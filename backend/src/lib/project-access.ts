@@ -13,6 +13,27 @@ export interface ProjectAccessResult {
 }
 
 /**
+ * Confirm that `projectId` actually lives under `organizationId`. Without this
+ * gate, a route handler that trusts checkProjectAccess / checkProjectManagePermission
+ * with a URL-supplied (organizationId, projectId) pair would let an org-A
+ * admin read or mutate org-B's project rows by passing org-A's id and an
+ * org-B project id together. Returns false (treat as 404) on mismatch.
+ */
+async function projectBelongsToOrg(organizationId: string, projectId: string): Promise<boolean> {
+  // .maybeSingle() so a missing project resolves to data=null without an
+  // error (cleaner than .single() throwing PGRST116). Test mocks for routes
+  // that already use `.single()` on `projects` for their own logic keep
+  // working because the helper's chain is a separate maybeSingle slot.
+  const { data, error } = await supabase
+    .from('projects')
+    .select('organization_id')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error || !data) return false;
+  return data.organization_id === organizationId;
+}
+
+/**
  * Resolve whether `userId` may read project `projectId` in organization
  * `organizationId`. Mirrors the access matrix used by the existing
  * organization-nested project routes:
@@ -21,12 +42,26 @@ export interface ProjectAccessResult {
  *   2. Direct project members (project_members row) → access
  *   3. Members of a team assigned to the project (project_teams) → access
  *   4. Otherwise → 404 (org not found / not a member) or 403 (no project link)
+ *
+ * Always rejects if `projectId` does not live under `organizationId` — closes
+ * the (orgA-id, victim-projectId-in-orgB) param-tampering surface.
  */
 export async function checkProjectAccess(
   userId: string,
   organizationId: string,
   projectId: string
 ): Promise<ProjectAccessResult> {
+  if (!(await projectBelongsToOrg(organizationId, projectId))) {
+    return {
+      hasAccess: false,
+      orgMembership: null,
+      projectMembership: null,
+      orgRole: null,
+      isInProjectTeam: false,
+      error: { status: 404, message: 'Project not found' },
+    };
+  }
+
   const { data: orgMembership, error: orgMembershipError } = await supabase
     .from('organization_members')
     .select('role')
@@ -122,12 +157,17 @@ export async function checkProjectAccess(
  * risk, etc.). Org owners/admins and members with
  * `manage_teams_and_projects` always pass. Owner-team members with
  * `manage_projects` (team-role permission) also pass.
+ *
+ * Always rejects if `projectId` does not live under `organizationId` — closes
+ * the same param-tampering surface as checkProjectAccess.
  */
 export async function checkProjectManagePermission(
   userId: string,
   organizationId: string,
   projectId: string
 ): Promise<boolean> {
+  if (!(await projectBelongsToOrg(organizationId, projectId))) return false;
+
   const { data: membership } = await supabase
     .from('organization_members')
     .select('role')

@@ -1,16 +1,18 @@
 /**
  * Routes for /api/organizations/:id/projects/:projectId/configured-images.
  *
- * Covers (per plan §M11 Acceptance):
+ * Covers (per plan §M11 Acceptance + post-review hardening):
  *   - GET list with cred-display join
- *   - POST create + image_reference regex validation
+ *   - POST create + image_reference regex/host validation
  *   - PATCH toggle enabled / swap cred (same-org)
  *   - DELETE
- *   - RBAC: 403 without checkProjectManagePermission
+ *   - RBAC: 403 without checkProjectManagePermission on POST/PATCH/DELETE
  *   - cred-from-other-org rejected with 400 cred_wrong_org (not 500)
- *   - 21st enabled POST returns 400 image_cap_reached
+ *   - 21st enabled POST returns 400 image_cap_reached (now via RPC)
  *   - PATCH with extra key returns 400 unknown_field
  *   - PATCH flipping enabled true past the cap returns 400 image_cap_reached
+ *   - cross-tenant DELETE/GET via projectId tampering returns 404 (project↔org bind)
+ *   - image_reference with internal host returns 400 image_reference_host_blocked
  */
 import request from 'supertest';
 import app from '../../index';
@@ -19,7 +21,9 @@ import {
   queryBuilder,
   setTableResponse,
   pushTableResponse,
+  setRpcResponse,
   clearTableRegistry,
+  clearRpcRegistry,
 } from '../../test/mocks/supabaseSingleton';
 import { createActivity } from '../../lib/activities';
 
@@ -29,18 +33,32 @@ jest.mock('../../lib/supabase', () => ({
 }));
 jest.mock('../../lib/activities', () => ({ createActivity: jest.fn() }));
 
+// validateImageRefHost performs DNS lookups; stub to deterministic results in
+// tests so cases pass offline and don't depend on the real registry hostnames
+// resolving cleanly. Specific tests can override the mock.
+jest.mock('../../lib/image-ref-guard', () => ({
+  validateImageRefHost: jest.fn((ref: string) => {
+    if (ref.startsWith('127.') || ref.startsWith('169.254.') || ref.includes('.internal/')) {
+      return Promise.resolve({ valid: false, reason: `host blocked: ${ref}` });
+    }
+    return Promise.resolve({ valid: true, host: 'public.example.com', addresses: ['1.2.3.4'] });
+  }),
+}));
+
 const ORG_ID = 'org-1';
 const PROJECT_ID = 'proj-x';
 const USER = { id: 'user-1', email: 'a@b.com' };
 const TOKEN = 'valid-token';
 
+/** project↔org bind passes; org admin path approves checkProjectManagePermission. */
 function setProjectManagePerm() {
-  // checkProjectManagePermission: org_members -> 'admin' short-circuits true
+  pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
   setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
 }
 
+/** project↔org bind passes; org admin + manage_teams_and_projects approves checkProjectAccess. */
 function setProjectAccess() {
-  // checkProjectAccess: org_members -> 'admin' short-circuits orgManageTeams
+  pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
   setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
   setTableResponse('organization_roles', 'single', {
     data: { permissions: { manage_teams_and_projects: true }, display_order: 1 },
@@ -48,13 +66,10 @@ function setProjectAccess() {
   });
 }
 
-function setNoMember() {
-  setTableResponse('organization_members', 'single', { data: null, error: null });
-}
-
 beforeEach(() => {
   jest.clearAllMocks();
   clearTableRegistry();
+  clearRpcRegistry();
   (supabase.auth.getUser as jest.Mock).mockResolvedValue({ data: { user: USER }, error: null });
 });
 
@@ -92,15 +107,27 @@ describe('GET /api/organizations/:id/projects/:projectId/configured-images', () 
     expect(res.body).toHaveLength(2);
     expect(res.body[0].credentials_display).toEqual({ display_name: 'GHCR org token', registry_type: 'ghcr' });
     expect(res.body[1].credentials_display).toBeNull();
-    // Tenancy: every list query carries .eq('project_id', PROJECT_ID).
     expect(queryBuilder.eq).toHaveBeenCalledWith('project_id', PROJECT_ID);
   });
 
   it('returns 404 to a non-member', async () => {
-    setNoMember();
+    pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
+    setTableResponse('organization_members', 'single', { data: null, error: null });
     const res = await request(app)
       .get(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
       .set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when projectId belongs to another org (cross-tenant param tampering)', async () => {
+    // checkProjectAccess's projectBelongsToOrg lookup finds the project but in
+    // a DIFFERENT org → bind fails → returns 404 before any data leak.
+    pushTableResponse('projects', { data: { organization_id: 'org-OTHER' }, error: null });
+
+    const res = await request(app)
+      .get(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+
     expect(res.status).toBe(404);
   });
 });
@@ -109,27 +136,17 @@ describe('GET /api/organizations/:id/projects/:projectId/configured-images', () 
 // POST
 // ===========================================================================
 describe('POST /api/organizations/:id/projects/:projectId/configured-images', () => {
-  function seedSuccessfulInsert() {
-    // Project resolution.
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // Insert returning row.
-    pushTableResponse('project_configured_images', {
-      data: {
+  it('creates a public image (no cred)', async () => {
+    setProjectManagePerm();
+    setRpcResponse('insert_configured_image_with_cap', {
+      data: [{
         id: 'i-new', project_id: PROJECT_ID, organization_id: ORG_ID,
         image_reference: 'ghcr.io/foo/bar:1.0', credentials_id: null, enabled: true,
         created_by: USER.id, created_at: '2026-05-05T00:00:00Z', updated_at: '2026-05-05T00:00:00Z',
-      },
+      }],
       error: null,
     });
-    // Cred-display join (no creds attached → empty result).
     setTableResponse('organization_registry_credentials', 'then', { data: [], error: null });
-    // Cap check — under cap.
-    setTableResponse('project_configured_images', 'then', { data: [{ id: 'i-existing' }], error: null });
-  }
-
-  it('creates a public image (no cred)', async () => {
-    setProjectManagePerm();
-    seedSuccessfulInsert();
 
     const res = await request(app)
       .post(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
@@ -146,16 +163,13 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
 
   it('creates a private image with same-org cred', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // Cred-org match check.
     pushTableResponse('organization_registry_credentials', { data: { id: 'c1', organization_id: ORG_ID }, error: null });
-    setTableResponse('project_configured_images', 'then', { data: [], error: null }); // cap
-    pushTableResponse('project_configured_images', {
-      data: {
+    setRpcResponse('insert_configured_image_with_cap', {
+      data: [{
         id: 'i-new', project_id: PROJECT_ID, organization_id: ORG_ID,
         image_reference: 'myorg.azurecr.io/foo:tag', credentials_id: 'c1', enabled: true,
         created_by: USER.id, created_at: '2026-05-05T00:00:00Z', updated_at: '2026-05-05T00:00:00Z',
-      },
+      }],
       error: null,
     });
     setTableResponse('organization_registry_credentials', 'then', {
@@ -175,8 +189,6 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
 
   it('rejects a cred from another org with 400 cred_wrong_org (not 500)', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // Cred-org mismatch — DIFFERENT org.
     pushTableResponse('organization_registry_credentials', {
       data: { id: 'c-other', organization_id: 'org-OTHER' },
       error: null,
@@ -194,7 +206,6 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
 
   it('rejects malformed image_reference with 400', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
 
     const res = await request(app)
       .post(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
@@ -205,13 +216,23 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
     expect(res.body.error).toMatch(/docker-pullable shape/);
   });
 
-  it('returns 400 image_cap_reached on the 21st enabled image', async () => {
+  it('rejects an internal-host image_reference with 400 image_reference_host_blocked', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // Cap probe — already 20 enabled rows.
-    setTableResponse('project_configured_images', 'then', {
-      data: Array.from({ length: 20 }, (_, i) => ({ id: `i-${i}` })),
-      error: null,
+
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ image_reference: '169.254.169.254/foo/bar:tag' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('image_reference_host_blocked');
+  });
+
+  it('returns 400 image_cap_reached on the 21st enabled image (RPC raises)', async () => {
+    setProjectManagePerm();
+    setRpcResponse('insert_configured_image_with_cap', {
+      data: null,
+      error: { message: 'image_cap_reached' },
     });
 
     const res = await request(app)
@@ -224,20 +245,14 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
     expect(res.body.message).toMatch(/limit of 20/);
   });
 
-  it('skips the cap check when posting with enabled=false', async () => {
+  it('creates a disabled image (cap not consumed at the RPC layer)', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // 20 enabled rows already, but the new one is disabled.
-    setTableResponse('project_configured_images', 'then', {
-      data: Array.from({ length: 20 }, (_, i) => ({ id: `i-${i}` })),
-      error: null,
-    });
-    pushTableResponse('project_configured_images', {
-      data: {
+    setRpcResponse('insert_configured_image_with_cap', {
+      data: [{
         id: 'i-disabled', project_id: PROJECT_ID, organization_id: ORG_ID,
         image_reference: 'foo:bar', credentials_id: null, enabled: false,
         created_by: USER.id, created_at: '2026-05-05T00:00:00Z', updated_at: '2026-05-05T00:00:00Z',
-      },
+      }],
       error: null,
     });
     setTableResponse('organization_registry_credentials', 'then', { data: [], error: null });
@@ -251,10 +266,23 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
   });
 
   it('returns 403 without manage permission', async () => {
-    // checkProjectManagePermission: 'member' role, no manage_teams_and_projects, no project membership.
+    pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
     setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
     setTableResponse('organization_roles', 'single', { data: { permissions: {} }, error: null });
     setTableResponse('project_teams', 'then', { data: [], error: null });
+
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ image_reference: 'foo:bar' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 when projectId belongs to another org', async () => {
+    // org-A admin token, but the project belongs to org-OTHER. project↔org
+    // bind in checkProjectManagePermission rejects → 403.
+    pushTableResponse('projects', { data: { organization_id: 'org-OTHER' }, error: null });
 
     const res = await request(app)
       .post(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images`)
@@ -271,13 +299,12 @@ describe('POST /api/organizations/:id/projects/:projectId/configured-images', ()
 describe('PATCH /api/organizations/:id/projects/:projectId/configured-images/:imageId', () => {
   it('toggles enabled', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    pushTableResponse('project_configured_images', {
-      data: {
+    setRpcResponse('update_configured_image_with_cap', {
+      data: [{
         id: 'i1', project_id: PROJECT_ID, organization_id: ORG_ID,
         image_reference: 'foo:bar', credentials_id: null, enabled: false,
         created_by: USER.id, created_at: '2026-05-05T00:00:00Z', updated_at: '2026-05-05T01:00:00Z',
-      },
+      }],
       error: null,
     });
     setTableResponse('organization_registry_credentials', 'then', { data: [], error: null });
@@ -296,17 +323,15 @@ describe('PATCH /api/organizations/:id/projects/:projectId/configured-images/:im
 
   it('swaps to a same-org cred', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    // Cred-org match.
     pushTableResponse('organization_registry_credentials', {
       data: { id: 'c2', organization_id: ORG_ID }, error: null,
     });
-    pushTableResponse('project_configured_images', {
-      data: {
+    setRpcResponse('update_configured_image_with_cap', {
+      data: [{
         id: 'i1', project_id: PROJECT_ID, organization_id: ORG_ID,
         image_reference: 'foo:bar', credentials_id: 'c2', enabled: true,
         created_by: USER.id, created_at: '2026-05-05T00:00:00Z', updated_at: '2026-05-05T01:00:00Z',
-      },
+      }],
       error: null,
     });
     setTableResponse('organization_registry_credentials', 'then', {
@@ -336,7 +361,6 @@ describe('PATCH /api/organizations/:id/projects/:projectId/configured-images/:im
 
   it('rejects a cross-org cred swap with 400 cred_wrong_org', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
     pushTableResponse('organization_registry_credentials', {
       data: { id: 'c-other', organization_id: 'org-OTHER' }, error: null,
     });
@@ -350,12 +374,11 @@ describe('PATCH /api/organizations/:id/projects/:projectId/configured-images/:im
     expect(res.body.error).toBe('cred_wrong_org');
   });
 
-  it('blocks flipping enabled true past the cap', async () => {
+  it('blocks flipping enabled true past the cap (RPC raises)', async () => {
     setProjectManagePerm();
-    pushTableResponse('projects', { data: { id: PROJECT_ID, organization_id: ORG_ID }, error: null });
-    setTableResponse('project_configured_images', 'then', {
-      data: Array.from({ length: 20 }, (_, i) => ({ id: `i-${i}` })),
-      error: null,
+    setRpcResponse('update_configured_image_with_cap', {
+      data: null,
+      error: { message: 'image_cap_reached' },
     });
 
     const res = await request(app)
@@ -365,6 +388,20 @@ describe('PATCH /api/organizations/:id/projects/:projectId/configured-images/:im
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('image_cap_reached');
+  });
+
+  it('returns 403 without manage permission', async () => {
+    pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
+    setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+    setTableResponse('organization_roles', 'single', { data: { permissions: {} }, error: null });
+    setTableResponse('project_teams', 'then', { data: [], error: null });
+
+    const res = await request(app)
+      .patch(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images/i1`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ enabled: false });
+
+    expect(res.status).toBe(403);
   });
 });
 
@@ -388,5 +425,31 @@ describe('DELETE /api/organizations/:id/projects/:projectId/configured-images/:i
     expect(createActivity).toHaveBeenCalledWith(expect.objectContaining({
       activity_type: 'configured_image_deleted',
     }));
+  });
+
+  it('returns 403 without manage permission', async () => {
+    // Was the missing 403 case from the critical review.
+    pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
+    setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+    setTableResponse('organization_roles', 'single', { data: { permissions: {} }, error: null });
+    setTableResponse('project_teams', 'then', { data: [], error: null });
+
+    const res = await request(app)
+      .delete(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images/i1`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 403 when projectId belongs to another org (cross-tenant DELETE)', async () => {
+    // The P0 from the critical review: org-A admin attempting DELETE on an
+    // image whose project lives in org-OTHER. project↔org bind rejects.
+    pushTableResponse('projects', { data: { organization_id: 'org-OTHER' }, error: null });
+
+    const res = await request(app)
+      .delete(`/api/organizations/${ORG_ID}/projects/${PROJECT_ID}/configured-images/i1`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(res.status).toBe(403);
   });
 });

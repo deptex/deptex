@@ -82,7 +82,10 @@ export interface SkippedImage {
     | 'registry_5xx'
     | 'manifest_not_found'
     | 'trivy_partial'
-    | 'budget_exhausted';
+    | 'budget_exhausted'
+    // SSRF defense: image_reference's registry host resolved to a
+    // private / loopback / IMDS / Fly 6PN range at scan time.
+    | 'image_host_blocked';
 }
 
 export type RegistryType =

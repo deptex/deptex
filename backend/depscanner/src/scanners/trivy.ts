@@ -384,20 +384,64 @@ export async function runTrivyImage(
 // ============================================================
 
 let cachedVersion: string | null = null;
-export async function trivyVersion(): Promise<string> {
-  if (cachedVersion) return cachedVersion;
+let cachedDbVersionDay: string | null = null;
+
+async function readTrivyVersionOutput(): Promise<string | null> {
   try {
     const v = await runScannerSubprocess({
       exe: 'trivy',
       args: ['--version'],
       timeoutMs: 10_000,
     });
-    const match = /Version:\s*(\S+)/i.exec(v.stdout);
-    cachedVersion = match?.[1] ?? 'unknown';
+    return v.stdout;
   } catch {
-    cachedVersion = 'unknown';
+    return null;
   }
+}
+
+export async function trivyVersion(): Promise<string> {
+  if (cachedVersion) return cachedVersion;
+  const stdout = await readTrivyVersionOutput();
+  const match = stdout ? /Version:\s*(\S+)/i.exec(stdout) : null;
+  cachedVersion = match?.[1] ?? 'unknown';
   return cachedVersion;
+}
+
+/**
+ * Surfaces Trivy's vulnerability-DB UpdatedAt date as YYYY-MM-DD UTC. This is
+ * the actual CVE DB version, not the calendar day of the scan — so two scans
+ * straddling a Trivy DB refresh produce different cache keys, and a stale row
+ * cannot serve fresh CVEs after the DB rolls.
+ *
+ * Trivy --version output looks like:
+ *   Version: 0.50.0
+ *   Vulnerability DB:
+ *     Version: 2
+ *     UpdatedAt: 2026-05-06 06:24:30.123456 +0000 UTC
+ *     ...
+ *
+ * Falls back to today's UTC date if the DB block is absent (older Trivy or
+ * malformed output) — strictly no worse than the previous wall-clock impl.
+ */
+export async function trivyDbVersionDay(): Promise<string> {
+  if (cachedDbVersionDay) return cachedDbVersionDay;
+  const stdout = await readTrivyVersionOutput();
+  if (stdout) {
+    // Match `UpdatedAt: YYYY-MM-DD ...` inside the Vulnerability DB block.
+    const m = /Vulnerability DB:[\s\S]*?UpdatedAt:\s*(\d{4}-\d{2}-\d{2})/i.exec(stdout);
+    if (m) {
+      cachedDbVersionDay = m[1];
+      return cachedDbVersionDay;
+    }
+  }
+  cachedDbVersionDay = new Date().toISOString().slice(0, 10);
+  return cachedDbVersionDay;
+}
+
+/** Test-only: clears the version + DB-version cache between cases. */
+export function _resetTrivyVersionCacheForTests(): void {
+  cachedVersion = null;
+  cachedDbVersionDay = null;
 }
 
 export type { SkippedImage };

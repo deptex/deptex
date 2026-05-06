@@ -26,8 +26,32 @@ import { supabase } from '../lib/supabase';
 import { encryptApiKey, decryptApiKey, isEncryptionConfigured } from '../lib/ai/encryption';
 import { checkOrgAccess, checkOrgManageIntegrations } from '../lib/rbac';
 import { createActivity } from '../lib/activities';
+import { validateExternalUrl } from '../lib/url-guard';
 
 const router = express.Router();
+
+// Length caps on user-controlled fields. Per-org DB usage cap; mirrors what
+// real-world cred values look like (display_name short, registry_url short,
+// service_account_json ~2.4KB).
+const FIELD_CAPS = {
+  display_name: 200,
+  registry_url: 512,
+  username: 256,
+  password: 4096,
+  token: 8192,
+  service_account_json: 8192,
+  client_id: 256,
+  client_secret: 256,
+  tenant_id: 256,
+  access_key_id: 128,
+  secret_access_key: 256,
+  session_token: 4096,
+  region: 64,
+} as const;
+
+function tooLong(field: keyof typeof FIELD_CAPS, value: string): boolean {
+  return value.length > FIELD_CAPS[field];
+}
 
 // ============================================================================
 // Schema validation — mirrors phase27b_iac_v2_registries.sql CHECK constraints
@@ -80,12 +104,18 @@ function validatePlaintext(c: any): { ok: true; value: CredentialPlaintext } | {
     case 'username_password':
       if (typeof c.username !== 'string' || !c.username) return { ok: false, error: 'username required' };
       if (typeof c.password !== 'string' || !c.password) return { ok: false, error: 'password required' };
+      if (tooLong('username', c.username)) return { ok: false, error: 'username too long' };
+      if (tooLong('password', c.password)) return { ok: false, error: 'password too long' };
       return { ok: true, value: { shape, username: c.username, password: c.password } };
     case 'aws_keys':
       if (typeof c.access_key_id !== 'string' || !c.access_key_id) return { ok: false, error: 'access_key_id required' };
       if (typeof c.secret_access_key !== 'string' || !c.secret_access_key) return { ok: false, error: 'secret_access_key required' };
       if (typeof c.region !== 'string' || !c.region) return { ok: false, error: 'region required' };
       if (c.session_token !== undefined && typeof c.session_token !== 'string') return { ok: false, error: 'session_token must be a string' };
+      if (tooLong('access_key_id', c.access_key_id)) return { ok: false, error: 'access_key_id too long' };
+      if (tooLong('secret_access_key', c.secret_access_key)) return { ok: false, error: 'secret_access_key too long' };
+      if (tooLong('region', c.region)) return { ok: false, error: 'region too long' };
+      if (c.session_token && tooLong('session_token', c.session_token)) return { ok: false, error: 'session_token too long' };
       return {
         ok: true,
         value: {
@@ -98,17 +128,40 @@ function validatePlaintext(c: any): { ok: true; value: CredentialPlaintext } | {
       };
     case 'gcp_service_account_key':
       if (typeof c.service_account_json !== 'string' || !c.service_account_json) return { ok: false, error: 'service_account_json required' };
+      if (tooLong('service_account_json', c.service_account_json)) return { ok: false, error: 'service_account_json too long' };
       try { JSON.parse(c.service_account_json); } catch { return { ok: false, error: 'service_account_json must be valid JSON' }; }
       return { ok: true, value: { shape, service_account_json: c.service_account_json } };
     case 'azure_service_principal':
       if (typeof c.client_id !== 'string' || !c.client_id) return { ok: false, error: 'client_id required' };
       if (typeof c.client_secret !== 'string' || !c.client_secret) return { ok: false, error: 'client_secret required' };
       if (typeof c.tenant_id !== 'string' || !c.tenant_id) return { ok: false, error: 'tenant_id required' };
+      if (tooLong('client_id', c.client_id)) return { ok: false, error: 'client_id too long' };
+      if (tooLong('client_secret', c.client_secret)) return { ok: false, error: 'client_secret too long' };
+      if (tooLong('tenant_id', c.tenant_id)) return { ok: false, error: 'tenant_id too long' };
       return { ok: true, value: { shape, client_id: c.client_id, client_secret: c.client_secret, tenant_id: c.tenant_id } };
     case 'token':
       if (typeof c.token !== 'string' || !c.token) return { ok: false, error: 'token required' };
+      if (tooLong('token', c.token)) return { ok: false, error: 'token too long' };
       return { ok: true, value: { shape, token: c.token } };
   }
+}
+
+/**
+ * Validate registry_url against the SSRF guard. Accepts user input with or
+ * without scheme; prepends https:// if missing so the URL parser succeeds,
+ * then runs the standard private-IP / loopback / IMDS / Fly 6PN block list.
+ */
+async function validateRegistryUrl(rawUrl: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0) {
+    return { ok: false, reason: 'registry_url is empty' };
+  }
+  let normalized = rawUrl.trim();
+  // Strip trailing slash for consistent host extraction.
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  if (!/^https?:\/\//i.test(normalized)) normalized = `https://${normalized}`;
+  const result = await validateExternalUrl(normalized);
+  if (!result.valid) return { ok: false, reason: result.reason };
+  return { ok: true };
 }
 
 const META_COLUMNS =
@@ -161,11 +214,23 @@ router.post('/:id/registry-credentials', authenticateUser, async (req: AuthReque
     if (typeof display_name !== 'string' || !display_name.trim()) {
       return res.status(400).json({ error: 'display_name required' });
     }
+    if (tooLong('display_name', display_name.trim())) {
+      return res.status(400).json({ error: 'display_name too long' });
+    }
     if (REGISTRY_URL_REQUIRED.includes(registry_type) && (typeof registry_url !== 'string' || !registry_url.trim())) {
       return res.status(400).json({ error: `registry_url required for ${registry_type}` });
     }
     if (registry_url !== undefined && registry_url !== null && typeof registry_url !== 'string') {
       return res.status(400).json({ error: 'registry_url must be a string or null' });
+    }
+    if (typeof registry_url === 'string' && registry_url.trim()) {
+      if (tooLong('registry_url', registry_url.trim())) {
+        return res.status(400).json({ error: 'registry_url too long' });
+      }
+      const urlCheck = await validateRegistryUrl(registry_url);
+      if (!urlCheck.ok) {
+        return res.status(400).json({ error: 'registry_url_blocked', reason: urlCheck.reason });
+      }
     }
 
     const validated = validatePlaintext(credentials);
@@ -241,6 +306,9 @@ router.patch('/:id/registry-credentials/:credId', authenticateUser, async (req: 
     }
     if (typeof body.display_name !== 'string' || !body.display_name.trim()) {
       return res.status(400).json({ error: 'display_name required' });
+    }
+    if (tooLong('display_name', body.display_name.trim())) {
+      return res.status(400).json({ error: 'display_name too long' });
     }
 
     const { data, error } = await supabase

@@ -71,6 +71,11 @@ beforeEach(() => {
     data: { permissions: { manage_teams_and_projects: true }, display_order: 0 },
     error: null,
   });
+  // checkProjectAccess / checkProjectManagePermission's project↔org bind.
+  setTableResponse('projects', 'maybeSingle', {
+    data: { organization_id: orgId },
+    error: null,
+  });
 });
 
 describe('scanner-findings tenant isolation (all 7 endpoints)', () => {
@@ -125,7 +130,7 @@ describe('scanner-findings tenant isolation (all 7 endpoints)', () => {
 describe('scanner-findings happy paths', () => {
   it('lists IaC findings, filtered by severity', async () => {
     setTableResponse('projects', 'single', {
-      data: { active_extraction_run_id: 'run-1' },
+      data: { organization_id: orgId, active_extraction_run_id: 'run-1' },
       error: null,
     });
     setTableResponse('project_iac_findings', 'count_head', {
@@ -168,7 +173,7 @@ describe('scanner-findings happy paths', () => {
     'github_actions',
   ])('accepts framework=%s on the iac-findings list filter', async (framework) => {
     setTableResponse('projects', 'single', {
-      data: { active_extraction_run_id: 'run-1' },
+      data: { organization_id: orgId, active_extraction_run_id: 'run-1' },
       error: null,
     });
     setTableResponse('project_iac_findings', 'count_head', {
@@ -195,7 +200,7 @@ describe('scanner-findings happy paths', () => {
     // unknown values fall through and return the unfiltered (project + run)
     // row set rather than failing the request.
     setTableResponse('projects', 'single', {
-      data: { active_extraction_run_id: 'run-1' },
+      data: { organization_id: orgId, active_extraction_run_id: 'run-1' },
       error: null,
     });
     setTableResponse('project_iac_findings', 'count_head', {
@@ -245,6 +250,7 @@ describe('scanner-findings happy paths', () => {
     // per-table counts; counts are exercised by the e2e fixture work in M5.
     setTableResponse('projects', 'single', {
       data: {
+        organization_id: orgId,
         active_extraction_run_id: 'run-1',
         infra_types: ['terraform', 'dockerfile'],
       },

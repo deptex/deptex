@@ -24,13 +24,17 @@ import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import { createActivity } from '../lib/activities';
+import { validateImageRefHost } from '../lib/image-ref-guard';
 
 const router = express.Router();
 router.use(authenticateUser);
 
 // docker-pullable shape, anchored. Allows tag refs (`repo:tag`) and digest
 // pins (`repo@sha256:<64-hex>`). Empty / spaces / unsafe chars rejected.
+// Length-capped to 512 (real OCI refs cap around 256) to keep the regex linear
+// and the DB row bounded.
 const IMAGE_REF_REGEX = /^[a-z0-9._\-/:]+(@sha256:[a-f0-9]{64})?$/;
+const IMAGE_REF_MAX_LEN = 512;
 
 const ENABLED_IMAGE_CAP = 20;
 
@@ -72,29 +76,6 @@ async function attachCredDisplay(
     ...r,
     credentials_display: r.credentials_id ? credMap[r.credentials_id] ?? null : null,
   }));
-}
-
-/**
- * Resolve the project's organization_id and confirm membership chain. The
- * orgId in the URL must match the project's actual org (catches stale UI
- * deeplinks that point at a project that has been transferred).
- */
-async function resolveProjectOrg(
-  orgId: string,
-  projectId: string,
-): Promise<{ ok: true; organizationId: string } | { ok: false; status: number; error: string }> {
-  const { data: project, error } = await supabase
-    .from('projects')
-    .select('id, organization_id')
-    .eq('id', projectId)
-    .single();
-  if (error || !project) {
-    return { ok: false, status: 404, error: 'Project not found' };
-  }
-  if (project.organization_id !== orgId) {
-    return { ok: false, status: 404, error: 'Project not found' };
-  }
-  return { ok: true, organizationId: project.organization_id };
 }
 
 /**
@@ -160,14 +141,20 @@ router.post('/:id/projects/:projectId/configured-images', async (req: AuthReques
       return res.status(403).json({ error: 'You do not have permission to manage configured images' });
     }
 
-    const project = await resolveProjectOrg(orgId, projectId);
-    if (!project.ok) {
-      return res.status(project.status).json({ error: project.error });
-    }
-
     const { image_reference, credentials_id, enabled } = req.body ?? {};
-    if (typeof image_reference !== 'string' || !IMAGE_REF_REGEX.test(image_reference.trim())) {
+    if (typeof image_reference !== 'string') {
+      return res.status(400).json({ error: 'image_reference must be a string' });
+    }
+    const trimmedRef = image_reference.trim();
+    if (trimmedRef.length === 0 || trimmedRef.length > IMAGE_REF_MAX_LEN) {
+      return res.status(400).json({ error: 'image_reference must be 1-512 chars' });
+    }
+    if (!IMAGE_REF_REGEX.test(trimmedRef)) {
       return res.status(400).json({ error: 'image_reference must match docker-pullable shape' });
+    }
+    const refGuard = await validateImageRefHost(trimmedRef);
+    if (!refGuard.valid) {
+      return res.status(400).json({ error: 'image_reference_host_blocked', reason: refGuard.reason });
     }
     if (credentials_id !== undefined && credentials_id !== null && typeof credentials_id !== 'string') {
       return res.status(400).json({ error: 'credentials_id must be a string or null' });
@@ -177,44 +164,38 @@ router.post('/:id/projects/:projectId/configured-images', async (req: AuthReques
     }
 
     if (credentials_id) {
-      const credCheck = await validateCredOrgMatch(credentials_id, project.organizationId);
+      const credCheck = await validateCredOrgMatch(credentials_id, orgId);
       if (!credCheck.ok) {
         return res.status(credCheck.status).json({ error: credCheck.error });
       }
     }
 
-    // Cap check — count enabled images BEFORE insert so we don't enable a
-    // 21st row even momentarily. The cap applies only when the new row is
-    // actually being enabled (default true); a disabled row is fine.
     const willEnable = enabled !== false;  // undefined → defaults to true
-    if (willEnable) {
-      const { data: enabledRows } = await supabase
-        .from('project_configured_images')
-        .select('id')
-        .eq('project_id', projectId)
-        .eq('enabled', true);
-      if ((enabledRows?.length ?? 0) >= ENABLED_IMAGE_CAP) {
+
+    // Atomic cap-and-insert via RPC. The function does the count + INSERT
+    // inside a single transaction with row-level locking on a sentinel,
+    // closing the JS-only TOCTOU window where two parallel POSTs both observe
+    // count<20 and both insert.
+    const { data: inserted, error: insertErr } = await supabase.rpc('insert_configured_image_with_cap', {
+      p_project_id: projectId,
+      p_organization_id: orgId,
+      p_image_reference: trimmedRef,
+      p_credentials_id: credentials_id ?? null,
+      p_enabled: willEnable,
+      p_created_by: userId,
+      p_cap: ENABLED_IMAGE_CAP,
+    });
+    if (insertErr) {
+      if (insertErr.message?.includes('image_cap_reached')) {
         return res.status(400).json({
           error: 'image_cap_reached',
           message: `Project limit of ${ENABLED_IMAGE_CAP} enabled configured images reached. Disable or delete entries before adding more.`,
         });
       }
+      throw insertErr;
     }
-
-    const { data, error } = await supabase
-      .from('project_configured_images')
-      .insert({
-        project_id: projectId,
-        organization_id: project.organizationId,
-        image_reference: image_reference.trim(),
-        credentials_id: credentials_id ?? null,
-        enabled: willEnable,
-        created_by: userId,
-      })
-      .select('id, project_id, organization_id, image_reference, credentials_id, enabled, created_by, created_at, updated_at')
-      .single();
-
-    if (error) throw error;
+    const data = Array.isArray(inserted) ? inserted[0] : inserted;
+    if (!data) throw new Error('insert_configured_image_with_cap returned no row');
 
     const [enriched] = await attachCredDisplay([data], orgId);
 
@@ -269,45 +250,34 @@ router.patch('/:id/projects/:projectId/configured-images/:imageId', async (req: 
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    const project = await resolveProjectOrg(orgId, projectId);
-    if (!project.ok) {
-      return res.status(project.status).json({ error: project.error });
-    }
-
     if (typeof updates.credentials_id === 'string') {
-      const credCheck = await validateCredOrgMatch(updates.credentials_id, project.organizationId);
+      const credCheck = await validateCredOrgMatch(updates.credentials_id, orgId);
       if (!credCheck.ok) {
         return res.status(credCheck.status).json({ error: credCheck.error });
       }
     }
 
-    // Cap re-check ONLY when the patch is flipping enabled to true.
-    if (updates.enabled === true) {
-      const { data: enabledRows } = await supabase
-        .from('project_configured_images')
-        .select('id')
-        .eq('project_id', projectId)
-        .eq('enabled', true)
-        .neq('id', imageId);
-      if ((enabledRows?.length ?? 0) >= ENABLED_IMAGE_CAP) {
+    // Atomic update via RPC: same cap-recheck-then-update transaction that
+    // POST uses, but only when the patch is flipping enabled=true.
+    const { data: updated, error: updateErr } = await supabase.rpc('update_configured_image_with_cap', {
+      p_image_id: imageId,
+      p_project_id: projectId,
+      p_organization_id: orgId,
+      p_enabled: 'enabled' in updates ? (updates.enabled as boolean) : null,
+      p_credentials_id_set: 'credentials_id' in updates,
+      p_credentials_id: 'credentials_id' in updates ? (updates.credentials_id as string | null) : null,
+      p_cap: ENABLED_IMAGE_CAP,
+    });
+    if (updateErr) {
+      if (updateErr.message?.includes('image_cap_reached')) {
         return res.status(400).json({
           error: 'image_cap_reached',
           message: `Project limit of ${ENABLED_IMAGE_CAP} enabled configured images reached.`,
         });
       }
+      throw updateErr;
     }
-
-    updates.updated_at = new Date().toISOString();
-
-    const { data, error } = await supabase
-      .from('project_configured_images')
-      .update(updates)
-      .eq('id', imageId)
-      .eq('project_id', projectId)
-      .select('id, project_id, organization_id, image_reference, credentials_id, enabled, created_by, created_at, updated_at')
-      .single();
-
-    if (error) throw error;
+    const data = Array.isArray(updated) ? updated[0] : updated;
     if (!data) return res.status(404).json({ error: 'Configured image not found' });
 
     const [enriched] = await attachCredDisplay([data], orgId);
@@ -317,7 +287,7 @@ router.patch('/:id/projects/:projectId/configured-images/:imageId', async (req: 
       user_id: userId,
       activity_type: 'configured_image_updated',
       description: `updated configured image "${data.image_reference}"`,
-      metadata: { configured_image_id: imageId, project_id: projectId, changed: Object.keys(updates).filter((k) => k !== 'updated_at') },
+      metadata: { configured_image_id: imageId, project_id: projectId, changed: Object.keys(updates) },
     });
 
     res.json(enriched);

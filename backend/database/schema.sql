@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS public.organization_generated_rules (
   last_used_at timestamp with time zone,
   use_count integer NOT NULL DEFAULT 0,
   framework_spec jsonb,
-  spec_format text NOT NULL DEFAULT 'framework_spec'::text
+  spec_format text NOT NULL DEFAULT 'semgrep_yaml'::text
 );
 CREATE TABLE IF NOT EXISTS public.organization_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -798,6 +798,30 @@ CREATE TABLE IF NOT EXISTS public.package_anomalies (
   score_breakdown jsonb DEFAULT '[]'::jsonb,
   detected_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.package_capabilities (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  package_name text NOT NULL,
+  version text NOT NULL,
+  ecosystem text NOT NULL,
+  scanner_version text NOT NULL,
+  spawns_processes boolean NOT NULL DEFAULT false,
+  network_io boolean NOT NULL DEFAULT false,
+  eval_dynamic boolean NOT NULL DEFAULT false,
+  native_addon_load boolean NOT NULL DEFAULT false,
+  filesystem_write boolean NOT NULL DEFAULT false,
+  crypto_operations boolean NOT NULL DEFAULT false,
+  serialization_deser boolean NOT NULL DEFAULT false,
+  install_script boolean NOT NULL DEFAULT false,
+  dns_query boolean NOT NULL DEFAULT false,
+  websocket boolean NOT NULL DEFAULT false,
+  process_signal boolean NOT NULL DEFAULT false,
+  encrypted_payload boolean NOT NULL DEFAULT false,
+  dynamic_import boolean NOT NULL DEFAULT false,
+  reads_env boolean NOT NULL DEFAULT false,
+  clipboard_access boolean NOT NULL DEFAULT false,
+  scanned_at timestamp with time zone NOT NULL DEFAULT now(),
+  scan_error text
+);
 CREATE TABLE IF NOT EXISTS public.package_commit_touched_functions (
   watched_package_id uuid NOT NULL,
   commit_sha text NOT NULL,
@@ -841,6 +865,18 @@ CREATE TABLE IF NOT EXISTS public.package_contributors (
   last_commit_date timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.package_maintainer_snapshots (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  package_name text NOT NULL,
+  version text NOT NULL,
+  ecosystem text NOT NULL,
+  observed_at timestamp with time zone NOT NULL DEFAULT now(),
+  maintainer_handles text[] NOT NULL DEFAULT '{}'::text[],
+  primary_maintainer_email text,
+  signing_config_hash text,
+  postinstall_hash text,
+  registry_metadata_raw jsonb
 );
 CREATE TABLE IF NOT EXISTS public.package_reputation_scores (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1584,7 +1620,8 @@ CREATE TABLE IF NOT EXISTS public.scan_jobs (
   malicious_scan_status text,
   target_id uuid,
   credential_id uuid,
-  credential_payload_hash text
+  credential_payload_hash text,
+  error_payload jsonb
 );
 CREATE TABLE IF NOT EXISTS public.scim_user_mappings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1947,8 +1984,10 @@ ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_
 ALTER TABLE public.organization_watchlist_cleared_commits ADD CONSTRAINT organization_watchlist_cleared_commits_pkey PRIMARY KEY (id);
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_capabilities ADD CONSTRAINT package_capabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT package_maintainer_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
@@ -2042,9 +2081,11 @@ ALTER TABLE public.organization_status_codes ADD CONSTRAINT organization_status_
 ALTER TABLE public.organization_statuses ADD CONSTRAINT organization_statuses_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.organization_watchlist ADD CONSTRAINT organization_watchlist_organization_id_dependency_id_key UNIQUE (organization_id, dependency_id);
 ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha);
+ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_natural_key UNIQUE (package_name, version, ecosystem);
 ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key UNIQUE NULLS NOT DISTINCT (package_name, version, ecosystem, observed_at);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_key UNIQUE (project_id);
@@ -2124,6 +2165,8 @@ ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_pol
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
+ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
@@ -2159,7 +2202,7 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type = 'dast'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text]))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text, 'tenant_drift_detected'::text, 'dast_credential_key_missing'::text, 'dast_credential_key_stale'::text, 'dast_credential_rotated'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_trigger_source_check CHECK (((trigger_source IS NULL) OR (trigger_source = ANY (ARRAY['manual'::text, 'webhook'::text, 'recovery'::text, 'scheduled'::text, 'on_deploy'::text, 'aegis'::text]))));
@@ -2552,9 +2595,12 @@ CREATE INDEX idx_package_contributors_author_email ON public.package_contributor
 CREATE INDEX idx_package_contributors_total_commits ON public.package_contributors USING btree (total_commits DESC);
 CREATE INDEX idx_package_contributors_watched_package_id ON public.package_contributors USING btree (watched_package_id);
 CREATE INDEX idx_package_security_cache_lookup ON public.package_security_cache USING btree (package_name, version, ecosystem, scanner);
+CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
+CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
+CREATE INDEX idx_pci_credentials_id ON public.project_configured_images USING btree (credentials_id, organization_id) WHERE (credentials_id IS NOT NULL);
 CREATE INDEX idx_pci_org ON public.project_configured_images USING btree (organization_id);
 CREATE INDEX idx_pci_project_enabled ON public.project_configured_images USING btree (project_id, enabled) WHERE (enabled = true);
 CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
@@ -2582,6 +2628,7 @@ CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organ
 CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
 CREATE INDEX idx_pmf_project_run ON public.project_malicious_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pmf_reachability ON public.project_malicious_findings USING btree (project_id, reachability_level) WHERE ((suppressed = false) AND (risk_accepted = false));
+CREATE INDEX idx_pms_lookup ON public.package_maintainer_snapshots USING btree (package_name, ecosystem, version, observed_at DESC);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
@@ -2957,6 +3004,33 @@ CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.assert_flow_suppression_tenant()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  actual_org uuid;
+BEGIN
+  SELECT organization_id INTO actual_org
+  FROM public.projects
+  WHERE id = NEW.project_id;
+
+  IF actual_org IS NULL THEN
+    RAISE EXCEPTION 'project % does not exist', NEW.project_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  IF actual_org <> NEW.organization_id THEN
+    RAISE EXCEPTION 'organization_id % does not own project % (actual: %)',
+      NEW.organization_id, NEW.project_id, actual_org
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.backfill_sla_for_organization(p_organization_id uuid)
@@ -4257,6 +4331,28 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.enforce_pci_org_id_and_null_creds()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  derived_org UUID;
+BEGIN
+  derived_org := (SELECT organization_id FROM projects WHERE id = NEW.project_id);
+  IF derived_org IS NULL THEN
+    RAISE EXCEPTION 'enforce_pci_org_id_and_null_creds: project % not found', NEW.project_id;
+  END IF;
+
+  IF TG_OP = 'UPDATE' AND derived_org IS DISTINCT FROM OLD.organization_id THEN
+    NEW.credentials_id := NULL;
+  END IF;
+
+  NEW.organization_id := derived_org;
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.enforce_pmf_org_consistency()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -4946,7 +5042,11 @@ AS $function$
   FROM public.ai_usage_logs
   WHERE organization_id = p_organization_id
     AND success = true
-    AND feature IN ('taint_engine_spec_inference', 'taint_engine_fp_filter')
+    AND feature IN (
+      'taint_engine_spec_inference',
+      'taint_engine_fp_filter',
+      'taint_engine_anthropic_fallback'
+    )
     AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC');
 $function$
 ;
@@ -5282,6 +5382,33 @@ CREATE OR REPLACE FUNCTION public.inner_product(vector, vector)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$inner_product$function$
+;
+
+CREATE OR REPLACE FUNCTION public.insert_configured_image_with_cap(p_project_id uuid, p_organization_id uuid, p_image_reference text, p_credentials_id uuid, p_enabled boolean, p_created_by uuid, p_cap integer DEFAULT 20)
+ RETURNS SETOF project_configured_images
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  current_count INTEGER;
+BEGIN
+  IF p_enabled THEN
+    SELECT count(*) INTO current_count
+      FROM project_configured_images
+      WHERE project_id = p_project_id AND enabled = true
+      FOR UPDATE;
+    IF current_count >= p_cap THEN
+      RAISE EXCEPTION 'image_cap_reached' USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+    INSERT INTO project_configured_images
+      (project_id, organization_id, image_reference, credentials_id, enabled, created_by)
+    VALUES
+      (p_project_id, p_organization_id, p_image_reference, p_credentials_id, p_enabled, p_created_by)
+    RETURNING *;
+END;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.insert_malicious_findings_with_recompute(p_findings jsonb)
@@ -6272,6 +6399,34 @@ end;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.update_configured_image_with_cap(p_image_id uuid, p_project_id uuid, p_organization_id uuid, p_enabled boolean, p_credentials_id_set boolean, p_credentials_id uuid, p_cap integer DEFAULT 20)
+ RETURNS SETOF project_configured_images
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  current_count INTEGER;
+BEGIN
+  IF p_enabled IS TRUE THEN
+    SELECT count(*) INTO current_count
+      FROM project_configured_images
+      WHERE project_id = p_project_id AND enabled = true AND id <> p_image_id
+      FOR UPDATE;
+    IF current_count >= p_cap THEN
+      RAISE EXCEPTION 'image_cap_reached' USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+    UPDATE project_configured_images SET
+      enabled = COALESCE(p_enabled, enabled),
+      credentials_id = CASE WHEN p_credentials_id_set THEN p_credentials_id ELSE credentials_id END,
+      updated_at = NOW()
+    WHERE id = p_image_id AND project_id = p_project_id AND organization_id = p_organization_id
+    RETURNING *;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.update_organization_integrations_updated_at()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -6594,12 +6749,12 @@ CREATE TRIGGER aegis_creator_leaves_org AFTER DELETE ON public.organization_memb
 CREATE TRIGGER create_project_roles_trigger AFTER INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION create_default_project_roles();
 CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH ROW EXECUTE FUNCTION create_default_team_roles();
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
-CREATE TRIGGER pci_null_creds_on_org_move BEFORE UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION pci_null_credentials_id_on_org_move();
 CREATE TRIGGER pmf_enforce_org_consistency BEFORE INSERT OR UPDATE OF organization_id, project_id ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION enforce_pmf_org_consistency();
-CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_project_scoped_org_id();
+CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_pci_org_id_and_null_creds();
 CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
+CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();

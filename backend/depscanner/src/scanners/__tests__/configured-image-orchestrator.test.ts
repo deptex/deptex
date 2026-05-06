@@ -331,6 +331,7 @@ describe('orchestrator cred resolution — cross-org isolation', () => {
         {
           id: CRED_A_ID,
           organization_id: ORG_A,
+          credential_shape: 'username_password',
           ...cipher,
         },
       ],
@@ -363,6 +364,7 @@ describe('orchestrator cred resolution — cross-org isolation', () => {
         {
           id: CRED_A_ID,
           organization_id: ORG_A,
+          credential_shape: 'token',
           ...cipher,
         },
       ],
@@ -375,6 +377,31 @@ describe('orchestrator cred resolution — cross-org isolation', () => {
         ['id', CRED_A_ID],
         ['organization_id', ORG_B],
       ]),
+    );
+  });
+
+  it('throws CredDecryptError when row.credential_shape disagrees with the decrypted plaintext shape', async () => {
+    // An attacker with DB write swaps a token-shape row's ciphertext to
+    // an aws_keys-shape blob. The worker must refuse before mintAuthForCredential
+    // dispatches on the swapped shape.
+    const cipher = seedCipher({
+      shape: 'aws_keys',
+      access_key_id: 'AKIA',
+      secret_access_key: 'sk',
+      region: 'us-west-2',
+    });
+    const { client } = makeCacheClient({
+      organization_registry_credentials: [
+        {
+          id: CRED_A_ID,
+          organization_id: ORG_A,
+          credential_shape: 'token', // mismatch
+          ...cipher,
+        },
+      ],
+    });
+    await expect(fetchAndDecryptCredential(client, CRED_A_ID, ORG_A)).rejects.toBeInstanceOf(
+      CredDecryptError,
     );
   });
 

@@ -31,6 +31,17 @@ jest.mock('../../lib/supabase', () => ({
 }));
 jest.mock('../../lib/activities', () => ({ createActivity: jest.fn() }));
 
+// validateExternalUrl performs DNS lookups; stub to deterministic results in
+// tests so cases pass offline. Specific tests can override the mock.
+jest.mock('../../lib/url-guard', () => ({
+  validateExternalUrl: jest.fn((url: string) => {
+    if (/(127\.|169\.254\.|10\.|192\.168\.|localhost|\.internal)/.test(url)) {
+      return Promise.resolve({ valid: false, reason: `host blocked: ${url}` });
+    }
+    return Promise.resolve({ valid: true, resolved: { host: 'public.example.com', addresses: ['1.2.3.4'] } });
+  }),
+}));
+
 // Force AI_ENCRYPTION_KEY for tests so encryption helpers are configured.
 // 32-byte hex key (64 chars). Must run before encryption.ts is imported by
 // the route module, which happens transitively via app.
@@ -224,6 +235,37 @@ describe('POST /api/organizations/:id/registry-credentials', () => {
   });
 });
 
+describe('POST /api/organizations/:id/registry-credentials — SSRF + length guards', () => {
+  it('rejects registry_url pointing at IMDS', async () => {
+    setPerm({ manage_integrations: true });
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/registry-credentials`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({
+        registry_type: 'harbor',
+        registry_url: '169.254.169.254',
+        display_name: 'imds',
+        credentials: { shape: 'username_password', username: 'u', password: 'p' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('registry_url_blocked');
+  });
+
+  it('rejects an over-long display_name with 400', async () => {
+    setPerm({ manage_integrations: true });
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/registry-credentials`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({
+        registry_type: 'dockerhub',
+        display_name: 'x'.repeat(201),
+        credentials: { shape: 'token', token: 't' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/display_name too long/);
+  });
+});
+
 // ===========================================================================
 // PATCH /:id/registry-credentials/:credId
 // ===========================================================================
@@ -261,6 +303,15 @@ describe('PATCH /api/organizations/:id/registry-credentials/:credId', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('unknown_field');
     expect(res.body.field).toBe('registry_type');
+  });
+
+  it('returns 403 without manage_integrations', async () => {
+    setPerm({ manage_integrations: false });
+    const res = await request(app)
+      .patch(`/api/organizations/${ORG_ID}/registry-credentials/c1`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ display_name: 'New' });
+    expect(res.status).toBe(403);
   });
 });
 
@@ -334,6 +385,15 @@ describe('PATCH /api/organizations/:id/registry-credentials/:credId/rotate', () 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('unknown_field');
   });
+
+  it('returns 403 without manage_integrations', async () => {
+    setPerm({ manage_integrations: false });
+    const res = await request(app)
+      .patch(`/api/organizations/${ORG_ID}/registry-credentials/c1/rotate`)
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ credentials: { shape: 'token', token: 't' } });
+    expect(res.status).toBe(403);
+  });
 });
 
 // ===========================================================================
@@ -362,6 +422,14 @@ describe('DELETE /api/organizations/:id/registry-credentials/:credId', () => {
       activity_type: 'registry_credential_deleted',
       metadata: expect.objectContaining({ detached_image_count: 2 }),
     }));
+  });
+
+  it('returns 403 without manage_integrations', async () => {
+    setPerm({ manage_integrations: false });
+    const res = await request(app)
+      .delete(`/api/organizations/${ORG_ID}/registry-credentials/c1`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -447,5 +515,13 @@ describe('POST /api/organizations/:id/registry-credentials/:credId/test', () => 
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: false, error_class: 'shape_invalid' });
+  });
+
+  it('returns 403 without manage_integrations', async () => {
+    setPerm({ manage_integrations: false });
+    const res = await request(app)
+      .post(`/api/organizations/${ORG_ID}/registry-credentials/c1/test`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(403);
   });
 });

@@ -19,6 +19,7 @@ import {
   RegistryUnavailableError,
   runTrivyConfig,
   runTrivyImage,
+  trivyDbVersionDay,
   trivyVersion,
   type ConfiguredCredRef,
 } from './trivy';
@@ -44,6 +45,7 @@ import {
   CredDecryptError,
   classifyContainerScanError,
 } from './scanner-errors';
+import { validateScanTimeHost } from './host-guard';
 import type {
   ContainerFinding,
   CredentialPlaintext,
@@ -241,6 +243,12 @@ export async function listConfiguredImages(
  * Lazy-decrypt a single credential by id. Reads encrypted_credentials from
  * the row only at this moment (Patch 8 / FMH-P0-3) — never produced upstream
  * during cred-list metadata reads.
+ *
+ * Cross-checks the row's credential_shape column against the decrypted
+ * plaintext.shape (the comment at registry-auth.ts promised this; previously
+ * unimplemented). A swapped ciphertext — e.g. a token-shape row whose
+ * encrypted_credentials was tampered to decrypt as aws_keys — is rejected
+ * before mintAuthForCredential dispatches on the plaintext shape.
  */
 export async function fetchAndDecryptCredential(
   supabase: SupabaseClient,
@@ -249,7 +257,7 @@ export async function fetchAndDecryptCredential(
 ): Promise<CredentialPlaintext> {
   const { data, error } = await supabase
     .from('organization_registry_credentials')
-    .select('encrypted_credentials, encryption_key_version')
+    .select('encrypted_credentials, encryption_key_version, credential_shape')
     .eq('id', credentialId)
     .eq('organization_id', organizationId)
     .single();
@@ -258,14 +266,21 @@ export async function fetchAndDecryptCredential(
       `cred lookup failed for id=${credentialId}: ${error?.message ?? 'no row'}`
     );
   }
+  let plaintext: CredentialPlaintext;
   try {
-    return decryptCredential(
+    plaintext = decryptCredential(
       (data as any).encrypted_credentials,
       (data as any).encryption_key_version
     );
   } catch (e: any) {
     throw new CredDecryptError(`cred decrypt failed for id=${credentialId}: ${e?.message ?? e}`);
   }
+  if (plaintext.shape !== (data as any).credential_shape) {
+    throw new CredDecryptError(
+      `cred shape mismatch for id=${credentialId}: row=${(data as any).credential_shape} plaintext=${plaintext.shape}`
+    );
+  }
+  return plaintext;
 }
 
 /**
@@ -531,11 +546,6 @@ async function shredAndRemoveDir(dir: string): Promise<void> {
 // Per-image scan — owns its substep taxonomy + try/catch. NEVER rethrows.
 // ---------------------------------------------------------------------------
 
-function trivyDbVersionDayUTC(): string {
-  // YYYY-MM-DD in UTC. Matches the schema CHECK on trivy_db_version_day.
-  return new Date().toISOString().slice(0, 10);
-}
-
 async function scanOneImage(
   image: ImagePlanEntry,
   ctx: ScannerStepContext,
@@ -543,6 +553,18 @@ async function scanOneImage(
   switches: KillSwitchContext,
   installationLogin: string | null
 ): Promise<{ findings: ContainerFinding[] } | { skipped: SkippedImage }> {
+  // ---- scan-time SSRF re-check (defeats DNS rebinding between create-time
+  // host validation in the route layer and now). If the registry host
+  // re-resolves to a private/loopback/IMDS/Fly-6PN range, skip the image
+  // before any crane / Trivy invocation.
+  const hostGuard = await validateScanTimeHost(image.imageRef, 'imageRef');
+  if (!hostGuard.valid) {
+    ctx.logger
+      .warn('container_scan.host_blocked', `${image.imageRef}: ${hostGuard.reason}`)
+      .catch(() => {});
+    return { skipped: { image: image.imageRef, reason: 'image_host_blocked' } };
+  }
+
   // ---- ghcr App-token fallback path: write the App token into envelope on
   // demand. The namespace check is enforced HERE (only on this fallback);
   // explicit ghcr creds bypass it.
@@ -615,7 +637,7 @@ async function scanOneImage(
         image_digest: probedDigest,
         scanner: 'trivy',
         scanner_version: `trivy@${await trivyVersion()}`,
-        trivy_db_version_day: trivyDbVersionDayUTC(),
+        trivy_db_version_day: await trivyDbVersionDay(),
       });
       if (hit) {
         // Rewrite image_reference on every cached row so cross-org cache
@@ -693,7 +715,7 @@ async function scanOneImage(
           image_digest: parsedDigest,
           scanner: 'trivy',
           scanner_version: trivyResult.version,
-          trivy_db_version_day: trivyDbVersionDayUTC(),
+          trivy_db_version_day: await trivyDbVersionDay(),
         },
         trivyResult.findings,
         ctx.organizationId,
@@ -1060,5 +1082,5 @@ export function ensureWorkspaceTmp(): string {
 // Internal exports for test harnesses.
 export const _internal = {
   isPublicImage,
-  trivyDbVersionDayUTC,
+  scanOneImage,
 };
