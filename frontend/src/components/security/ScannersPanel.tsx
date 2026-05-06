@@ -4,6 +4,7 @@ import { api, frameworkLabel, type ScannerSummary } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import RegistryCredentialsSection from './RegistryCredentialsSection';
+import ConfiguredImagesSection from './ConfiguredImagesSection';
 
 interface Props {
   organizationId: string;
@@ -151,6 +152,7 @@ export default function ScannersPanel({
       </div>
 
       <RegistryCredentialsSection organizationId={organizationId} canManage={canManage} />
+      <ConfiguredImagesSection organizationId={organizationId} projectId={projectId} canManage={canManage} />
     </div>
   );
 }
