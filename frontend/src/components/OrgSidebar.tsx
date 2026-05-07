@@ -787,11 +787,11 @@ export default function OrgSidebar({
               <DropdownMenuContent
                 align="start"
                 side="top"
-                className="w-72 p-0 px-3 pt-3 pb-3"
+                className="w-72 p-1.5 rounded-xl"
                 alignOffset={0}
                 sideOffset={8}
               >
-                <div className="flex items-center gap-3 px-0 py-3">
+                <div className="flex items-center gap-3 px-3 py-2">
                   <img
                     src={avatarUrl}
                     alt=""
@@ -813,10 +813,10 @@ export default function OrgSidebar({
                 <DropdownMenuItem asChild>
                   <Link
                     to={`/organizations/${organizationId}/account/general`}
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <User className="h-4 w-4" />
+                    <User className="h-5 w-5" />
                     Account Settings
                   </Link>
                 </DropdownMenuItem>
@@ -825,10 +825,10 @@ export default function OrgSidebar({
                     href="/docs"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <BookOpen className="h-4 w-4" />
+                    <BookOpen className="h-5 w-5" />
                     Documentation
                   </a>
                 </DropdownMenuItem>
@@ -837,9 +837,9 @@ export default function OrgSidebar({
                     setProfileOpen(false);
                     setFeedbackOpen(true);
                   }}
-                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                  className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                 >
-                  <MessageSquare className="h-4 w-4" />
+                  <MessageSquare className="h-5 w-5" />
                   Feedback
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
@@ -847,27 +847,25 @@ export default function OrgSidebar({
                     href="/docs/help"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <Mail className="h-4 w-4" />
+                    <Mail className="h-5 w-5" />
                     Contact Support
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <div className="pt-2">
-                  <DropdownMenuItem
-                    onClick={async () => {
-                      setProfileOpen(false);
-                      await onSignOut?.();
-                      navigate('/');
-                    }}
-                    className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10 flex items-center gap-2 rounded-md"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Log out
-                  </DropdownMenuItem>
-                </div>
+                <DropdownMenuItem
+                  onClick={async () => {
+                    setProfileOpen(false);
+                    await onSignOut?.();
+                    navigate('/');
+                  }}
+                  className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
+                >
+                  <LogOut className="h-5 w-5" />
+                  Log out
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarFooter>
