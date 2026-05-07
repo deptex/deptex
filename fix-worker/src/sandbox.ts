@@ -169,13 +169,13 @@ function requireBinary(name: string, suggestion: string): void {
 async function setupJava(workDir: string, logger: FixLogger): Promise<void> {
   // Maven is the most common; add Gradle later if needed.
   if (fileExists(workDir, 'pom.xml')) {
-    requireBinary('mvn', 'Add Maven to backend/fix-worker/Dockerfile to enable Java fixes.');
+    requireBinary('mvn', 'Add Maven to fix-worker/Dockerfile to enable Java fixes.');
     await logger.info('setup', 'mvn -B -q dependency:resolve');
     execSync('mvn -B -q dependency:resolve', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
     return;
   }
   if (fileExists(workDir, 'build.gradle') || fileExists(workDir, 'build.gradle.kts')) {
-    requireBinary('gradle', 'Add Gradle to backend/fix-worker/Dockerfile to enable Java fixes.');
+    requireBinary('gradle', 'Add Gradle to fix-worker/Dockerfile to enable Java fixes.');
     await logger.info('setup', 'gradle dependencies --quiet');
     execSync('gradle dependencies --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
     return;
@@ -188,7 +188,7 @@ async function setupRuby(workDir: string, logger: FixLogger): Promise<void> {
     await logger.warn('setup', 'No Gemfile — skipping Ruby setup');
     return;
   }
-  requireBinary('bundle', 'Add Ruby + bundler to backend/fix-worker/Dockerfile to enable Ruby fixes.');
+  requireBinary('bundle', 'Add Ruby + bundler to fix-worker/Dockerfile to enable Ruby fixes.');
   await logger.info('setup', 'bundle install --quiet');
   execSync('bundle install --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
 }
@@ -198,7 +198,7 @@ async function setupPhp(workDir: string, logger: FixLogger): Promise<void> {
     await logger.warn('setup', 'No composer.json — skipping PHP setup');
     return;
   }
-  requireBinary('composer', 'Add PHP + composer to backend/fix-worker/Dockerfile to enable PHP fixes.');
+  requireBinary('composer', 'Add PHP + composer to fix-worker/Dockerfile to enable PHP fixes.');
   await logger.info('setup', 'composer install --no-interaction --quiet');
   execSync('composer install --no-interaction --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
 }
@@ -208,14 +208,14 @@ async function setupRust(workDir: string, logger: FixLogger): Promise<void> {
     await logger.warn('setup', 'No Cargo.toml — skipping Rust setup');
     return;
   }
-  requireBinary('cargo', 'Add Rust toolchain to backend/fix-worker/Dockerfile to enable Rust fixes.');
+  requireBinary('cargo', 'Add Rust toolchain to fix-worker/Dockerfile to enable Rust fixes.');
   await logger.info('setup', 'cargo fetch');
   execSync('cargo fetch --quiet', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
 }
 
 async function setupCsharp(workDir: string, logger: FixLogger): Promise<void> {
   // dotnet restore picks up .csproj / .sln automatically from the cwd.
-  requireBinary('dotnet', 'Add .NET SDK to backend/fix-worker/Dockerfile to enable C# fixes.');
+  requireBinary('dotnet', 'Add .NET SDK to fix-worker/Dockerfile to enable C# fixes.');
   await logger.info('setup', 'dotnet restore --nologo');
   execSync('dotnet restore --nologo', { ...EXEC_OPTS, cwd: workDir, timeout: 600_000 });
 }

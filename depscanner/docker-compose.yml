@@ -1,5 +1,5 @@
 # Run depscanner (the unified scanner worker) in Docker (no local Python/dep-scan needed).
-# From backend/depscanner:
+# From depscanner:
 #   docker compose up --build
 #
 # Backend must be reachable from the container. If the backend runs on your host:

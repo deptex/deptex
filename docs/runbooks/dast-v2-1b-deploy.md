@@ -25,7 +25,7 @@ mcp__claude_ai_Supabase__apply_migration {
 
 Verify the `RAISE NOTICE` row counts in the Supabase logs match expectations (zero or small for solo-pre-launch).
 
-If `apply_migration` succeeds but `schema:dump` (run locally) fails: do NOT re-apply the migration — it will error on the NOT NULL flip and the function-overload assertion. Re-run only `cd backend/depscanner && npm run schema:dump`.
+If `apply_migration` succeeds but `schema:dump` (run locally) fails: do NOT re-apply the migration — it will error on the NOT NULL flip and the function-overload assertion. Re-run only `cd depscanner && npm run schema:dump`.
 
 ## Step 3 — Verify
 

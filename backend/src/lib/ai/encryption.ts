@@ -86,7 +86,7 @@ export function decryptApiKey(encrypted: string, storedVersion: number): string 
 // Everything below uses the backend's Supabase client and is intentionally
 // excluded from the depscanner copy. scripts/sync-encryption.ts truncates at
 // the marker; .github/workflows/encryption-sync-check.yml fails the PR if the
-// committed copy at backend/depscanner/src/lib/encryption.ts diverges.
+// committed copy at depscanner/src/lib/encryption.ts diverges.
 
 async function rotateEncryptedTable(
   supabase: any,

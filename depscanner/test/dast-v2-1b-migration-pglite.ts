@@ -28,7 +28,7 @@
  *       accepted on credentials.
  *   14. Exactly one queue_scan_job overload exists post-migration.
  *
- * Run: `cd backend/depscanner && npx tsx test/dast-v2-1b-migration-pglite.ts`
+ * Run: `cd depscanner && npx tsx test/dast-v2-1b-migration-pglite.ts`
  *
  * Pattern: skip schema.sql (forward-references in CHECK constraints don't
  * load on PGLite); apply phase24a + phase24b directly on a v1-shaped scaffold.
@@ -134,9 +134,9 @@ const SCAFFOLD_SQL = `
   CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY);
 `;
 
-const PHASE24A_SQL_PATH = path.resolve(__dirname, '../../database/phase24a_dast_v2_engine_additive.sql');
-const PHASE24A_2_SQL_PATH = path.resolve(__dirname, '../../database/phase24a_2_dast_v2_engine_pipeline.sql');
-const PHASE24B_SQL_PATH = path.resolve(__dirname, '../../database/phase24b_dast_v2_engine_destructive.sql');
+const PHASE24A_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase24a_dast_v2_engine_additive.sql');
+const PHASE24A_2_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase24a_2_dast_v2_engine_pipeline.sql');
+const PHASE24B_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase24b_dast_v2_engine_destructive.sql');
 
 let failures = 0;
 function assert(cond: unknown, msg: string): void {

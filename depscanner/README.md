@@ -20,7 +20,7 @@ All heavy tooling (cdxgen, dep-scan, Semgrep, TruffleHog, Atom, Python, Go, Mave
 ### Build
 
 ```bash
-cd backend/extraction-worker
+cd depscanner
 npm run docker:build
 ```
 
@@ -127,7 +127,7 @@ npm start
 
 Everything (Node, cdxgen, dep-scan, Semgrep, TruffleHog) runs inside the container.
 
-From `backend/extraction-worker`:
+From `depscanner`:
 
 ```bash
 docker compose up --build
@@ -159,6 +159,6 @@ Polls `extraction-jobs` (prod) or `extraction-jobs-local` (dev). Jobs are pushed
    - Either `Queued extraction job for project ... (queue: extraction-jobs-local, length: 1)` or `[EXTRACT] Redis not configured - extraction job NOT queued.`
    - If you see "Redis not configured", the **backend** is missing `UPSTASH_REDIS_URL` and `UPSTASH_REDIS_TOKEN` in **backend/.env** (not this folder).
 
-2. **Same Redis and queue name:** The backend uses **backend/.env**; this worker uses **backend/extraction-worker/.env**. Both need the same `UPSTASH_REDIS_URL` and `UPSTASH_REDIS_TOKEN`. Queue name is `extraction-jobs-local` when `NODE_ENV` is not `production`, and `extraction-jobs` when it is. If the backend runs with `NODE_ENV=production` and the worker without it (or vice versa), they use different queues and jobs never meet. Fix: set `NODE_ENV` the same for both, or set `EXTRACTION_QUEUE_NAME=extraction-jobs-local` in both .env files.
+2. **Same Redis and queue name:** The backend uses **backend/.env**; this worker uses **depscanner/.env**. Both need the same `UPSTASH_REDIS_URL` and `UPSTASH_REDIS_TOKEN`. Queue name is `extraction-jobs-local` when `NODE_ENV` is not `production`, and `extraction-jobs` when it is. If the backend runs with `NODE_ENV=production` and the worker without it (or vice versa), they use different queues and jobs never meet. Fix: set `NODE_ENV` the same for both, or set `EXTRACTION_QUEUE_NAME=extraction-jobs-local` in both .env files.
 
 3. **Verify worker startup:** When you run `npm start` here you should see `[EXTRACT] NODE_ENV=... → queue: extraction-jobs-local` and the Redis URL prefix. Compare with the backend’s "Backend Redis URL" log; they should match.

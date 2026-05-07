@@ -4688,7 +4688,7 @@ export interface LicenseViolation {
   depscore: number | null;
 }
 
-// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Mirror of `IAC_FRAMEWORKS` in `depscanner/src/scanners/types.ts`.
 // Kept in sync manually (frontend can't import from depscanner package).
 export const IAC_FRAMEWORKS = [
   'terraform',
@@ -4811,7 +4811,7 @@ export type CredentialShape =
   | 'token';
 
 // Public API shape — encrypted_credentials is server-only and never serialized
-// in responses. Mirrors backend/depscanner/src/scanners/types.ts; kept in sync
+// in responses. Mirrors depscanner/src/scanners/types.ts; kept in sync
 // manually (frontend can't import from depscanner package).
 export interface RegistryCredential {
   id: string;

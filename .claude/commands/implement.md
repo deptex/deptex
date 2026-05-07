@@ -16,7 +16,7 @@ For each milestone in the active plan:
 ### Defaults that don't need re-confirming
 
 - Apply DB migrations via Supabase MCP (`mcp__claude_ai_Supabase__apply_migration`), never paste SQL for Henry to run.
-- After any migration change, run `cd backend/extraction-worker && npm run schema:dump` in the same commit to refresh `backend/database/schema.sql` (CI fails otherwise).
+- After any migration change, run `cd depscanner && npm run schema:dump` in the same commit to refresh `backend/database/schema.sql` (CI fails otherwise).
 - Use git bash, not PowerShell.
 - Prefer editing existing files over creating new ones.
 - No new `.md` docs without checking first (per `feedback_docs_content` memory).

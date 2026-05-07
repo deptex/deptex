@@ -9,7 +9,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - Use git bash, not PowerShell
 - Backend: `cd backend && npm run dev` (port 3001). Frontend: `cd frontend && npm run dev` (port 3000)
 - API routes: add to `backend/src/routes/`, register in `backend/src/index.ts`
-- DB migrations: `backend/database/` (~140 SQL files). **If you add or modify a migration, also run `cd backend/depscanner && npm run schema:dump` in the same PR to refresh `backend/database/schema.sql`.** That file is the source of truth for PGLite local-mode (depscanner CLI + CI smoke tests). CI (`.github/workflows/schema-check.yml`) fails PRs that touch a migration without refreshing it.
+- DB migrations: `backend/database/` (~140 SQL files). **If you add or modify a migration, also run `cd depscanner && npm run schema:dump` in the same PR to refresh `backend/database/schema.sql`.** That file is the source of truth for PGLite local-mode (depscanner CLI + CI smoke tests). CI (`.github/workflows/schema-check.yml`) fails PRs that touch a migration without refreshing it.
 - UI components: Radix primitives + Tailwind (shadcn pattern). Add via `npx shadcn@latest`
 - See `DEVELOPERS.md` for full setup, `CONTRIBUTING.md` for PR flow, `fly.md` for Fly.io deployment
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
@@ -52,9 +52,9 @@ backend/
     routes/               API route handlers (orgs, teams, projects, aegis, workers, webhooks, etc.)
     lib/                  Shared libraries (ai/, aegis/, learning/, github, policy-engine, etc.)
     middleware/            auth.ts (JWT), ip-allowlist.ts
-  depscanner/             Unified scanner worker. Extraction (clone + cdxgen + dep-scan + tree-sitter + framework detection + Semgrep + TruffleHog) today; DAST (ZAP) added in Phase 23+. Single Fly app `deptex-depscanner` with type-aware dispatch on scan_jobs.type. Fly.io scale-to-zero.
-  fix-worker/             Aegis Fix Agent — plan-then-execute coding agent (Fly.io scale-to-zero)
   database/               ~140 SQL migration files
+depscanner/             Unified scanner worker. Extraction (clone + cdxgen + dep-scan + tree-sitter + framework detection + Semgrep + TruffleHog) today; DAST (ZAP) added in Phase 23+. Single Fly app `deptex-depscanner` with type-aware dispatch on scan_jobs.type. Fly.io scale-to-zero.
+fix-worker/             Aegis Fix Agent — plan-then-execute coding agent (Fly.io scale-to-zero)
 
 frontend/src/
   main.tsx                RouterProvider entry
@@ -111,7 +111,7 @@ Connect repo -> queueExtractionJob() inserts scan_jobs (type='extraction'), star
   -> Fault tolerance: 60s heartbeat, 5min stuck detection, recovery cron, max 3 attempts
 ```
 
-Reachability rule packs live in `backend/depscanner/reachability-rules/` — one folder per CVE (`CVE-YYYY-NNNNN-<slug>/rule.yml` + fixtures). See that directory's README for authoring conventions. `scripts/validate-reachability-rules.ts` runs in CI and fails on malformed/missing rules.
+Reachability rule packs live in `depscanner/reachability-rules/` — one folder per CVE (`CVE-YYYY-NNNNN-<slug>/rule.yml` + fixtures). See that directory's README for authoring conventions. `scripts/validate-reachability-rules.ts` runs in CI and fails on malformed/missing rules.
 
 ### Aegis AI Agent
 ```

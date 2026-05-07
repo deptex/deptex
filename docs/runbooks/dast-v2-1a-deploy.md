@@ -9,7 +9,7 @@ path safe.
 
 The original `DAST_RUNNER_MODE=helper_script` rollback flag has been retired:
 the worker only ever spawned the AF YAML path through `runZapWithControlPlane`
-in `backend/depscanner/src/dast/pipeline.ts`, so the dispatcher and the
+in `depscanner/src/dast/pipeline.ts`, so the dispatcher and the
 helper-script + api-scan code paths in `runner.ts` were never reachable in
 production. Real-ZAP e2e validated AF YAML against Juice Shop before the
 helper-script code was deleted; v2.1b no longer needs to drop the flag.
@@ -124,7 +124,7 @@ Monitor for **≥7 days** (≥30 days for prod). Hold phase24b until **all** of:
   ORDER BY funcname;
   ```
 - `commit_dast_target_run` accumulates calls (i.e., new RPC is being exercised).
-- Juice Shop e2e (`backend/depscanner/dast/__tests__/juice-shop.e2e`) reproduces
+- Juice Shop e2e (`depscanner/dast/__tests__/juice-shop.e2e`) reproduces
   v1 anonymous-baseline finding count within ±10% under both `helper_script`
   and `automation_framework` runner modes.
 - No `tenant_drift_detected` or `dast_credential_key_*` aborts in the last 7 days.

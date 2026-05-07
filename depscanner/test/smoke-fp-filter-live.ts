@@ -24,7 +24,7 @@ import {
 import { loadSpec, propagate } from '../src/taint-engine';
 import type { FrameworkSpec } from '../src/taint-engine';
 
-dotenv({ path: path.resolve(__dirname, '../../.env') });
+dotenv({ path: path.resolve(__dirname, '../../backend/.env') });
 
 const ORG_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const PROJECT_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';

@@ -19,7 +19,7 @@ import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SCHEMA_FILE = path.resolve(__dirname, '../../database/schema.sql');
+const SCHEMA_FILE = path.resolve(__dirname, '../../backend/database/schema.sql');
 
 let failures = 0;
 let passed = 0;

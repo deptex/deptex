@@ -65,9 +65,9 @@ const SCAFFOLD_SQL = `
   CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY);
 `;
 
-const PHASE25_SQL_PATH = path.resolve(__dirname, '../../database/phase25_reachability_rule_generation.sql');
-const PHASE25B_SQL_PATH = path.resolve(__dirname, '../../database/phase25b_reachability_validation_breakdown.sql');
-const PHASE25C_SQL_PATH = path.resolve(__dirname, '../../database/phase25c_reachability_settings_updated_by_index.sql');
+const PHASE25_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase25_reachability_rule_generation.sql');
+const PHASE25B_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase25b_reachability_validation_breakdown.sql');
+const PHASE25C_SQL_PATH = path.resolve(__dirname, '../../backend/database/phase25c_reachability_settings_updated_by_index.sql');
 
 let failures = 0;
 

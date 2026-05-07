@@ -15,7 +15,7 @@ The app uses a **single backend** in `backend/`. All API routes live in **`backe
 |-------------------|-----------|
 | Is a new HTTP API surface | **`backend/src/routes/`** — add router + register in **`backend/src/index.ts`** |
 | Is shared logic (policy engine, AI, GitHub, Redis, etc.) | **`backend/src/lib/`** |
-| Is extraction / SBOM / vuln pipeline worker logic | **`backend/extraction-worker/`** (and related workers under `backend/`) |
+| Is extraction / SBOM / vuln pipeline worker logic | **`depscanner/`** (and related workers under `backend/`) |
 | Is org/team/project/integrations/Aegis | **`backend/src/routes/`** + **`backend/src/lib/`** |
 
 ---

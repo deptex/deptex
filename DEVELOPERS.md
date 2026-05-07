@@ -75,7 +75,7 @@ Frontend runs at `http://localhost:3000` (or the port Vite assigns).
 For dependency extraction (clone, SBOM, dep-scan):
 
 ```bash
-cd backend/extraction-worker
+cd depscanner
 npm install
 # Set SUPABASE_* and optionally REDIS in .env
 npm run dev
@@ -90,7 +90,7 @@ The extraction pipeline now includes a `malicious_scan` step (after vuln scan, b
 | Directory                    | Purpose                                               |
 | ---------------------------- | ----------------------------------------------------- |
 | `backend/`                   | Express API; routes in `backend/src/routes/`, libs in `backend/src/lib/` |
-| `backend/extraction-worker/` | Clone, cdxgen, SBOM, dep-scan pipeline                |
+| `depscanner/` | Clone, cdxgen, SBOM, dep-scan pipeline                |
 | `frontend/`                  | React dashboard                                       |
 | `backend/database/`          | SQL migrations                                        |
 

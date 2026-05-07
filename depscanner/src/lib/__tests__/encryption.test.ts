@@ -12,6 +12,7 @@ const FIXTURE_PATH = path.resolve(
   '..',
   '..',
   '..',
+  'backend',
   'src',
   'lib',
   'ai',

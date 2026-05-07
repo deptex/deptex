@@ -24,7 +24,7 @@ import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 
-// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Mirror of `IAC_FRAMEWORKS` in `depscanner/src/scanners/types.ts`.
 // Backend's tsconfig rootDir is ./src so cross-package import isn't possible;
 // kept in sync manually with the depscanner canonical export and the
 // `project_iac_findings.framework` CHECK constraint (phase27a migration).

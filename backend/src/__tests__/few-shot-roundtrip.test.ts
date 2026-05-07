@@ -25,10 +25,10 @@ import {
   PersistedFrameworkSpecSchema,
   withOsvIdsSubstituted,
   findRogueOsvIdInSinks,
-} from '../../depscanner/src/rule-generator/framework-spec-schema';
-import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../../depscanner/src/rule-generator/few-shot-examples';
-import { validateRule, makeRuleGenWorkdir } from '../../depscanner/src/rule-generator/validate';
-import { ALL_VULN_CLASSES } from '../../depscanner/src/taint-engine/spec';
+} from '../../../depscanner/src/rule-generator/framework-spec-schema';
+import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../../../depscanner/src/rule-generator/few-shot-examples';
+import { validateRule, makeRuleGenWorkdir } from '../../../depscanner/src/rule-generator/validate';
+import { ALL_VULN_CLASSES } from '../../../depscanner/src/taint-engine/spec';
 
 describe('few-shot library — Gate 1 schema validation', () => {
   test('library is non-empty and CVE ids are unique', () => {
@@ -97,8 +97,8 @@ describe('few-shot library — Gate 1 schema validation', () => {
   // jest's vm-isolate sandbox refuses without --experimental-vm-modules.
   //
   // Canonical Gate 2 location:
-  //   `backend/depscanner/test/few-shot-roundtrip-gate2.ts`
-  //   `cd backend/depscanner && npm run test:few-shot-gate2`
+  //   `depscanner/test/few-shot-roundtrip-gate2.ts`
+  //   `cd depscanner && npm run test:few-shot-gate2`
   //
   // We still cover the JS fixture here (TS Compiler API doesn't need WASM)
   // so jest catches the most common regression class — the all-language

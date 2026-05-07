@@ -345,5 +345,5 @@ END $$;
 COMMIT;
 
 -- =============================================================================
--- After applying: regenerate schema.sql via `cd backend/depscanner && npm run schema:dump`
+-- After applying: regenerate schema.sql via `cd depscanner && npm run schema:dump`
 -- =============================================================================

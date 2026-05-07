@@ -1,7 +1,7 @@
 // SPA / classic-runtime detector — backend route copy.
 //
 // This file mirrors the depscanner's canonical implementation at
-// `backend/depscanner/src/dast/spa-detect.ts`. The two copies must stay in
+// `depscanner/src/dast/spa-detect.ts`. The two copies must stay in
 // sync (same regex set, same return shape). Duplication exists because each
 // package has rootDir: ./src and forbids cross-package production imports;
 // the alternative would be a workspace-level shared lib, which we'll

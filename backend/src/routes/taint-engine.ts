@@ -84,7 +84,7 @@ function requirePerm(perm: string) {
 // ---------------------------------------------------------------------------
 
 // Single source of truth lives in `backend/src/lib/taint-engine-defaults.ts`,
-// which mirrors `backend/depscanner/src/taint-engine/spec.ts:ALL_VULN_CLASSES`
+// which mirrors `depscanner/src/taint-engine/spec.ts:ALL_VULN_CLASSES`
 // (the engine's own constant). The defaults test asserts byte-equality across
 // all three surfaces (engine, this re-export, frontend mirror).
 const VULN_CLASSES: ReadonlySet<string> = new Set(ALL_VULN_CLASSES);

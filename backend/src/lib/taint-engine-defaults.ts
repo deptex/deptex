@@ -23,7 +23,7 @@ export const COST_CAP_MAX_USD = 1000;
 
 /**
  * Closed taxonomy of vulnerability classes the taint engine + generator
- * understand. Mirrors `backend/depscanner/src/taint-engine/spec.ts`'s
+ * understand. Mirrors `depscanner/src/taint-engine/spec.ts`'s
  * `ALL_VULN_CLASSES` byte-for-byte; the depscanner is its own tsc package
  * (rootDir=./src), so production code in backend/src can't import from
  * depscanner — we duplicate and pin equality with a unit test.
