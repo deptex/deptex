@@ -36,7 +36,8 @@ export type VulnClass =
   | 'redos'
   | 'file_upload'
   | 'open_redirect'
-  | 'log_injection';
+  | 'log_injection'
+  | 'code_injection';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -50,4 +51,5 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'file_upload',
   'open_redirect',
   'log_injection',
+  'code_injection',
 ];

@@ -65,17 +65,24 @@ describe('taint-engine defaults', () => {
     expect(literalEntries).toEqual([...ALL_VULN_CLASSES]);
   });
 
-  test('phase26 migration vuln_classes_enabled CHECK list matches ALL_VULN_CLASSES', () => {
-    // The taint_engine_settings.vuln_classes_enabled column was introduced
-    // in phase26 with a CHECK that the array contains only the enum values.
-    // Surface the migration text so a future expansion of the engine taxonomy
-    // fails this test loudly.
-    const sql = fs.readFileSync(
+  test('vuln_classes_enabled DEFAULT migrations cover every ALL_VULN_CLASSES entry', () => {
+    // The column was introduced in phase26 (initial 11-class taxonomy) and
+    // extended in phase28b (added `code_injection` for SpEL-style CVEs). Every
+    // class in the engine taxonomy must appear in at least one phase*.sql
+    // migration so the live DB DEFAULT keeps tracking the engine. Surface the
+    // combined migration text so the next taxonomy expansion can't ship
+    // without a matching migration.
+    const phase26 = fs.readFileSync(
       path.resolve(__dirname, '../../database/phase26_taint_engine.sql'),
       'utf8',
     );
+    const phase28b = fs.readFileSync(
+      path.resolve(__dirname, '../../database/phase28b_code_injection_vuln_class.sql'),
+      'utf8',
+    );
+    const combined = `${phase26}\n${phase28b}`;
     for (const cls of ALL_VULN_CLASSES) {
-      expect(sql).toContain(cls);
+      expect(combined).toContain(cls);
     }
   });
 });

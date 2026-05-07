@@ -16,7 +16,18 @@
 
 /**
  * Closed taxonomy of vulnerability classes the engine can detect. Matches
- * the taint_engine_settings.vuln_classes_enabled CHECK list (M4 migration).
+ * the taint_engine_settings.vuln_classes_enabled DEFAULT list (phase26
+ * migration; extended in phase28b to add `code_injection`).
+ *
+ * `code_injection` covers expression / template / eval-style sinks where
+ * tainted data is interpreted as code by the runtime — Spring SpEL eval,
+ * `eval(*)`, `Function(*)`, server-side template injection, etc. Added
+ * because Qwen routinely emits this label for SpEL CVEs (e.g.
+ * CVE-2023-34053) and the previous closed enum silently rejected the
+ * generated spec under `invalid_schema`. Vuln classes that genuinely fall
+ * outside taint flow (DoS, XML expansion, HTTP/2 reset attacks) are
+ * surfaced via the `vuln_class_out_of_scope` generator failure code
+ * instead of being modelled here.
  */
 export type VulnClass =
   | 'sql_injection'
@@ -29,7 +40,8 @@ export type VulnClass =
   | 'redos'
   | 'file_upload'
   | 'open_redirect'
-  | 'log_injection';
+  | 'log_injection'
+  | 'code_injection';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -43,6 +55,7 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'file_upload',
   'open_redirect',
   'log_injection',
+  'code_injection',
 ];
 
 /** Kind label attached to a tainted value as it flows through the program. */

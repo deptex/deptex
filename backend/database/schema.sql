@@ -1715,7 +1715,7 @@ CREATE TABLE IF NOT EXISTS public.taint_engine_settings (
   ai_layer_enabled boolean DEFAULT true,
   monthly_ai_cost_cap_usd numeric(10,2) DEFAULT 75.00,
   untyped_js_enabled boolean DEFAULT true,
-  vuln_classes_enabled text[] DEFAULT ARRAY['sql_injection'::text, 'ssrf'::text, 'xss'::text, 'path_traversal'::text, 'command_injection'::text, 'prototype_pollution'::text, 'deserialization'::text, 'redos'::text, 'file_upload'::text, 'open_redirect'::text, 'log_injection'::text],
+  vuln_classes_enabled text[] DEFAULT ARRAY['sql_injection'::text, 'ssrf'::text, 'xss'::text, 'path_traversal'::text, 'command_injection'::text, 'prototype_pollution'::text, 'deserialization'::text, 'redos'::text, 'file_upload'::text, 'open_redirect'::text, 'log_injection'::text, 'code_injection'::text],
   killswitch_active boolean DEFAULT false,
   killswitch_reason text,
   killswitch_activated_at timestamp with time zone,
@@ -1854,8 +1854,6 @@ CREATE TABLE IF NOT EXISTS public.user_notifications (
 CREATE TABLE IF NOT EXISTS public.user_profiles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
-  avatar_url text,
-  full_name text,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   default_organization_id uuid

@@ -91,6 +91,58 @@ describe('rule-generator FrameworkSpec output — schema gate (Gate 1)', () => {
     expect((caught as GenerationError).code).toBe('invalid_schema');
   });
 
+  test('parseAndValidate surfaces vuln_class_out_of_scope for off-enum sink vuln_class', () => {
+    // Phase 6.5 e2e baseline: 3 of 88 corpus CVEs (Spring SpEL CVE-2023-34053,
+    // Apache POI scriptable CVE-2017-12626, HTTP/2 Rapid Reset CVE-2023-44487)
+    // had Qwen invent vuln_class values the engine doesn't model. They were
+    // bucketed as generic invalid_schema, hiding "this CVE is not a taint
+    // flow" behind "the model garbled the schema." This test pins the new
+    // labelled bucket so the signal stays visible after future schema work.
+    const bad = JSON.parse(JSON.stringify(validPayload));
+    bad.framework_spec.sinks[0].vuln_class = 'http2_rapid_reset';
+    let caught: unknown;
+    try { parseAndValidate(JSON.stringify(bad)); } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(GenerationError);
+    expect((caught as GenerationError).code).toBe('vuln_class_out_of_scope');
+    expect((caught as GenerationError).message).toMatch(/non-taint-modelable/);
+  });
+
+  test('parseAndValidate surfaces vuln_class_out_of_scope for off-enum sanitizer vuln_classes', () => {
+    const bad = JSON.parse(JSON.stringify(validPayload));
+    bad.framework_spec.sanitizers = [
+      {
+        pattern: 'pkg.scrub(*)',
+        vuln_classes: ['xml_billion_laughs'],
+        description: 'demo',
+      },
+    ];
+    let caught: unknown;
+    try { parseAndValidate(JSON.stringify(bad)); } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(GenerationError);
+    expect((caught as GenerationError).code).toBe('vuln_class_out_of_scope');
+  });
+
+  test('parseAndValidate keeps invalid_schema bucket when vuln_class fails alongside another field', () => {
+    // Conservative: a payload that fails for vuln_class AND something else
+    // stays in invalid_schema so we don't suppress real schema bugs.
+    const bad = JSON.parse(JSON.stringify(validPayload));
+    bad.framework_spec.sinks[0].vuln_class = 'spel_injection';
+    bad.framework_spec.language = 'klingon';
+    let caught: unknown;
+    try { parseAndValidate(JSON.stringify(bad)); } catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(GenerationError);
+    expect((caught as GenerationError).code).toBe('invalid_schema');
+  });
+
+  test('parseAndValidate accepts the new code_injection vuln_class', () => {
+    // phase28b adds code_injection to the engine taxonomy. Confirm the zod
+    // schema now accepts it so SpEL-style CVEs round-trip cleanly.
+    const ok = JSON.parse(JSON.stringify(validPayload));
+    ok.framework_spec.sinks[0].vuln_class = 'code_injection';
+    const r = parseAndValidate(JSON.stringify(ok));
+    expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('code_injection');
+  });
+
   test('parseAndValidate parses well-shaped payload with promptInjectionSuspect=false', () => {
     const r = parseAndValidate(JSON.stringify(validPayload));
     expect(r.payload.framework_spec.framework).toBe('pkg');
