@@ -87,12 +87,12 @@ export default function CreateOrganizationModal({
             Cancel
           </Button>
           <Button
+            variant="white"
             onClick={handleSubmit}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
             disabled={loading || !name.trim()}
           >
             {loading && (
-              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent flex-shrink-0" />
+              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent flex-shrink-0" />
             )}
             Create
           </Button>

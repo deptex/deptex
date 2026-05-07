@@ -549,7 +549,6 @@ export default function OrgSidebar({
               currentOrganizationRole={organization.role}
               currentOrganizationRoleDisplayName={organization.role_display_name}
               currentOrganizationRoleColor={organization.role_color}
-              triggerVariant="full"
             />
           ) : (
             <div className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1" aria-hidden>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Check, ChevronsUpDown, Mail, LogOut } from 'lucide-react';
+import { Search, Plus, Check, Mail, LogOut, Loader2 } from 'lucide-react';
 import { api, Organization, OrganizationInvitation } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import {
@@ -8,8 +8,16 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from './ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Button } from './ui/button';
+import { useToast } from '../hooks/use-toast';
 import CreateOrganizationModal from './CreateOrganizationModal';
 import { RoleBadge } from './RoleBadge';
 
@@ -57,9 +65,6 @@ interface OrganizationSwitcherProps {
   currentOrganizationRole?: string | null;
   currentOrganizationRoleDisplayName?: string | null;
   currentOrganizationRoleColor?: string | null;
-  showOrgName?: boolean;
-  /** When "full", trigger shows avatar + name + chevron (for header). Default "icon" (chevron only). */
-  triggerVariant?: 'full' | 'icon';
 }
 
 export default function OrganizationSwitcher({
@@ -69,8 +74,6 @@ export default function OrganizationSwitcher({
   currentOrganizationRole,
   currentOrganizationRoleDisplayName,
   currentOrganizationRoleColor,
-  showOrgName = false,
-  triggerVariant = 'icon',
 }: OrganizationSwitcherProps) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([]);
@@ -83,6 +86,7 @@ export default function OrganizationSwitcher({
   const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState(false);
   const [orgToLeave, setOrgToLeave] = useState<{ id: string; name: string } | null>(null);
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   useEffect(() => {
     loadCurrentUser();
@@ -172,8 +176,9 @@ export default function OrganizationSwitcher({
       setLeavingOrgId(orgToLeave.id);
       await api.removeMember(orgToLeave.id, currentUserId);
 
-      // Remove from local state
-      setOrganizations(orgs => orgs.filter(org => org.id !== orgToLeave.id));
+      const updated = organizations.filter(org => org.id !== orgToLeave.id);
+      setOrganizations(updated);
+      setCachedOrgList(updated, invitations);
 
       // If leaving the current org, navigate to landing (OrganizationsLanding will
       // resolve the correct default from the user's profile or fall back to orgs[0]).
@@ -185,7 +190,11 @@ export default function OrganizationSwitcher({
       setOrgToLeave(null);
     } catch (error: any) {
       console.error('Failed to leave organization:', error);
-      alert(error.message || 'Failed to leave organization. Please try again.');
+      toast({
+        title: 'Failed to leave organization',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
     } finally {
       setLeavingOrgId(null);
     }
@@ -401,52 +410,33 @@ export default function OrganizationSwitcher({
 
   return (
     <>
-      {triggerVariant === 'full' ? (
-        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
-            >
-              <img
-                src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
-                alt=""
-                className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
-              />
-              <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
-                {currentOrganizationName}
-              </span>
-              <div className="flex items-center gap-0.5 flex-shrink-0">
-                {currentOrganizationRole && (
-                  <RoleBadge
-                    role={currentOrganizationRole}
-                    roleDisplayName={currentOrganizationRoleDisplayName}
-                    roleColor={currentOrganizationRoleColor}
-                  />
-                )}
-              </div>
-            </button>
-          </DropdownMenuTrigger>
-          {dropdownContent}
-        </DropdownMenu>
-      ) : (
-        <div className="flex items-center gap-2">
-          {showOrgName && (
-            <span className="text-foreground font-medium">{currentOrganizationName}</span>
-          )}
-          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle/85 transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
-              >
-                <ChevronsUpDown className="h-4 w-4 text-foreground-secondary hover:text-foreground transition-colors" />
-              </button>
-            </DropdownMenuTrigger>
-            {dropdownContent}
-          </DropdownMenu>
-        </div>
-      )}
+      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
+          >
+            <img
+              src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
+              alt=""
+              className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
+            />
+            <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
+              {currentOrganizationName}
+            </span>
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              {currentOrganizationRole && (
+                <RoleBadge
+                  role={currentOrganizationRole}
+                  roleDisplayName={currentOrganizationRoleDisplayName}
+                  roleColor={currentOrganizationRoleColor}
+                />
+              )}
+            </div>
+          </button>
+        </DropdownMenuTrigger>
+        {dropdownContent}
+      </DropdownMenu>
 
       <CreateOrganizationModal
         isOpen={isCreateModalOpen}
@@ -454,69 +444,51 @@ export default function OrganizationSwitcher({
         onSuccess={handleCreateSuccess}
       />
 
-      {/* Leave Organization Confirmation Modal */}
-      {showLeaveConfirmModal && orgToLeave && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowLeaveConfirmModal(false);
-              setOrgToLeave(null);
-            }}
-          />
-
-          {/* Modal - centered */}
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <div
-              className="bg-background border border-border rounded-lg shadow-2xl w-full max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="px-6 py-5 border-b border-border">
-                <h2 className="text-xl font-semibold text-foreground">
-                  Leave Organization
-                </h2>
-              </div>
-
-              {/* Content */}
-              <div className="px-6 py-6">
-                <p className="text-foreground-secondary">
-                  Are you sure you want to leave <strong>"{orgToLeave.name}"</strong>? You will lose access to all teams and projects in this organization.
-                </p>
-              </div>
-
-              {/* Footer */}
-              <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowLeaveConfirmModal(false);
-                    setOrgToLeave(null);
-                  }}
-                  disabled={leavingOrgId === orgToLeave.id}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={confirmLeaveOrganization}
-                  disabled={leavingOrgId === orgToLeave.id}
-                  className="bg-red-600 text-white hover:bg-red-700"
-                >
-                  {leavingOrgId === orgToLeave.id ? (
-                    <>
-                      <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                      Leaving
-                    </>
-                  ) : (
-                    'Leave Organization'
-                  )}
-                </Button>
-              </div>
-            </div>
+      <Dialog
+        open={showLeaveConfirmModal}
+        onOpenChange={(open) => {
+          if (!open && leavingOrgId === null) {
+            setShowLeaveConfirmModal(false);
+            setOrgToLeave(null);
+          }
+        }}
+      >
+        <DialogContent
+          hideClose
+          className="sm:max-w-[420px] bg-background p-0 gap-0 overflow-hidden"
+        >
+          <div className="px-6 pt-6 pb-4">
+            <DialogTitle>Leave organization?</DialogTitle>
+            <DialogDescription className="mt-1">
+              You'll lose access to all teams and projects in{' '}
+              <strong className="text-foreground font-medium">{orgToLeave?.name}</strong>.
+            </DialogDescription>
           </div>
-        </div>
-      )}
+          <DialogFooter className="px-6 py-4 border-t border-border bg-background flex items-center justify-between">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowLeaveConfirmModal(false);
+                setOrgToLeave(null);
+              }}
+              disabled={leavingOrgId === orgToLeave?.id}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmLeaveOrganization}
+              disabled={leavingOrgId === orgToLeave?.id}
+            >
+              {leavingOrgId === orgToLeave?.id ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Leaving</>
+              ) : (
+                'Leave'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
