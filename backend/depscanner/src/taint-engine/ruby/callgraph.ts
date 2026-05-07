@@ -68,6 +68,33 @@ const SKIP_DIRS = new Set([
 
 const RB_EXTENSION = '.rb';
 
+/**
+ * Sinatra exposes its request handlers as DSL calls inside a class body —
+ * `class App < Sinatra::Base; get '/path' do ... end; end`. The do-block is
+ * the actual handler but tree-sitter sees it as a `block` attached to a
+ * regular method `call`, not as a method def, so without explicit lowering
+ * the engine analyzes ZERO functions in any Sinatra-shaped file.
+ *
+ * To recognize routes we (a) detect classes whose superclass text contains a
+ * known Sinatra base, then (b) treat any HTTP-verb call with a trailing
+ * do/brace block as a synthetic instance method on that class.
+ *
+ * Hanami / Roda / Padrino share the same shape (DSL block on a known base
+ * class) and could be added by extending these constants alone.
+ */
+const SINATRA_BASE_CLASSES = ['Sinatra::Base', 'Sinatra::Application'] as const;
+const SINATRA_HTTP_VERBS = new Set([
+  'get',
+  'post',
+  'put',
+  'patch',
+  'delete',
+  'head',
+  'options',
+  'link',
+  'unlink',
+]);
+
 interface FileTrees {
   filePath: string;
   absolutePath: string;
@@ -87,6 +114,12 @@ interface FileFunctions {
   methods: Map<string, FunctionId>;
   /** synthetic module initializer FunctionId. */
   moduleId: FunctionId;
+  /**
+   * `call` AST node → FunctionId of the synthetic Sinatra route this call
+   * was lowered into. Used by collectCallEdges to attribute calls inside the
+   * route block to the route handler instead of the file's module init.
+   */
+  sinatraRouteByCallNode: Map<Node, FunctionId>;
 }
 
 /**
@@ -204,6 +237,7 @@ export async function buildRubyCallgraphContext(
           topLevel: new Map(),
           methods: new Map(),
           moduleId: makeFunctionId(f.filePath, 1, 1, '<module>'),
+          sinatraRouteByCallNode: new Map(),
         },
     });
   }
@@ -250,6 +284,45 @@ function textOf(node: Node | null | undefined, source: string): string {
   return source.slice(node.startIndex, node.endIndex);
 }
 
+type MethodLike =
+  | {
+      kind: 'method' | 'singleton_method';
+      node: Node;
+      enclosing: string | null;
+    }
+  | {
+      kind: 'sinatra_route';
+      /** the do_block / block AST node — what we lower as the function body. */
+      node: Node;
+      /** the surrounding `call` node (verb '/path' do ... end) — used by
+       *  collectCallEdges to attribute calls inside the block to this route. */
+      callNode: Node;
+      /** Always set for sinatra_route — guaranteed by the detector. */
+      enclosing: string;
+      verb: string;
+      /** Synthesized `__sinatra_<verb>_L<line>[_<sanitized-path>]` name. */
+      syntheticName: string;
+      /** Position of the route call (used as the function's start position). */
+      line: number;
+      column: number;
+    };
+
+function isSinatraSubclass(classNode: Node, source: string): boolean {
+  const superclass = classNode.childForFieldName('superclass');
+  if (!superclass) return false;
+  const text = source.slice(superclass.startIndex, superclass.endIndex);
+  return SINATRA_BASE_CLASSES.some((b) => text.includes(b));
+}
+
+function syntheticRouteName(verb: string, pathLiteral: string | null, line: number): string {
+  if (!pathLiteral) return `__sinatra_${verb}_L${line}`;
+  const safe = pathLiteral
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  return safe ? `__sinatra_${verb}_L${line}_${safe}` : `__sinatra_${verb}_L${line}`;
+}
+
 /**
  * Walk a Ruby AST and find every `method` / `singleton_method` node, with
  * its enclosing class (if any). Tree-sitter-ruby uses:
@@ -258,13 +331,21 @@ function textOf(node: Node | null | undefined, source: string): string {
  *   - `class` for class definitions
  *   - `module` for module definitions (we treat these like classes for
  *     method namespacing).
+ *
+ * Also recognizes Sinatra route DSL inside `class X < Sinatra::Base` — every
+ * `get '/path' do ... end` (and the other HTTP verbs) is collected as a
+ * synthetic instance method on X with the do/brace block as its body. See
+ * SINATRA_BASE_CLASSES / SINATRA_HTTP_VERBS at the top of this file.
  */
-function findMethodDefs(
-  root: Node,
-): Array<{ node: Node; isSingleton: boolean; enclosing: string | null }> {
-  const out: Array<{ node: Node; isSingleton: boolean; enclosing: string | null }> = [];
-  const visit = (node: Node, enclosing: string | null): void => {
+function findMethodDefs(root: Node, source: string): MethodLike[] {
+  const out: MethodLike[] = [];
+  const visit = (
+    node: Node,
+    enclosing: string | null,
+    sinatraEnclosing: string | null,
+  ): void => {
     let nextEnclosing = enclosing;
+    let nextSinatra = sinatraEnclosing;
     if (node.type === 'class' || node.type === 'module') {
       const nameNode = node.childForFieldName('name');
       if (nameNode) {
@@ -273,18 +354,58 @@ function findMethodDefs(
         const last = text.split('::').pop()!.trim();
         nextEnclosing = last || nextEnclosing;
       }
+      // A nested non-Sinatra class clears the Sinatra context for its body;
+      // a Sinatra subclass establishes it.
+      if (node.type === 'class' && isSinatraSubclass(node, source)) {
+        nextSinatra = nextEnclosing;
+      } else {
+        nextSinatra = null;
+      }
     } else if (node.type === 'method' || node.type === 'singleton_method') {
-      out.push({ node, isSingleton: node.type === 'singleton_method', enclosing });
+      out.push({ kind: node.type, node, enclosing });
       // Don't descend into method bodies looking for more method defs at the
       // class level — nested defs get the enclosing method's class as their
       // class context, which is fine for v1.
+    } else if (node.type === 'call' && sinatraEnclosing) {
+      // Inside a Sinatra subclass — check for HTTP-verb DSL with a block.
+      const methodNode = node.childForFieldName('method');
+      const recvNode = node.childForFieldName('receiver');
+      const blockNode = node.childForFieldName('block');
+      if (
+        !recvNode &&
+        methodNode &&
+        blockNode &&
+        (blockNode.type === 'do_block' || blockNode.type === 'block')
+      ) {
+        const verb = source.slice(methodNode.startIndex, methodNode.endIndex);
+        if (SINATRA_HTTP_VERBS.has(verb)) {
+          let pathLiteral: string | null = null;
+          const args = node.childForFieldName('arguments');
+          if (args && args.namedChildCount > 0) {
+            const arg0 = args.namedChild(0);
+            if (arg0) pathLiteral = stringLiteralValue(arg0, source);
+          }
+          const line = node.startPosition.row + 1;
+          const column = node.startPosition.column + 1;
+          out.push({
+            kind: 'sinatra_route',
+            node: blockNode,
+            callNode: node,
+            enclosing: sinatraEnclosing,
+            verb,
+            syntheticName: syntheticRouteName(verb, pathLiteral, line),
+            line,
+            column,
+          });
+        }
+      }
     }
     for (let i = 0; i < node.namedChildCount; i++) {
       const child = node.namedChild(i);
-      if (child) visit(child, nextEnclosing);
+      if (child) visit(child, nextEnclosing, nextSinatra);
     }
   };
-  visit(root, null);
+  visit(root, null, null);
   return out;
 }
 
@@ -315,8 +436,32 @@ function collectFunctionsForFile(
 
   const topLevel = new Map<string, FunctionId>();
   const methods = new Map<string, FunctionId>();
+  const sinatraRouteByCallNode = new Map<Node, FunctionId>();
 
-  for (const def of findMethodDefs(root)) {
+  for (const def of findMethodDefs(root, f.source)) {
+    if (def.kind === 'sinatra_route') {
+      const end = def.node.endPosition;
+      const id = makeFunctionId(f.filePath, def.line, def.column, def.syntheticName);
+      nodes.push({
+        id,
+        name: def.syntheticName,
+        kind: 'method',
+        filePath: f.filePath,
+        startLine: def.line,
+        startColumn: def.column,
+        endLine: end.row + 1,
+        endColumn: end.column + 1,
+        isFullyTyped: false,
+        containingClass: def.enclosing,
+        isModuleInitializer: false,
+      });
+      // Map the FunctionId to the do_block node so the IR lowerer walks the
+      // block body. The route metadata already lives on def.node === blockNode.
+      nodeIdToFunc.set(id, def.node);
+      methods.set(`${def.enclosing}.${def.syntheticName}`, id);
+      sinatraRouteByCallNode.set(def.callNode, id);
+      continue;
+    }
     const nameNode = def.node.childForFieldName('name');
     const name = textOf(nameNode, f.source);
     if (!name) continue;
@@ -346,7 +491,7 @@ function collectFunctionsForFile(
     }
   }
 
-  return { topLevel, methods, moduleId };
+  return { topLevel, methods, moduleId, sinatraRouteByCallNode };
 }
 
 /**
@@ -597,6 +742,12 @@ function collectCallEdges(
         calleeText,
         argumentCount,
       });
+      // Sinatra route DSL: when descending into the do/brace block of
+      // `get '/path' do ... end`, attribute calls inside the block to the
+      // synthetic route function, not the file's <module> initializer.
+      const ff = fileFunctions.get(f.filePath);
+      const routeId = ff?.sinatraRouteByCallNode.get(node);
+      if (routeId) nextEnclosingFnId = routeId;
     }
 
     for (let i = 0; i < node.namedChildCount; i++) {

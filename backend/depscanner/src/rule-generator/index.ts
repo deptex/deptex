@@ -33,6 +33,7 @@ export type GenerationStatus =
   | 'fetch_failed'
   | 'parse_failed'
   | 'invalid_schema'
+  | 'vuln_class_out_of_scope'
   | 'prompt_injection_suspect'
   | 'provider_error'
   | 'unexpected';
@@ -377,6 +378,7 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
         if (err instanceof GenerationError) {
           if (err.code === 'parse_failed') status = 'parse_failed';
           else if (err.code === 'invalid_schema') status = 'invalid_schema';
+          else if (err.code === 'vuln_class_out_of_scope') status = 'vuln_class_out_of_scope';
           else if (err.code === 'prompt_injection_suspect') status = 'prompt_injection_suspect';
         }
         if (status === 'prompt_injection_suspect') {
@@ -393,6 +395,23 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
             errors,
             attempts: attempt,
             promptInjectionSuspect: true,
+          };
+        }
+        if (status === 'vuln_class_out_of_scope') {
+          // Don't retry — the CVE is genuinely outside the engine's taint-flow
+          // model (DoS, XML expansion, HTTP/2 reset). Re-prompting the model
+          // would either get the same response or coerce it into emitting a
+          // wrong-but-accepted vuln_class, masking the real signal.
+          return {
+            ...DEFAULT_RESULT_BASE(args),
+            status,
+            affectedVersionRange: affectedRange,
+            costUsd: cumulativeCost,
+            inputTokens: cumulativeInputTokens,
+            outputTokens: cumulativeOutputTokens,
+            errors,
+            attempts: attempt,
+            promptInjectionSuspect,
           };
         }
         const retryable = status === 'parse_failed' || status === 'invalid_schema';

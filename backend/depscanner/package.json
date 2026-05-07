@@ -42,7 +42,7 @@
     "test:rule-generation-step-pglite": "tsx test/rule-generation-step-pglite.test.ts",
     "test:few-shot-gate2": "tsx test/few-shot-roundtrip-gate2.ts",
     "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
-    "test:dast-v2-1a-migration-pglite": "tsx test/dast-v2-1a-migration-pglite.ts",
+    "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
     "docker:prepare": "mkdir -p .schema && cp ../database/schema.sql .schema/schema.sql && tsx ../../scripts/sync-encryption.ts",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",

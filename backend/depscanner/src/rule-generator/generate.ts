@@ -81,6 +81,7 @@ export class GenerationError extends Error {
     | 'provider_timeout'
     | 'parse_failed'
     | 'invalid_schema'
+    | 'vuln_class_out_of_scope'
     | 'prompt_injection_suspect'
     | 'unsupported_provider';
 
@@ -213,12 +214,41 @@ export function parseAndValidate(raw: string): ParseResult {
 
   const result = GeneratedFrameworkSpecPayloadSchema.safeParse(parsed);
   if (!result.success) {
+    const issuesStr = result.error.issues.map((i) => `${i.path.join('.')}=${i.message}`).join('; ');
+    // Single-issue vuln_class enum mismatch is the dominant non-taint-modelable
+    // CVE signal (DoS, XML expansion, HTTP/2 reset). Bucket it separately so
+    // ops can distinguish "this CVE is genuinely outside taint scope" from
+    // "the model garbled the schema". The retry loop treats this as
+    // non-retryable — the model can't be coaxed into rewriting a DoS CVE as
+    // a taint flow it isn't.
+    if (isVulnClassEnumMismatch(result.error.issues)) {
+      throw new GenerationError(
+        'vuln_class_out_of_scope',
+        `Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): ${issuesStr}`,
+      );
+    }
     throw new GenerationError(
       'invalid_schema',
-      `Generated payload failed schema: ${result.error.issues.map((i) => `${i.path.join('.')}=${i.message}`).join('; ')}`,
+      `Generated payload failed schema: ${issuesStr}`,
     );
   }
   return { payload: result.data, promptInjectionSuspect: false };
+}
+
+/**
+ * Returns true when EVERY issue in the validation error is an enum-value
+ * mismatch on a `vuln_class` (sink) or `vuln_classes` (sanitizer) field.
+ * Conservative: a payload that fails for vuln_class AND something else stays
+ * in the `invalid_schema` bucket so we don't suppress real schema bugs.
+ */
+function isVulnClassEnumMismatch(
+  issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; code: string }>,
+): boolean {
+  if (issues.length === 0) return false;
+  return issues.every((i) => {
+    if (i.code !== 'invalid_enum_value') return false;
+    return i.path.some((seg) => seg === 'vuln_class' || seg === 'vuln_classes');
+  });
 }
 
 function stripCodeFence(s: string): string {

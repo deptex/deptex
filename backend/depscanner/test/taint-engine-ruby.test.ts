@@ -53,14 +53,20 @@ const CASES: FixtureCase[] = [
     specs: ['rails'],
     expectedVulnClass: 'command_injection',
   },
-  // Sinatra fixtures live under fixtures/ruby-vulns/sinatra-*-{vuln,safe} but
-  // are intentionally NOT exercised yet: the Ruby callgraph only treats
-  // `def foo` / `def self.foo` as functions, not Sinatra route do-blocks
-  // (`get '/path' do ... end`). Sinatra's idiomatic DSL puts the request
-  // handler inside the block, so until the substrate is taught to lower
-  // those blocks as synthetic functions, sinatra recall is 0% by design.
-  // See sinatra-{sql-injection,xss}-{vuln,safe}/ + their README for the
-  // canonical block-style fixtures that should pass once the gap is closed.
+  {
+    name: 'Sinatra SQL injection',
+    vulnDir: 'sinatra-sql-injection-vuln',
+    safeDir: 'sinatra-sql-injection-safe',
+    specs: ['sinatra'],
+    expectedVulnClass: 'sql_injection',
+  },
+  {
+    name: 'Sinatra XSS',
+    vulnDir: 'sinatra-xss-vuln',
+    safeDir: 'sinatra-xss-safe',
+    specs: ['sinatra'],
+    expectedVulnClass: 'xss',
+  },
 ];
 
 function summarize(flows: Flow[]): string {

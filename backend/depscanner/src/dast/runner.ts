@@ -1,18 +1,4 @@
-// ZAP report parser + log scrub. Phase 23b/24a left this file holding three
-// concerns; v2.1a hardening retired the helper-script + dual-runner dispatcher
-// (runZap / runZapHelperScript / runZapAutomationFramework / pickRunnerMode /
-// DAST_RUNNER_MODE) which were never reachable from production — the worker
-// pipeline.ts has its own runZapWithControlPlane that spawns ZAP directly via
-// the AF YAML path. With those gone the only surface left here is the bits
-// pipeline.ts actually imports: types, redaction, ZAP JSON parsing.
-//
-// What remains:
-//   - DastFindingRaw / DastScanProfile types
-//   - REDACTION_PATTERNS + redactCredentials (called from pipeline.ts and
-//     control-plane.ts to scrub stderr before it lands in Fly logs)
-//   - parseZapReport (called from pipeline.ts to convert ZAP JSON → finding
-//     rows; the redactCredentials step also happens here on payload/evidence)
-//   - ZAP_DEFAULT_TIMEOUT_MS (re-exported for callers that need the wall-time)
+// ZAP report parser + log scrub helpers.
 
 // ---------------------------------------------------------------------------
 // Public types
