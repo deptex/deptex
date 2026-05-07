@@ -70,13 +70,46 @@ router.post('/stream', async (req: AuthRequest, res) => {
       context,
     );
 
-    // Flush response headers (including X-Thread-Id) eagerly, BEFORE the
-    // LLM is invoked. Otherwise the client doesn't see the threadId until
-    // the first SSE chunk arrives, and a fast Stop click during the
-    // submission phase would abort the fetch before headers are received —
-    // the server has the thread, the client has no way to learn its id, and
-    // the next message creates a duplicate. We bypass
-    // pipeUIMessageStreamToResponse here so we control when writeHead fires.
+    // PREFLIGHT — every read-only setup that can fail goes BEFORE writeHead,
+    // so a BYOK loader rejection / cost-cap block / DB error returns a clean
+    // 500 + JSON body instead of a half-flushed SSE stream the client can't
+    // make sense of. Once writeHead fires, we're committed to the SSE channel.
+    const [history, memoryContext, providerInfo] = await Promise.all([
+      loadThreadHistory(resolvedThreadId),
+      queryRelevantMemories(organizationId, message),
+      getProviderInfoForOrg(organizationId, modelId),
+    ]);
+
+    const cap = await checkMonthlyCostCap(
+      organizationId,
+      providerInfo.model,
+      [{ role: 'user', content: message }],
+      providerInfo.monthlyCostCap,
+    );
+
+    // Build the agent here too — getLanguageModelForOrg throws on missing /
+    // disabled BYOK keys, and we want that as a 500 not as a torn-down SSE.
+    // If cap blocked above we skip agent construction (no model call needed).
+    const agent = cap.allowed
+      ? await createAegisAgent({
+          orgId: organizationId,
+          userId,
+          threadId: resolvedThreadId,
+          userMessage: message,
+          priorMessageCount: history.length,
+          context,
+          memoryContext,
+          modelId,
+        })
+      : null;
+
+    // Flush response headers (including X-Thread-Id) eagerly, BEFORE we
+    // start streaming — but only AFTER preflight has succeeded. The client
+    // needs the threadId on the wire before any SSE chunks arrive so a fast
+    // Stop click during submission can still resolve the thread; flushing
+    // earlier (pre-BYOK) means a BYOK failure can't return a 500 anymore
+    // because the status is already 200. We bypass pipeUIMessageStreamToResponse
+    // here so we control when writeHead fires.
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -86,26 +119,13 @@ router.post('/stream', async (req: AuthRequest, res) => {
       'X-Thread-Id': resolvedThreadId,
     });
 
-    const [history, memoryContext] = await Promise.all([
-      loadThreadHistory(resolvedThreadId),
-      queryRelevantMemories(organizationId, message),
-    ]);
-
-    // Pre-flight cost cap. If the org is over budget, record a cost_cap error
-    // assistant message and skip the model call. We deliberately also skip
-    // saving the user message — there's nothing to answer it with.
-    const providerInfo = await getProviderInfoForOrg(organizationId, modelId);
-    const cap = await checkMonthlyCostCap(
-      organizationId,
-      providerInfo.model,
-      [{ role: 'user', content: message }],
-      providerInfo.monthlyCostCap,
-    );
     if (!cap.allowed) {
+      // Pre-flight cost cap blocked. Record a cost_cap error assistant
+      // message and skip the model call. We deliberately also skip saving
+      // the user message — there's nothing to answer it with. Headers are
+      // flushed so the client picks up X-Thread-Id and treats no-content +
+      // persisted error row the same as any other turn.
       await writeAegisChatError(resolvedThreadId, { type: 'cost_cap', message: cap.message });
-      // Headers (including X-Thread-Id) are already flushed; just close the
-      // empty SSE stream. The client treats no-content + persisted error row
-      // the same as any other turn.
       return res.end();
     }
 
@@ -126,19 +146,8 @@ router.post('/stream', async (req: AuthRequest, res) => {
       );
     }
 
-    const agent = await createAegisAgent({
-      orgId: organizationId,
-      userId,
-      threadId: resolvedThreadId,
-      userMessage: message,
-      priorMessageCount: history.length,
-      context,
-      memoryContext,
-      modelId,
-    });
-
     const messages: ModelMessage[] = [...history, { role: 'user', content: message }];
-    const result = await agent.stream({ messages });
+    const result = await agent!.stream({ messages });
 
     // Force the agent to drive to completion regardless of whether the HTTP
     // response is consumed. This is the canonical AI SDK guarantee for
