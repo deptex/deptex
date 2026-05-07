@@ -30,11 +30,23 @@ const STYLES: Record<Exclude<EpdEntryPointClassification, 'UNKNOWN'>, StyleDef> 
 };
 
 const STATUS_HINT: Record<EpdStatus, string> = {
+  // legacy (Phase 4)
   ai_verified:       'Verified by AI against your repository source.',
   byok_missing:      'Heuristic classification — configure Anthropic BYOK in AI Configuration to enable AI verification.',
   fallback_no_ai:    'AI verification skipped for this reachability level.',
   ai_error_fallback: 'AI call failed; heuristic classification applied.',
   budget_exceeded:   'AI verification budget reached this extraction; heuristic classification applied for the rest.',
+  pending:           'EPD evaluation has not run yet for this vulnerability.',
+  // Phase 6.5 — flow aggregator (M5)
+  flow_aggregated:        'EPD computed from worst-case of per-flow AI verdicts on this dependency.',
+  no_flows_evaluated:     'No reachable flows met the confidence + suppression filters.',
+  all_flows_suppressed:   'All flows for this vulnerability have been user-suppressed.',
+  ai_truncated:           'AI response exceeded max tokens; verdict skipped from depscore aggregation.',
+  // Phase 6.5 — gated Anthropic fallback (OD-6)
+  ai_verified_anthropic_fallback:                  'Triple verdict was degraded; verified by Anthropic fallback.',
+  ai_verified_anthropic_fallback_failed:           'Anthropic fallback errored; depscore from Qwen aggregator only — review manually.',
+  ai_verified_anthropic_fallback_skipped_cost_cap: 'Anthropic fallback skipped because the monthly cost cap was reached; depscore from Qwen aggregator only.',
+  ai_verified_anthropic_fallback_skipped_burn_breaker: 'Anthropic fallback skipped because this extraction hit the per-extraction cost-burn breaker; depscore from Qwen aggregator only.',
 };
 
 interface EntryPointBadgeProps {

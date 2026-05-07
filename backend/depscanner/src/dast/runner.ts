@@ -1,18 +1,4 @@
-// Phase 23b PR 3: ZAP runner. Wraps the ZAP helper scripts with a Promise-based
-// `child_process.spawn` invocation (NEVER `execSync` — heartbeat must survive a
-// 25-minute scan; see plan Task 8 + `feedback_simplicity_bias`).
-//
-// Three profiles:
-//   * 'quick' or 'auto'-without-routes → zap-baseline.py (~1-2 min, passive)
-//   * 'auto'-with-routes               → zap-api-scan.py + synthesized OpenAPI
-//   * 'full'                           → zap-full-scan.py (~20+ min, active)
-//
-// ZAP exit codes 1-2 mean "scan completed but findings were emitted" — we do
-// NOT treat those as runner failures. Exit code 3+ is a real subprocess error.
-
-import { spawn } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
+// ZAP report parser + log scrub helpers.
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -32,145 +18,7 @@ export interface DastFindingRaw {
   confidence: 'confirmed' | 'high' | 'medium' | 'low';
 }
 
-/** Subset of project_entry_points used to build the API-scan OpenAPI stub. */
-export interface DastEntryPointInput {
-  framework: string;
-  http_method: string | null;
-  route_pattern: string | null;
-  handler_name: string | null;
-}
-
 export type DastScanProfile = 'auto' | 'quick' | 'full' | 'api';
-
-export interface RunZapOptions {
-  targetUrl: string;
-  scanProfile: DastScanProfile;
-  routes: DastEntryPointInput[];
-  timeoutMs?: number;
-}
-
-export interface RunZapResult {
-  findings: DastFindingRaw[];
-  scriptUsed: 'baseline' | 'full' | 'api';
-  exitCode: number | null;
-  durationMs: number;
-}
-
-// ---------------------------------------------------------------------------
-// Profile selection
-// ---------------------------------------------------------------------------
-
-export function selectScript(
-  scanProfile: DastScanProfile,
-  hasRoutes: boolean
-): 'baseline' | 'full' | 'api' {
-  if (scanProfile === 'full') return 'full';
-  if (scanProfile === 'quick') return 'baseline';
-  if (scanProfile === 'api') return 'api';
-  // 'auto': API scan when we have route info, baseline otherwise.
-  return hasRoutes ? 'api' : 'baseline';
-}
-
-// ---------------------------------------------------------------------------
-// OpenAPI stub synthesis from project_entry_points
-// ---------------------------------------------------------------------------
-
-const SUPPORTED_HTTP_METHODS = new Set([
-  'get',
-  'post',
-  'put',
-  'delete',
-  'patch',
-  'head',
-  'options',
-]);
-
-/**
- * Convert a per-framework pattern into OpenAPI 3.0 path syntax.
- *
- * Express/Fastify/Sinatra `:id` → `{id}`. Rails/Gin `:id` and `*splat` → `{id}`
- * `{splat}`. FastAPI/Spring/Laravel `{id}` already match — we only strip `:type`
- * suffix and trailing `?`. Patterns from unsupported frameworks are returned
- * verbatim (best-effort; the API scan will skip them if ZAP refuses).
- */
-export function patternToOpenApi(framework: string, pattern: string): string {
-  const fw = framework.toLowerCase();
-  let p = pattern;
-
-  // Strip leading scheme+host if a full URL is supplied.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(p)) {
-    try {
-      p = new URL(p).pathname || '/';
-    } catch {
-      // fall through
-    }
-  }
-
-  if (fw === 'express' || fw === 'fastify' || fw === 'sinatra') {
-    return p.replace(/:([A-Za-z0-9_]+)\??/g, '{$1}');
-  }
-  if (fw === 'rails') {
-    p = p.replace(/\*([A-Za-z0-9_]+)/g, '{$1}');
-    return p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-  }
-  if (fw === 'gin') {
-    p = p.replace(/\*([A-Za-z0-9_]+)/g, '{$1}');
-    return p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-  }
-  if (fw === 'fastapi' || fw === 'spring' || fw === 'laravel') {
-    // {name:type} → {name}, {name?} → {name}
-    return p.replace(/\{([A-Za-z0-9_]+)(?::[^}]+)?\??\}/g, '{$1}');
-  }
-  return p;
-}
-
-export function buildOpenApiStub(
-  targetUrl: string,
-  routes: DastEntryPointInput[]
-): Record<string, unknown> {
-  const url = new URL(targetUrl);
-  const serverUrl = `${url.protocol}//${url.host}`;
-
-  // Group routes by canonical path → method → minimal Operation object.
-  const paths: Record<string, Record<string, unknown>> = {};
-  for (const r of routes) {
-    if (!r.route_pattern || !r.http_method) continue;
-    const method = r.http_method.toLowerCase();
-    if (!SUPPORTED_HTTP_METHODS.has(method)) continue;
-    const oasPath = patternToOpenApi(r.framework, r.route_pattern);
-    if (!oasPath.startsWith('/')) continue;
-
-    if (!paths[oasPath]) paths[oasPath] = {};
-    if (paths[oasPath][method]) continue; // first wins
-
-    // Extract path params from `{name}` segments.
-    const params: Array<Record<string, unknown>> = [];
-    const matched = oasPath.matchAll(/\{([A-Za-z0-9_]+)\}/g);
-    for (const m of matched) {
-      params.push({
-        name: m[1],
-        in: 'path',
-        required: true,
-        schema: { type: 'string' },
-      });
-    }
-
-    paths[oasPath][method] = {
-      summary: r.handler_name ?? `${method.toUpperCase()} ${oasPath}`,
-      ...(params.length > 0 ? { parameters: params } : {}),
-      responses: {
-        '200': { description: 'OK' },
-      },
-    };
-  }
-
-  return {
-    openapi: '3.0.0',
-    info: { title: 'Deptex DAST synthesized API', version: '1.0' },
-    servers: [{ url: serverUrl }],
-    paths,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -183,6 +31,13 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '[REDACTED_AWS_KEY]'],
   // Bearer tokens
   [/(?:Bearer|bearer)\s+[A-Za-z0-9+/=._-]{20,}/g, 'Bearer [REDACTED]'],
+  // Cookie / Set-Cookie request and response headers — cookie-strategy
+  // credentials are emitted by ZAP as `Cookie: session=…; csrf=…` when
+  // verbose tracing is enabled. We redact the entire header value (rather
+  // than only the first name=value pair) because every pair on the line is
+  // potentially sensitive and `;`-separated continuations would otherwise
+  // slip through. Stops at end-of-line so multi-header logs aren't squashed.
+  [/(?:^|\b)((?:set-)?cookie)\s*:\s*[^\r\n]+/gi, '$1: [REDACTED]'],
   // GitHub tokens
   [/\bghp_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHP]'],
   [/\bghs_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHS]'],
@@ -317,162 +172,7 @@ export function parseZapReport(report: ZapReport): DastFindingRaw[] {
 }
 
 // ---------------------------------------------------------------------------
-// spawn wrapper (NEVER execSync — heartbeat must keep ticking during a 25-min
-// scan; see `feedback_simplicity_bias` and plan Task 8 acceptance).
-// ---------------------------------------------------------------------------
-
-export interface SpawnResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-export function spawnZap(
-  command: string,
-  args: string[],
-  timeoutMs: number,
-  onStderr?: (chunk: string) => void
-): Promise<SpawnResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-      // Force kill 10s after SIGTERM if ZAP refuses.
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 10_000).unref();
-    }, timeoutMs);
-
-    child.stdout?.on('data', (b: Buffer) => {
-      stdout += b.toString('utf-8');
-    });
-    child.stderr?.on('data', (b: Buffer) => {
-      const s = b.toString('utf-8');
-      stderr += s;
-      onStderr?.(s);
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(new Error(`ZAP scan timed out after ${timeoutMs}ms (SIGTERM sent)`));
-        return;
-      }
-      resolve({ exitCode: code, stdout, stderr });
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Public entry point
+// Default scan timeout — single source of truth shared with pipeline.ts.
 // ---------------------------------------------------------------------------
 
 export const ZAP_DEFAULT_TIMEOUT_MS = 30 * 60_000; // 30 min
-
-export async function runZap(opts: RunZapOptions): Promise<RunZapResult> {
-  const startedAt = Date.now();
-  const timeoutMs = opts.timeoutMs ?? ZAP_DEFAULT_TIMEOUT_MS;
-  const script = selectScript(opts.scanProfile, opts.routes.length > 0);
-
-  // ZAP helpers refuse any `-J / -t / -c / -g` path outside `/zap/wrk` when
-  // running inside a Docker container (zap-baseline.py:374). We always run
-  // inside the depscanner image at scan time, so default to /zap/wrk; allow
-  // override for local dev where the dir doesn't exist.
-  const zapWorkDir = process.env.DAST_WORK_DIR || '/zap/wrk';
-  const tmpDir = fs.mkdtempSync(path.join(zapWorkDir, 'deptex-dast-'));
-  const reportPath = path.join(tmpDir, 'zap-report.json');
-
-  // ZAP's Automation Framework joins `reportDir` (= /zap/wrk) with whatever we
-  // pass via -J, even when -J is absolute, producing /zap/wrk/zap/wrk/... and
-  // failing the report write. Pass paths *relative to* /zap/wrk for any flag
-  // that gets routed through the AF report job (`-J`) or the AF input file
-  // resolver (`-t openapi.json`).
-  const reportArg = path.relative(zapWorkDir, reportPath);
-
-  let args: string[];
-  let cleanup: (() => void) | null = null;
-
-  if (script === 'api') {
-    const stub = buildOpenApiStub(opts.targetUrl, opts.routes);
-    const stubPath = path.join(tmpDir, 'openapi.json');
-    fs.writeFileSync(stubPath, JSON.stringify(stub));
-    const stubArg = path.relative(zapWorkDir, stubPath);
-    args = [
-      '-t', stubArg,
-      '-f', 'openapi',
-      '-J', reportArg,
-      '-I', // do not return non-zero on warn/fail
-    ];
-    cleanup = () => {
-      try { fs.unlinkSync(stubPath); } catch { /* noop */ }
-    };
-  } else if (script === 'full') {
-    args = [
-      '-t', opts.targetUrl,
-      '-J', reportArg,
-      '-I',
-    ];
-  } else {
-    // baseline
-    args = [
-      '-t', opts.targetUrl,
-      '-J', reportArg,
-      '-I',
-    ];
-  }
-
-  const command = `/zap/zap-${script === 'baseline' ? 'baseline' : script === 'full' ? 'full-scan' : 'api-scan'}.py`;
-
-  let result: SpawnResult;
-  try {
-    result = await spawnZap(command, args, timeoutMs, (chunk) => {
-      // Stream stderr to console for ops visibility; scrub credentials before
-      // anything lands in the log.
-      process.stderr.write(`[zap] ${redactCredentials(chunk)}`);
-    });
-  } finally {
-    cleanup?.();
-  }
-
-  // Exit code 0 = clean, 1 = at least one FAIL rule, 2 = at least one WARN rule.
-  // 1 + 2 are normal scan completions with findings — do NOT throw.
-  // Any other code (3+, null from kill) is a runner-level failure.
-  if (result.exitCode !== 0 && result.exitCode !== 1 && result.exitCode !== 2) {
-    const tail = result.stderr.slice(-2_000);
-    throw new Error(
-      `ZAP ${script} exited with code ${result.exitCode}. stderr tail: ${redactCredentials(tail)}`
-    );
-  }
-
-  if (!fs.existsSync(reportPath)) {
-    throw new Error(`ZAP ${script} produced no report at ${reportPath}`);
-  }
-
-  const reportRaw = fs.readFileSync(reportPath, 'utf-8');
-  let report: ZapReport;
-  try {
-    report = JSON.parse(reportRaw);
-  } catch (e) {
-    throw new Error(`Failed to parse ZAP JSON report: ${(e as Error).message}`);
-  }
-
-  try { fs.unlinkSync(reportPath); } catch { /* noop */ }
-  try { fs.rmdirSync(tmpDir); } catch { /* noop */ }
-
-  return {
-    findings: parseZapReport(report),
-    scriptUsed: script,
-    exitCode: result.exitCode,
-    durationMs: Date.now() - startedAt,
-  };
-}

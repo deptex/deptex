@@ -20,15 +20,28 @@ export interface ExtractionJobRow {
 
 // PR 2: depscanner accepts both extraction and dast. The dast pipeline ships in PR 3;
 // PR 2 has a stub that fails fast so the queue path can be exercised end-to-end.
-const SUPPORTED_TYPES = ['extraction', 'dast'] as const;
+//
+// Phase 24a (v2.1a) introduces a startup probe: when DAST_CREDENTIAL_KEY is
+// absent the worker MUST NOT claim DAST jobs (see plan §Task 7 acceptance —
+// silent-anonymous-fallback is the non-negotiable invariant). The supported-
+// types list is derived from the env at process start; flipping the key on
+// requires a worker restart to pick up.
+export function getSupportedJobTypes(): string[] {
+  const types: string[] = ['extraction'];
+  if (process.env.DAST_CREDENTIAL_KEY) {
+    types.push('dast', 'dast_zap', 'dast_nuclei');
+  }
+  return types;
+}
 
 export async function claimJob(
   supabase: Storage,
-  machineId: string
+  machineId: string,
+  supportedTypes: string[] = getSupportedJobTypes(),
 ): Promise<ExtractionJobRow | null> {
   const { data, error } = await supabase.rpc('claim_scan_job', {
     p_machine_id: machineId,
-    p_supported_types: SUPPORTED_TYPES as unknown as string[],
+    p_supported_types: supportedTypes,
   });
 
   if (error) {

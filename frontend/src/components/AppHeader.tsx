@@ -4,7 +4,7 @@ import FeedbackPopover from './FeedbackPopover';
 import CommandPalette from './CommandPalette';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useUserProfile } from '../hooks/useUserProfile';
+import { getAvatarUrl, getDisplayNameOrNull } from '../lib/userIdentity';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,8 +33,9 @@ interface AppHeaderProps {
 }
 
 export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg = false, customLeftContent, customRightContent, hideRightActions = false }: AppHeaderProps) {
-  const { avatarUrl } = useUserProfile();
   const { user, signOut } = useAuth();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
   const location = useLocation();
   const [commandOpen, setCommandOpen] = useState(false);
@@ -165,8 +166,8 @@ export default function AppHeader({ breadcrumb, showSearch = false, showNewOrg =
                       />
                     </div>
                     <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                      {user?.user_metadata?.full_name && (
-                        <span className="text-sm font-medium text-foreground truncate">{user.user_metadata.full_name}</span>
+                      {fullName && (
+                        <span className="text-sm font-medium text-foreground truncate">{fullName}</span>
                       )}
                       <span className="text-xs text-foreground-secondary truncate">{user?.email}</span>
                     </div>

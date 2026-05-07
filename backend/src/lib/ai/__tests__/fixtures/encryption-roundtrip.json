@@ -1,0 +1,7 @@
+{
+  "_comment": "Shared fixture for the backend + depscanner encryption round-trip tests. Both packages decrypt `encrypted` using `key_hex` at version `key_version` and MUST get back `plaintext`. If sync drifts (cipher algorithm change, nonce/auth-tag layout change), the depscanner test fails.",
+  "key_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+  "key_version": 1,
+  "plaintext": "test-secret-payload",
+  "encrypted": "AQIDBAUGBwgJCgsM:Dhd21MVkwCKYnc/sHI5mfhz/xw==:aJFHZa2oQqQPpdmMcH1qXg=="
+}

@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
-import type { ContainerFinding, IaCFinding } from '../../lib/api';
+import { frameworkLabel, type ContainerFinding, type IaCFinding } from '../../lib/api';
 import { CodeSnippetBlock, getLangInfo } from './VulnerabilityOrgSidebarExpandedContent';
 
 type IaCRow = { type: 'iac'; data: IaCFinding };
@@ -34,10 +34,23 @@ function severityClass(sev: string | null): string {
   }
 }
 
-function frameworkLabel(framework: IaCFinding['framework']): string {
-  if (framework === 'terraform') return 'Terraform';
-  if (framework === 'kubernetes') return 'Kubernetes';
-  return 'Dockerfile';
+// Format a normalized compliance benchmark key (e.g. cis_aws_v1_4 → 'CIS AWS V1.4')
+// for display in the badge strip. Acronyms are upper-cased; v1_4 becomes V1.4.
+function formatBenchmarkLabel(key: string): string {
+  return key
+    .split('_')
+    .map((part) => {
+      if (/^v\d+/i.test(part)) {
+        return part
+          .replace(/^v/i, 'V')
+          .replace(/(\d+)(\d+)$/, '$1.$2');
+      }
+      if (/^(cis|soc|nist|pci|hipaa|fedramp|gdpr|iso|cwe|owasp)\d*$/i.test(part)) {
+        return part.toUpperCase();
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(' ');
 }
 
 function ignoreButton({
@@ -90,6 +103,9 @@ export default function InfraFindingCard(props: Props) {
 
   if (props.type === 'iac') {
     const f = props.data;
+    const complianceEntries = f.compliance_refs
+      ? Object.entries(f.compliance_refs).filter(([, ids]) => ids.length > 0)
+      : [];
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-2">
@@ -113,6 +129,23 @@ export default function InfraFindingCard(props: Props) {
           </div>
           {ignoreButton({ busy, isIgnored, onClick: onToggleStatus })}
         </div>
+
+        {complianceEntries.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Compliance
+            </span>
+            {complianceEntries.map(([key, ids]) => (
+              <span
+                key={key}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-300 border border-blue-500/20"
+                title={ids.join(', ')}
+              >
+                {formatBenchmarkLabel(key)} · {ids.length}
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <div>

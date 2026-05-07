@@ -22,9 +22,10 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import StreamZip from 'node-stream-zip';
 import { supabase } from '../supabase';
-import { canonicalizeEcosystem } from './ecosystem';
+import { canonicalizeEcosystem, canonicalizePackageName, type CanonicalEcosystem } from './ecosystem';
 import type { MaliciousFeedSource, MaliciousFeedSyncState, MaliciousSeverity } from './types';
 import { getGitHubToken } from '../ghsa';
+import { resolveVulnerableRange, makePackumentCache, type PackumentCache } from './version-range';
 
 export interface FeedSyncResult {
   source: MaliciousFeedSource;
@@ -117,8 +118,12 @@ export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise
 async function syncOsv(): Promise<{ entries_added: number; entries_withdrawn: number }> {
   let added = 0;
   let withdrawn = 0;
+  // OSV entries usually carry an explicit `versions` array, so the version-range
+  // resolver is rarely needed — but pass a cache anyway so the code path is uniform
+  // with GHSA. Cache is per-OSV-run, distinct from GHSA's.
+  const cache = makePackumentCache();
   for (const eco of OSV_ECOSYSTEMS) {
-    const entries = await fetchOsvMaliciousForEcosystem(eco.raw, eco.canonical);
+    const entries = await fetchOsvMaliciousForEcosystem(eco.raw, eco.canonical, cache);
     const summary = await upsertEntries(entries);
     added += summary.added;
     withdrawn += summary.withdrawn;
@@ -126,7 +131,11 @@ async function syncOsv(): Promise<{ entries_added: number; entries_withdrawn: nu
   return { entries_added: added, entries_withdrawn: withdrawn };
 }
 
-async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string): Promise<UpsertEntry[]> {
+async function fetchOsvMaliciousForEcosystem(
+  ecoRaw: string,
+  canonical: string,
+  cache: PackumentCache,
+): Promise<UpsertEntry[]> {
   // OSV publishes per-ecosystem bulk archives at
   //   https://osv-vulnerabilities.storage.googleapis.com/<eco>/all.zip
   // each entry is a single advisory JSON. We only care about MAL-* IDs
@@ -164,7 +173,7 @@ async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string):
       try {
         const data = await zip.entryData(name);
         const advisory = JSON.parse(data.toString('utf8'));
-        for (const e of advisoryToEntries(advisory, 'osv', canonical)) {
+        for (const e of await advisoryToEntries(advisory, 'osv', canonical, cache)) {
           entries.push(e);
         }
       } catch {
@@ -181,6 +190,25 @@ async function fetchOsvMaliciousForEcosystem(ecoRaw: string, canonical: string):
 
 // ───────────────────────────── GHSA ────────────────────────────────────────
 
+// Map canonical ecosystem → GHSA `SecurityAdvisoryEcosystem` enum. v1 ran
+// a single un-filtered query and topped out at 5000 advisories total
+// (50 pages × 100/page). M2.1 fans out: one paginated query per ecosystem,
+// raising the effective cap to 5000 PER ecosystem (~35k aggregate). Skips
+// canonical ecosystems with no GHSA representation (vscode).
+const GHSA_ECOSYSTEMS: Array<{ canonical: CanonicalEcosystem; ghsa: string }> = [
+  { canonical: 'npm', ghsa: 'NPM' },
+  { canonical: 'pypi', ghsa: 'PIP' },
+  { canonical: 'maven', ghsa: 'MAVEN' },
+  { canonical: 'golang', ghsa: 'GO' },
+  { canonical: 'rubygems', ghsa: 'RUBYGEMS' },
+  { canonical: 'composer', ghsa: 'COMPOSER' },
+  { canonical: 'cargo', ghsa: 'RUST' },
+  { canonical: 'nuget', ghsa: 'NUGET' },
+  { canonical: 'github-actions', ghsa: 'ACTIONS' },
+];
+
+const GHSA_MAX_PAGES_PER_ECO = 50; // 50 × 100/page = 5k entries / ecosystem
+
 async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: number }> {
   const token = getGitHubToken();
   if (!token) {
@@ -194,36 +222,46 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 
   let added = 0;
   let withdrawn = 0;
-  let cursor: string | null = null;
-  let pages = 0;
-  const maxPages = 50;
 
-  while (pages < maxPages) {
-    const page = await fetchGhsaMalwarePage(cursor, token);
-    if (!page || page.advisories.length === 0) break;
+  // Per-run version-list cache so the 12th typosquat advisory targeting
+  // `lodash` doesn't trigger a 12th packument fetch. Cache spans all
+  // ecosystems — the cache is keyed (ecosystem, name) internally.
+  const cache = makePackumentCache();
 
-    const entries: UpsertEntry[] = [];
-    for (const adv of page.advisories) {
-      // GHSA's `vulnerabilities` is a GraphQL connection: { nodes: [...] }.
-      // The earlier `vulnerabilities?.[0]` indexed the connection object as if
-      // it were an array → always undefined → every advisory got skipped and
-      // entries_added came back 0 even though the API returned 5k advisories.
-      const firstNode = adv.vulnerabilities?.nodes?.[0];
-      const ecoRaw = firstNode?.package?.ecosystem;
-      const canonical = canonicalizeEcosystem(ecoRaw ?? null);
-      if (!canonical) continue;
-      for (const e of advisoryToEntries(adv, 'ghsa', canonical)) {
-        entries.push(e);
+  for (const eco of GHSA_ECOSYSTEMS) {
+    let cursor: string | null = null;
+    let pages = 0;
+
+    while (pages < GHSA_MAX_PAGES_PER_ECO) {
+      const page = await fetchGhsaMalwarePage(cursor, token, eco.ghsa);
+      if (!page || page.vulnerabilities.length === 0) break;
+
+      // Each `securityVulnerabilities` node is one (package, advisory) row.
+      // Reshape into the synthetic-advisory shape `advisoryToEntries` already
+      // understands so the OSV path can stay unchanged.
+      const entries: UpsertEntry[] = [];
+      for (const vuln of page.vulnerabilities) {
+        const synthetic = {
+          ghsaId: vuln.advisory?.ghsaId,
+          summary: vuln.advisory?.summary,
+          description: vuln.advisory?.description,
+          severity: vuln.advisory?.severity,
+          withdrawnAt: vuln.advisory?.withdrawnAt,
+          vulnerabilities: { nodes: [vuln] },
+        };
+        for (const e of await advisoryToEntries(synthetic, 'ghsa', eco.canonical, cache)) {
+          entries.push(e);
+        }
       }
+
+      const summary = await upsertEntries(entries);
+      added += summary.added;
+      withdrawn += summary.withdrawn;
+
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+      pages++;
     }
-
-    const summary = await upsertEntries(entries);
-    added += summary.added;
-    withdrawn += summary.withdrawn;
-
-    if (!page.hasNextPage) break;
-    cursor = page.endCursor;
-    pages++;
   }
 
   return { entries_added: added, entries_withdrawn: withdrawn };
@@ -232,22 +270,30 @@ async function syncGhsa(): Promise<{ entries_added: number; entries_withdrawn: n
 async function fetchGhsaMalwarePage(
   cursor: string | null,
   token: string,
-): Promise<{ advisories: any[]; hasNextPage: boolean; endCursor: string | null } | null> {
+  ghsaEcosystem: string,
+  attempt = 0,
+): Promise<{ vulnerabilities: any[]; hasNextPage: boolean; endCursor: string | null } | null> {
   const after = cursor ? `, after: ${JSON.stringify(cursor)}` : '';
+  // SCHEMA NOTE — verified against api.github.com 2026-05-05:
+  //   `securityAdvisories` does NOT accept an `ecosystem` argument.
+  //   `securityVulnerabilities` DOES — it's the per-(package, advisory)
+  //    join shape with the filter we need. Each node arrives pre-joined,
+  //    so the M2.1 per-ecosystem fan-out works after a small reshape into
+  //    the synthetic-advisory shape advisoryToEntries already accepts.
+  // orderBy: securityVulnerabilities only exposes UPDATED_AT — that's
+  // fine since we run daily and pull newest-first.
   const query = `query {
-    securityAdvisories(first: 100${after}, classifications: [MALWARE], orderBy: { field: PUBLISHED_AT, direction: DESC }) {
+    securityVulnerabilities(first: 100${after}, ecosystem: ${ghsaEcosystem}, classifications: [MALWARE], orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        ghsaId
-        summary
-        description
-        severity
-        withdrawnAt
-        vulnerabilities(first: 100) {
-          nodes {
-            package { ecosystem name }
-            vulnerableVersionRange
-          }
+        package { ecosystem name }
+        vulnerableVersionRange
+        advisory {
+          ghsaId
+          summary
+          description
+          severity
+          withdrawnAt
         }
       }
     }
@@ -262,29 +308,40 @@ async function fetchGhsaMalwarePage(
     },
     body: JSON.stringify({ query }),
   });
+
+  // Authenticated GraphQL is 5000 points/h. We can blow it if the cron run
+  // collides with concurrent automation; back off + retry with the cursor
+  // intact. 403 is also used for secondary-rate-limit (abuse detection).
+  if ((res.status === 429 || res.status === 403) && attempt < 3) {
+    const retryAfterRaw = res.headers.get('retry-after');
+    const retryAfterMs = retryAfterRaw ? Math.max(1000, parseInt(retryAfterRaw, 10) * 1000) : 30_000 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    return fetchGhsaMalwarePage(cursor, token, ghsaEcosystem, attempt + 1);
+  }
   if (!res.ok) {
     throw new Error(`GHSA GraphQL ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as any;
   if (json.errors) {
-    throw new Error(`GHSA GraphQL errors: ${JSON.stringify(json.errors)}`);
+    throw new Error(`GHSA GraphQL errors (eco=${ghsaEcosystem}): ${JSON.stringify(json.errors)}`);
   }
-  const sa = json.data?.securityAdvisories;
-  if (!sa) return null;
+  const sv = json.data?.securityVulnerabilities;
+  if (!sv) return null;
   return {
-    advisories: sa.nodes ?? [],
-    hasNextPage: Boolean(sa.pageInfo?.hasNextPage),
-    endCursor: sa.pageInfo?.endCursor ?? null,
+    vulnerabilities: sv.nodes ?? [],
+    hasNextPage: Boolean(sv.pageInfo?.hasNextPage),
+    endCursor: sv.pageInfo?.endCursor ?? null,
   };
 }
 
 // ───────────────────────────── shared ──────────────────────────────────────
 
-function advisoryToEntries(
+async function advisoryToEntries(
   advisory: any,
   source: MaliciousFeedSource,
   canonical: string,
-): UpsertEntry[] {
+  cache: PackumentCache,
+): Promise<UpsertEntry[]> {
   const sourceId: string = advisory.id ?? advisory.ghsaId ?? '';
   if (!sourceId) return [];
   const description: string | null = advisory.summary ?? advisory.description ?? null;
@@ -298,9 +355,33 @@ function advisoryToEntries(
   for (const a of list) {
     const ecoRaw = a?.package?.ecosystem ?? a?.ecosystem;
     const eco = canonicalizeEcosystem(ecoRaw ?? null) ?? canonical;
-    const name = a?.package?.name ?? a?.name;
-    if (!name) continue;
-    const versions: Array<string | null> = pickVersions(a) ?? [null];
+    const rawName = a?.package?.name ?? a?.name;
+    if (!rawName) continue;
+    // Canonicalize on write so the read-side lookup (lookupFeed) finds the
+    // row regardless of advisory-source casing. PEP 503 normalization for
+    // pypi means GHSA's `Django` lands as `django`, matching the cdxgen
+    // SBOM output for installed PyPI packages.
+    const name = canonicalizePackageName(rawName, eco as CanonicalEcosystem);
+
+    // 1. Explicit version list (OSV publishes these for most MAL-* entries).
+    let versions: Array<string | null> | null = pickVersions(a);
+
+    // 2. GHSA's `vulnerableVersionRange` — expand to concrete versions via
+    //    per-ecosystem registry lookup. Falls through to `[null]` (= "all
+    //    versions") when the resolver can't enumerate.
+    if (!versions && typeof a?.vulnerableVersionRange === 'string' && a.vulnerableVersionRange.trim()) {
+      const resolved = await resolveVulnerableRange(
+        eco as CanonicalEcosystem,
+        name,
+        a.vulnerableVersionRange,
+        cache,
+      );
+      if (resolved && resolved.length > 0) versions = resolved.slice(0, 200);
+    }
+
+    // 3. Fallback: one row with version=null = matches every installed version.
+    versions = versions ?? [null];
+
     for (const v of versions) {
       entries.push({
         package_name: name,

@@ -56,11 +56,7 @@ vi.mock('../NotificationRulesSection', () => ({
 }));
 
 vi.mock('../../../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 'user-1' } }),
-}));
-
-vi.mock('../../hooks/useUserProfile', () => ({
-  useUserProfile: () => ({ fullName: 'Test User' }),
+  useAuth: () => ({ user: { id: 'user-1', user_metadata: { custom_full_name: 'Test User' } } }),
 }));
 
 describe('ProjectSettingsPage – Notifications', () => {

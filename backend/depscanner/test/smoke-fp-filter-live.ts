@@ -20,7 +20,6 @@ import { createPGLiteStorage } from '../src/storage';
 import {
   filterFlow,
   createUsageLogger,
-  parseVerdict,
 } from '../src/taint-engine/fp-filter';
 import { loadSpec, propagate } from '../src/taint-engine';
 import type { FrameworkSpec } from '../src/taint-engine';
@@ -88,6 +87,7 @@ async function main(): Promise<void> {
       flow,
       workspaceRoot: fixtureRoot,
       apiKey,
+      specs: [expressSpec, stdlibSpec],
       onWarn: (m) => console.error(`  [filter warn] ${m}`),
     },
     logger,
@@ -98,21 +98,26 @@ async function main(): Promise<void> {
 
   // Step 4: assertions.
   assert(
-    result.verdict === 'kept' || result.verdict === 'rejected' || result.verdict === 'kept_on_error',
-    `verdict in {kept, rejected, kept_on_error} (got ${result.verdict})`,
+    result.verdict === 'kept' ||
+      result.verdict === 'rejected' ||
+      result.verdict === 'kept_on_error' ||
+      result.verdict === 'ai_truncated',
+    `verdict in {kept, rejected, kept_on_error, ai_truncated} (got ${result.verdict})`,
   );
-  if (result.verdict === 'kept_on_error') {
-    console.error(`  filter errored: ${(result as any).errorMessage}`);
+  if (result.verdict === 'kept_on_error' || result.verdict === 'ai_truncated') {
+    console.error(`  filter errored (${result.verdict}): ${(result as any).errorMessage}`);
     failures++;
   } else {
     console.log(`  verdict=${result.verdict}`);
-    console.log(`  confidence=${(result as any).confidence}`);
-    console.log(`  reasoning="${(result as any).reasoning}"`);
-    console.log(`  inputTokens=${(result as any).inputTokens} outputTokens=${(result as any).outputTokens}`);
+    console.log(`  verdict_confidence=${result.verdict_confidence}`);
+    console.log(`  verdict_reasoning="${result.verdict_reasoning}"`);
+    console.log(`  sanitization=${JSON.stringify(result.sanitization)}`);
+    console.log(`  endpoint=${JSON.stringify(result.endpoint)}`);
+    console.log(`  inputTokens=${result.inputTokens} outputTokens=${result.outputTokens}`);
     console.log(`  costUsd=$${result.costUsd.toFixed(6)}`);
     assert(result.costUsd > 0, `costUsd > 0 (got ${result.costUsd})`);
     assert(result.costUsd < 0.01, `costUsd < $0.01 per call (got ${result.costUsd})`);
-    assert(typeof (result as any).reasoning === 'string', 'reasoning is a string');
+    assert(typeof result.verdict_reasoning === 'string', 'verdict_reasoning is a string');
   }
 
   // Step 5: confirm ai_usage_logs row landed.

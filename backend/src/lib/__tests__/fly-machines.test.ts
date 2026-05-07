@@ -22,7 +22,7 @@ beforeEach(() => {
   process.env.FLY_MAX_BURST_MACHINES = '5';
 });
 
-import { startExtractionMachine } from '../fly-machines';
+import { getDastMachineConfig, startDastMachine, startExtractionMachine } from '../fly-machines';
 
 describe('startExtractionMachine', () => {
   it('happy path: list machines → find stopped → start it → return machine ID', async () => {
@@ -154,5 +154,90 @@ describe('startExtractionMachine', () => {
     const result = await startExtractionMachine();
 
     expect(result).toBe('m-new');
+  });
+});
+
+describe('getDastMachineConfig — runtime branching', () => {
+  it("'classic' → shared-cpu-4x 8GB", () => {
+    const cfg = getDastMachineConfig('classic');
+    expect(cfg.guest).toEqual({ cpus: 4, memory_mb: 8192, cpu_kind: 'shared' });
+    expect(cfg.app).toBe('deptex-depscanner');
+  });
+
+  it("'spa' → performance-4x 16GB", () => {
+    const cfg = getDastMachineConfig('spa');
+    expect(cfg.guest).toEqual({ cpus: 4, memory_mb: 16384, cpu_kind: 'performance' });
+    expect(cfg.app).toBe('deptex-depscanner');
+  });
+
+  it("'unknown' → performance-4x 16GB (first scan default)", () => {
+    const cfg = getDastMachineConfig('unknown');
+    expect(cfg.guest).toEqual({ cpus: 4, memory_mb: 16384, cpu_kind: 'performance' });
+  });
+
+  it('app name is identical across runtimes (single Fly app, type-aware dispatch)', () => {
+    const classicApp = getDastMachineConfig('classic').app;
+    const spaApp = getDastMachineConfig('spa').app;
+    const unknownApp = getDastMachineConfig('unknown').app;
+    expect(classicApp).toBe(spaApp);
+    expect(spaApp).toBe(unknownApp);
+  });
+
+  it('honours FLY_DAST_MAX_BURST env var', () => {
+    process.env.FLY_DAST_MAX_BURST = '7';
+    // Re-require so the constant re-reads the env value.
+    jest.resetModules();
+    const reloaded = require('../fly-machines') as typeof import('../fly-machines');
+    expect(reloaded.getDastMachineConfig('classic').maxBurst).toBe(7);
+    expect(reloaded.getDastMachineConfig('spa').maxBurst).toBe(7);
+    delete process.env.FLY_DAST_MAX_BURST;
+  });
+});
+
+describe('startDastMachine — passes runtime-branched config to Fly', () => {
+  it("classic target → shared-cpu-4x 8GB shape on burst create", async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'm-classic', state: 'created', name: 'burst', region: 'iad' }),
+      });
+
+    const result = await startDastMachine('classic');
+
+    expect(result).toBe('m-classic');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const createBody = JSON.parse((mockFetch.mock.calls[1][1] as RequestInit).body as string);
+    expect(createBody.config.guest).toEqual({ cpus: 4, memory_mb: 8192, cpu_kind: 'shared' });
+  });
+
+  it("'spa' target → performance-4x 16GB shape on burst create", async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'm-spa', state: 'created', name: 'burst', region: 'iad' }),
+      });
+
+    const result = await startDastMachine('spa');
+
+    expect(result).toBe('m-spa');
+    const createBody = JSON.parse((mockFetch.mock.calls[1][1] as RequestInit).body as string);
+    expect(createBody.config.guest).toEqual({ cpus: 4, memory_mb: 16384, cpu_kind: 'performance' });
+  });
+
+  it("'unknown' (no arg / first scan) defaults to performance-4x 16GB", async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'm-default', state: 'created', name: 'burst', region: 'iad' }),
+      });
+
+    const result = await startDastMachine();
+
+    expect(result).toBe('m-default');
+    const createBody = JSON.parse((mockFetch.mock.calls[1][1] as RequestInit).body as string);
+    expect(createBody.config.guest).toEqual({ cpus: 4, memory_mb: 16384, cpu_kind: 'performance' });
   });
 });

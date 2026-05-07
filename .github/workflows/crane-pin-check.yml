@@ -1,0 +1,83 @@
+name: Crane pin sync check
+
+# Enforces: any PR that bumps CRANE_VERSION in backend/depscanner/Dockerfile
+# MUST also bump BOTH CRANE_SHA256_AMD64 and CRANE_SHA256_ARM64 in the same
+# PR. Otherwise the build will silently install the new release under the
+# old SHA pin (sha256sum -c will fail at build time, but we want the failure
+# at PR-review time, not at the next image rebuild).
+#
+# Mirrors the enforcement style of schema-check.yml. No secrets required —
+# this is a pure git-diff check that works for fork PRs from OSS contributors.
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - backend/depscanner/Dockerfile
+
+jobs:
+  check-crane-pins-synced:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect CRANE_VERSION / SHA changes
+        id: diff
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          DIFF=$(git diff "$BASE" "$HEAD" -- backend/depscanner/Dockerfile)
+
+          # Look for `+ARG CRANE_VERSION=` / `+ARG CRANE_SHA256_AMD64=` /
+          # `+ARG CRANE_SHA256_ARM64=` lines in the diff. A bare `+` prefix
+          # means the line is being added in this PR.
+          VERSION_CHANGED=$(echo "$DIFF" | grep -E '^\+ARG CRANE_VERSION=' || true)
+          SHA_AMD64_CHANGED=$(echo "$DIFF" | grep -E '^\+ARG CRANE_SHA256_AMD64=' || true)
+          SHA_ARM64_CHANGED=$(echo "$DIFF" | grep -E '^\+ARG CRANE_SHA256_ARM64=' || true)
+
+          echo "version_changed<<EOF" >> $GITHUB_OUTPUT
+          echo "$VERSION_CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "amd64_changed<<EOF" >> $GITHUB_OUTPUT
+          echo "$SHA_AMD64_CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "arm64_changed<<EOF" >> $GITHUB_OUTPUT
+          echo "$SHA_ARM64_CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Fail if version bumped without matching SHA bumps
+        if: steps.diff.outputs.version_changed != '' && (steps.diff.outputs.amd64_changed == '' || steps.diff.outputs.arm64_changed == '')
+        run: |
+          echo "::error::This PR bumps CRANE_VERSION in backend/depscanner/Dockerfile but does NOT update both CRANE_SHA256_AMD64 and CRANE_SHA256_ARM64."
+          echo ""
+          echo "Crane runs in the worker holding decrypted registry creds."
+          echo "Bumping the version without re-pinning both arch SHAs leaves the"
+          echo "checksum guard pointed at the old release."
+          echo ""
+          echo "Look up new SHAs at:"
+          echo "  https://github.com/google/go-containerregistry/releases/tag/<CRANE_VERSION>"
+          echo "  (the checksums.txt asset on the release page)"
+          echo ""
+          echo "Diff snippet:"
+          echo "version line(s) added: ${{ steps.diff.outputs.version_changed }}"
+          echo "amd64 line(s) added:   ${{ steps.diff.outputs.amd64_changed }}"
+          echo "arm64 line(s) added:   ${{ steps.diff.outputs.arm64_changed }}"
+          exit 1
+
+      - name: Fail if a SHA bumped without a version bump
+        if: steps.diff.outputs.version_changed == '' && (steps.diff.outputs.amd64_changed != '' || steps.diff.outputs.arm64_changed != '')
+        run: |
+          echo "::error::This PR changes a CRANE_SHA256_* pin without bumping CRANE_VERSION. SHA pins are derived from the upstream release; changing one without the other points the checksum guard at a different blob than the install URL."
+          echo ""
+          echo "If the SHA edit is intentional (e.g. correcting a typo from a prior PR), bump CRANE_VERSION too — even to the same value with a no-op edit — so the diff is reviewable."
+          exit 1
+
+      - name: Summary
+        run: |
+          if [ -z "${{ steps.diff.outputs.version_changed }}" ] && [ -z "${{ steps.diff.outputs.amd64_changed }}" ] && [ -z "${{ steps.diff.outputs.arm64_changed }}" ]; then
+            echo "No crane pin changes — sync check skipped."
+          else
+            echo "Crane version + both arch SHAs all updated together — OK."
+          fi

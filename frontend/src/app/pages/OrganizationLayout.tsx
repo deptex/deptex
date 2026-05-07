@@ -7,7 +7,7 @@ import { InviteMemberDialog } from '../../components/InviteMemberDialog';
 import { api, Organization, RolePermissions, Team, Project, OrganizationMember, OrganizationInvitation, OrganizationRole } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
+import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Toaster } from '../../components/ui/toaster';
 import { PlanProvider } from '../../contexts/PlanContext';
 
@@ -21,7 +21,8 @@ export default function OrganizationLayout() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
-  const { avatarUrl } = useUserProfile();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
 
   // Cached permissions for instant tab display
   const cachedPermissions = useMemo(() => {
@@ -280,6 +281,7 @@ export default function OrganizationLayout() {
             onRefetchTeams={refetchTeamsAndNotify}
             user={user}
             avatarUrl={avatarUrl}
+            fullName={fullName}
             onSignOut={signOut}
           />
           <SidebarInset>

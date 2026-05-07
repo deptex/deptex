@@ -18,7 +18,7 @@ import OrganizationOverviewPage from "./pages/OrganizationOverviewPage";
 
 import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
-import SettingsPage from "./pages/SettingsPage";
+import AccountSettingsPage from "./pages/AccountSettingsPage";
 import PlatformFeaturesPage from "./pages/PlatformFeaturesPage";
 import ProjectHealthPage from "./pages/ProjectHealthPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
@@ -39,10 +39,19 @@ import FlowEditorPage from "./pages/FlowEditorPage";
 import AdminGate from "../components/AdminGate";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
 
-// Redirect /settings to /settings/general while preserving search params (for OAuth callbacks)
+// Forward the legacy /settings entry point to the user's account page within
+// their default organization. Falls back to /organizations when no default
+// is set (the landing page handles initial selection). Preserves search
+// params so OAuth callbacks survive the redirect.
 function SettingsRedirect() {
   const { search } = useLocation();
-  return <Navigate to={`/settings/general${search}`} replace />;
+  const defaultOrg = typeof window !== 'undefined'
+    ? localStorage.getItem('deptex_default_org')
+    : null;
+  const target = defaultOrg
+    ? `/organizations/${defaultOrg}/account/general${search}`
+    : `/organizations${search}`;
+  return <Navigate to={target} replace />;
 }
 
 /** All project URLs redirect to org overview (project UI lives in org overview sidebar). */
@@ -164,6 +173,18 @@ export const router = createBrowserRouter([
         element: <FlowEditorPage />,
       },
       {
+        path: "account",
+        element: <Navigate to="general" replace />,
+      },
+      {
+        path: "account/general",
+        element: <AccountSettingsPage />,
+      },
+      {
+        path: "account/connected-accounts",
+        element: <AccountSettingsPage />,
+      },
+      {
         path: ":tab",
         element: <Navigate to=".." replace />,
       },
@@ -210,28 +231,12 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: "/settings/general",
+    path: "/settings/*",
     element: (
       <ProtectedRoute>
-        <SettingsPage />
+        <SettingsRedirect />
       </ProtectedRoute>
     ),
-  },
-  {
-    path: "/settings/general/connected-accounts",
-    element: (
-      <ProtectedRoute>
-        <SettingsPage />
-      </ProtectedRoute>
-    ),
-  },
-  {
-    path: "/settings/notifications",
-    element: <Navigate to="/settings/general" replace />,
-  },
-  {
-    path: "/settings/security",
-    element: <Navigate to="/settings/general" replace />,
   },
 
   // ============================================

@@ -17,6 +17,7 @@ import {
   Globe,
   BarChart,
   CreditCard,
+  ShieldCheck,
 } from 'lucide-react';
 import { RolePermissions } from './api';
 
@@ -32,6 +33,7 @@ export const VALID_SETTINGS_SECTIONS = new Set([
   'policies',
   'statuses',
   'security_slas',
+  'malicious_allowlist',
   'audit_logs',
   'sso',
   'mfa',
@@ -145,6 +147,9 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'policies', label: 'Policies', icon: <Shield className={iconClass} /> });
     entries.push({ id: 'statuses', label: 'Statuses', icon: <Tag className={iconClass} /> });
     entries.push({ id: 'security_slas', label: 'Security SLAs', icon: <Clock className={iconClass} /> });
+  }
+  if (perms.manage_organization_settings) {
+    entries.push({ id: 'malicious_allowlist', label: 'Malicious Allowlist', icon: <ShieldCheck className={iconClass} /> });
   }
   if (perms.view_activity) {
     entries.push({ id: 'audit_logs', label: 'Audit Logs', icon: <FileText className={iconClass} /> });

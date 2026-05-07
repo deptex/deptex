@@ -45,11 +45,14 @@ describe('claimJob', () => {
 
     mockRpc.mockResolvedValueOnce({ data: [job], error: null });
 
+    // DAST_CREDENTIAL_KEY drives the supported-types list; set it so the test
+    // can assert against the full DAST-enabled shape.
+    process.env.DAST_CREDENTIAL_KEY = '0'.repeat(64);
     const result = await claimJob(mockSupabase as any, machineId);
 
     expect(mockRpc).toHaveBeenCalledWith('claim_scan_job', {
       p_machine_id: machineId,
-      p_supported_types: ['extraction', 'dast'],
+      p_supported_types: ['extraction', 'dast', 'dast_zap', 'dast_nuclei'],
     });
     expect(result).toEqual(job);
   });

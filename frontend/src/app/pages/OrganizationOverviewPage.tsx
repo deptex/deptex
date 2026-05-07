@@ -29,7 +29,7 @@ import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionSt
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
+import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { useToast } from '../../hooks/use-toast';
 import {
   useOrganizationOverviewGraphLayout,
@@ -293,7 +293,8 @@ export default function OrganizationVulnerabilitiesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { avatarUrl: myAvatarUrl, fullName: myFullName } = useUserProfile();
+  const myAvatarUrl = getAvatarUrl(user);
+  const myFullName = getDisplayNameOrNull(user);
   const { toast } = useToast();
   const { organization } = useOutletContext<OrganizationContextType>();
   const [teamsById, setTeamsById] = useState<Record<string, Team>>({});
@@ -3256,7 +3257,12 @@ export default function OrganizationVulnerabilitiesPage() {
                       </div>
                     ) : (
                       <>
-                        <VulnerabilityExpandableTable organizationId={orgId!} rows={securityRows} onStatusChange={() => void loadTeamVulns(1)} />
+                        <VulnerabilityExpandableTable
+                          organizationId={orgId!}
+                          rows={securityRows}
+                          onStatusChange={() => void loadTeamVulns(1)}
+                          canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+                        />
                         {Math.ceil(teamSidebarVulnsTotal / 50) > 1 && (
                           <div className="flex items-center justify-between gap-3 pt-2">
                             <span className="text-xs text-foreground-secondary">
@@ -4352,6 +4358,9 @@ export default function OrganizationVulnerabilitiesPage() {
                                             <VulnerabilityOrgSidebarExpandedContent
                                               detail={detail.data}
                                               rowSummary={v.summary ?? null}
+                                              organizationId={orgId}
+                                              projectId={selectedProjectId ?? undefined}
+                                              canManage={Boolean(organization?.permissions?.manage_teams_and_projects)}
                                             />
                                           ) : (
                                             <div className="text-sm text-muted-foreground">No details available.</div>

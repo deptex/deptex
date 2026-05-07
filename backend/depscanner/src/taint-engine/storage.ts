@@ -10,6 +10,26 @@
  *      remaining (project_id, run_id, purl, entry_file, entry_line,
  *      sink_method) coords still vary per-flow).
  *
+ *      Phase 6.5 layered three changes over this:
+ *        - flow.osv_id (set by the propagator on CVE-targeted sinks) is now
+ *          written into project_reachable_flows.osv_id, mirroring the
+ *          existing rule_id pattern. The classifier's confirmed-tier
+ *          OR-clause keys on (osv_id IS NOT NULL AND dependency_id IS NOT
+ *          NULL).
+ *        - flow_signature_hash is computed at write time from canonicalized
+ *          (source_file:line, sink_file:line, sink_method, osv_id) so the
+ *          per-flow suppression hash survives re-extractions of the same
+ *          logical flow even though writeFlows wipe-and-rewrites every run.
+ *        - resolveSinkDep replaces the old internal-sentinel default. Caller
+ *          supplies a resolver that maps a flow to its dependency
+ *          (typically: createOsvIdResolver(depsByOsvId) for CVE-tagged
+ *          flows; the fallback for unmatched flows is a per-flow-unique
+ *          synthetic purl + dependencyId=null so the classifier OR-clause
+ *          naturally excludes them from confirmed-tier promotion). The
+ *          original 'pkg:internal/taint-engine' sentinel is gone — it was
+ *          dead code on every taint_engine row written today (verified at
+ *          M0.1; see plan section 0.1).
+ *
  *   2. writeRun() — upsert a row into taint_engine_runs that captures
  *      per-extraction telemetry. The circuit breaker reads this table to
  *      decide whether to engage the killswitch on the next extraction.
@@ -21,9 +41,15 @@
  * tracked separately in the runs table); the caller logs warnings.
  */
 
+import { createHash } from 'crypto';
+import * as path from 'path';
 import type { Storage } from '../storage';
 import type { Flow } from './flow';
-import type { FilterResult } from './fp-filter';
+import type { FilterTriple, TripleResult } from './fp-filter';
+
+function isFilterTriple(v: TripleResult): v is FilterTriple {
+  return v.verdict === 'kept' || v.verdict === 'rejected';
+}
 
 const FLOW_BATCH_SIZE = 100;
 
@@ -37,26 +63,56 @@ export interface WriteFlowsResult {
   errors: string[];
 }
 
+export interface ResolvedDep {
+  purl: string;
+  dependencyId: string | null;
+}
+
 export interface WriteFlowsOptions {
   projectId: string;
   extractionRunId: string;
   flows: Flow[];
   /**
-   * Resolver from a Flow's sink/entry locations to the dependency that owns
-   * the sink. M4 ships without dependency resolution (engine doesn't know
-   * which package the sink callee resolves to without callgraph→sbom
-   * matching) — pass `() => null` and we'll write rows with purl='internal'
-   * and dependency_id=null, so the classifier still picks them up but they
-   * don't promote a specific PDV. M5+ will plumb real dep resolution.
+   * Resolver from a Flow to its owning dependency. Phase 6.5 default: callers
+   * pass `createOsvIdResolver(depsByOsvId)` so CVE-tagged flows resolve to
+   * the real (dependencyId, purl) for classifier confirmed-tier promotion.
+   * Framework-generic flows (no osv_id) fall through to a per-flow-unique
+   * synthetic purl with dependencyId=null — written so the row exists, but
+   * the classifier OR-clause's `dependency_id IS NOT NULL` guard naturally
+   * excludes them. Returning `null` skips the flow entirely.
    */
-  resolveDep?: (flow: Flow) => { purl: string; dependencyId: string | null } | null;
+  resolveDep?: (flow: Flow) => ResolvedDep | null;
   /**
-   * Optional per-flow AI filter verdicts (M7). Embedded into the
-   * flow_nodes JSONB so admins can see why a borderline flow survived
-   * (or, for rejected flows, this map skips them entirely upstream and
-   * we never see them here). Keyed by Flow.id.
+   * Optional per-flow AI filter verdicts (M7 → M4 triple). Embedded into the
+   * flow_nodes JSONB so admins can see why a borderline flow survived (or,
+   * for rejected flows, this map skips them entirely upstream and we never
+   * see them here). Keyed by Flow.id.
+   *
+   * Phase 6.5 / M4 expands one synthetic node into THREE:
+   *   - ai_filter_verdict      — keep/reject/kept_on_error/ai_truncated
+   *   - ai_sanitization_verdict — is_sanitized + reasoning + sanitizer_line + confidence
+   *   - ai_endpoint_verdict     — classification + reasoning
+   * All carry `synthetic: true` so revert paths and frontend filters can
+   * distinguish AI-generated nodes from real hops.
+   *
+   * Status precedence (locked, also documented at top of fp-filter.ts and
+   * planned for top of epd.ts when M5 lands):
+   *   'ai_truncated' > 'kept_on_error' > '_anthropic_fallback_failed' >
+   *   '_anthropic_fallback_skipped_cost_cap' >
+   *   '_anthropic_fallback_skipped_burn_breaker' > '_anthropic_fallback' >
+   *   'flow_aggregated'
    */
-  filterVerdicts?: Map<string, FilterResult>;
+  filterVerdicts?: Map<string, TripleResult>;
+  /**
+   * Phase 6.5 — workspace clone root, used to strip the random clone-dir
+   * prefix from file paths before they're hashed into flow_signature_hash.
+   * Without this, a re-extraction of the same logical flow would produce a
+   * different hash on each run (clone dir is randomized) and break user
+   * suppressions every time. When undefined, paths are hashed as-is and the
+   * suppression-survives-re-extraction guarantee degrades — caller should
+   * always pass it for production extractions.
+   */
+  workspaceRoot?: string;
 }
 
 /**
@@ -67,8 +123,8 @@ export async function writeFlows(
   storage: Storage,
   options: WriteFlowsOptions,
 ): Promise<WriteFlowsResult> {
-  const { projectId, extractionRunId, flows } = options;
-  const resolveDep = options.resolveDep ?? defaultResolveDep;
+  const { projectId, extractionRunId, flows, workspaceRoot } = options;
+  const resolveDep = options.resolveDep ?? fallbackUnresolvedResolveDep;
   const verdicts = options.filterVerdicts;
   const errors: string[] = [];
 
@@ -76,30 +132,55 @@ export async function writeFlows(
   for (const flow of flows) {
     const dep = resolveDep(flow);
     if (!dep) continue;
-    // Embed AI filter verdict (M7.5) into the JSONB so admins can see why
-    // a borderline flow survived. We append a synthetic node rather than
-    // adding a top-level column (keeps the project_reachable_flows schema
-    // identical between engine + atom + reachability_rules sources).
+    // Embed AI verdict triple (M4) into the JSONB so admins can see why a
+    // borderline flow survived. We append synthetic nodes rather than
+    // adding top-level columns (keeps the project_reachable_flows schema
+    // identical between engine + atom + reachability_rules sources). For
+    // error paths (kept_on_error / ai_truncated) only the ai_filter_verdict
+    // node is appended — sanitization + endpoint signals are unavailable.
     const v = verdicts?.get(flow.id);
     let flowNodesWithVerdict: unknown = flow.flow_nodes;
     if (v) {
-      flowNodesWithVerdict = [
-        ...flow.flow_nodes,
-        v.verdict === 'kept_on_error'
-          ? {
-              kind: 'ai_filter_verdict',
-              verdict: 'kept_on_error',
-              reasoning: v.reasoning,
-              error_message: v.errorMessage,
-            }
-          : {
-              kind: 'ai_filter_verdict',
-              verdict: v.verdict,
-              reasoning: v.reasoning,
-              confidence: v.confidence,
-              model: v.model,
-            },
-      ];
+      const appended: unknown[] = [...flow.flow_nodes];
+      if (isFilterTriple(v)) {
+        appended.push({
+          kind: 'ai_filter_verdict',
+          verdict: v.verdict,
+          reasoning: v.verdict_reasoning,
+          confidence: v.verdict_confidence,
+          model: v.model,
+          synthetic: true,
+        });
+        appended.push({
+          kind: 'ai_sanitization_verdict',
+          is_sanitized: v.sanitization.is_sanitized,
+          reasoning: v.sanitization.reasoning,
+          sanitizer_line: v.sanitization.sanitizer_line,
+          confidence: v.sanitization.confidence,
+          model: v.model,
+          synthetic: true,
+        });
+        appended.push({
+          kind: 'ai_endpoint_verdict',
+          classification: v.endpoint.classification,
+          reasoning: v.endpoint.reasoning,
+          model: v.model,
+          synthetic: true,
+        });
+      } else {
+        // kept_on_error | ai_truncated — only the error-shaped synthetic node.
+        appended.push({
+          kind: 'ai_filter_verdict',
+          verdict: v.verdict,
+          reasoning: v.reasoning,
+          error_message: v.errorMessage,
+          // M5 aggregator filters on epd_status; mirror the verdict so the
+          // status precedence ordering is readable from a single field.
+          epd_status: v.verdict,
+          synthetic: true,
+        });
+      }
+      flowNodesWithVerdict = appended;
     }
     rows.push({
       project_id: projectId,
@@ -107,11 +188,12 @@ export async function writeFlows(
       purl: dep.purl,
       dependency_id: dep.dependencyId,
       reachability_source: 'taint_engine',
-      // osv_id/rule_id stay NULL — taint engine flows aren't keyed to a
-      // single CVE the way reachability_rules taint flows are. Under the
-      // phase23.4 NULLS NOT DISTINCT UNIQUE this means engine rows dedup
-      // on coords alone (matches atom semantics).
-      osv_id: null,
+      // Phase 6.5: osv_id is now populated from the matched sink (when the
+      // sink came from a CVE-targeted FrameworkSpec row). Framework-generic
+      // flows leave osv_id null, matching the legacy behaviour. rule_id
+      // stays null — that column belongs to the Phase 3 Semgrep rule pack
+      // path, which writes its own rows separately.
+      osv_id: flow.osv_id ?? null,
       rule_id: null,
       flow_nodes: flowNodesWithVerdict,
       entry_point_file: flow.entry_point_file,
@@ -129,6 +211,12 @@ export async function writeFlows(
       sink_is_external: flow.sink_is_external,
       flow_length: flow.flow_length,
       llm_prompt: null,
+      // Phase 6.5 — stable hash for per-flow suppression survival across
+      // writeFlows wipe-and-rewrite (Patch 9 / OD-4 Option B). The hash
+      // input is canonicalized so re-extractions of the same logical flow
+      // re-produce the same hash even though the workspace clone path is
+      // randomized.
+      flow_signature_hash: computeFlowSignatureHash(flow, workspaceRoot),
     });
   }
 
@@ -150,23 +238,130 @@ export async function writeFlows(
   return { attempted: rows.length, written, errors };
 }
 
-function defaultResolveDep(_flow: Flow): { purl: string; dependencyId: string | null } | null {
-  // M4 ships without callgraph→SBOM matching; tag the row as internal so
-  // the classifier's per-PDV roll-up keys it under the synthetic 'internal'
-  // PURL bucket. M5 will replace this with a real resolver mapping sink
-  // callee to dep.
-  //
-  // INVARIANT (verified 2026-04-30 critical-review):
-  // updateReachabilityLevels() in src/reachability.ts joins
-  // project_reachable_flows to project_dependency_vulnerabilities by exact
-  // purl match. 'pkg:internal/taint-engine' will never appear as a real
-  // SBOM purl (the 'internal' namespace is a private Deptex sentinel),
-  // so no PDV's reachability_level can be promoted by an engine flow until
-  // M5 lands the real resolver. Until then, engine output is a write-only
-  // shadow signal that downstream classification ignores. Do NOT change
-  // this PURL to a public-namespace string without reading reachability.ts
-  // — a collision would silently promote unrelated vulnerabilities.
-  return { purl: 'pkg:internal/taint-engine', dependencyId: null };
+/**
+ * Phase 6.5 — fallback resolver for flows the caller didn't supply a
+ * resolveDep for, OR for flows that the caller's resolver returned null/
+ * synthetic for. Produces a per-flow-unique synthetic purl built from
+ * sink coords; dependencyId=null. The synthetic namespace `pkg:internal/
+ * taint-engine-unresolved-<sha>` is per-flow-unique so unresolved flows
+ * never collide with each other or with real SBOM purls (preserves the
+ * reachability.ts join invariant that a synthetic purl never matches a
+ * PDV).
+ *
+ * Classifier behaviour: the M5 confirmed-tier OR-clause requires
+ * `dependency_id IS NOT NULL`, so unresolved-synthetic rows naturally drop
+ * out of promotion. The row still exists for telemetry (admin-facing
+ * "engine emitted these flows but couldn't tie them to a SBOM dep").
+ */
+export function fallbackUnresolvedResolveDep(flow: Flow): ResolvedDep {
+  const sha = createHash('sha256')
+    .update(`${flow.sink_file}:${flow.sink_line}`)
+    .digest('hex')
+    .slice(0, 8);
+  return { purl: `pkg:internal/taint-engine-unresolved-${sha}`, dependencyId: null };
+}
+
+/**
+ * Phase 6.5 — `osv_id → ResolvedDep` resolver factory. Used by pipeline.ts:
+ * the caller builds `depsByOsvId` from `project_dependency_vulnerabilities`
+ * + `project_dependencies` joined on this extraction's PDV rows, then wraps
+ * the map in this helper before passing to writeFlows. CVE-tagged flows
+ * resolve to their real (dependencyId, purl); framework-generic flows (no
+ * osv_id) and CVE-tagged flows whose dep didn't make it into the map fall
+ * through to fallbackUnresolvedResolveDep.
+ */
+export function createOsvIdResolver(
+  depsByOsvId: Map<string, ResolvedDep>,
+): (flow: Flow) => ResolvedDep {
+  return (flow) => {
+    if (flow.osv_id) {
+      const hit = depsByOsvId.get(flow.osv_id);
+      if (hit) return hit;
+    }
+    return fallbackUnresolvedResolveDep(flow);
+  };
+}
+
+/**
+ * Phase 6.5 — compute the stable per-flow signature hash from canonical
+ * inputs. Locked canonicalization rules (Patch 9 / re-review):
+ *
+ *   1. Repo-relative POSIX paths — strip workspace clone-root prefix; replace
+ *      backslashes with forward slashes. NO realpath / symlink resolution
+ *      (could escape the workspace on Windows-with-symlink hosts).
+ *   2. Lowercased ASCII — covers macOS HFS+ + Windows path case-insensitivity.
+ *      Safe on Linux: customer code shouldn't have case-only-different sibling
+ *      files; if it does, the hash collision is acceptable for suppression
+ *      purposes.
+ *   3. UTF-8 BOM stripped — defensive; shouldn't occur in repo paths.
+ *   4. Integer line numbers — Math.trunc; non-finite/non-positive lines throw
+ *      (programming error, not user data).
+ *   5. sink_method = engine's matched callee text — `flow.sink_method` is the
+ *      IR node's callee.text, NOT a model-emitted string. (parseTriple's
+ *      sanitizer_line cannot be the source — that's model-emitted.)
+ *   6. osv_id || '' — empty string for non-CVE-tagged flows so the hash is
+ *      well-defined on framework-generic flows even though they aren't
+ *      CVE-suppressible.
+ *
+ * Known degradation: line-shift drift. A whitespace-only commit that adds a
+ * blank line above the source/sink shifts every line number by 1 → all
+ * suppressions for that flow break. Acceptable in v1; future Phase 6.5b can
+ * replace line numbers with structural identifiers (function-qualified-name
+ * from tree-sitter usage extraction).
+ */
+export function computeFlowSignatureHash(flow: Flow, workspaceRoot?: string): string {
+  const sourcePath = canonicalRepoPath(flow.entry_point_file, workspaceRoot);
+  const sinkPath = canonicalRepoPath(flow.sink_file, workspaceRoot);
+  const sourceLine = canonicalLine(flow.entry_point_line, 'entry_point_line');
+  const sinkLine = canonicalLine(flow.sink_line, 'sink_line');
+  const osvKey = flow.osv_id ?? '';
+  const input = `${sourcePath}:${sourceLine}|${sinkPath}:${sinkLine}|${flow.sink_method}|${osvKey}`;
+  return createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * Strip clone-root prefix, normalize separators, drop UTF-8 BOM, lowercase.
+ * Exported so tests can lock down the canonicalization contract.
+ */
+export function canonicalRepoPath(filePath: string, workspaceRoot?: string): string {
+  let p = filePath;
+  // Drop UTF-8 BOM if it leaked into a path string (defensive).
+  if (p.charCodeAt(0) === 0xfeff) p = p.slice(1);
+  // Strip the workspace clone-root prefix so the random clone dir
+  // (e.g. /tmp/depscanner-workspace-abc123/) doesn't drift the hash.
+  if (workspaceRoot) {
+    // Compare on both raw + normalized variants of the workspace root so we
+    // don't miss a prefix that already had its slashes normalized upstream.
+    const candidates = new Set<string>();
+    candidates.add(workspaceRoot);
+    candidates.add(workspaceRoot.replace(/\\/g, '/'));
+    if (!workspaceRoot.endsWith('/') && !workspaceRoot.endsWith(path.sep)) {
+      candidates.add(workspaceRoot + path.sep);
+      candidates.add(workspaceRoot + '/');
+      candidates.add(workspaceRoot.replace(/\\/g, '/') + '/');
+    }
+    for (const root of candidates) {
+      if (p.startsWith(root)) {
+        p = p.slice(root.length);
+        break;
+      }
+    }
+  }
+  // Normalize separators after the prefix strip so a `\\`-form workspace
+  // root prefix doesn't fail to match a `/`-form path.
+  p = p.replace(/\\/g, '/');
+  // Drop a leading slash so `lib/foo.js` and `/lib/foo.js` collapse — the
+  // workspace strip above might leave a leading separator depending on
+  // whether the root carried its trailing slash.
+  if (p.startsWith('/')) p = p.slice(1);
+  return p.toLowerCase();
+}
+
+function canonicalLine(line: number, field: string): number {
+  if (!Number.isFinite(line) || line <= 0) {
+    throw new Error(`computeFlowSignatureHash: ${field}=${line} is not a finite positive integer`);
+  }
+  return Math.trunc(line);
 }
 
 export type TaintEngineRunStatus = 'running' | 'completed' | 'failed' | 'aborted' | 'skipped';

@@ -2,10 +2,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  classifyImageRef,
+  extractGhcrOwner,
+  normalizeDigest,
   parseDockerfileFinalStage,
   parseTrivyConfigOutput,
   parseTrivyImageOutput,
+  RegistryUnavailableError,
+  resolveImageDigest,
+  resolvePullStrategy,
+  type ConfiguredCredRef,
+  type CraneRunner,
 } from '../trivy';
 
 function writeTempDockerfile(name: string, contents: string): string {
@@ -76,41 +82,32 @@ describe('parseDockerfileFinalStage (Patch E)', () => {
   });
 });
 
-describe('classifyImageRef (Patch C)', () => {
-  it('treats bare-name images as public docker hub', () => {
-    expect(classifyImageRef('node:20')).toEqual({ kind: 'public_dockerhub' });
-  });
-
-  it('treats library/* images as public docker hub', () => {
-    expect(classifyImageRef('library/nginx:alpine')).toEqual({ kind: 'public_dockerhub' });
-  });
-
-  it('treats explicit docker.io as public docker hub', () => {
-    expect(classifyImageRef('docker.io/library/postgres:15')).toEqual({
-      kind: 'public_dockerhub',
-    });
-  });
-
+describe('extractGhcrOwner', () => {
   it('extracts the owner from a ghcr.io image', () => {
-    expect(classifyImageRef('ghcr.io/anthropic/foo:bar')).toEqual({
-      kind: 'ghcr',
-      owner: 'anthropic',
-    });
+    expect(extractGhcrOwner('ghcr.io/anthropic/foo:bar')).toBe('anthropic');
   });
 
-  it('marks ECR / GCR / ACR / Quay / Harbor as unsupported_registry at v1', () => {
-    expect(classifyImageRef('123456789.dkr.ecr.us-east-1.amazonaws.com/foo:tag').kind).toBe(
-      'unsupported_registry'
-    );
-    expect(classifyImageRef('gcr.io/my-project/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('myorg.azurecr.io/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('quay.io/myorg/foo:tag').kind).toBe('unsupported_registry');
-    expect(classifyImageRef('harbor.example.com/myorg/foo:tag').kind).toBe('unsupported_registry');
+  it('extracts the owner when a digest pin is present', () => {
+    expect(
+      extractGhcrOwner(
+        'ghcr.io/anthropic/foo@sha256:abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
+      )
+    ).toBe('anthropic');
   });
 
-  it('extracts ghcr owner correctly when a digest pin is present', () => {
-    const result = classifyImageRef('ghcr.io/anthropic/foo@sha256:abcd1234');
-    expect(result).toEqual({ kind: 'ghcr', owner: 'anthropic' });
+  it('returns null for non-ghcr hosts', () => {
+    expect(extractGhcrOwner('docker.io/library/node:20')).toBeNull();
+    expect(extractGhcrOwner('myorg.azurecr.io/foo:tag')).toBeNull();
+    expect(extractGhcrOwner('quay.io/team/foo')).toBeNull();
+  });
+
+  it('returns null for bare-name images (implicit docker.io)', () => {
+    expect(extractGhcrOwner('node:20')).toBeNull();
+    expect(extractGhcrOwner('library/nginx')).toBeNull();
+  });
+
+  it('returns null when ghcr ref is missing the owner segment', () => {
+    expect(extractGhcrOwner('ghcr.io/')).toBeNull();
   });
 });
 
@@ -203,5 +200,201 @@ describe('parseTrivyImageOutput', () => {
       ],
     });
     expect(parseTrivyImageOutput(sample, 'nginx:alpine', 'trivy@0.50.4').findings).toEqual([]);
+  });
+});
+
+// =============================================================================
+// v2 — normalizeDigest, resolvePullStrategy, resolveImageDigest (M6)
+// =============================================================================
+
+const HEX64 = 'a'.repeat(64);
+
+describe('normalizeDigest', () => {
+  it.each([
+    [HEX64, HEX64],
+    [`sha256:${HEX64}`, HEX64],
+    [`nginx@sha256:${HEX64}`, HEX64],
+    [`docker.io/library/nginx@sha256:${HEX64}`, HEX64],
+    [`123456789012.dkr.ecr.us-west-2.amazonaws.com/myorg/myimg@sha256:${HEX64}`, HEX64],
+  ])('canonicalizes %s', (input, expected) => {
+    expect(normalizeDigest(input)).toBe(expected);
+  });
+
+  it('round-trips: all input forms reduce to the same canonical digest', () => {
+    const a = normalizeDigest(HEX64);
+    const b = normalizeDigest(`sha256:${HEX64}`);
+    const c = normalizeDigest(`repo/path@sha256:${HEX64}`);
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+  });
+
+  it('rejects too-short hex', () => {
+    expect(() => normalizeDigest('a'.repeat(32))).toThrow(/invalid digest/);
+  });
+
+  it('rejects upper-case hex (digests are lower-case canonically)', () => {
+    expect(() => normalizeDigest('A'.repeat(64))).toThrow(/invalid digest/);
+  });
+
+  it('rejects a mid-string sha256 prefix (anchored regex)', () => {
+    expect(() =>
+      normalizeDigest(`stuff@sha256:${HEX64}@trailing`)
+    ).toThrow(/invalid digest/);
+  });
+});
+
+describe('resolvePullStrategy', () => {
+  const ECR_CRED: ConfiguredCredRef = {
+    id: 'cred-ecr',
+    registry_type: 'ecr',
+    registry_url: 'https://123.dkr.ecr.us-west-2.amazonaws.com',
+  };
+  const GHCR_CRED: ConfiguredCredRef = {
+    id: 'cred-ghcr',
+    registry_type: 'ghcr',
+    registry_url: null,
+  };
+  const ACR_CRED: ConfiguredCredRef = {
+    id: 'cred-acr',
+    registry_type: 'acr',
+    registry_url: 'myorg.azurecr.io',
+  };
+
+  it.each([
+    'node:20',
+    'library/nginx:alpine',
+    'docker.io/library/postgres:15',
+    'public.ecr.aws/lambda/nodejs:20',
+    'mcr.microsoft.com/dotnet/aspnet:8.0',
+  ])('returns public for %s', (ref) => {
+    expect(resolvePullStrategy(ref, [])).toEqual({ kind: 'public' });
+  });
+
+  it('returns authenticated when a cred matches the host', () => {
+    expect(
+      resolvePullStrategy('123.dkr.ecr.us-west-2.amazonaws.com/myimg:tag', [ECR_CRED])
+    ).toEqual({
+      kind: 'authenticated',
+      credId: 'cred-ecr',
+      hostname: '123.dkr.ecr.us-west-2.amazonaws.com',
+    });
+  });
+
+  it('returns authenticated for ghcr when a ghcr cred is configured', () => {
+    expect(resolvePullStrategy('ghcr.io/myorg/myapp:v1', [GHCR_CRED])).toEqual({
+      kind: 'authenticated',
+      credId: 'cred-ghcr',
+      hostname: 'ghcr.io',
+    });
+  });
+
+  it('returns skip for ghcr without a configured cred (v1 special case retired)', () => {
+    expect(resolvePullStrategy('ghcr.io/myorg/myapp:v1', [])).toEqual({
+      kind: 'skip',
+      reason: 'no_matching_cred',
+    });
+  });
+
+  it('returns skip for ECR when no matching cred is configured', () => {
+    expect(
+      resolvePullStrategy('999.dkr.ecr.eu-west-1.amazonaws.com/x:y', [ECR_CRED])
+    ).toEqual({ kind: 'skip', reason: 'no_matching_cred' });
+  });
+
+  it('selects the first matching cred when multiple are configured', () => {
+    const result = resolvePullStrategy(
+      'myorg.azurecr.io/foo:bar',
+      [ECR_CRED, ACR_CRED, GHCR_CRED]
+    );
+    expect(result).toEqual({
+      kind: 'authenticated',
+      credId: 'cred-acr',
+      hostname: 'myorg.azurecr.io',
+    });
+  });
+
+  it('skips a misconfigured cred (e.g. harbor with NULL registry_url) and tries the rest', () => {
+    const broken: ConfiguredCredRef = {
+      id: 'cred-broken',
+      registry_type: 'harbor',
+      registry_url: null,
+    };
+    expect(resolvePullStrategy('myorg.azurecr.io/foo:bar', [broken, ACR_CRED])).toEqual({
+      kind: 'authenticated',
+      credId: 'cred-acr',
+      hostname: 'myorg.azurecr.io',
+    });
+  });
+
+  it('treats a digest-pinned reference the same as a tagged one', () => {
+    expect(
+      resolvePullStrategy(
+        `123.dkr.ecr.us-west-2.amazonaws.com/myimg@sha256:${HEX64}`,
+        [ECR_CRED]
+      )
+    ).toEqual({
+      kind: 'authenticated',
+      credId: 'cred-ecr',
+      hostname: '123.dkr.ecr.us-west-2.amazonaws.com',
+    });
+  });
+});
+
+describe('resolveImageDigest', () => {
+  it('returns the canonical 64-hex digest from a successful crane run', async () => {
+    const runner: CraneRunner = jest.fn().mockResolvedValue({
+      stdout: `sha256:${HEX64}\n`,
+      exitCode: 0,
+    });
+    await expect(
+      resolveImageDigest('docker.io/library/nginx:1.27', { runner })
+    ).resolves.toBe(HEX64);
+    expect(runner).toHaveBeenCalledWith('docker.io/library/nginx:1.27', {
+      dockerConfigDir: undefined,
+      timeoutMs: 5000,
+    });
+  });
+
+  it('passes dockerConfigDir through to the runner', async () => {
+    const runner: CraneRunner = jest.fn().mockResolvedValue({
+      stdout: `sha256:${HEX64}`,
+      exitCode: 0,
+    });
+    await resolveImageDigest('nginx:1', { runner, dockerConfigDir: '/tmp/scan-x' });
+    expect(runner).toHaveBeenCalledWith('nginx:1', {
+      dockerConfigDir: '/tmp/scan-x',
+      timeoutMs: 5000,
+    });
+  });
+
+  it('classifies a runner timeout as RegistryUnavailableError', async () => {
+    // Mirrors what defaultCraneRunner does on execFile timeout: rejects with
+    // RegistryUnavailableError carrying the "timed out" cause.
+    const runner: CraneRunner = () =>
+      Promise.reject(new RegistryUnavailableError('private:1', 'crane probe timed out'));
+    await expect(
+      resolveImageDigest('private:1', { runner })
+    ).rejects.toThrow(/timed out/);
+  });
+
+  it('wraps a non-RegistryUnavailableError rejection (e.g. ENOENT) into RegistryUnavailableError', async () => {
+    const runner: CraneRunner = () =>
+      Promise.reject(Object.assign(new Error('crane: command not found'), { code: 'ENOENT' }));
+    const promise = resolveImageDigest('nginx:1', { runner });
+    await expect(promise).rejects.toBeInstanceOf(RegistryUnavailableError);
+    await expect(promise).rejects.toThrow(/command not found/);
+  });
+
+  it('classifies a non-zero exit as RegistryUnavailableError', async () => {
+    const runner: CraneRunner = jest.fn().mockResolvedValue({ stdout: '', exitCode: 2 });
+    await expect(resolveImageDigest('nginx:1', { runner })).rejects.toThrow(/crane exit 2/);
+  });
+
+  it('throws on malformed digest output (defensive parse)', async () => {
+    const runner: CraneRunner = jest.fn().mockResolvedValue({
+      stdout: 'not a digest',
+      exitCode: 0,
+    });
+    await expect(resolveImageDigest('nginx:1', { runner })).rejects.toThrow(/invalid digest/);
   });
 });

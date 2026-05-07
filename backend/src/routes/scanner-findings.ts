@@ -24,6 +24,24 @@ import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 
+// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Backend's tsconfig rootDir is ./src so cross-package import isn't possible;
+// kept in sync manually with the depscanner canonical export and the
+// `project_iac_findings.framework` CHECK constraint (phase27a migration).
+const RISK_ACCEPTED_REASON_MAX_LEN = 4096;
+
+const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
 const router = express.Router();
 router.use(authenticateUser);
 
@@ -80,7 +98,7 @@ router.get('/:id/projects/:projectId/iac-findings', async (req: AuthRequest, res
       countQuery = countQuery.eq('status', statusFilter);
       dataQuery = dataQuery.eq('status', statusFilter);
     }
-    if (['terraform', 'kubernetes', 'dockerfile'].includes(frameworkFilter)) {
+    if ((IAC_FRAMEWORKS as readonly string[]).includes(frameworkFilter)) {
       countQuery = countQuery.eq('framework', frameworkFilter);
       dataQuery = dataQuery.eq('framework', frameworkFilter);
     }
@@ -148,6 +166,11 @@ router.patch('/:id/projects/:projectId/iac-findings/:findingId/risk-accept', asy
 
     const { reason, accepted } = req.body ?? {};
     const now = new Date().toISOString();
+    const trimmedReason =
+      typeof reason === 'string' ? reason.trim().slice(0, RISK_ACCEPTED_REASON_MAX_LEN) : null;
+    if (typeof reason === 'string' && reason.length > RISK_ACCEPTED_REASON_MAX_LEN) {
+      return res.status(400).json({ error: 'reason too long' });
+    }
     const update =
       accepted === false
         ? {
@@ -160,7 +183,7 @@ router.patch('/:id/projects/:projectId/iac-findings/:findingId/risk-accept', asy
             risk_accepted: true,
             risk_accepted_by: userId,
             risk_accepted_at: now,
-            risk_accepted_reason: typeof reason === 'string' ? reason.trim() || null : null,
+            risk_accepted_reason: trimmedReason || null,
           };
     const { error, count } = await supabase
       .from('project_iac_findings')
@@ -279,6 +302,11 @@ router.patch('/:id/projects/:projectId/container-findings/:findingId/risk-accept
 
     const { reason, accepted } = req.body ?? {};
     const now = new Date().toISOString();
+    const trimmedReason =
+      typeof reason === 'string' ? reason.trim().slice(0, RISK_ACCEPTED_REASON_MAX_LEN) : null;
+    if (typeof reason === 'string' && reason.length > RISK_ACCEPTED_REASON_MAX_LEN) {
+      return res.status(400).json({ error: 'reason too long' });
+    }
     const update =
       accepted === false
         ? {
@@ -291,7 +319,7 @@ router.patch('/:id/projects/:projectId/container-findings/:findingId/risk-accept
             risk_accepted: true,
             risk_accepted_by: userId,
             risk_accepted_at: now,
-            risk_accepted_reason: typeof reason === 'string' ? reason.trim() || null : null,
+            risk_accepted_reason: trimmedReason || null,
           };
     const { error, count } = await supabase
       .from('project_container_findings')

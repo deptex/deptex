@@ -32,7 +32,19 @@ const CHECK_TYPE_TO_FRAMEWORK: Record<string, IaCFramework> = {
   terraform: 'terraform',
   terraform_plan: 'terraform',
   kubernetes: 'kubernetes',
+  // Checkov emits its kustomize check_type for kustomization files; the v2
+  // taxonomy folds them into kubernetes (no separate framework value).
+  kustomize: 'kubernetes',
   dockerfile: 'dockerfile',
+  helm: 'helm',
+  cloudformation: 'cloudformation',
+  // Azure ARM appears as 'arm' in some Checkov versions and 'azure_pipelines'
+  // / 'arm_pipelines' in others — only the deploymentTemplate framework is in
+  // scope here, which uses 'arm'.
+  arm: 'arm',
+  bicep: 'bicep',
+  serverless: 'serverless',
+  github_actions: 'github_actions',
 };
 
 function frameworkOf(raw: CheckovRawCheck, reportType: string | undefined): IaCFramework | null {
@@ -67,6 +79,53 @@ function normalizeSeverity(raw: CheckovRawCheck): string | null {
   return null;
 }
 
+function normalizeBenchmarkKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Pulls compliance framework references out of Checkov's per-check metadata.
+ * Checkov's shape varies across versions — handle the two common patterns:
+ *   1. Object map: `{ "CIS AWS V1.4": ["1.1.1", "1.1.2"], "SOC2": [...] }`
+ *   2. Array of pairs: `[{ name: "CIS AWS V1.4", ids: ["1.1.1"] }, ...]`
+ * Keys are normalized to snake_case lowercase; empty extraction → null.
+ */
+export function extractComplianceRefs(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, string[]> | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const benchmark = (metadata as { benchmark?: unknown }).benchmark;
+  if (!benchmark) return null;
+
+  const out: Record<string, string[]> = {};
+
+  if (Array.isArray(benchmark)) {
+    for (const entry of benchmark) {
+      if (!entry || typeof entry !== 'object') continue;
+      const name = (entry as { name?: unknown }).name;
+      const ids = (entry as { ids?: unknown }).ids;
+      if (typeof name !== 'string' || !Array.isArray(ids)) continue;
+      const cleanIds = ids.filter(
+        (v): v is string => typeof v === 'string' && v.length > 0
+      );
+      if (cleanIds.length > 0) out[normalizeBenchmarkKey(name)] = cleanIds;
+    }
+  } else if (typeof benchmark === 'object') {
+    for (const [key, value] of Object.entries(benchmark)) {
+      if (!Array.isArray(value)) continue;
+      const cleanIds = value.filter(
+        (v): v is string => typeof v === 'string' && v.length > 0
+      );
+      if (cleanIds.length > 0) out[normalizeBenchmarkKey(key)] = cleanIds;
+    }
+  }
+
+  return Object.keys(out).length === 0 ? null : out;
+}
+
 function parseSingleReport(report: CheckovRawReport, version: string): IaCFinding[] {
   const checks = report.results?.failed_checks ?? [];
   const out: IaCFinding[] = [];
@@ -99,6 +158,7 @@ function parseSingleReport(report: CheckovRawReport, version: string): IaCFindin
       code_snippet: snippet(c),
       rule_doc_url: c.guideline ?? null,
       iac_fingerprint: buildFingerprint(c),
+      compliance_refs: extractComplianceRefs(c.metadata),
       metadata: c.metadata ?? null,
     });
   }
@@ -136,10 +196,20 @@ export interface RunCheckovOptions {
   verboseLog?: boolean;
 }
 
+// Maps the canonical 9-value IaCFramework union to the framework keyword
+// Checkov accepts on the `--framework` flag. Trivy still owns dockerfile in
+// practice (orchestrator routes it), but the mapping is kept here so a
+// dockerfile entry passed in still resolves rather than silently dropping.
 const FRAMEWORK_TO_CHECKOV: Record<IaCFramework, string> = {
   terraform: 'terraform',
   kubernetes: 'kubernetes',
   dockerfile: 'dockerfile',
+  helm: 'helm',
+  cloudformation: 'cloudformation',
+  arm: 'arm',
+  bicep: 'bicep',
+  serverless: 'serverless',
+  github_actions: 'github_actions',
 };
 
 export async function runCheckov(
@@ -182,6 +252,9 @@ export async function runCheckov(
     exe: 'checkov',
     args,
     cwd: opts.repoPath,
+    // Checkov reports on real repos are well under 16MB; cap defends against
+    // a target repo with tens of thousands of generated misconfig findings.
+    stdoutMaxBytes: 16 * 1024 * 1024,
     signal: opts.signal,
     onHeartbeat: opts.onHeartbeat,
     logger: opts.logger,

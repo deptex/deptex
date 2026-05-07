@@ -3739,7 +3739,11 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 <div className="mb-6 flex items-center gap-2">
                   <h2 className="text-2xl font-bold text-foreground">Scanners</h2>
                 </div>
-                <ScannersPanel organizationId={organizationId} projectId={projectId} />
+                <ScannersPanel
+                  organizationId={organizationId}
+                  projectId={projectId}
+                  canManage={!!userPermissions?.edit_settings}
+                />
               </div>
             )}
           </div>

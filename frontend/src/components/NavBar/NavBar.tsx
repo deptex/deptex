@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { useAuth } from "../../contexts/AuthContext";
-import { useUserProfile } from "../../hooks/useUserProfile";
+import { getAvatarUrl, getDisplayNameOrNull } from "../../lib/userIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -114,7 +114,8 @@ export default function NavBar() {
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [githubStars, setGithubStars] = useState<number | null>(null);
   const { user, signOut } = useAuth();
-  const { avatarUrl } = useUserProfile();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
   const [dropdownTimeout, setDropdownTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
 
@@ -305,8 +306,8 @@ export default function NavBar() {
                         />
                       </div>
                       <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                        {user.user_metadata?.full_name && (
-                          <span className="text-sm font-medium text-foreground truncate">{user.user_metadata.full_name}</span>
+                        {fullName && (
+                          <span className="text-sm font-medium text-foreground truncate">{fullName}</span>
                         )}
                         <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
                       </div>

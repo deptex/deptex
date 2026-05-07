@@ -25,6 +25,7 @@ import {
   PinOff,
   Archive,
   ArchiveRestore,
+  Link2,
 } from 'lucide-react';
 
 import {
@@ -73,8 +74,9 @@ interface OrgSidebarProps {
   organization: Organization | null;
   userPermissions?: RolePermissions | null;
   onRefetchTeams?: () => void | Promise<void>;
-  user?: { email?: string | null; user_metadata?: { full_name?: string } } | null;
+  user?: { email?: string | null } | null;
   avatarUrl?: string;
+  fullName?: string | null;
   onSignOut?: () => Promise<void>;
 }
 
@@ -115,6 +117,7 @@ export default function OrgSidebar({
   onRefetchTeams,
   user = null,
   avatarUrl = '/images/blank_profile_image.png',
+  fullName = null,
   onSignOut,
 }: OrgSidebarProps) {
   const location = useLocation();
@@ -209,6 +212,17 @@ export default function OrgSidebar({
     const parts = location.pathname.split('/').filter(Boolean);
     return parts[3] === 'routines';
   }, [inAegis, location.pathname]);
+
+  const inAccount = useMemo(() => {
+    const parts = location.pathname.split('/').filter(Boolean);
+    return parts[0] === 'organizations' && parts[1] === organizationId && parts[2] === 'account';
+  }, [location.pathname, organizationId]);
+
+  const accountActiveSection = useMemo(() => {
+    if (!inAccount) return null;
+    const parts = location.pathname.split('/').filter(Boolean);
+    return parts[3] || 'general';
+  }, [inAccount, location.pathname]);
 
   const canUseAegis = userPermissions?.interact_with_aegis === true;
 
@@ -521,7 +535,7 @@ export default function OrgSidebar({
     navigate(`/organizations/${organizationId}/settings/${sectionId}`);
   };
 
-  const displayName = user?.user_metadata?.full_name || user?.email || 'Account';
+  const displayName = fullName || user?.email || 'Account';
 
   return (
     <>
@@ -548,7 +562,7 @@ export default function OrgSidebar({
         <div className="px-2 pb-1">
           <button
             type="button"
-            className="w-full flex items-center gap-2 px-3 h-9 rounded-md bg-background-subtle/50 border border-border/50 text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors text-left"
+            className="w-full flex items-center gap-2 px-3 h-8 rounded-md bg-background-subtle/50 border border-border/50 text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors text-left"
           >
             <Search className="h-4 w-4 flex-shrink-0" />
             <span className="text-sm flex-1">Find...</span>
@@ -562,7 +576,7 @@ export default function OrgSidebar({
           {/* Main nav — fades out left when entering any drilldown */}
           <div className={cn(
             'transition-[opacity,transform] duration-150 ease-out',
-            (inSettings || inAegis)
+            (inSettings || inAegis || inAccount)
               ? 'absolute top-0 inset-x-0 opacity-0 -translate-x-2 pointer-events-none'
               : 'opacity-100 translate-x-0'
           )}>
@@ -625,6 +639,46 @@ export default function OrgSidebar({
                       </SidebarMenuItem>
                     );
                   })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
+
+          {/* Account settings nav */}
+          <div className={cn(
+            'absolute top-0 inset-x-0 transition-[opacity,transform] duration-150 ease-out',
+            inAccount ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
+          )}>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <button
+                      onClick={() => navigate(`/organizations/${organizationId}`)}
+                      className="nav-btn relative w-full flex items-center justify-center h-9 rounded-md px-3 text-sm font-medium text-foreground-secondary hover:bg-background-subtle/75 hover:text-foreground transition-colors"
+                    >
+                      <ChevronLeft className="absolute left-3 h-5 w-5 tab-icon-shake" />
+                      <span>Account</span>
+                    </button>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={accountActiveSection === 'general'}
+                      onClick={() => navigate(`/organizations/${organizationId}/account/general`)}
+                    >
+                      <Settings className="tab-icon-shake" />
+                      <span>General</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={accountActiveSection === 'connected-accounts'}
+                      onClick={() => navigate(`/organizations/${organizationId}/account/connected-accounts`)}
+                    >
+                      <Link2 className="tab-icon-shake" />
+                      <span>Connected Accounts</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -747,9 +801,9 @@ export default function OrgSidebar({
                     }}
                   />
                   <div className="min-w-0 flex-1">
-                    {user?.user_metadata?.full_name && (
+                    {fullName && (
                       <p className="text-sm font-medium text-foreground truncate">
-                        {user.user_metadata.full_name}
+                        {fullName}
                       </p>
                     )}
                     <p className="text-xs text-foreground-secondary truncate">{user?.email}</p>
@@ -758,7 +812,7 @@ export default function OrgSidebar({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
                   <Link
-                    to="/settings"
+                    to={`/organizations/${organizationId}/account/general`}
                     className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
                     onClick={() => setProfileOpen(false)}
                   >

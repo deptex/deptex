@@ -144,12 +144,7 @@ export default function OrganizationSwitcher({
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, handleEscape]);
 
-  const handleSelectOrganization = async (orgId: string) => {
-    try {
-      await api.updateUserProfile({ default_organization_id: orgId });
-    } catch {
-      // Non-blocking
-    }
+  const handleSelectOrganization = (orgId: string) => {
     navigate(`/organizations/${orgId}`);
     setIsOpen(false);
   };
@@ -180,15 +175,9 @@ export default function OrganizationSwitcher({
       // Remove from local state
       setOrganizations(orgs => orgs.filter(org => org.id !== orgToLeave.id));
 
-      // If leaving the current org, navigate to landing (redirects to default or empty state)
+      // If leaving the current org, navigate to landing (OrganizationsLanding will
+      // resolve the correct default from the user's profile or fall back to orgs[0]).
       if (orgToLeave.id === currentOrganizationId) {
-        try {
-          const remaining = organizations.filter((o) => o.id !== orgToLeave.id);
-          const newDefaultId = remaining.length > 0 ? remaining[0].id : null;
-          await api.updateUserProfile({ default_organization_id: newDefaultId });
-        } catch {
-          // Non-blocking
-        }
         navigate('/organizations');
       }
 
@@ -218,7 +207,7 @@ export default function OrganizationSwitcher({
               <button
                 type="button"
                 onClick={() => { setSearchQuery(''); setIsOpen(false); }}
-                className="flex-shrink-0 px-2 py-1 text-xs border border-border rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle/75 transition-colors"
+                className="flex-shrink-0 px-2 py-1 text-xs border border-border rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle/85 transition-colors"
               >
                 Esc
               </button>
@@ -243,7 +232,7 @@ export default function OrganizationSwitcher({
                         <div className="group">
                           <button
                             onClick={() => handleSelectOrganization(currentOrganizationId)}
-                            className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/75"
+                            className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/85"
                           >
                             <div className="flex items-center gap-2 min-w-0">
                               <img
@@ -298,7 +287,7 @@ export default function OrganizationSwitcher({
                           <div key={org.id} className="group">
                             <button
                               onClick={() => handleSelectOrganization(org.id)}
-                              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/75"
+                              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/85"
                             >
                               <div className="flex items-center gap-2 min-w-0">
                                 <img
@@ -375,7 +364,7 @@ export default function OrganizationSwitcher({
                           navigate(`/invite/${invitation.id}`);
                           setIsOpen(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md group text-left hover:bg-background-subtle/75"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md group text-left hover:bg-background-subtle/85"
                       >
                         <Mail className="h-4 w-4 text-foreground-secondary group-hover:text-foreground transition-colors" />
                         <div className="flex-1 min-w-0">
@@ -396,7 +385,7 @@ export default function OrganizationSwitcher({
               <div className="border-t border-border mt-2 pt-2 px-2 pb-2">
                 <button
                   onClick={handleCreateOrganization}
-                  className="w-full flex items-center justify-start gap-2 px-3 py-2.5 text-foreground hover:bg-background-subtle/75 rounded-md transition-colors group text-left"
+                  className="w-full flex items-center justify-start gap-2 px-3 py-2.5 text-foreground hover:bg-background-subtle/85 rounded-md transition-colors group text-left"
                 >
                   <Plus className="h-4 w-4 flex-shrink-0 text-foreground" />
                   <div className="flex flex-col items-start min-w-0">
@@ -413,36 +402,33 @@ export default function OrganizationSwitcher({
   return (
     <>
       {triggerVariant === 'full' ? (
-        <div className="flex items-center gap-2 w-full pl-2 pr-0.5 py-2">
-          <img
-            src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
-            alt=""
-            className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
-          />
-          <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
-            {currentOrganizationName}
-          </span>
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-            {currentOrganizationRole && (
-              <RoleBadge
-                role={currentOrganizationRole}
-                roleDisplayName={currentOrganizationRoleDisplayName}
-                roleColor={currentOrganizationRoleColor}
+        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
+            >
+              <img
+                src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
+                alt=""
+                className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
               />
-            )}
-            <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-background-subtle/75 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
-                >
-                  <ChevronsUpDown className="h-4 w-4 text-foreground-secondary" />
-                </button>
-              </DropdownMenuTrigger>
-              {dropdownContent}
-            </DropdownMenu>
-          </div>
-        </div>
+              <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
+                {currentOrganizationName}
+              </span>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                {currentOrganizationRole && (
+                  <RoleBadge
+                    role={currentOrganizationRole}
+                    roleDisplayName={currentOrganizationRoleDisplayName}
+                    roleColor={currentOrganizationRoleColor}
+                  />
+                )}
+              </div>
+            </button>
+          </DropdownMenuTrigger>
+          {dropdownContent}
+        </DropdownMenu>
       ) : (
         <div className="flex items-center gap-2">
           {showOrgName && (
@@ -452,7 +438,7 @@ export default function OrganizationSwitcher({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle/75 transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
+                className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle/85 transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
               >
                 <ChevronsUpDown className="h-4 w-4 text-foreground-secondary hover:text-foreground transition-colors" />
               </button>

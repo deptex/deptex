@@ -40,6 +40,8 @@ describe('Project Routes', () => {
     // Default: org owner with manage so most tests get access
     setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
     setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+    // checkProjectAccess / checkProjectManagePermission's project↔org bind.
+    setTableResponse('projects', 'maybeSingle', { data: { organization_id: orgId }, error: null });
   });
 
   describe('GET /api/organizations/:id/projects', () => {
@@ -274,7 +276,7 @@ describe('Project Routes', () => {
     const newOwnerTeamId = 'team-2';
 
     it('returns 200 and transfers project ownership when user has permission', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('teams', 'single', { data: { id: newOwnerTeamId, name: 'Team B', description: null, avatar_url: null }, error: null });
       setTableResponse('project_teams', 'single', { data: { id: 'pt-1', team_id: 'team-1' }, error: null });
       setTableResponse('team_roles', 'single', { data: { name: 'Team A' }, error: null });
@@ -567,7 +569,7 @@ describe('Project Routes', () => {
     });
 
     it('returns 200 and adds contributing team when user is org owner', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('teams', 'single', { data: { id: teamId, name: 'Team B', description: null, avatar_url: null }, error: null });
       // Queue: first call checks for existing assoc (null = not found), second call is insert result
       pushTableResponse('project_teams', { data: null, error: null });
@@ -598,7 +600,7 @@ describe('Project Routes', () => {
     });
 
     it('returns 404 when team is not in the org', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('teams', 'single', { data: null, error: { message: 'Not found' } });
 
       const res = await request(app)
@@ -616,7 +618,7 @@ describe('Project Routes', () => {
     const teamId = 'team-2';
 
     it('returns 200 and removes contributing team', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('project_teams', 'single', { data: { id: 'pt-1', is_owner: false }, error: null });
       setTableResponse('teams', 'single', { data: { name: 'Team B' }, error: null });
       setTableResponse('project_teams', 'then', { data: null, error: null });
@@ -630,7 +632,7 @@ describe('Project Routes', () => {
     });
 
     it('returns 400 when trying to remove the owner team', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('project_teams', 'single', { data: { id: 'pt-1', is_owner: true }, error: null });
 
       const res = await request(app)
@@ -642,7 +644,7 @@ describe('Project Routes', () => {
     });
 
     it('returns 404 when team is not associated with the project', async () => {
-      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project' }, error: null });
+      setTableResponse('projects', 'single', { data: { id: projectId, name: 'Test Project', organization_id: orgId }, error: null });
       setTableResponse('project_teams', 'single', { data: null, error: { message: 'Not found' } });
 
       const res = await request(app)

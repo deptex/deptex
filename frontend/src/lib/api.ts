@@ -1013,14 +1013,20 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles/${roleId}`, { method: 'DELETE' });
   },
 
-  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
+  async getUserProfile(): Promise<{ user_id: string; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile');
   },
 
-  async updateUserProfile(data: { avatar_url?: string; full_name?: string; default_organization_id?: string | null }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
+  async updateUserProfile(data: { default_organization_id: string | null }): Promise<{ user_id: string; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile', {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+  async deleteAccount(): Promise<void> {
+    await fetchWithAuth('/api/user-profile/self', {
+      method: 'DELETE',
     });
   },
 
@@ -1985,23 +1991,117 @@ export const api = {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`);
   },
 
-  async saveDastConfig(projectId: string, config: DastConfigDTO): Promise<DastConfigDTO> {
+  async saveDastConfig(
+    projectId: string,
+    config: Partial<DastConfigDTO>,
+  ): Promise<DastConfigDTO> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/config`, {
       method: 'PUT',
       body: JSON.stringify(config),
     });
   },
 
-  async triggerDastScan(projectId: string): Promise<DastScanTriggerResponse> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, { method: 'POST' });
+  async getDastTargets(projectId: string): Promise<DastTargetDTO[]> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`);
   },
 
-  async getDastJobs(projectId: string, limit = 20): Promise<DastJobDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?limit=${limit}`);
+  async createDastTarget(
+    projectId: string,
+    body: { target_url: string; label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
-  async getDastFindings(projectId: string, limit = 100): Promise<DastFindingDTO[]> {
-    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?limit=${limit}`);
+  async updateDastTarget(
+    projectId: string,
+    targetId: string,
+    body: { label?: string | null; enabled?: boolean },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async deleteDastTarget(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(`/api/projects/${projectId}/dast/targets/${targetId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async recheckDastTargetRuntime(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastRecheckRuntimeResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/recheck-runtime`,
+      { method: 'POST' },
+    );
+  },
+
+  async getDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastCredentialSummaryDTO | null> {
+    try {
+      return await fetchWithAuth(
+        `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      );
+    } catch (e: any) {
+      if (e?.message === 'credentials_not_set') return null;
+      throw e;
+    }
+  },
+
+  async putDastTargetCredentials(
+    projectId: string,
+    targetId: string,
+    body: DastCredentialUpsertDTO,
+  ): Promise<DastCredentialSummaryDTO> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
+  },
+
+  async deleteDastTargetCredentials(projectId: string, targetId: string): Promise<void> {
+    await fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials`,
+      { method: 'DELETE' },
+    );
+  },
+
+  async triggerDastScan(
+    projectId: string,
+    body: { target_id: string },
+  ): Promise<DastScanTriggerResponse> {
+    return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async getDastJobs(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastJobDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 20));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/jobs?${params.toString()}`);
+  },
+
+  async getDastFindings(
+    projectId: string,
+    opts: { limit?: number; targetId?: string } = {},
+  ): Promise<DastFindingDTO[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(opts.limit ?? 100));
+    if (opts.targetId) params.set('target_id', opts.targetId);
+    return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
   async getProjectVulnerabilities(
@@ -2217,14 +2317,127 @@ export const api = {
     );
   },
 
+  // ============================================================
+  // Registry credentials (org-scoped) + configured images (project-scoped)
+  // Backend routes mounted in src/routes/registry-credentials.ts and
+  // src/routes/configured-images.ts. The encrypted credential blob is never
+  // returned to the client — only metadata + the test endpoint's pass/fail.
+  // ============================================================
+
+  async listRegistryCredentials(organizationId: string): Promise<RegistryCredential[]> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`);
+  },
+
+  async createRegistryCredential(
+    organizationId: string,
+    body: CreateRegistryCredentialBody
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/registry-credentials`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  async updateRegistryCredentialDisplayName(
+    organizationId: string,
+    credentialId: string,
+    displayName: string
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'PATCH', body: JSON.stringify({ display_name: displayName }) }
+    );
+  },
+
+  async rotateRegistryCredential(
+    organizationId: string,
+    credentialId: string,
+    newPlaintext: CredentialPlaintext
+  ): Promise<RegistryCredential> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/rotate`,
+      { method: 'PATCH', body: JSON.stringify({ credentials: newPlaintext }) }
+    );
+  },
+
+  async testRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<RegistryCredentialTestResult> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}/test`,
+      { method: 'POST' }
+    );
+  },
+
+  async deleteRegistryCredential(
+    organizationId: string,
+    credentialId: string
+  ): Promise<DeleteRegistryCredentialResponse> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/registry-credentials/${credentialId}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async listConfiguredImages(
+    organizationId: string,
+    projectId: string
+  ): Promise<ConfiguredImage[]> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`
+    );
+  },
+
+  async createConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    body: CreateConfiguredImageBody
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  },
+
+  async toggleConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string,
+    enabled: boolean
+  ): Promise<ConfiguredImage> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'PATCH', body: JSON.stringify({ enabled }) }
+    );
+  },
+
+  async deleteConfiguredImage(
+    organizationId: string,
+    projectId: string,
+    imageId: string
+  ): Promise<{ message: string }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/configured-images/${imageId}`,
+      { method: 'DELETE' }
+    );
+  },
+
   maliciousFindings: {
     async list(
       organizationId: string,
       projectId: string,
       page = 1,
-      perPage = 50
+      perPage = 50,
+      filters?: { reachability?: MaliciousReachabilityLevel | 'unknown' | null }
     ): Promise<PaginatedResponse<MaliciousFinding>> {
-      return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?page=${page}&per_page=${perPage}`);
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('per_page', String(perPage));
+      if (filters?.reachability) qs.set('reachability', filters.reachability);
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/projects/${projectId}/malicious-findings?${qs.toString()}`
+      );
     },
     async get(
       organizationId: string,
@@ -2255,6 +2468,39 @@ export const api = {
     },
   },
 
+  maliciousAllowlist: {
+    async list(organizationId: string): Promise<{ data: MaliciousAllowlistEntry[] }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`);
+    },
+    async add(
+      organizationId: string,
+      body: { package_name: string; version: string | null; ecosystem: string; reason: string }
+    ): Promise<MaliciousAllowlistEntry> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    async revoke(organizationId: string, entryId: string): Promise<{ success: boolean }> {
+      return fetchWithAuth(`/api/organizations/${organizationId}/malicious-allowlist/${entryId}`, {
+        method: 'DELETE',
+      });
+    },
+  },
+
+  capabilities: {
+    async fetch(
+      organizationId: string,
+      ecosystem: string,
+      packageName: string,
+      version: string,
+    ): Promise<PackageCapabilities> {
+      return fetchWithAuth(
+        `/api/organizations/${organizationId}/packages/${encodeURIComponent(ecosystem)}/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}/capabilities`,
+      );
+    },
+  },
+
   async getVulnerabilityDetail(
     organizationId: string,
     projectId: string,
@@ -2280,6 +2526,30 @@ export const api = {
   ): Promise<{ success: boolean }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unsuppress`, {
       method: 'PATCH',
+    });
+  },
+
+  // Phase 6.5 — per-flow suppression. Hash-keyed (Option B / OD-4) so
+  // suppression survives writeFlows wipe-and-rewrite across re-extractions.
+  async createFlowSuppression(
+    organizationId: string,
+    projectId: string,
+    flowSignatureHash: string,
+    suppressedReason?: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions`, {
+      method: 'POST',
+      body: JSON.stringify({ flow_signature_hash: flowSignatureHash, suppressed_reason: suppressedReason }),
+    });
+  },
+
+  async deleteFlowSuppression(
+    organizationId: string,
+    projectId: string,
+    flowSignatureHash: string
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions/${encodeURIComponent(flowSignatureHash)}`, {
+      method: 'DELETE',
     });
   },
 
@@ -3656,18 +3926,88 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
+export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
+export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
+export type DastEngine = 'zap' | 'nuclei' | 'merged';
+
+export interface DastTargetDTO {
+  id: string;
+  target_url: string;
+  label: string | null;
+  enabled: boolean;
+  detected_runtime: DastDetectedRuntime;
+  detected_runtime_at: string | null;
+  detected_runtime_ttl_at: string | null;
+  has_credentials: boolean;
+  auth_strategy: DastAuthStrategy | null;
+  active_dast_run_id: string | null;
+  last_scanned_at: string | null;
+  created_at: string;
+}
+
+export interface DastScopeHeaderRule {
+  name: string;
+  value: string;
+  scope: 'all' | 'requests' | 'responses';
+}
+
+export interface DastScopeConfig {
+  include_patterns?: string[];
+  exclude_patterns?: string[];
+  header_rules?: DastScopeHeaderRule[];
+}
 
 export interface DastConfigDTO {
   enabled: boolean;
-  target_url: string | null;
   scan_profile: DastScanProfile;
   scan_timeout_minutes: number;
+  scope_config?: DastScopeConfig;
+  targets?: DastTargetDTO[];
+}
+
+export type DastCredentialPayloadSummary =
+  | { kind: 'form'; username_masked: string }
+  | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
+  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] };
+
+export interface DastCredentialSummaryDTO {
+  auth_strategy: DastAuthStrategy;
+  payload_summary: DastCredentialPayloadSummary;
+  logged_in_indicator: string | null;
+  logged_out_indicator: string | null;
+  updated_at: string;
+}
+
+export type DastCredentialUpsertPayload =
+  | {
+      kind: 'form';
+      login_url: string;
+      username_field: string;
+      password_field: string;
+      username: string;
+      password: string;
+    }
+  | { kind: 'jwt'; token: string }
+  | {
+      kind: 'cookie';
+      cookies: { name: string; value: string; domain?: string; path?: string }[];
+    };
+
+export interface DastCredentialUpsertDTO {
+  auth_strategy: DastAuthStrategy;
+  payload: DastCredentialUpsertPayload;
+  logged_in_indicator?: string;
+  logged_out_indicator?: string;
+  /** When true, server skips the form-login probe step at PUT time. */
+  skip_login_probe?: boolean;
 }
 
 export interface DastJobDTO {
   id: string;
   status: ScanJobStatus;
   trigger_source: string | null;
+  target_id?: string | null;
   target_url: string | null;
   scan_profile: DastScanProfile | null;
   findings_count: number | null;
@@ -3682,6 +4022,9 @@ export interface DastJobDTO {
 
 export interface DastFindingDTO {
   id: string;
+  target_id?: string | null;
+  auth_state?: DastAuthState | null;
+  engine?: DastEngine | null;
   endpoint_url: string;
   http_method: string;
   vulnerability_type: string;
@@ -3698,6 +4041,8 @@ export interface DastFindingDTO {
   handler_line: number | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
+  linked_sast_finding_id?: string | null;
+  cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
@@ -3707,9 +4052,20 @@ export interface DastFindingDTO {
 export interface DastScanTriggerResponse {
   jobId: string;
   status: ScanJobStatus;
+  target_id?: string;
   target_url: string;
   scan_profile: DastScanProfile;
+  detected_runtime?: DastDetectedRuntime;
   created_at: string;
+}
+
+export interface DastRecheckRuntimeResponse {
+  target: DastTargetDTO;
+  probe: {
+    probed: boolean;
+    confidence: number;
+    markers: string[];
+  };
 }
 
 export interface ExtractionRun {
@@ -4332,6 +4688,39 @@ export interface LicenseViolation {
   depscore: number | null;
 }
 
+// Mirror of `IAC_FRAMEWORKS` in `backend/depscanner/src/scanners/types.ts`.
+// Kept in sync manually (frontend can't import from depscanner package).
+export const IAC_FRAMEWORKS = [
+  'terraform',
+  'kubernetes',
+  'dockerfile',
+  'helm',
+  'cloudformation',
+  'arm',
+  'bicep',
+  'serverless',
+  'github_actions',
+] as const;
+
+export type IaCFramework = (typeof IAC_FRAMEWORKS)[number];
+
+const IAC_FRAMEWORK_LABELS: Record<IaCFramework, string> = {
+  terraform: 'Terraform',
+  kubernetes: 'Kubernetes',
+  dockerfile: 'Dockerfile',
+  helm: 'Helm',
+  cloudformation: 'CloudFormation',
+  arm: 'Azure ARM',
+  bicep: 'Bicep',
+  serverless: 'Serverless',
+  github_actions: 'GitHub Actions',
+};
+
+export function frameworkLabel(framework: IaCFramework | string | null | undefined): string {
+  if (!framework) return '';
+  return IAC_FRAMEWORK_LABELS[framework as IaCFramework] ?? String(framework);
+}
+
 export interface IaCFinding {
   id: string;
   project_id: string;
@@ -4340,7 +4729,7 @@ export interface IaCFinding {
   scanner: 'trivy' | 'checkov';
   scanner_version: string | null;
   rule_id: string;
-  framework: 'terraform' | 'kubernetes' | 'dockerfile';
+  framework: IaCFramework;
   file_path: string;
   start_line: number | null;
   end_line: number | null;
@@ -4352,6 +4741,7 @@ export interface IaCFinding {
   code_snippet: string | null;
   rule_doc_url: string | null;
   iac_fingerprint: string | null;
+  compliance_refs: Record<string, string[]> | null;
   status: 'open' | 'ignored';
   suppressed: boolean;
   risk_accepted: boolean;
@@ -4369,7 +4759,7 @@ export interface ContainerFinding {
   scanner_version: string | null;
   image_reference: string;
   image_digest: string;
-  image_source: 'dockerfile_base';
+  image_source: 'dockerfile_base' | 'configured_image';
   os_package_name: string;
   os_package_version: string;
   os_package_ecosystem: string | null;
@@ -4397,13 +4787,144 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
-  infra_types: Array<'terraform' | 'kubernetes' | 'dockerfile'>;
+  infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
 }
 
-export type MaliciousScanner = 'feed' | 'guarddog';
+export type RegistryType =
+  | 'ghcr'
+  | 'ecr'
+  | 'gcr'
+  | 'acr'
+  | 'dockerhub'
+  | 'quay'
+  | 'harbor'
+  | 'jfrog'
+  | 'custom';
+
+export type CredentialShape =
+  | 'username_password'
+  | 'aws_keys'
+  | 'gcp_service_account_key'
+  | 'azure_service_principal'
+  | 'token';
+
+// Public API shape — encrypted_credentials is server-only and never serialized
+// in responses. Mirrors backend/depscanner/src/scanners/types.ts; kept in sync
+// manually (frontend can't import from depscanner package).
+export interface RegistryCredential {
+  id: string;
+  organization_id: string;
+  registry_type: RegistryType;
+  registry_url: string | null;
+  display_name: string;
+  credential_shape: CredentialShape;
+  encryption_key_version: number;
+  last_used_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CredentialPlaintext =
+  | { shape: 'username_password'; username: string; password: string }
+  | {
+      shape: 'aws_keys';
+      access_key_id: string;
+      secret_access_key: string;
+      session_token?: string;
+      region: string;
+    }
+  | { shape: 'gcp_service_account_key'; service_account_json: string }
+  | {
+      shape: 'azure_service_principal';
+      client_id: string;
+      client_secret: string;
+      tenant_id: string;
+    }
+  | { shape: 'token'; token: string };
+
+export interface CreateRegistryCredentialBody {
+  registry_type: RegistryType;
+  registry_url?: string | null;
+  display_name: string;
+  credentials: CredentialPlaintext;
+}
+
+export interface ConfiguredImage {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  image_reference: string;
+  credentials_id: string | null;
+  credentials_display?: { display_name: string; registry_type: RegistryType } | null;
+  enabled: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateConfiguredImageBody {
+  image_reference: string;
+  credentials_id?: string | null;
+  enabled?: boolean;
+}
+
+export type RegistryCredentialTestResult =
+  | { ok: true }
+  | { ok: false; error_class: 'decrypt_failed' | 'shape_invalid' };
+
+export interface DeleteRegistryCredentialResponse {
+  message: string;
+  detached_image_count: number;
+}
+
+export type MaliciousScanner = 'feed' | 'guarddog' | 'maintainer';
 export type MaliciousSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+/**
+ * v2 canonical ecosystem set. Widened from v1's 7 to 10 for 8-language
+ * capability detector parity (composer/cargo/nuget added).
+ */
+export const MALICIOUS_ECOSYSTEMS = [
+  'npm', 'pypi', 'maven', 'golang', 'rubygems',
+  'composer', 'cargo', 'nuget', 'github-actions', 'vscode',
+] as const;
+export type MaliciousEcosystem = typeof MALICIOUS_ECOSYSTEMS[number];
+
+export interface MaliciousAllowlistEntry {
+  id: string;
+  package_name: string;
+  version: string | null;
+  ecosystem: string;
+  reason: string;
+  added_by: string | null;
+  added_by_email: string;
+  added_at: string;
+  revoked_at: string | null;
+}
+
+/**
+ * Malicious-package reachability classification (v2). Distinct from the
+ * vulnerability ReachabilityLevel because malicious findings use a
+ * lightweight per-package callgraph, not the full taint engine.
+ */
+export type MaliciousReachabilityLevel =
+  | 'unimported'
+  | 'imported_unused'
+  | 'module'
+  | 'function';
+
+export interface MaliciousReachabilityDetails {
+  entry_points?: string[];
+  call_chain?: string[];
+  sink_file?: string;
+  sink_line?: number;
+  /** Set on soft-fail when the resolver threw — level will be null. */
+  error?: string;
+  message?: string;
+}
 
 export interface MaliciousFinding {
   id: string;
@@ -4432,7 +4953,43 @@ export interface MaliciousFinding {
   evidence?: { file_path: string; lines: [number, number]; snippet: string }[];
   ai_narrative?: string | null;
   ai_narrative_cached_at?: string | null;
+  reachability_level?: MaliciousReachabilityLevel | null;
+  reachability_details?: MaliciousReachabilityDetails | null;
+  reachability_computed_at?: string | null;
 }
+
+/**
+ * Per-package capability tags (malicious-packages-v2 M1b). Global cache —
+ * the same row is returned for every org that has the package in scope.
+ * Locked at 15 boolean tags for v2.
+ */
+export interface PackageCapabilities {
+  package_name: string;
+  version: string;
+  ecosystem: string;
+  scanner_version: string;
+  scanned_at: string;
+  scan_error: string | null;
+  capabilities: {
+    spawns_processes: boolean;
+    network_io: boolean;
+    eval_dynamic: boolean;
+    native_addon_load: boolean;
+    filesystem_write: boolean;
+    crypto_operations: boolean;
+    serialization_deser: boolean;
+    install_script: boolean;
+    dns_query: boolean;
+    websocket: boolean;
+    process_signal: boolean;
+    encrypted_payload: boolean;
+    dynamic_import: boolean;
+    reads_env: boolean;
+    clipboard_access: boolean;
+  };
+}
+
+export type CapabilityKey = keyof PackageCapabilities['capabilities'];
 
 export interface VulnerabilityEvent {
   id: string;
@@ -4571,6 +5128,17 @@ export interface PaginatedResponse<T> {
 }
 
 // Reachability types
+//
+// Phase 6.5 — `flow_nodes` is a heterogeneous JSONB array. Real source/sink
+// hops carry the legacy atom-shape fields (parentFileName, lineNumber, ...).
+// Synthetic AI-verdict nodes — written by the worker's fp-filter — carry
+// `synthetic: true` and discriminate on `kind`. The frontend filters synthetic
+// nodes OUT of the per-hop chain count and renders them in dedicated sub-rows.
+export type FlowNodeKind =
+  | 'ai_filter_verdict'
+  | 'ai_sanitization_verdict'
+  | 'ai_endpoint_verdict';
+
 export interface ReachableFlowNode {
   id?: number;
   label?: string;
@@ -4588,6 +5156,32 @@ export interface ReachableFlowNode {
   lineNumber?: number;
   columnNumber?: number;
   tags?: string;
+
+  // Phase 6.5 — engine-shape hop fields (newer than atom-shape; some flows
+  // already carry both during the migration window — render code reads
+  // whichever is present).
+  file?: string;
+  line?: number;
+
+  // Phase 6.5 — synthetic AI verdict node discriminator. When `synthetic` is
+  // true, this entry is a worker-emitted verdict, not a code hop. Real hops
+  // never set `synthetic`.
+  kind?: FlowNodeKind | string;
+  synthetic?: boolean;
+
+  // ai_filter_verdict
+  verdict?: 'kept' | 'dropped' | 'kept_on_error' | 'ai_truncated' | string;
+  confidence?: number;
+  model?: string;
+  reasoning?: string | null;
+
+  // ai_sanitization_verdict
+  is_sanitized?: boolean | null;
+  sanitizer_line?: number | null;
+  sanitizer_name?: string | null;
+
+  // ai_endpoint_verdict
+  classification?: EpdEntryPointClassification | string;
 }
 
 export interface ReachableFlow {
@@ -4608,6 +5202,23 @@ export interface ReachableFlow {
   flow_length: number;
   llm_prompt: string | null;
   created_at: string;
+
+  // Phase 6.5 — CVE-targeted taint engine fields. Populated only on
+  // `reachability_source='taint_engine'` rows that matched a CVE-tagged sink
+  // from a generated FrameworkSpec; framework-generic flows leave these null.
+  osv_id?: string | null;
+  reachability_source?: 'atom' | 'semgrep_taint' | 'taint_engine' | string | null;
+  reachability_level?: ReachabilityLevel;
+
+  // Stable hash keyed (source_file:line, sink_file:line, sink_method, osv_id).
+  // Survives writeFlows wipe-and-rewrite across re-extractions; backs per-flow
+  // suppression. Computed at write time on the worker; never trusted from API.
+  flow_signature_hash?: string | null;
+
+  // Server-computed from a LEFT JOIN against project_reachable_flow_suppressions
+  // on the GET /vulnerabilities/:osvId/detail endpoint — the row itself stays
+  // derived (the suppression lives in a separate user-state table).
+  is_suppressed?: boolean;
 }
 
 export interface UsageSlice {
@@ -4638,13 +5249,32 @@ export type ReachabilityLevel = 'unreachable' | 'module' | 'function' | 'data_fl
 /** EPD entry-point class. Drives the per-vuln badge in the security tables. */
 export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
 
-/** EPD scoring lifecycle. `ai_verified` when BYOK ran end-to-end; other values drive the badge tooltip explanation. */
+/**
+ * EPD scoring lifecycle. The legacy values come from the original per-PDV
+ * Anthropic verifier (Phase 4). Phase 6.5 adds the new flow-aggregator path
+ * (`flow_aggregated` etc.) and the gated Anthropic fallback (`ai_verified_anthropic_fallback*`).
+ *
+ * `pending` is also an existing-backend value that wasn't surfaced here
+ * before — added now so consumers don't have to default-cast.
+ */
 export type EpdStatus =
+  // legacy (Phase 4)
   | 'ai_verified'
   | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
-  | 'budget_exceeded';
+  | 'budget_exceeded'
+  | 'pending'
+  // Phase 6.5 — flow aggregator (M5)
+  | 'flow_aggregated'
+  | 'no_flows_evaluated'
+  | 'all_flows_suppressed'
+  | 'ai_truncated'
+  // Phase 6.5 — gated Anthropic fallback (OD-6)
+  | 'ai_verified_anthropic_fallback'
+  | 'ai_verified_anthropic_fallback_failed'
+  | 'ai_verified_anthropic_fallback_skipped_cost_cap'
+  | 'ai_verified_anthropic_fallback_skipped_burn_breaker';
 
 /** Per-org reachability rule generation policy (Phase 5). */
 export interface ReachabilitySettings {

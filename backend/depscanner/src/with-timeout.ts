@@ -142,7 +142,27 @@ export interface ScannerSubprocessOptions {
   timeoutMs?: number;
   /** Extra env to merge over process.env. Used for DOCKER_AUTH_CONFIG, etc. */
   env?: Record<string, string | undefined>;
+  /** Hard cap on stdout bytes — guards against a malicious scanner target
+   *  emitting hundred-MB JSON that JSON.parse would OOM the worker on. When
+   *  exceeded, the child is killed and the promise rejects with
+   *  ScannerOutputTooLargeError. Default 64 MiB. */
+  stdoutMaxBytes?: number;
 }
+
+export class ScannerOutputTooLargeError extends Error {
+  readonly exe: string;
+  readonly stdoutBytes: number;
+  readonly limitBytes: number;
+  constructor(exe: string, stdoutBytes: number, limitBytes: number) {
+    super(`${exe} stdout exceeded ${limitBytes} bytes (got ${stdoutBytes})`);
+    this.name = 'ScannerOutputTooLargeError';
+    this.exe = exe;
+    this.stdoutBytes = stdoutBytes;
+    this.limitBytes = limitBytes;
+  }
+}
+
+const DEFAULT_STDOUT_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * Spawn a scanner binary, collect stdout/stderr, run a heartbeat on a fixed
@@ -182,8 +202,22 @@ export function runScannerSubprocess(
 
     let stdout = '';
     let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    const stdoutLimit = opts.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX_BYTES;
+    const stderrLimit = Math.min(4 * 1024 * 1024, stdoutLimit);
+    let killedForOversizeOutput = false;
 
     child.stdout.on('data', (data: Buffer) => {
+      stdoutBytes += data.length;
+      if (stdoutBytes > stdoutLimit) {
+        if (!killedForOversizeOutput) {
+          killedForOversizeOutput = true;
+          try { child.kill('SIGKILL'); } catch { /* already dead */ }
+          reject(new ScannerOutputTooLargeError(opts.exe, stdoutBytes, stdoutLimit));
+        }
+        return;
+      }
       const chunk = data.toString();
       stdout += chunk;
       if (verboseLog && opts.logger && opts.verboseLogStep) {
@@ -196,6 +230,12 @@ export function runScannerSubprocess(
       }
     });
     child.stderr.on('data', (data: Buffer) => {
+      stderrBytes += data.length;
+      if (stderrBytes > stderrLimit) {
+        // Drop further chunks; stderr blow-up is usually a verbose tool,
+        // not a memory exhaustion vector.
+        return;
+      }
       stderr += data.toString();
     });
 

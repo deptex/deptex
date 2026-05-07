@@ -27,6 +27,7 @@ import { Input } from '../../../../components/ui/input';
 import { Label } from '../../../../components/ui/label';
 import { useToast } from '../../../../hooks/use-toast';
 import { fetchWithAuth } from '../../../../lib/api';
+import { DEFAULT_MONTHLY_AI_COST_CAP_USD } from '../../../../lib/taint-engine-defaults';
 import { cn } from '../../../../lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ export default function TaintEngineSettingsPage() {
   }, [orgId]);
 
   const beginEditCap = () => {
-    setPendingCap(String(settings?.monthly_ai_cost_cap_usd ?? 50));
+    setPendingCap(String(settings?.monthly_ai_cost_cap_usd ?? DEFAULT_MONTHLY_AI_COST_CAP_USD));
     setEditingCap(true);
   };
 

@@ -73,6 +73,8 @@ function mockOrgOwnerAccess() {
     data: { permissions: { manage_teams_and_projects: true }, display_order: 0 },
     error: null,
   });
+  // checkProjectAccess / checkProjectManagePermission's project↔org bind
+  setTableResponse('projects', 'maybeSingle', { data: { organization_id: orgId }, error: null });
 }
 
 function mockOrgManagePermission() {
@@ -82,6 +84,7 @@ function mockOrgManagePermission() {
   });
   setTableResponse('organizations', 'single', { data: { mfa_enforced: false }, error: null });
   setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+  setTableResponse('projects', 'maybeSingle', { data: { organization_id: orgId }, error: null });
 }
 
 describe('Supply Chain Routes', () => {
@@ -100,7 +103,16 @@ describe('Supply Chain Routes', () => {
       error: null,
     });
     queryBuilder.single.mockResolvedValue({ data: {}, error: null });
-    queryBuilder.maybeSingle.mockResolvedValue({ data: {}, error: null });
+    // checkProjectAccess / checkProjectManagePermission's project↔org bind
+    // calls .from('projects').maybeSingle(); default to a passing answer
+    // so individual tests don't need to set it. Tests can still override
+    // with mockResolvedValueOnce when they want a non-matching org.
+    queryBuilder.maybeSingle.mockImplementation(function (this: any) {
+      if (this._table === 'projects') {
+        return Promise.resolve({ data: { organization_id: orgId }, error: null });
+      }
+      return Promise.resolve({ data: {}, error: null });
+    });
     queryBuilder.then.mockImplementation((resolve: any) => resolve({ data: [], error: null }));
   });
 

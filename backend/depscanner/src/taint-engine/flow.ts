@@ -57,6 +57,19 @@ export interface Flow {
    * default 0.7).
    */
   engine_confidence: number;
+  /**
+   * Phase 6.5 — when the matched sink came from a CVE-targeted FrameworkSpec
+   * (`organization_generated_rules` row with spec_format='framework_spec'),
+   * the sink carries an `osv_id` that the propagator copies onto the Flow
+   * here. Framework-generic flows (matched against bundled
+   * framework-models/*.yaml) leave it undefined.
+   *
+   * The classifier's confirmed-tier OR-clause keys on
+   * `osv_id IS NOT NULL AND dependency_id IS NOT NULL`, so this field is
+   * the discriminator that lets a CVE-targeted flow promote a PDV to
+   * `confirmed`.
+   */
+  osv_id?: string;
 }
 
 /** Compact in-memory metadata about a tainted value flowing through the program. */

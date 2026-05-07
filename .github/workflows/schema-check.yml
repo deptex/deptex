@@ -67,7 +67,7 @@ jobs:
             # common DDL create/alter verbs. awk grabs the first non-DDL token
             # on the matching line.
             IDS=$(sed 's/--.*$//' "$mig" \
-              | grep -oEi '(ADD COLUMN( IF NOT EXISTS)?|ADD CONSTRAINT|CREATE( OR REPLACE)? FUNCTION|CREATE( UNIQUE)? INDEX( IF NOT EXISTS)?|CREATE TABLE( IF NOT EXISTS)?)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' \
+              | grep -oEi '(ADD COLUMN( IF NOT EXISTS)?|ADD CONSTRAINT|CREATE( OR REPLACE)? FUNCTION|CREATE( UNIQUE)? INDEX( CONCURRENTLY)?( IF NOT EXISTS)?|CREATE TABLE( IF NOT EXISTS)?)[[:space:]]+[A-Za-z_][A-Za-z0-9_.]*' \
               | awk '{print $NF}' \
               | sort -u)
             if [ -z "$IDS" ]; then

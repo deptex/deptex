@@ -57,9 +57,28 @@ async function main() {
     process.exit(1);
   }
 
-  // JSONB wrapper already sorts by (ord, ddl); copy out so the type-asserted
-  // array is mutable for any downstream tweaks.
-  const rows = ((data as DumpRow[] | null) ?? []).slice();
+  // JSONB wrapper sorts by (ord, ddl), but that places `function` AFTER
+  // `constraint`. PGLite parses the dump linearly and validates CHECK
+  // constraint expressions at constraint-creation time — so a CHECK that
+  // references a SQL function (e.g. framework_spec_osv_matches_cve on
+  // organization_generated_rules) errors with "function does not exist"
+  // unless the function is emitted first. Reorder so functions come before
+  // constraints; production Supabase never replays this dump (it runs
+  // migrations sequentially), so the change is PGLite-only.
+  const KIND_ORDER: Record<string, number> = {
+    enum: 0,
+    table: 1,
+    function: 2,
+    constraint: 3,
+    index: 4,
+    trigger: 5,
+  };
+  const rows = ((data as DumpRow[] | null) ?? []).slice().sort((a, b) => {
+    const ka = KIND_ORDER[a.kind] ?? 99;
+    const kb = KIND_ORDER[b.kind] ?? 99;
+    if (ka !== kb) return ka - kb;
+    return a.ord - b.ord;
+  });
 
   const out: string[] = [];
   out.push('-- Deptex schema dump');
@@ -80,23 +99,46 @@ async function main() {
   const sections: Record<string, string> = {
     enum: 'ENUM TYPES',
     table: 'TABLES',
+    function: 'FUNCTIONS',
     constraint: 'CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)',
     index: 'INDEXES',
-    function: 'FUNCTIONS',
     trigger: 'TRIGGERS',
   };
 
-  let currentKind = '';
+  const SECTION_ORDER: Array<keyof typeof sections> = [
+    'enum',
+    'table',
+    'function',
+    'constraint',
+    'index',
+    'trigger',
+  ];
+  const grouped: Record<string, DumpRow[]> = {};
   for (const row of rows) {
-    if (row.kind !== currentKind) {
-      out.push('');
-      out.push('-- ============================================');
-      out.push('-- ' + (sections[row.kind] ?? row.kind.toUpperCase()));
-      out.push('-- ============================================');
-      currentKind = row.kind;
+    (grouped[row.kind] ??= []).push(row);
+  }
+
+  for (const kind of SECTION_ORDER) {
+    const rowsForKind = grouped[kind];
+    if (!rowsForKind || rowsForKind.length === 0) continue;
+    out.push('');
+    out.push('-- ============================================');
+    out.push('-- ' + (sections[kind] ?? kind.toUpperCase()));
+    out.push('-- ============================================');
+    for (const row of rowsForKind) {
+      out.push(row.ddl);
+      if (kind === 'function') out.push('');
     }
-    out.push(row.ddl);
-    if (row.kind === 'function') out.push('');
+  }
+  // Any unrecognised kinds the wrapper might emit in future — append at end
+  // so they never sneak above the function section by accident.
+  for (const kind of Object.keys(grouped)) {
+    if ((SECTION_ORDER as string[]).includes(kind)) continue;
+    out.push('');
+    out.push('-- ============================================');
+    out.push('-- ' + kind.toUpperCase());
+    out.push('-- ============================================');
+    for (const row of grouped[kind]) out.push(row.ddl);
   }
 
   fs.writeFileSync(OUT_FILE, out.join('\n') + '\n');

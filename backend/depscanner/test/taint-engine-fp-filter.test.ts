@@ -1,22 +1,13 @@
 /**
- * Unit tests for the M7 per-flow AI false-positive filter.
+ * Unit tests for the per-flow AI false-positive filter (Phase 6.5 triple).
  *
- * The filter calls Gemini Flash via fetch, so we stub global.fetch and
- * route every request to a per-test handler. We exercise:
- *   - happy path: model returns {verdict:'kept'} → flow survives
- *   - rejection path: model returns {verdict:'rejected'} → flow dropped
- *   - malformed JSON → kept_on_error
- *   - non-200 HTTP → kept_on_error
- *   - timeout → kept_on_error
- *   - parseVerdict accepts code-fenced JSON, clamps confidence
- *   - prompt builder includes vuln class + source loc + sink loc
- *   - cost estimator returns positive value
- *
- * Plus integration-shaped tests for the runner-level batching:
- *   - flows above the engine_confidence threshold pass through deterministically
- *   - flows below get routed to the filter; rejected ones are dropped
+ * Triple-shape parser + sanitizer-aware sampling + nonce-wrapping coverage
+ * lives in test/taint-engine-fp-filter-triple.test.ts (jest). This file
+ * keeps the integration-level smoke tests for the runner pathway:
  *   - cost cap pre-check skips the entire batch when over budget
  *   - ai_layer_enabled=false short-circuits the filter
+ *   - empty workspace yields zero flows; filter not exercised
+ *   - usage logger swallows DB errors
  *
  * Run: npx tsx test/taint-engine-fp-filter.test.ts
  */
@@ -30,7 +21,7 @@ import {
   buildPrompt,
   estimatePerFlowCostUsd,
   filterFlow,
-  parseVerdict,
+  parseTriple,
   createUsageLogger,
 } from '../src/taint-engine/fp-filter';
 import { runEngine } from '../src/taint-engine/runner';
@@ -90,8 +81,6 @@ interface StubFetchOptions {
   body?: unknown;
   /** When set, the fetch promise rejects with this error. */
   error?: Error;
-  /** Override usage metadata returned in the body. */
-  usage?: { promptTokenCount: number; candidatesTokenCount: number };
 }
 
 const realFetch: typeof fetch = global.fetch;
@@ -119,42 +108,60 @@ function restoreFetch(): void {
   stubCalls = [];
 }
 
-function makeQwenBody(verdict: 'kept' | 'rejected', reasoning: string, confidence: number) {
+function makeQwenTripleBody(opts: {
+  verdict?: 'kept' | 'rejected';
+  is_sanitized?: boolean | null;
+  classification?: 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
+  confidence?: number;
+}) {
   return {
     choices: [
       {
         message: {
-          content: JSON.stringify({ verdict, reasoning, confidence }),
+          content: JSON.stringify({
+            verdict: opts.verdict ?? 'kept',
+            verdict_reasoning: 'real exploit',
+            verdict_confidence: opts.confidence ?? 0.9,
+            sanitization: {
+              is_sanitized: opts.is_sanitized ?? false,
+              reasoning: 'no sanitizer found',
+              sanitizer_line: null,
+            },
+            endpoint: {
+              classification: opts.classification ?? 'PUBLIC_UNAUTH',
+              reasoning: 'app.post handler',
+            },
+          }),
         },
+        finish_reason: 'stop',
       },
     ],
-    usage: { prompt_tokens: 800, completion_tokens: 50 },
+    usage: { prompt_tokens: 800, completion_tokens: 80 },
   };
 }
 
-async function testParseVerdict() {
-  console.log('\n[test] parseVerdict accepts plain JSON');
-  const ok = parseVerdict('{"verdict":"kept","reasoning":"valid","confidence":0.9}');
+async function testParseTripleSmoke() {
+  console.log('\n[test] parseTriple accepts plain JSON');
+  const ok = parseTriple(
+    JSON.stringify({
+      verdict: 'kept',
+      verdict_reasoning: 'real',
+      verdict_confidence: 0.9,
+      sanitization: { is_sanitized: false, reasoning: 'no', sanitizer_line: null },
+      endpoint: { classification: 'PUBLIC_UNAUTH', reasoning: 'handler' },
+    }),
+    [],
+  );
   assert(ok?.verdict === 'kept', `verdict=kept (got ${ok?.verdict})`);
-  assert(ok?.confidence === 0.9, `confidence=0.9 (got ${ok?.confidence})`);
+  assert(ok?.endpoint.classification === 'PUBLIC_UNAUTH', 'endpoint=PUBLIC_UNAUTH');
 
-  console.log('\n[test] parseVerdict strips ```json fences');
-  const fenced = parseVerdict('```json\n{"verdict":"rejected","reasoning":"sanitized","confidence":0.6}\n```');
-  assert(fenced?.verdict === 'rejected', 'fenced verdict=rejected');
-
-  console.log('\n[test] parseVerdict returns null on garbage');
-  assert(parseVerdict('definitely not json') === null, 'non-JSON → null');
-  assert(parseVerdict('{"verdict":"maybe"}') === null, 'invalid verdict enum → null');
-
-  console.log('\n[test] parseVerdict clamps confidence');
-  const clamped = parseVerdict('{"verdict":"kept","reasoning":"x","confidence":2.5}');
-  assert(clamped?.confidence === 1, `confidence clamped to 1 (got ${clamped?.confidence})`);
-  const negative = parseVerdict('{"verdict":"kept","reasoning":"x","confidence":-0.3}');
-  assert(negative?.confidence === 0, `confidence clamped to 0 (got ${negative?.confidence})`);
+  console.log('\n[test] parseTriple returns null on garbage');
+  assert(parseTriple('definitely not json', []) === null, 'non-JSON → null');
+  assert(parseTriple('{"verdict":"maybe"}', []) === null, 'invalid verdict enum → null');
 }
 
 async function testBuildPrompt() {
-  console.log('\n[test] buildPrompt embeds vuln class + locations');
+  console.log('\n[test] buildPrompt embeds vuln class + locations + nonce');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-filter-prompt-'));
   fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
   fs.writeFileSync(
@@ -169,12 +176,16 @@ async function testBuildPrompt() {
       '',
     ].join('\n'),
   );
-  const prompt = buildPrompt(makeFlow(), tmpDir);
-  assert(prompt.includes('sql injection'), 'prompt mentions vuln class (humanized)');
-  assert(prompt.includes('src/server.ts:4'), 'prompt mentions source file:line');
-  assert(prompt.includes('src/server.ts:5'), 'prompt mentions sink file:line');
-  assert(prompt.includes('db.query'), 'prompt mentions sink method');
-  assert(prompt.includes('"verdict"') && prompt.includes('"rejected"'), 'prompt asks for verdict json');
+  const NONCE = 'deadbeefcafef00d';
+  const { systemPrompt, userPrompt } = buildPrompt(makeFlow(), tmpDir, [], NONCE);
+  assert(userPrompt.includes('sql injection'), 'prompt mentions vuln class (humanized)');
+  assert(userPrompt.includes('src/server.ts:4'), 'prompt mentions source file:line');
+  assert(userPrompt.includes('src/server.ts:5'), 'prompt mentions sink file:line');
+  assert(userPrompt.includes('db.query'), 'prompt mentions sink method');
+  assert(userPrompt.includes('"verdict"') && userPrompt.includes('"rejected"'), 'prompt asks for verdict json');
+  assert(userPrompt.includes(`<untrusted_code_${NONCE}`), 'user prompt wraps source in nonce-tagged delimiter');
+  assert(systemPrompt.includes(NONCE), 'system prompt embeds the nonce');
+  assert(systemPrompt.includes('candidate_sanitizers'), 'system prompt names candidate_sanitizers list');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
@@ -187,7 +198,7 @@ async function testEstimatePerFlowCost() {
 
 async function testFilterFlowKept() {
   console.log('\n[test] filterFlow: model returns kept');
-  stubFetch(() => ({ body: makeQwenBody('kept', 'real exploit', 0.9) }));
+  stubFetch(() => ({ body: makeQwenTripleBody({ verdict: 'kept', confidence: 0.9 }) }));
   const calls: any[] = [];
   const logger = { async log(input: any) { calls.push(input); } };
   const result = await filterFlow(
@@ -196,8 +207,10 @@ async function testFilterFlowKept() {
     { organizationId: ORG_ID, userId: USER_ID, projectId: PROJECT_ID, extractionRunId: RUN_ID },
   );
   assert(result.verdict === 'kept', `verdict=kept (got ${result.verdict})`);
-  if (result.verdict !== 'kept_on_error') {
-    assert(result.confidence === 0.9, 'confidence=0.9');
+  if (result.verdict === 'kept' || result.verdict === 'rejected') {
+    assert(result.verdict_confidence === 0.9, 'verdict_confidence=0.9');
+    assert(result.endpoint.classification === 'PUBLIC_UNAUTH', 'endpoint=PUBLIC_UNAUTH');
+    assert(result.sanitization.is_sanitized === false, 'is_sanitized=false');
     assert(result.costUsd > 0, 'costUsd > 0');
   }
   assert(calls.length === 1, `logger.log called once (got ${calls.length})`);
@@ -208,7 +221,7 @@ async function testFilterFlowKept() {
 
 async function testFilterFlowRejected() {
   console.log('\n[test] filterFlow: model returns rejected');
-  stubFetch(() => ({ body: makeQwenBody('rejected', 'sanitized via prepared statement', 0.85) }));
+  stubFetch(() => ({ body: makeQwenTripleBody({ verdict: 'rejected', confidence: 0.85 }) }));
   const calls: any[] = [];
   const logger = { async log(input: any) { calls.push(input); } };
   const result = await filterFlow(
@@ -225,7 +238,7 @@ async function testFilterFlowMalformedJson() {
   console.log('\n[test] filterFlow: model returns garbage → kept_on_error');
   stubFetch(() => ({
     body: {
-      choices: [{ message: { content: 'definitely not json' } }],
+      choices: [{ message: { content: 'definitely not json' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 800, completion_tokens: 5 },
     },
   }));
@@ -238,7 +251,6 @@ async function testFilterFlowMalformedJson() {
   );
   assert(result.verdict === 'kept_on_error', `verdict=kept_on_error (got ${result.verdict})`);
   assert(calls[0].success === false, 'logger captured success=false');
-  assert(/malformed/i.test(calls[0].errorMessage ?? ''), 'errorMessage mentions malformed');
   restoreFetch();
 }
 
@@ -261,12 +273,8 @@ async function testFilterFlowHttpError() {
 async function testRunnerThresholdGating() {
   console.log('\n[test] runner: empty workspace yields zero flows, filter not exercised');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-runner-'));
-  // Empty workspace → engine builds an empty callgraph → zero flows. The
-  // bundled framework specs in src/taint-engine/framework-models still load
-  // (the runner resolves relative to __dirname), so ran=true but no flows
-  // means the filter's no_flows short-circuit fires before any fetch.
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenTripleBody({}) }; });
   const storage = await createPGLiteStorage();
   await storage.from('organizations').insert({ id: ORG_ID, name: 'fp-test', created_at: new Date().toISOString() });
 
@@ -296,11 +304,6 @@ async function testRunnerThresholdGating() {
 
 async function testCostCapPreCheck() {
   console.log('\n[test] runner: cost cap pre-check short-circuits filter when over budget');
-  // Seed an org with a tiny cap and a big spend in ai_usage_logs, then assert
-  // the runner.runFpFilterStage path skips with reason 'cost_cap_exceeded'.
-  // We can't easily hit runEngine without a spec'd workspace, so we exercise
-  // the runner-level logic through the same exported entrypoint by giving
-  // it a workspace with a single fixture file + the bundled express.yaml spec.
   const storage = await createPGLiteStorage();
   await storage.from('organizations').insert({
     id: ORG_ID,
@@ -314,7 +317,6 @@ async function testCostCapPreCheck() {
     ai_layer_enabled: true,
     ai_fp_filter_confidence_threshold: 0.99, // force everything below threshold
   });
-  // Pre-spend the cap by inserting a big ai_usage_logs row.
   await storage.from('ai_usage_logs').insert({
     organization_id: ORG_ID,
     user_id: USER_ID,
@@ -328,7 +330,6 @@ async function testCostCapPreCheck() {
     success: true,
   });
 
-  // Build a one-file workspace + a minimal spec so runEngine emits ≥1 flow.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-cap-'));
   fs.writeFileSync(
     path.join(tmpDir, 'tsconfig.json'),
@@ -346,7 +347,7 @@ async function testCostCapPreCheck() {
   );
 
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenTripleBody({}) }; });
 
   const result = await runEngine({
     workspaceRoot: tmpDir,
@@ -360,8 +361,6 @@ async function testCostCapPreCheck() {
     },
   });
 
-  // The engine ran but the filter was cost-capped → no fetch call,
-  // flowsAfterFilter mirrors propagation.flows verbatim.
   if (result.ran && result.aiFilter) {
     assert(
       result.aiFilter.skippedReason === 'cost_cap_exceeded',
@@ -370,8 +369,6 @@ async function testCostCapPreCheck() {
     assert(!fetchCalled, 'fetch never invoked under cost cap');
     assert(result.aiFilter.flowsChecked === 0, 'flowsChecked=0 when capped');
   } else {
-    // If the engine didn't emit flows for this fixture, the cap test is moot
-    // but the surrounding piping (settings read, RPC call) was exercised.
     assert(true, 'engine did not emit flows for this fixture; cost-cap path not exercised');
   }
 
@@ -396,10 +393,8 @@ async function testAiLayerDisabled() {
     ai_fp_filter_confidence_threshold: 0.7,
   });
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-disabled-'));
-  // Empty workspace; even when ai_layer_enabled=false the runner reads the
-  // setting and bails before invoking the model. We assert no fetch went out.
   let fetchCalled = false;
-  stubFetch(() => { fetchCalled = true; return { body: makeQwenBody('kept', 'x', 0.9) }; });
+  stubFetch(() => { fetchCalled = true; return { body: makeQwenTripleBody({}) }; });
   const result = await runEngine({
     workspaceRoot: tmpDir,
     fpFilter: {
@@ -411,8 +406,6 @@ async function testAiLayerDisabled() {
       apiKey: 'test-key',
     },
   });
-  // ran=true with empty flows + ai_layer_enabled=false → either no_flows
-  // (short-circuits before settings) or ai_layer_disabled, both fine.
   if (result.ran && result.aiFilter) {
     const reason = result.aiFilter.skippedReason;
     assert(
@@ -455,7 +448,7 @@ async function testUsageLoggerSwallowsErrors() {
 }
 
 async function main() {
-  await testParseVerdict();
+  await testParseTripleSmoke();
   await testBuildPrompt();
   await testEstimatePerFlowCost();
   await testFilterFlowKept();

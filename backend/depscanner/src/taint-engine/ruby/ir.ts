@@ -86,6 +86,22 @@ export function lowerRubyMethod(
         }
       }
     }
+  } else if (funcNode.type === 'do_block' || funcNode.type === 'block') {
+    // Sinatra-style route DSL — `get '/path' do |params...| ... end` is
+    // lowered as a synthetic instance method on the enclosing class. Block
+    // params (uncommon in Sinatra; mostly named-capture aliases) become
+    // method params; the block body is an implicit-return method body.
+    const paramsNode =
+      funcNode.childForFieldName('parameters') ?? findChildOfType(funcNode, 'block_parameters');
+    if (paramsNode) {
+      for (let i = 0; i < paramsNode.namedChildCount; i++) {
+        const p = paramsNode.namedChild(i);
+        if (!p) continue;
+        const name = paramNameOf(p, opts.fileContext.source);
+        params.push(name ?? `<param@${i}>`);
+      }
+    }
+    body = funcNode.childForFieldName('body') ?? findChildOfType(funcNode, 'body_statement');
   } else if (funcNode.type === 'program') {
     isModule = true;
     body = funcNode;

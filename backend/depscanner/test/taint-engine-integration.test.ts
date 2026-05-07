@@ -234,6 +234,70 @@ async function testWriteRunIdempotent(storage: Awaited<ReturnType<typeof createP
   assert(row?.flows_emitted === 3, `flows_emitted overwritten to 3 (got ${row?.flows_emitted})`);
 }
 
+async function testFlowSignatureHashDeterminism(
+  storage: Awaited<ReturnType<typeof createPGLiteStorage>>,
+) {
+  console.log('\n[test] flow_signature_hash is deterministic + osv_id round-trips');
+  const HASH_RUN_A = 'run_hash_determinism_a';
+  const HASH_RUN_B = 'run_hash_determinism_b';
+  const CVE = 'CVE-2021-23337';
+  const workspaceRoot = '/repo/work';
+  // Same logical flow shape under different extraction_run_ids — the hash
+  // must be stable across the two runs because writeFlows canonicalizes
+  // file paths against workspaceRoot before hashing.
+  const flow = makeFlow({
+    osv_id: CVE,
+    entry_point_file: `${workspaceRoot}/src/server.ts`,
+    sink_file: `${workspaceRoot}/src/server.ts`,
+  });
+
+  await writeRun(storage, {
+    projectId: PROJECT_ID,
+    organizationId: ORG_ID,
+    extractionRunId: HASH_RUN_A,
+    status: 'completed',
+  });
+  await writeRun(storage, {
+    projectId: PROJECT_ID,
+    organizationId: ORG_ID,
+    extractionRunId: HASH_RUN_B,
+    status: 'completed',
+  });
+
+  const a = await writeFlows(storage, {
+    projectId: PROJECT_ID,
+    extractionRunId: HASH_RUN_A,
+    flows: [flow],
+    workspaceRoot,
+  });
+  const b = await writeFlows(storage, {
+    projectId: PROJECT_ID,
+    extractionRunId: HASH_RUN_B,
+    flows: [flow],
+    workspaceRoot,
+  });
+  assert(a.written === 1 && b.written === 1, 'both writeFlows calls succeeded');
+
+  const { data: rowsA } = await storage
+    .from('project_reachable_flows')
+    .select('flow_signature_hash, osv_id')
+    .eq('extraction_run_id', HASH_RUN_A);
+  const { data: rowsB } = await storage
+    .from('project_reachable_flows')
+    .select('flow_signature_hash, osv_id')
+    .eq('extraction_run_id', HASH_RUN_B);
+
+  const hashA = (rowsA?.[0] as { flow_signature_hash: string } | undefined)?.flow_signature_hash;
+  const hashB = (rowsB?.[0] as { flow_signature_hash: string } | undefined)?.flow_signature_hash;
+
+  assert(typeof hashA === 'string' && /^[0-9a-f]{64}$/i.test(hashA), `hashA is 64-char hex (got: ${hashA})`);
+  assert(typeof hashB === 'string' && /^[0-9a-f]{64}$/i.test(hashB), `hashB is 64-char hex (got: ${hashB})`);
+  assert(hashA === hashB, `hashA == hashB (got: ${hashA} vs ${hashB})`);
+  // osv_id round-trips so the classifier's confirmed-tier promotion can match.
+  const osvA = (rowsA?.[0] as { osv_id: string } | undefined)?.osv_id;
+  assert(osvA === CVE, `osv_id round-trips through the DB write (got: ${osvA})`);
+}
+
 async function testRolloutGate() {
   console.log('\n[test] shouldRunForRollout env var behavior');
   // Set explicitly to 0 — never run.
@@ -258,6 +322,7 @@ async function main() {
   await testThresholdTrip(storage);
   await testKillswitchEngages(storage);
   await testWriteRunIdempotent(storage);
+  await testFlowSignatureHashDeterminism(storage);
   await testRolloutGate();
 
   console.log(`\n${passes} passed, ${failures} failed`);
