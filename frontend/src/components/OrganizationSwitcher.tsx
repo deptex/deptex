@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, Check, Mail, LogOut, Loader2 } from 'lucide-react';
 import { api, Organization, OrganizationInvitation } from '../lib/api';
@@ -21,8 +21,11 @@ import { useToast } from '../hooks/use-toast';
 import CreateOrganizationModal from './CreateOrganizationModal';
 import { RoleBadge } from './RoleBadge';
 
-/** In-memory cache for org list so we don't refetch every time the dropdown opens (same pattern as settings tabs). */
-const ORG_SWITCHER_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+/** Tiny in-memory cache so rapid open → close → open doesn't re-fetch.
+ * The real "feels instant" mechanism is prefetch-on-hover; this just covers
+ * the rapid-toggle case. Keep short so role/name changes from elsewhere
+ * (org settings, role admin) clear within seconds. */
+const ORG_SWITCHER_CACHE_TTL_MS = 30 * 1000; // 30 seconds
 let orgSwitcherCache: {
   organizations: Organization[];
   invitations: OrganizationInvitation[];
@@ -87,6 +90,7 @@ export default function OrganizationSwitcher({
   const [orgToLeave, setOrgToLeave] = useState<{ id: string; name: string } | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const inflightRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     loadCurrentUser();
@@ -94,13 +98,7 @@ export default function OrganizationSwitcher({
 
   useEffect(() => {
     if (!isOpen) return;
-    const cached = getCachedOrgList();
-    if (cached) {
-      setOrganizations(cached.organizations);
-      setInvitations(cached.invitations);
-      return;
-    }
-    loadData();
+    void loadData();
   }, [isOpen]);
 
   const loadCurrentUser = async () => {
@@ -114,21 +112,36 @@ export default function OrganizationSwitcher({
     }
   };
 
-  const loadData = async () => {
-    try {
-      setIsLoading(true);
-      const [orgsData, invitesData] = await Promise.all([
-        api.getOrganizations(),
-        api.getInvitations().catch(() => []), // Fallback to empty array if endpoint doesn't exist yet
-      ]);
-      setOrganizations(orgsData);
-      setInvitations(invitesData || []);
-      setCachedOrgList(orgsData, invitesData || []);
-    } catch (error) {
-      console.error('Failed to load organizations:', error);
-    } finally {
-      setIsLoading(false);
+  const loadData = async (): Promise<void> => {
+    const cached = getCachedOrgList();
+    if (cached) {
+      setOrganizations(cached.organizations);
+      setInvitations(cached.invitations);
+      return;
     }
+
+    if (inflightRef.current) return inflightRef.current;
+
+    const promise = (async () => {
+      try {
+        setIsLoading(true);
+        const [orgsData, invitesData] = await Promise.all([
+          api.getOrganizations(),
+          api.getInvitations().catch(() => []),
+        ]);
+        setOrganizations(orgsData);
+        setInvitations(invitesData || []);
+        setCachedOrgList(orgsData, invitesData || []);
+      } catch (error) {
+        console.error('Failed to load organizations:', error);
+      } finally {
+        setIsLoading(false);
+        inflightRef.current = null;
+      }
+    })();
+
+    inflightRef.current = promise;
+    return promise;
   };
 
   const filteredOrganizations = organizations.filter(org =>
@@ -414,6 +427,8 @@ export default function OrganizationSwitcher({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
+            onMouseEnter={() => { void loadData(); }}
+            onFocus={() => { void loadData(); }}
             className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
           >
             <img
