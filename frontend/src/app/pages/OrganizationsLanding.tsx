@@ -92,12 +92,6 @@ export default function OrganizationsLanding() {
     setCreating(true);
     try {
       const org = await api.createOrganization(createName.trim());
-      localStorage.setItem('deptex_default_org', org.id);
-      try {
-        await api.updateUserProfile({ default_organization_id: org.id });
-      } catch {
-        // Non-blocking
-      }
       navigate(`/organizations/${org.id}`, { replace: true });
     } catch (err: any) {
       setCreateError(err.message || 'Failed to create organization');
@@ -110,11 +104,6 @@ export default function OrganizationsLanding() {
     setAcceptingId(inv.id);
     try {
       const result = await api.acceptInvitation(inv.organization_id, inv.id);
-      try {
-        await api.updateUserProfile({ default_organization_id: result.organization_id });
-      } catch {
-        // Non-blocking
-      }
       navigate(`/organizations/${result.organization_id}`, { replace: true });
     } catch (err: any) {
       toast({
@@ -133,6 +122,19 @@ export default function OrganizationsLanding() {
       <div className="min-h-screen bg-background">
         <Toaster position="bottom-right" />
       </div>
+    );
+  }
+
+  // After OAuth provider linking, redirect back to connected-accounts with the
+  // toast param. Cleared by AccountSettingsPage when the toast fires (not here,
+  // because StrictMode double-renders and would clear before commit).
+  const pendingConnect = sessionStorage.getItem('deptex_connect_return');
+  if (pendingConnect && defaultOrgId) {
+    return (
+      <Navigate
+        to={`/organizations/${defaultOrgId}/account/connected-accounts?connected=${pendingConnect}`}
+        replace
+      />
     );
   }
 

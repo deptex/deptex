@@ -51,10 +51,6 @@ vi.mock('../../../contexts/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'user-1', user_metadata: { full_name: 'Test User' } } }),
 }));
 
-vi.mock('../../hooks/useUserProfile', () => ({
-  useUserProfile: () => ({ fullName: 'Test User' }),
-}));
-
 vi.mock('../../components/PolicyCodeEditor', () => ({
   PolicyCodeEditor: ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
     <textarea data-testid="policy-editor" value={value} onChange={(e) => onChange(e.target.value)} />

@@ -74,8 +74,9 @@ interface OrgSidebarProps {
   organization: Organization | null;
   userPermissions?: RolePermissions | null;
   onRefetchTeams?: () => void | Promise<void>;
-  user?: { email?: string | null; user_metadata?: { full_name?: string } } | null;
+  user?: { email?: string | null } | null;
   avatarUrl?: string;
+  fullName?: string | null;
   onSignOut?: () => Promise<void>;
 }
 
@@ -116,6 +117,7 @@ export default function OrgSidebar({
   onRefetchTeams,
   user = null,
   avatarUrl = '/images/blank_profile_image.png',
+  fullName = null,
   onSignOut,
 }: OrgSidebarProps) {
   const location = useLocation();
@@ -469,7 +471,7 @@ export default function OrgSidebar({
     navigate(`/organizations/${organizationId}/settings/${sectionId}`);
   };
 
-  const displayName = user?.user_metadata?.full_name || user?.email || 'Account';
+  const displayName = fullName || user?.email || 'Account';
 
   return (
     <>
@@ -733,9 +735,9 @@ export default function OrgSidebar({
                     }}
                   />
                   <div className="min-w-0 flex-1">
-                    {user?.user_metadata?.full_name && (
+                    {fullName && (
                       <p className="text-sm font-medium text-foreground truncate">
-                        {user.user_metadata.full_name}
+                        {fullName}
                       </p>
                     )}
                     <p className="text-xs text-foreground-secondary truncate">{user?.email}</p>

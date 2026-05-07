@@ -7,7 +7,7 @@ import { cn } from '../../lib/utils';
 import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
 import { NotificationAIAssistant } from '../../components/NotificationAIAssistant';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
+import { getDisplayNameOrNull } from '../../lib/userIdentity';
 import { useToast } from '../../hooks/use-toast';
 import { api, type OrganizationNotificationRule, type CiCdConnection, type CiCdProvider, type OrganizationMember } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -242,7 +242,7 @@ interface NotificationRulesSectionProps {
 
 export default function NotificationRulesSection({ organizationId = '', projectId, teamId, hideTitle, hideListContent, createHandlerRef, connections: externalConnections }: NotificationRulesSectionProps) {
   const { user } = useAuth();
-  const { fullName } = useUserProfile();
+  const fullName = getDisplayNameOrNull(user);
   const { toast } = useToast();
   const [rules, setRules] = useState<OrganizationNotificationRule[]>([]);
   const [connections, setConnections] = useState<CiCdConnection[]>([]);

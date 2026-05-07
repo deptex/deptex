@@ -962,14 +962,20 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/roles/${roleId}`, { method: 'DELETE' });
   },
 
-  async getUserProfile(): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
+  async getUserProfile(): Promise<{ user_id: string; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile');
   },
 
-  async updateUserProfile(data: { avatar_url?: string; full_name?: string; default_organization_id?: string | null }): Promise<{ user_id: string; avatar_url: string | null; full_name: string | null; default_organization_id: string | null }> {
+  async updateUserProfile(data: { default_organization_id: string | null }): Promise<{ user_id: string; default_organization_id: string | null }> {
     return fetchWithAuth('/api/user-profile', {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+  async deleteAccount(): Promise<void> {
+    await fetchWithAuth('/api/user-profile/self', {
+      method: 'DELETE',
     });
   },
 

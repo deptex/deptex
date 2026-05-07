@@ -1,30 +1,85 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserProfile } from '../../hooks/useUserProfile';
-import { useParams, useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
-import { api } from '../../lib/api';
+import { api, Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
-import { Edit2 } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select';
+import { Edit2, Loader2, Trash2 } from 'lucide-react';
+import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
+import { Skeleton } from '../../components/ui/skeleton';
 
 export default function AccountSettingsPage() {
-  const { id: orgId } = useParams<{ id: string }>();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const isConnectedAccounts = pathname.endsWith('connected-accounts');
-  const { user, signInWithGitHub, signInWithGoogle } = useAuth();
+  const { user, signOut } = useAuth();
   const { toast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const { avatarUrl, fullName } = useUserProfile();
+  const [, setSearchParams] = useSearchParams();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
 
-  const [displayName, setDisplayName] = useState(fullName || user?.user_metadata?.full_name || '');
-  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-  const [integrations, setIntegrations] = useState<Record<string, boolean>>({
-    github: false,
-    google: false,
-  });
+  const [displayName, setDisplayName] = useState(fullName || '');
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [savingGeneral, setSavingGeneral] = useState(false);
+  // Derived from user.identities, with a per-user localStorage cache so revisits
+  // don't flash the Connect button while AuthContext refreshes the session.
+  const integrations = useMemo<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = { github: false, google: false };
+    const fromUser = user?.identities;
+    if (fromUser && fromUser.length > 0) {
+      fromUser.forEach((identity) => {
+        if (identity.provider === 'github') map.github = true;
+        else if (identity.provider === 'google') map.google = true;
+      });
+      if (user?.id) {
+        try { localStorage.setItem(`deptex_integrations_${user.id}`, JSON.stringify(map)); } catch {}
+      }
+      return map;
+    }
+    if (user?.id) {
+      try {
+        const cached = localStorage.getItem(`deptex_integrations_${user.id}`);
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return map;
+  }, [user]);
 
-  // Tab title
+  const [organizations, setOrganizations] = useState<Organization[] | null>(null);
+  const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
+  const [pendingDefaultOrgId, setPendingDefaultOrgId] = useState<string | null>(null);
+  const [savingDefaultOrg, setSavingDefaultOrg] = useState(false);
+
+  const isDefaultOrgDirty = pendingDefaultOrgId !== defaultOrgId;
+  const canSaveDefaultOrg = !savingDefaultOrg && organizations !== null && isDefaultOrgDirty;
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteBlockedOrgs, setDeleteBlockedOrgs] = useState<{ id: string; name: string }[] | null>(null);
+
+  const trimmedName = displayName.trim();
+  const currentName = (fullName || '').trim();
+  const isNameInvalid = trimmedName.length === 0 || trimmedName.length > 32;
+  const isNameUnchanged = trimmedName === currentName;
+  const isAvatarPending = pendingAvatarFile !== null;
+  const hasPendingChange = !isNameUnchanged || isAvatarPending;
+  const canSave = !savingGeneral && !isNameInvalid && hasPendingChange;
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
   useEffect(() => {
     const prev = document.title;
     document.title = 'Account Settings | Deptex';
@@ -33,132 +88,246 @@ export default function AccountSettingsPage() {
     };
   }, []);
 
-  // Sync display name from hook
+  // Re-sync the input when the live name changes (e.g., after our own save
+  // propagates through onAuthStateChange, or after OAuth re-login).
   useEffect(() => {
     if (fullName) {
       setDisplayName(fullName);
     }
   }, [fullName]);
 
-  // Load integrations on mount and check GitHub login
+  // Load the user's orgs + current default for the picker. Failures are
+  // non-fatal — the card just won't render until orgs resolve.
   useEffect(() => {
-    loadIntegrations();
-    // Check if user logged in with GitHub via Supabase
-    if (user?.identities?.some((identity: any) => identity.provider === 'github')) {
-      setIntegrations(prev => ({ ...prev, github: true }));
-    }
-    // Check and restore avatar if missing from metadata but exists in storage
-    checkAndRestoreAvatar();
-  }, [user]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [orgs, profile] = await Promise.all([
+          api.getOrganizations(),
+          api.getUserProfile(),
+        ]);
+        if (cancelled) return;
+        setOrganizations(orgs);
+        // If no explicit default is set, treat the first joined org as the
+        // effective default so the Save button stays inactive until the user
+        // actually picks something different.
+        const effectiveDefault = profile.default_organization_id ?? (orgs[0]?.id ?? null);
+        setDefaultOrgId(effectiveDefault);
+        setPendingDefaultOrgId(effectiveDefault);
+      } catch (error) {
+        console.error('Failed to load organizations / default org:', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-  // Check if avatar exists in storage but is missing from profile, and restore it
-  const checkAndRestoreAvatar = async () => {
-    if (!user?.id) return;
+  const handleSelectDefaultOrg = (value: string) => {
+    setPendingDefaultOrgId(value);
+  };
 
+  const handleSaveDefaultOrg = async () => {
+    if (!canSaveDefaultOrg) return;
+
+    const previous = defaultOrgId;
+    setSavingDefaultOrg(true);
     try {
-      // Check if profile already has avatar_url
-      const profile = await api.getUserProfile();
-      if (profile.avatar_url) return;
+      await api.updateUserProfile({ default_organization_id: pendingDefaultOrgId });
+      setDefaultOrgId(pendingDefaultOrgId);
+      // Keep the localStorage cache in sync so SettingsRedirect + the
+      // OrganizationsLanding fast-path see the new default without a refetch.
+      if (pendingDefaultOrgId) {
+        localStorage.setItem('deptex_default_org', pendingDefaultOrgId);
+      } else {
+        localStorage.removeItem('deptex_default_org');
+      }
+      toast({
+        title: 'Default organization updated',
+        description: pendingDefaultOrgId
+          ? 'You will land here next time you open Deptex.'
+          : 'Your default organization has been cleared.',
+      });
+    } catch (error) {
+      console.error('Failed to update default organization:', error);
+      setPendingDefaultOrgId(previous);
+      toast({
+        title: 'Update failed',
+        description: 'Could not update your default organization. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingDefaultOrg(false);
+    }
+  };
 
-      // List files in the user's avatar folder
-      const { data: files, error } = await supabase.storage
-        .from('avatars')
-        .list(user.id, {
-          limit: 1,
-          sortBy: { column: 'created_at', order: 'desc' }
-        });
+  // After linkIdentity OAuth, the cached session still has the old identities
+  // until refreshed. Force a refresh so the Connected badge picks up the new
+  // provider, and clean up the URL param.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    if (!connected) return;
+    sessionStorage.removeItem('deptex_connect_return');
+    supabase.auth.refreshSession();
+    setSearchParams({}, { replace: true });
+  }, [setSearchParams]);
 
-      if (error) {
-        console.error('Error checking avatar storage:', error);
-        return;
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: 'File too large',
+        description: 'Please upload an image smaller than 5MB.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      toast({
+        title: 'Invalid file type',
+        description: 'Please upload an image file.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setPendingAvatarFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const handleSaveGeneral = async () => {
+    if (!canSave) return;
+    if (!isNameUnchanged && isNameInvalid) {
+      toast({
+        title: 'Invalid display name',
+        description: trimmedName.length === 0
+          ? 'Display name cannot be empty.'
+          : 'Display name must be 32 characters or fewer.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setSavingGeneral(true);
+    let uploadedFilePath: string | null = null;
+    try {
+      const updates: Record<string, string> = {};
+      if (!isNameUnchanged) {
+        updates.custom_full_name = trimmedName;
       }
 
-      // If we found a file, restore the avatar_url in profile
-      if (files && files.length > 0) {
-        const filePath = `${user.id}/${files[0].name}`;
+      if (pendingAvatarFile && user?.id) {
+        const fileExt = pendingAvatarFile.name.split('.').pop();
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+        const filePath = `${user.id}/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, pendingAvatarFile, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+        if (uploadError) throw uploadError;
+        uploadedFilePath = filePath;
+
         const { data: { publicUrl } } = supabase.storage
           .from('avatars')
           .getPublicUrl(filePath);
-
-        // Update user profile with the restored avatar URL
-        await api.updateUserProfile({ avatar_url: publicUrl });
-        console.log('Avatar restored from storage');
+        updates.custom_avatar_url = publicUrl;
       }
-    } catch (error) {
-      console.error('Error in checkAndRestoreAvatar:', error);
-    }
-  };
 
-  // Handle OAuth callback
-  useEffect(() => {
-    const connected = searchParams.get('connected');
-    const error = searchParams.get('error');
-    const message = searchParams.get('message');
+      const { error: updateError } = await supabase.auth.updateUser({ data: updates });
+      if (updateError) throw updateError;
 
-    if (connected) {
+      setPendingAvatarFile(null);
+      setPreviewUrl(null);
       toast({
-        title: 'Connected',
-        description: `${connected.charAt(0).toUpperCase() + connected.slice(1)} has been connected successfully.`,
+        title: 'Settings saved',
+        description: 'Your changes have been applied.',
       });
-      loadIntegrations();
-      // Clean up URL
-      setSearchParams({});
-    } else if (error) {
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      // If we uploaded the avatar but the auth update failed, drop the
+      // orphan file so the bucket doesn't accumulate dead uploads.
+      if (uploadedFilePath) {
+        await supabase.storage
+          .from('avatars')
+          .remove([uploadedFilePath])
+          .catch((cleanupError) => {
+            console.error('Failed to clean up orphaned avatar:', cleanupError);
+          });
+      }
       toast({
-        title: 'Connection failed',
-        description: message || `Failed to connect ${error}.`,
+        title: 'Save failed',
+        description: 'Could not save your changes. Please try again.',
         variant: 'destructive',
       });
-      setSearchParams({});
-    }
-  }, [searchParams, toast, setSearchParams]);
-
-  const loadIntegrations = async () => {
-    try {
-      // For user settings, we only care about login providers (GitHub, Google)
-      // Check if user logged in with these providers via Supabase
-      const integrationMap: Record<string, boolean> = {
-        github: false,
-        google: false,
-      };
-
-      // Check identities from Supabase Auth
-      if (user?.identities) {
-        user.identities.forEach((identity: any) => {
-          if (identity.provider === 'github') {
-            integrationMap.github = true;
-          } else if (identity.provider === 'google') {
-            integrationMap.google = true;
-          }
-        });
-      }
-
-      setIntegrations(integrationMap);
-    } catch (error: any) {
-      console.error('Failed to load integrations:', error);
+    } finally {
+      setSavingGeneral(false);
     }
   };
 
-  const handleSaveGeneral = () => {
-    // TODO: Implement API call to save settings
-    toast({
-      title: 'Settings saved',
-      description: 'Your general settings have been updated.',
-    });
+  const handleOpenDeleteConfirm = () => {
+    setDeleteConfirmInput('');
+    setDeleteBlockedOrgs(null);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleCancelDelete = () => {
+    if (deleting) return;
+    setShowDeleteConfirm(false);
+    setDeleteConfirmInput('');
+    setDeleteBlockedOrgs(null);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleting) return;
+    if (!user?.email || deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()) {
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      await api.deleteAccount();
+      toast({ title: 'Account deleted', description: 'Your account has been permanently removed.' });
+      await signOut();
+      navigate('/');
+    } catch (error: unknown) {
+      console.error('Error deleting account:', error);
+      const responseBody = (error as { responseBody?: { organizations?: { id: string; name: string }[] } } | null)?.responseBody;
+      if (responseBody?.organizations && responseBody.organizations.length > 0) {
+        setDeleteBlockedOrgs(responseBody.organizations);
+      } else {
+        toast({
+          title: 'Could not delete account',
+          description: 'Please try again or contact support.',
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleConnectProvider = async (provider: 'github' | 'google') => {
     try {
-      if (provider === 'github') {
-        await signInWithGitHub();
-      } else if (provider === 'google') {
-        await signInWithGoogle();
-      }
-      // The OAuth flow will redirect, so we don't need to do anything else here
-    } catch (error: any) {
+      sessionStorage.setItem('deptex_connect_return', provider);
+      const { error } = await supabase.auth.linkIdentity({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/organizations`,
+        },
+      });
+      if (error) throw error;
+    } catch (error) {
+      sessionStorage.removeItem('deptex_connect_return');
+      console.error(`Error connecting ${provider}:`, error);
       toast({
         title: 'Connection failed',
-        description: error.message || `Failed to connect ${provider}. Please try again.`,
+        description: `Failed to connect ${provider}. Please try again.`,
         variant: 'destructive',
       });
     }
@@ -174,7 +343,6 @@ export default function AccountSettingsPage() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
         {!isConnectedAccounts && (
           <div className="space-y-6">
-            {/* Profile Card: Display Name + Avatar */}
             <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               <div className="p-6">
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] items-start gap-6">
@@ -189,7 +357,8 @@ export default function AccountSettingsPage() {
                         value={displayName}
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
-                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground-secondary placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                        maxLength={32}
+                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-ring transition-colors"
                       />
                     </div>
                   </div>
@@ -199,114 +368,186 @@ export default function AccountSettingsPage() {
                       accept="image/*"
                       className="hidden"
                       id="avatar-upload"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-
-                        if (file.size > 5 * 1024 * 1024) {
-                          toast({
-                            title: 'File too large',
-                            description: 'Please upload an image smaller than 5MB.',
-                            variant: 'destructive',
-                          });
-                          return;
-                        }
-
-                        if (!file.type.startsWith('image/')) {
-                          toast({
-                            title: 'Invalid file type',
-                            description: 'Please upload an image file.',
-                            variant: 'destructive',
-                          });
-                          return;
-                        }
-
-                        try {
-                          setIsUploadingAvatar(true);
-                          const fileExt = file.name.split('.').pop();
-                          const fileName = `${user?.id}-${Date.now()}.${fileExt}`;
-                          const filePath = `${user?.id}/${fileName}`;
-
-                          const { error: uploadError } = await supabase.storage
-                            .from('avatars')
-                            .upload(filePath, file, {
-                              cacheControl: '3600',
-                              upsert: true,
-                            });
-
-                          if (uploadError) throw uploadError;
-
-                          const { data: { publicUrl } } = supabase.storage
-                            .from('avatars')
-                            .getPublicUrl(filePath);
-
-                          await api.updateUserProfile({ avatar_url: publicUrl });
-
-                          if (user?.id) {
-                            localStorage.removeItem(`user_profile_${user.id}`);
-                          }
-
-                          await new Promise<void>((resolve) => {
-                            const img = new Image();
-                            img.onload = () => resolve();
-                            img.onerror = () => resolve();
-                            img.src = publicUrl;
-                          });
-
-                          toast({
-                            title: 'Avatar updated',
-                            description: 'Your avatar has been updated successfully.',
-                          });
-
-                          window.location.reload();
-                        } catch (error: any) {
-                          console.error('Error uploading avatar:', error);
-                          setIsUploadingAvatar(false);
-                          toast({
-                            title: 'Upload failed',
-                            description: error.message || 'Failed to upload avatar. Please try again.',
-                            variant: 'destructive',
-                          });
-                        }
-
-                        e.target.value = '';
-                      }}
+                      onChange={handleAvatarSelect}
                     />
-                    <label htmlFor="avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
+                    <label htmlFor="avatar-upload" className={`cursor-pointer block group ${savingGeneral ? 'pointer-events-none' : ''}`}>
                       <div className="relative">
                         <img
-                          src={avatarUrl}
+                          src={previewUrl || avatarUrl}
                           alt={user?.email || 'User'}
                           className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
                           onError={(e) => {
                             e.currentTarget.src = '/images/blank_profile_image.png';
                           }}
                         />
-                        {isUploadingAvatar ? (
-                          <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
-                            <span className="animate-spin h-6 w-6 border-2 border-white border-t-transparent rounded-full" />
-                          </div>
-                        ) : (
-                          <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Edit2 className="h-5 w-5 text-white" />
-                          </div>
-                        )}
+                        <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Edit2 className="h-5 w-5 text-white" />
+                        </div>
                       </div>
                     </label>
                   </div>
                 </div>
               </div>
-              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                <p className="text-xs text-foreground-secondary">
-                  Please use 32 characters at maximum.
-                </p>
+              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                 <Button
                   onClick={handleSaveGeneral}
-                  size="sm"
-                  className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  disabled={!canSave || savingGeneral}
+                  variant="white"
                 >
-                  Save
+                  <span className={savingGeneral ? 'invisible' : ''}>Save</span>
+                  {savingGeneral && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
                 </Button>
+              </div>
+            </div>
+
+
+            {/* Default Organization Card */}
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              <div className="p-6 space-y-3">
+                <h3 className="text-base font-semibold text-foreground">Default Organization</h3>
+                <p className="text-sm text-foreground-secondary">
+                  When you open Deptex, you'll land in this organization.
+                </p>
+                <div className="max-w-md">
+                  <Select
+                    value={pendingDefaultOrgId ?? ''}
+                    onValueChange={handleSelectDefaultOrg}
+                    disabled={organizations === null}
+                  >
+                    <SelectTrigger className="w-full h-10 bg-black/20 border-border [&>span]:flex [&>span]:items-center [&>span]:gap-2 [&>span]:min-w-0 [&>span]:flex-1">
+                      {organizations === null ? (
+                        <div className="flex items-center gap-2.5 flex-1">
+                          <Skeleton className="h-6 w-6 rounded-full flex-shrink-0" />
+                          <Skeleton className="h-4 w-28" />
+                        </div>
+                      ) : (
+                        <SelectValue placeholder="Select an organization" />
+                      )}
+                    </SelectTrigger>
+                    <SelectContent>
+                      {organizations?.map((org) => (
+                        <SelectItem key={org.id} value={org.id}>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={org.avatar_url || '/images/org_profile.png'}
+                              alt={org.name}
+                              className="h-6 w-6 rounded-full object-cover bg-transparent flex-shrink-0"
+                            />
+                            <span className="truncate">{org.name}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+                <Button
+                  onClick={handleSaveDefaultOrg}
+                  disabled={!canSaveDefaultOrg || savingDefaultOrg}
+                  variant="white"
+                >
+                  <span className={savingDefaultOrg ? 'invisible' : ''}>Save</span>
+                  {savingDefaultOrg && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Danger Zone */}
+            <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+              <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+                <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
+              </div>
+              <div className="p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <h4 className="text-base font-semibold text-foreground mb-1">Delete Account</h4>
+                    <p className="text-sm text-foreground-secondary">
+                      Permanently delete your account and everything tied to it — profile, memberships, and per-user data. This cannot be undone.
+                    </p>
+                  </div>
+                  {!showDeleteConfirm && (
+                    <Button
+                      onClick={handleOpenDeleteConfirm}
+                      variant="destructive"
+                      size="sm"
+                      className="flex-shrink-0"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-2" />
+                      Delete
+                    </Button>
+                  )}
+                </div>
+
+                {showDeleteConfirm && (
+                  <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
+                    {deleteBlockedOrgs && deleteBlockedOrgs.length > 0 ? (
+                      <>
+                        <p className="text-sm text-foreground">
+                          You're the only owner of {deleteBlockedOrgs.length === 1 ? 'this organization' : 'these organizations'}:
+                        </p>
+                        <ul className="text-sm text-foreground-secondary list-disc list-inside space-y-1">
+                          {deleteBlockedOrgs.map((org) => (
+                            <li key={org.id}>{org.name}</li>
+                          ))}
+                        </ul>
+                        <p className="text-sm text-foreground-secondary">
+                          Transfer ownership or delete {deleteBlockedOrgs.length === 1 ? 'the organization' : 'them'} first, then come back here.
+                        </p>
+                        <div>
+                          <Button onClick={handleCancelDelete} variant="ghost" size="sm" className="h-8">
+                            Close
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-foreground">
+                          To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{user?.email}</strong> below:
+                        </p>
+                        <input
+                          type="text"
+                          value={deleteConfirmInput}
+                          onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                          placeholder={user?.email ?? ''}
+                          autoFocus
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            onClick={handleDeleteAccount}
+                            variant="destructive"
+                            size="sm"
+                            disabled={
+                              deleting ||
+                              !user?.email ||
+                              deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()
+                            }
+                            className="h-8"
+                          >
+                            {deleting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            )}
+                            Delete Forever
+                          </Button>
+                          <Button onClick={handleCancelDelete} variant="ghost" size="sm" className="h-8">
+                            Cancel
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -373,7 +614,7 @@ export default function AccountSettingsPage() {
                         <td className="px-4 py-3">
                           {!isConnected && (
                             <Button
-                              size="sm"
+                              variant="white"
                               onClick={() => handleConnectProvider(integration.id as 'github' | 'google')}
                             >
                               Connect

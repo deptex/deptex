@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { LogOut, Settings } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { useUserProfile } from "../hooks/useUserProfile";
+import { getAvatarUrl, getDisplayNameOrNull } from "../lib/userIdentity";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -22,7 +22,8 @@ const docTabs = [
 export default function DocsHeader() {
   const { user, signOut } = useAuth();
   const location = useLocation();
-  const { avatarUrl } = useUserProfile();
+  const avatarUrl = getAvatarUrl(user);
+  const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
 
   return (
@@ -111,9 +112,9 @@ export default function DocsHeader() {
                       />
                     </div>
                     <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                      {user.user_metadata?.full_name && (
+                      {fullName && (
                         <span className="text-sm font-medium text-foreground truncate">
-                          {user.user_metadata.full_name}
+                          {fullName}
                         </span>
                       )}
                       <span className="text-xs text-foreground/80 truncate">{user.email}</span>

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 
@@ -37,71 +37,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // When there IS a cached user, we already know the state; loading stays false.
   const [loading, setLoading] = useState(() => getCachedUser() === null);
 
-  // Check and restore avatar if missing from profile but exists in storage or OAuth metadata
-  const checkAndRestoreAvatar = useCallback(async (user: User | null) => {
-    if (!user?.id) return;
-    
-    try {
-      // Check user profile first
-      const { api } = await import('../lib/api');
-      const profile = await api.getUserProfile();
-      if (profile.avatar_url) return; // Already has avatar in profile
-      
-      // Check for OAuth profile picture (Google, GitHub, etc.)
-      // Priority: picture first, then avatar_url
-      const oauthPicture = user.user_metadata?.picture || user.user_metadata?.avatar_url;
-      if (oauthPicture) {
-        // Sync OAuth profile picture to user_profiles table
-        await api.updateUserProfile({ avatar_url: oauthPicture });
-        console.log('OAuth avatar synced to user profile');
-        return;
-      }
-      
-      // List files in the user's avatar folder
-      const { data: files, error } = await supabase.storage
-        .from('avatars')
-        .list(user.id, {
-          limit: 1,
-          sortBy: { column: 'created_at', order: 'desc' }
-        });
-      
-      if (error) {
-        // Silently fail - storage might not be accessible or folder doesn't exist yet
-        return;
-      }
-      
-      // If we found a file, restore the avatar_url in profile
-      if (files && files.length > 0) {
-        const filePath = `${user.id}/${files[0].name}`;
-        const { data: { publicUrl } } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(filePath);
-        
-        // Update user profile with the restored avatar URL
-        await api.updateUserProfile({ avatar_url: publicUrl });
-        console.log('Avatar restored from storage to user profile');
-      }
-    } catch (error) {
-      // Silently fail - don't interrupt the login flow
-      console.error('Error in checkAndRestoreAvatar:', error);
-    }
-  }, []);
-
   useEffect(() => {
     // Get initial session (for fast first paint). Do NOT set loading=false here —
     // getSession() can return null during token refresh; wait for INITIAL_SESSION.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      const user = session?.user ?? null;
-      setUser(user);
+      setUser(session?.user ?? null);
       // Push the initial token to the realtime socket so private-channel RLS
       // evaluates auth.uid() correctly. Without this, realtime.messages policies
       // silently reject broadcasts after the first token refresh.
       supabase.realtime.setAuth(session?.access_token ?? null);
-      // Check and restore avatar if needed
-      if (user) {
-        checkAndRestoreAvatar(user);
-      }
     });
 
     // Only consider auth "ready" when Supabase emits INITIAL_SESSION (after any refresh).
@@ -109,17 +54,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
-      const user = session?.user ?? null;
-      setUser(user);
+      setUser(session?.user ?? null);
       // Keep the realtime socket's JWT in sync on every auth transition so
       // long sessions don't silently break when Supabase rotates the token.
       supabase.realtime.setAuth(session?.access_token ?? null);
       if (event === 'INITIAL_SESSION') {
         setLoading(false);
-      }
-      // Check and restore avatar when user logs in or session is restored
-      if (user) {
-        checkAndRestoreAvatar(user);
       }
     });
 
@@ -130,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
       clearTimeout(fallbackTimer);
     };
-  }, [checkAndRestoreAvatar]);
+  }, []);
 
   const signInWithGoogle = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
@@ -160,6 +100,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     localStorage.removeItem('deptex_default_org');
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('user_profile_'))
+      .forEach((k) => localStorage.removeItem(k));
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error('Error signing out:', error);
