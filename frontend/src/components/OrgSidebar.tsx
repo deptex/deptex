@@ -540,7 +540,7 @@ export default function OrgSidebar({
   return (
     <>
       <Sidebar collapsible="offcanvas">
-        <SidebarHeader className="px-2 py-2">
+        <SidebarHeader className="px-2 py-3">
           {organization ? (
             <OrganizationSwitcher
               currentOrganizationId={organization.id}
@@ -552,9 +552,10 @@ export default function OrgSidebar({
               triggerVariant="full"
             />
           ) : (
-            <div className="flex items-center gap-2 px-1 py-1" aria-hidden>
-              <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
+            <div className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1" aria-hidden>
+              <div className="h-7 w-7 rounded-full bg-muted animate-pulse flex-shrink-0" />
               <div className="h-4 w-24 rounded bg-muted animate-pulse" />
+              <div className="h-5 w-14 ml-auto rounded-full bg-muted animate-pulse flex-shrink-0" />
             </div>
           )}
         </SidebarHeader>
