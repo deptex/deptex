@@ -69,6 +69,7 @@ export interface PerCveResult {
     | 'fetch_failed'
     | 'parse_failed'
     | 'invalid_schema'
+    | 'vuln_class_out_of_scope'
     | 'provider_error'
     | 'unexpected'
     | 'dry_run';
@@ -191,7 +192,11 @@ async function runOne(args: {
       const code = err instanceof GenerationError ? err.code : 'provider_error';
       const status: PerCveResult['status'] = code === 'parse_failed'
         ? 'parse_failed'
-        : code === 'invalid_schema' ? 'invalid_schema' : 'provider_error';
+        : code === 'invalid_schema' ? 'invalid_schema'
+        : code === 'vuln_class_out_of_scope' ? 'vuln_class_out_of_scope'
+        : 'provider_error';
+      // vuln_class_out_of_scope is non-retryable — the model can't be coaxed
+      // into rewriting a DoS / non-taint CVE as something the engine models.
       const retryable = status === 'parse_failed' || status === 'invalid_schema';
       if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
         revisionFeedback = buildAttemptFailureFeedback({
