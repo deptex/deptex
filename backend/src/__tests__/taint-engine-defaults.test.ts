@@ -16,7 +16,7 @@ import {
   DEFAULT_GENERATOR_MONTHLY_BUDGET_USD,
   ALL_VULN_CLASSES,
 } from '../lib/taint-engine-defaults';
-import { ALL_VULN_CLASSES as ENGINE_VULN_CLASSES } from '../../depscanner/src/taint-engine/spec';
+import { ALL_VULN_CLASSES as ENGINE_VULN_CLASSES } from '../../../depscanner/src/taint-engine/spec';
 
 describe('taint-engine defaults', () => {
   test('DEFAULT_MONTHLY_AI_COST_CAP_USD matches phase27a migration DEFAULT (75)', () => {

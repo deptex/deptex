@@ -25,10 +25,10 @@ import {
   PersistedFrameworkSpecSchema,
   withOsvIdsSubstituted,
   findRogueOsvIdInSinks,
-} from '../../depscanner/src/rule-generator/framework-spec-schema';
-import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../../depscanner/src/rule-generator/few-shot-examples';
-import { validateRule, makeRuleGenWorkdir } from '../../depscanner/src/rule-generator/validate';
-import { ALL_VULN_CLASSES } from '../../depscanner/src/taint-engine/spec';
+} from '../../../depscanner/src/rule-generator/framework-spec-schema';
+import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../../../depscanner/src/rule-generator/few-shot-examples';
+import { validateRule, makeRuleGenWorkdir } from '../../../depscanner/src/rule-generator/validate';
+import { ALL_VULN_CLASSES } from '../../../depscanner/src/taint-engine/spec';
 
 describe('few-shot library — Gate 1 schema validation', () => {
   test('library is non-empty and CVE ids are unique', () => {
