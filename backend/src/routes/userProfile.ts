@@ -86,54 +86,66 @@ router.put('/', async (req: AuthRequest, res) => {
 });
 
 // DELETE /api/user-profile/self - Permanently delete the authenticated user.
-// Refuses if the user is the sole owner of any organization (to prevent
-// orphaning shared resources). Otherwise, calls Supabase's admin deleteUser
-// which cascades through user_profiles and organization_members via FK.
+// For each org where the user is the sole owner: if there are no other members,
+// the org is auto-deleted (it belongs to no one else); if there are other
+// members, the request is refused so ownership can be transferred first.
 router.delete('/self', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
 
-    // 1. Find every org where this user is an owner.
     const { data: ownerMemberships, error: ownerError } = await supabase
       .from('organization_members')
       .select('organization_id, organizations(id, name)')
       .eq('user_id', userId)
       .eq('role', 'owner');
+    if (ownerError) throw ownerError;
 
-    if (ownerError) {
-      throw ownerError;
-    }
+    const orgsToAutoDelete: string[] = [];
+    const blockingOrgs: { id: string; name: string }[] = [];
 
-    // 2. For each, check if there's at least one other owner.
-    const soleOwnerOrgs: { id: string; name: string }[] = [];
     for (const m of ownerMemberships ?? []) {
-      const { count, error: countError } = await supabase
+      const { count: totalMembers, error: totalErr } = await supabase
+        .from('organization_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', m.organization_id);
+      if (totalErr) throw totalErr;
+
+      const { count: otherOwners, error: otherErr } = await supabase
         .from('organization_members')
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', m.organization_id)
-        .eq('role', 'owner');
-      if (countError) {
-        throw countError;
-      }
-      if ((count ?? 0) <= 1) {
+        .eq('role', 'owner')
+        .neq('user_id', userId);
+      if (otherErr) throw otherErr;
+
+      if ((totalMembers ?? 0) <= 1) {
+        orgsToAutoDelete.push(m.organization_id);
+      } else if ((otherOwners ?? 0) === 0) {
         const org = (m as any).organizations as { id: string; name: string } | null;
-        if (org) soleOwnerOrgs.push(org);
+        if (org) blockingOrgs.push(org);
       }
+      // else: another owner exists, leaving is safe
     }
 
-    if (soleOwnerOrgs.length > 0) {
+    if (blockingOrgs.length > 0) {
       return res.status(400).json({
-        error: 'You are the only owner of one or more organizations. Transfer ownership or delete the organization before deleting your account.',
-        organizations: soleOwnerOrgs,
+        error: 'You are the only owner of one or more organizations with other members. Transfer ownership or delete the organization before deleting your account.',
+        organizations: blockingOrgs,
       });
     }
 
-    // 3. Delete the auth user. CASCADE on user_profiles.user_id and
-    //    organization_members.user_id removes app-domain rows automatically.
-    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
-    if (deleteError) {
-      throw deleteError;
+    // Auto-delete orgs where the user is the sole member. CASCADE FKs on
+    // organization_id will clean up projects, members, invitations, etc.
+    for (const orgId of orgsToAutoDelete) {
+      const { error: orgDeleteError } = await supabase
+        .from('organizations')
+        .delete()
+        .eq('id', orgId);
+      if (orgDeleteError) throw orgDeleteError;
     }
+
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
+    if (deleteError) throw deleteError;
 
     res.status(204).send();
   } catch (error: any) {

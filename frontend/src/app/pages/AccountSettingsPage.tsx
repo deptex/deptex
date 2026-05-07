@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
@@ -20,9 +20,9 @@ export default function AccountSettingsPage() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const isConnectedAccounts = pathname.endsWith('connected-accounts');
-  const { user, signInWithGitHub, signInWithGoogle, signOut } = useAuth();
+  const { user, signOut } = useAuth();
   const { toast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
   const avatarUrl = getAvatarUrl(user);
   const fullName = getDisplayNameOrNull(user);
 
@@ -30,10 +30,29 @@ export default function AccountSettingsPage() {
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [savingGeneral, setSavingGeneral] = useState(false);
-  const [integrations, setIntegrations] = useState<Record<string, boolean>>({
-    github: false,
-    google: false,
-  });
+  // Derived from user.identities, with a per-user localStorage cache so revisits
+  // don't flash the Connect button while AuthContext refreshes the session.
+  const integrations = useMemo<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = { github: false, google: false };
+    const fromUser = user?.identities;
+    if (fromUser && fromUser.length > 0) {
+      fromUser.forEach((identity) => {
+        if (identity.provider === 'github') map.github = true;
+        else if (identity.provider === 'google') map.google = true;
+      });
+      if (user?.id) {
+        try { localStorage.setItem(`deptex_integrations_${user.id}`, JSON.stringify(map)); } catch {}
+      }
+      return map;
+    }
+    if (user?.id) {
+      try {
+        const cached = localStorage.getItem(`deptex_integrations_${user.id}`);
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return map;
+  }, [user]);
 
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [defaultOrgId, setDefaultOrgId] = useState<string | null>(null);
@@ -77,15 +96,6 @@ export default function AccountSettingsPage() {
     }
   }, [fullName]);
 
-  useEffect(() => {
-    const integrationMap: Record<string, boolean> = { github: false, google: false };
-    user?.identities?.forEach((identity) => {
-      if (identity.provider === 'github') integrationMap.github = true;
-      else if (identity.provider === 'google') integrationMap.google = true;
-    });
-    setIntegrations(integrationMap);
-  }, [user]);
-
   // Load the user's orgs + current default for the picker. Failures are
   // non-fatal — the card just won't render until orgs resolve.
   useEffect(() => {
@@ -98,9 +108,11 @@ export default function AccountSettingsPage() {
         ]);
         if (cancelled) return;
         setOrganizations(orgs);
-        // If no explicit default is set, pre-select the first org joined.
+        // If no explicit default is set, treat the first joined org as the
+        // effective default so the Save button stays inactive until the user
+        // actually picks something different.
         const effectiveDefault = profile.default_organization_id ?? (orgs[0]?.id ?? null);
-        setDefaultOrgId(profile.default_organization_id);
+        setDefaultOrgId(effectiveDefault);
         setPendingDefaultOrgId(effectiveDefault);
       } catch (error) {
         console.error('Failed to load organizations / default org:', error);
@@ -147,26 +159,17 @@ export default function AccountSettingsPage() {
     }
   };
 
+  // After linkIdentity OAuth, the cached session still has the old identities
+  // until refreshed. Force a refresh so the Connected badge picks up the new
+  // provider, and clean up the URL param.
   useEffect(() => {
-    const connected = searchParams.get('connected');
-    const error = searchParams.get('error');
-    const message = searchParams.get('message');
-
-    if (connected) {
-      toast({
-        title: 'Connected',
-        description: `${connected.charAt(0).toUpperCase() + connected.slice(1)} has been connected successfully.`,
-      });
-      setSearchParams({});
-    } else if (error) {
-      toast({
-        title: 'Connection failed',
-        description: message || `Failed to connect ${error}.`,
-        variant: 'destructive',
-      });
-      setSearchParams({});
-    }
-  }, [searchParams, toast, setSearchParams]);
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    if (!connected) return;
+    sessionStorage.removeItem('deptex_connect_return');
+    supabase.auth.refreshSession();
+    setSearchParams({}, { replace: true });
+  }, [setSearchParams]);
 
   const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -311,12 +314,16 @@ export default function AccountSettingsPage() {
 
   const handleConnectProvider = async (provider: 'github' | 'google') => {
     try {
-      if (provider === 'github') {
-        await signInWithGitHub();
-      } else if (provider === 'google') {
-        await signInWithGoogle();
-      }
+      sessionStorage.setItem('deptex_connect_return', provider);
+      const { error } = await supabase.auth.linkIdentity({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/organizations`,
+        },
+      });
+      if (error) throw error;
     } catch (error) {
+      sessionStorage.removeItem('deptex_connect_return');
       console.error(`Error connecting ${provider}:`, error);
       toast({
         title: 'Connection failed',
@@ -607,7 +614,7 @@ export default function AccountSettingsPage() {
                         <td className="px-4 py-3">
                           {!isConnected && (
                             <Button
-                              size="sm"
+                              variant="white"
                               onClick={() => handleConnectProvider(integration.id as 'github' | 'google')}
                             >
                               Connect

@@ -128,9 +128,9 @@ const faqItems: FaqItem[] = [
   },
   {
     category: "Account",
-    question: "How do I change my email?",
+    question: "How do I change my display name or avatar?",
     answer:
-      "Visit your Personal Settings page from the user menu in the top-right corner. You can update your email address, display name, and other profile details there.",
+      "Open the user menu at the bottom of the sidebar and choose Account Settings. You can update your display name, avatar, default organization, and connected sign-in providers there. Email is managed by your sign-in provider (Google or GitHub).",
   },
   {
     category: "Account",

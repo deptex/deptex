@@ -125,6 +125,19 @@ export default function OrganizationsLanding() {
     );
   }
 
+  // After OAuth provider linking, redirect back to connected-accounts with the
+  // toast param. Cleared by AccountSettingsPage when the toast fires (not here,
+  // because StrictMode double-renders and would clear before commit).
+  const pendingConnect = sessionStorage.getItem('deptex_connect_return');
+  if (pendingConnect && defaultOrgId) {
+    return (
+      <Navigate
+        to={`/organizations/${defaultOrgId}/account/connected-accounts?connected=${pendingConnect}`}
+        replace
+      />
+    );
+  }
+
   if (defaultOrgId) {
     return <Navigate to={`/organizations/${defaultOrgId}`} replace />;
   }
