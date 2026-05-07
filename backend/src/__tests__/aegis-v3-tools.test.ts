@@ -7,7 +7,7 @@ import {
 } from '../test/mocks/supabaseSingleton';
 
 import { ALL_AEGIS_TOOLS } from '../lib/aegis-v3/tools';
-import type { AegisToolContext, AegisToolEntry } from '../lib/aegis-v3/tool-types';
+import { newTurnState, type AegisToolContext, type AegisToolEntry } from '../lib/aegis-v3/tool-types';
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
@@ -23,6 +23,7 @@ function makeCtx(): AegisToolContext {
     threadId: THREAD_ID,
     operatingMode: 'propose',
     supabase: supabase as unknown as AegisToolContext['supabase'],
+    turnState: newTurnState(),
   };
 }
 

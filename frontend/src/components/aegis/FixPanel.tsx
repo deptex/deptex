@@ -209,7 +209,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
     }
   }, [fixId]);
 
-  if (loading && !plan) return <FixPanelSkeleton />;
+  if (!plan && (loading || status === 'planning')) return <FixPanelSkeleton />;
   if (!plan) return <div className="p-6 text-sm text-foreground-secondary">Plan unavailable.</div>;
 
   const refusal = plan.refusal;
@@ -241,7 +241,6 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
             >
               {fixes.map((f) => {
                 const isActive = f.id === fixId;
-                const label = f.plan?.summary ?? 'Generating plan…';
                 return (
                   <DropdownMenuItem
                     key={f.id}
@@ -249,7 +248,11 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                     className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
                   >
                     <FixStatusIcon status={f.status} />
-                    <span className="flex-1 truncate text-sm">{label}</span>
+                    {f.plan?.summary ? (
+                      <span className="flex-1 truncate text-sm">{f.plan.summary}</span>
+                    ) : (
+                      <div className="h-3.5 rounded bg-foreground/[0.12] animate-pulse flex-1 min-w-0 max-w-[14rem]" />
+                    )}
                   </DropdownMenuItem>
                 );
               })}
@@ -482,7 +485,7 @@ interface FixListRowProps {
 }
 
 function FixListRow({ fix, onSelect }: FixListRowProps) {
-  const summary = fix.plan?.summary ?? 'Generating plan…';
+  const summary = fix.plan?.summary ?? null;
   const status = fix.status;
 
   return (
@@ -492,7 +495,11 @@ function FixListRow({ fix, onSelect }: FixListRowProps) {
       className="group w-full flex items-center gap-3 px-4 py-3 rounded-md border border-border bg-background-subtle/30 hover:bg-background-subtle/60 transition-colors text-left"
     >
       <FixStatusIcon status={status} />
-      <span className="text-sm font-medium text-foreground truncate flex-1">{summary}</span>
+      {summary ? (
+        <span className="text-sm font-medium text-foreground truncate flex-1">{summary}</span>
+      ) : (
+        <div className="h-3.5 w-48 rounded bg-foreground/[0.12] animate-pulse shrink-0 mr-auto" />
+      )}
       <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary/60 shrink-0 group-hover:text-foreground-secondary transition-colors" />
     </button>
   );
@@ -505,7 +512,7 @@ function FixStatusIcon({ status }: { status: FixStatus }) {
   const iconCls = 'h-4 w-4 shrink-0';
   switch (status) {
     case 'planning':
-      return <Loader2 className={cn(iconCls, 'animate-spin text-foreground-secondary')} aria-label="Generating plan" />;
+      return <Loader2 className={cn(iconCls, 'animate-spin text-foreground-secondary')} aria-label="Planning" />;
     case 'awaiting_approval':
       return <ClipboardList className={cn(iconCls, 'text-foreground-secondary')} aria-label="Plan ready" />;
     case 'approved':

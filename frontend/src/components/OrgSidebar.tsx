@@ -218,12 +218,27 @@ export default function OrgSidebar({
   const [aegisDraftTitle, setAegisDraftTitle] = useState('');
   const [aegisConfirmDeleteId, setAegisConfirmDeleteId] = useState<string | null>(null);
   const [aegisDeleting, setAegisDeleting] = useState(false);
+  // Threads that were just created and are still waiting on server-side
+  // title generation — render a skeleton bar instead of "New chat" text.
+  // Cleared per-thread the moment we see the API return a non-default title
+  // (or by the timeout fallback in the threadCreated effect).
+  const [titlePendingIds, setTitlePendingIds] = useState<Set<string>>(new Set());
 
   const refreshAegisThreads = useCallback(async () => {
     if (!organizationId) return;
     try {
       const list = await aegisApi.listThreads(organizationId);
       setAegisThreads(list);
+      setTitlePendingIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const t of list) {
+          if (next.has(t.id) && t.title && t.title !== 'New chat') {
+            next.delete(t.id);
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
     } catch {
       setAegisThreads([]);
     }
@@ -246,6 +261,51 @@ export default function OrgSidebar({
     const handler = () => { if (inAegis && canUseAegis) void refreshAegisThreads(); };
     window.addEventListener('aegis:threadListChanged', handler);
     return () => window.removeEventListener('aegis:threadListChanged', handler);
+  }, [inAegis, canUseAegis, refreshAegisThreads]);
+
+  // Optimistic insert. ChatPane fires aegis:threadCreated with the full
+  // thread payload the moment the user sends their first message — well
+  // before the server has the row written. Inserting it locally here lets
+  // the sidebar show "New chat" immediately; the next API refresh syncs
+  // any server-side changes (real generated title, fix status, etc.).
+  // We also schedule delayed catch-up refreshes because generateThreadTitle
+  // runs in parallel with the model stream server-side and can finish
+  // AFTER the post-stream refresh, leaving "New chat" stuck until the user
+  // takes another action. The 3s/8s pair covers fast and slow title gens.
+  useEffect(() => {
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    const handler = (e: Event) => {
+      if (!inAegis || !canUseAegis) return;
+      const detail = (e as CustomEvent).detail as { thread?: AegisThread } | undefined;
+      const thread = detail?.thread;
+      if (!thread) return;
+      setAegisThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [thread, ...prev]));
+      setTitlePendingIds((prev) => {
+        const next = new Set(prev);
+        next.add(thread.id);
+        return next;
+      });
+      timeouts.push(setTimeout(() => { void refreshAegisThreads(); }, 3000));
+      timeouts.push(setTimeout(() => { void refreshAegisThreads(); }, 8000));
+      // Hard fallback: if title gen fails or stays stuck, drop the skeleton
+      // after 12s so the row at least shows "New chat" rather than a
+      // permanently shimmering bar.
+      timeouts.push(
+        setTimeout(() => {
+          setTitlePendingIds((prev) => {
+            if (!prev.has(thread.id)) return prev;
+            const next = new Set(prev);
+            next.delete(thread.id);
+            return next;
+          });
+        }, 12000),
+      );
+    };
+    window.addEventListener('aegis:threadCreated', handler as EventListener);
+    return () => {
+      window.removeEventListener('aegis:threadCreated', handler as EventListener);
+      timeouts.forEach(clearTimeout);
+    };
   }, [inAegis, canUseAegis, refreshAegisThreads]);
 
   const handleAegisRename = useCallback(async (threadId: string, title: string) => {
@@ -355,7 +415,11 @@ export default function OrgSidebar({
                 >
                   <ThreadIcon fixStatus={thread.fixStatus} />
                   <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)] group-hover/thread:[mask-image:linear-gradient(to_right,black_calc(100%-72px),transparent)]">
-                    {thread.title}
+                    {titlePendingIds.has(thread.id) ? (
+                      <span className="inline-block h-3.5 w-32 rounded bg-foreground/10 animate-pulse align-middle" />
+                    ) : (
+                      thread.title || 'New chat'
+                    )}
                   </span>
                   {isPinned && (
                     <Pin className="flex-shrink-0 group-hover/thread:hidden text-foreground/40" style={{ width: 15, height: 15 }} />
@@ -363,7 +427,7 @@ export default function OrgSidebar({
                 </SidebarMenuButton>
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
-                <div className="font-semibold text-foreground">{thread.title}</div>
+                <div className="font-semibold text-foreground">{thread.title || 'New chat'}</div>
                 {fixStatusLabel(thread.fixStatus) && (
                   <div className="mt-1 flex items-center gap-1.5 text-foreground/60 text-xs">
                     <ThreadIcon fixStatus={thread.fixStatus} className="h-3 w-3" />

@@ -9,7 +9,7 @@ export function FixStatusPill({ status }: { status: FixStatus }) {
     return (
       <span className={cn(base, 'bg-foreground/5 text-foreground-secondary border-border')}>
         <Loader2 className="h-3 w-3 animate-spin" />
-        Generating plan
+        Planning
       </span>
     );
   }

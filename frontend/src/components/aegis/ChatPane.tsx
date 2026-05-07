@@ -499,12 +499,14 @@ export function ChatPane({
     onThreadUpdatedRef.current?.();
   }, [stop]);
 
-  // Show the thinking dot only while there's nothing visible to indicate
-  // progress yet — i.e. between submission and the first text token, or in
-  // the gap after a tool call before the next text segment streams. Once
-  // text is actively appearing OR the last part is a request_fix tool (which
-  // renders as the PlanCardSkeleton, already signaling progress), suppress
-  // the dot.
+  // Show the thinking dot whenever the stream is in flight and there's no
+  // self-evident visible affordance for the user. Suppressed only by
+  // (a) actively-typing text content — the typing animation IS the
+  // indicator — and (b) request_fix / revise_fix in flight, which render
+  // PlanCardSkeleton. set_todos resolves immediately and produces the
+  // strip, but the agent then often pauses to think before its next
+  // visible action — those gaps fall into the default-true branch so the
+  // dot reappears between actions instead of going dark.
   const showThinkingDot = useMemo(() => {
     if (status === 'submitted') return true;
     if (status !== 'streaming') return false;
@@ -513,10 +515,10 @@ export function ChatPane({
     const parts = (last.parts ?? []) as any[];
     if (parts.length === 0) return true;
     const lastPart = parts[parts.length - 1];
-    if (lastPart?.type === 'text' && (lastPart.text ?? '').length > 0) return false;
+    if (lastPart?.type === 'text' && (lastPart.text ?? '').trim().length > 0) return false;
     const lastPartType = typeof lastPart?.type === 'string' ? lastPart.type : '';
     const lastToolName = lastPart?.toolName ?? (lastPartType.startsWith('tool-') ? lastPartType.replace(/^tool-/, '') : '');
-    if (lastToolName === 'request_fix' && lastPart?.state !== 'output-error') return false;
+    if ((lastToolName === 'request_fix' || lastToolName === 'revise_fix') && lastPart?.state !== 'output-error') return false;
     return true;
   }, [status, messages]);
 
@@ -703,29 +705,36 @@ function SendQueuePanel({
         </svg>
         <span>{queue.length} Queued</span>
       </button>
-      {!collapsed && (
-        <ul className="px-2 pb-1">
-          {queue.map((item) => (
-            <li
-              key={item.id}
-              className="group flex items-start gap-3 rounded-md px-2 py-1 hover:bg-background-subtle transition-colors"
-            >
-              <span className="mt-1 h-3 w-3 shrink-0 rounded-full border border-foreground/40" />
-              <span className="flex-1 text-sm leading-snug text-foreground whitespace-pre-wrap break-words">
-                {item.text}
-              </span>
-              <button
-                type="button"
-                onClick={() => onRemove(item.id)}
-                aria-label="Remove from queue"
-                className="-mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-foreground/50 opacity-0 transition-all hover:bg-background-card hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows] duration-200 ease-out',
+          collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
+        )}
+      >
+        <div className="overflow-hidden">
+          <ul className="px-2 pb-1">
+            {queue.map((item) => (
+              <li
+                key={item.id}
+                className="group flex items-start gap-3 rounded-md px-2 py-1 hover:bg-background-subtle transition-colors"
               >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <span className="mt-1 h-3 w-3 shrink-0 rounded-full border border-foreground/40" />
+                <span className="flex-1 text-sm leading-snug text-foreground whitespace-pre-wrap break-words">
+                  {item.text}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRemove(item.id)}
+                  aria-label="Remove from queue"
+                  className="-mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-foreground/50 opacity-0 transition-all hover:bg-background-card hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }

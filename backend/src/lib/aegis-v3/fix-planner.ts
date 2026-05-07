@@ -25,6 +25,12 @@ export interface PlannerInput {
   // planner treats it as binding direction over its own defaults
   // (e.g. "add more tests", "use the env var X", "skip the rollback step").
   userInstructions?: string;
+  // The current plan's `summary` when this is a revision. Tells the planner
+  // to keep the title stable across revisions unless the user explicitly
+  // asked to change it — otherwise the title drifts with each revision and
+  // subsequent planMatch lookups (which the agent does by remembered title)
+  // start failing.
+  existingSummary?: string;
 }
 
 export interface PlannerResult {
@@ -173,6 +179,15 @@ function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: Re
       '',
       'USER REVISION REQUEST (binding — incorporate over your own defaults):',
       input.userInstructions.trim(),
+    );
+  }
+  if (input.existingSummary && input.existingSummary.trim().length > 0) {
+    lines.push(
+      '',
+      'EXISTING PLAN SUMMARY (this is a REVISION):',
+      input.existingSummary.trim(),
+      '',
+      "Reuse this exact `summary` in your output VERBATIM unless the user's revision request explicitly asks for a title change. The summary is the plan's stable identifier across revisions; rewriting it makes follow-up lookups by the user / agent fail. Update `description`, `issue`, `todos`, `verificationSteps`, `fileChanges` freely to match the revision request — but the `summary` field must stay byte-for-byte identical unless the user said otherwise.",
     );
   }
   lines.push('Produce the plan now.');

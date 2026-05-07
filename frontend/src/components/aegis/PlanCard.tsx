@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronRight, ListChecks, Loader2 } from 'lucide-react';
+import { ChevronRight, ClipboardList, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api, type FixRecord, type FixStatus } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { useFixPanel } from './FixPanelContext';
-import { FixStatusPill } from './FixStatusPill';
 
 interface PlanCardProps {
   fixId: string;
@@ -76,41 +75,53 @@ export function PlanCard({
     };
   }, [fixId, refresh]);
 
-  const status: FixStatus = fix?.status ?? 'planning';
-  const summary = fix?.plan?.summary ?? 'Generating plan…';
+  const planSummary = fix?.plan?.summary ?? null;
+  // Revise in flight: status flipped to 'planning' but the previous plan is
+  // still in place (the backend keeps it until the new plan overwrites).
+  // We render the existing title with a "Revising" pill so the card doesn't
+  // momentarily lose its name.
+  const isRevising = fix?.status === 'planning' && !!fix?.plan;
 
   return (
     <button
       type="button"
       onClick={() => openFix(fixId)}
       className={cn(
-        'group my-2 w-full flex items-center gap-3 px-4 py-2.5 rounded-md border bg-background-card-header hover:bg-background-subtle transition-colors text-left',
-        isPanelOpenForThisFix ? 'border-foreground/30' : 'border-border',
+        'group my-2 w-full flex items-center gap-3 px-4 py-3 rounded-md border border-border transition-colors text-left',
+        isPanelOpenForThisFix ? 'bg-background-subtle/60' : 'bg-background-subtle/30 hover:bg-background-subtle/60',
       )}
     >
-      <ListChecks className="h-4 w-4 text-foreground-secondary shrink-0" />
-      <span className="text-sm text-foreground truncate flex-1 min-w-0">{summary}</span>
-      {revised && (
-        <span className="shrink-0 rounded-sm border border-border bg-background-subtle px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-secondary">
+      <ClipboardList className="h-4 w-4 text-foreground-secondary shrink-0" />
+      {planSummary ? (
+        <span className="text-sm text-foreground truncate flex-1 min-w-0">{planSummary}</span>
+      ) : (
+        <div className="h-3.5 w-56 rounded bg-foreground/[0.12] animate-pulse shrink-0 mr-auto" />
+      )}
+      {isRevising ? (
+        <span className="flex items-center gap-1 shrink-0 rounded-sm border border-border bg-background-card-header px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-secondary">
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          Revising
+        </span>
+      ) : revised ? (
+        <span className="shrink-0 rounded-sm border border-border bg-background-card-header px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground-secondary">
           Revised
         </span>
-      )}
-      <FixStatusPill status={status} />
+      ) : null}
       <ChevronRight className="h-3.5 w-3.5 text-foreground-secondary shrink-0 group-hover:text-foreground transition-colors" />
     </button>
   );
 }
 
-// In-flight skeleton for the chat pill — rendered while request_fix or
-// revise_fix is streaming and we don't have a fixId yet. Mirrors the pill
-// shape so when the tool resolves nothing shifts.
-export function PlanCardSkeleton({ revised = false }: { revised?: boolean }) {
+// In-flight skeleton for the chat pill — rendered while request_fix is
+// streaming and we don't have a fixId yet. Mirrors the resolved card's
+// chrome (same bg / border / padding as FixListRow in the side panel) so
+// nothing shifts when the plan resolves; only the inner bars are skeletons.
+export function PlanCardSkeleton(_props: { revised?: boolean } = {}) {
   return (
-    <div className="my-2 w-full flex items-center gap-3 px-4 py-2.5 rounded-md border border-border bg-background-card-header">
-      <Loader2 className="h-4 w-4 text-foreground-secondary shrink-0 animate-spin" />
-      <span className="text-sm text-foreground-secondary flex-1 min-w-0">
-        {revised ? 'Revising plan…' : 'Generating plan…'}
-      </span>
+    <div className="my-2 w-full flex items-center gap-3 px-4 py-3 rounded-md border border-border bg-background-subtle/30">
+      <div className="h-4 w-4 rounded bg-foreground/[0.08] animate-pulse shrink-0" />
+      <div className="h-3.5 w-56 rounded bg-foreground/[0.08] animate-pulse shrink-0 mr-auto" />
+      <div className="h-3.5 w-3.5 rounded bg-foreground/[0.08] animate-pulse shrink-0" />
     </div>
   );
 }

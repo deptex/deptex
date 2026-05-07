@@ -86,29 +86,32 @@ export default function AegisPage() {
 
   // Called by ChatPane when it creates a thread from the landing state.
   // Updates the URL silently (no remount) and signals OrgSidebar to refresh.
+  // The event payload carries the optimistic thread so OrgSidebar can insert
+  // it immediately — without that, OrgSidebar's API refresh races the
+  // server-side insert and returns the prior list, leaving the sidebar
+  // empty until the first stream completes.
   const handleThreadCreated = useCallback((threadId: string) => {
     if (!orgId) return;
     silentUrlUpdateRef.current = true;
     const now = new Date().toISOString();
-    setThreads((prev) => {
-      if (prev.some((t) => t.id === threadId)) return prev;
-      const optimistic: AegisThread = {
-        id: threadId,
-        organizationId: orgId,
-        userId: user?.id ?? '',
-        createdBy: user?.id ?? '',
-        isCreator: true,
-        participantCount: 1,
-        title: 'New chat',
-        createdAt: now,
-        updatedAt: now,
-        pinnedAt: null,
-        archivedAt: null,
-        fixStatus: null,
-      };
-      return [optimistic, ...prev];
-    });
-    window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    const optimistic: AegisThread = {
+      id: threadId,
+      organizationId: orgId,
+      userId: user?.id ?? '',
+      createdBy: user?.id ?? '',
+      isCreator: true,
+      participantCount: 1,
+      title: 'New chat',
+      createdAt: now,
+      updatedAt: now,
+      pinnedAt: null,
+      archivedAt: null,
+      fixStatus: null,
+    };
+    setThreads((prev) => (prev.some((t) => t.id === threadId) ? prev : [optimistic, ...prev]));
+    window.dispatchEvent(
+      new CustomEvent('aegis:threadCreated', { detail: { thread: optimistic } }),
+    );
     navigate(`/organizations/${orgId}/aegis/${threadId}`, { replace: true });
   }, [orgId, user, navigate]);
 

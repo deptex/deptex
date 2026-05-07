@@ -51,7 +51,14 @@ const setTodos: AegisToolEntry<{ todos: Todo[] }, { ok: true }> = {
       },
     },
   }),
-  execute: async () => ({ ok: true }),
+  execute: async (_input, ctx) => {
+    // Flag is read by request_fix / revise_fix to enforce "must call set_todos
+    // before fanning out to ≥2 user-visible workstreams in a single turn."
+    // Setting unconditionally is fine — the schema's minItems:2 already gates
+    // out trivial single-step lists.
+    ctx.turnState.setTodosCalled = true;
+    return { ok: true };
+  },
 };
 
 export const chatTools: AegisToolEntry[] = [setTodos];

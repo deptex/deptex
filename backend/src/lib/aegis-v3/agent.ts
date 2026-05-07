@@ -7,7 +7,7 @@ import { ALL_AEGIS_TOOLS, buildToolSet } from './tools';
 import { saveAssistantMessage, saveToolExecution, logChatUsage } from './persistence';
 import { stepsToMessageParts } from './parts';
 import { recordActualCost } from '../ai/cost-cap';
-import type { AegisOperatingMode, AegisToolContext } from './tool-types';
+import { newTurnState, type AegisOperatingMode, type AegisToolContext } from './tool-types';
 
 export interface CreateAegisAgentOptions {
   orgId: string;
@@ -66,6 +66,11 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
     threadId: opts.threadId,
     operatingMode,
     supabase: supabase as unknown as SupabaseClient,
+    // Fresh per-turn state. Tools mutate this Set / flag to dedupe in-turn
+    // (e.g. revise_fix refuses a 2nd revision of the same plan; request_fix
+    // refuses re-requesting the same finding). The state never persists
+    // across stream calls because ctx is rebuilt in createAegisAgent.
+    turnState: newTurnState(),
   };
 
   const startedAt = Date.now();
@@ -109,6 +114,9 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
       }
     },
     onFinish: async ({ text, totalUsage, steps }) => {
+      console.log(
+        `[aegis-v3] onFinish fired thread=${opts.threadId} textLen=${text?.length ?? 0} steps=${steps?.length ?? 0}`,
+      );
       const inputTokens = totalUsage?.inputTokens ?? 0;
       const outputTokens = totalUsage?.outputTokens ?? 0;
       const totalTokens = totalUsage?.totalTokens ?? inputTokens + outputTokens;
@@ -136,12 +144,21 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
         console.warn('[aegis-v3] error-row cleanup failed', cleanupErr);
       }
 
-      await saveAssistantMessage({
-        threadId: opts.threadId,
-        assistantText: text ?? '',
-        parts,
-        totalTokens,
-      });
+      try {
+        await saveAssistantMessage({
+          threadId: opts.threadId,
+          assistantText: text ?? '',
+          parts,
+          totalTokens,
+        });
+        console.log(`[aegis-v3] saveAssistantMessage OK thread=${opts.threadId}`);
+      } catch (saveErr) {
+        console.error(
+          `[aegis-v3] saveAssistantMessage FAILED thread=${opts.threadId}`,
+          saveErr,
+        );
+        throw saveErr;
+      }
 
       await logChatUsage({
         organizationId: opts.orgId,

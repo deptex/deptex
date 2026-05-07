@@ -12,12 +12,33 @@ export type ToolPermissionKey =
 
 export type AegisOperatingMode = 'propose' | 'announce' | 'autopilot';
 
+// Per-turn state shared across tool invocations within a single agent stream.
+// Lives only as long as the request that built the context — the agent
+// constructor allocates fresh Sets / flags on every turn so dedup never leaks
+// across messages. Tools read AND mutate these fields to enforce in-turn
+// invariants like "don't revise the same plan twice" or "fan-out tools must
+// surface progress via set_todos."
+export interface AegisTurnState {
+  setTodosCalled: boolean;
+  revisedFixIds: Set<string>;
+  requestedFindings: Set<string>;
+}
+
 export interface AegisToolContext {
   orgId: string;
   userId: string;
   threadId: string;
   operatingMode: AegisOperatingMode;
   supabase: SupabaseClient;
+  turnState: AegisTurnState;
+}
+
+export function newTurnState(): AegisTurnState {
+  return {
+    setTodosCalled: false,
+    revisedFixIds: new Set<string>(),
+    requestedFindings: new Set<string>(),
+  };
 }
 
 export interface AegisToolEntry<Input = any, Output = unknown> {

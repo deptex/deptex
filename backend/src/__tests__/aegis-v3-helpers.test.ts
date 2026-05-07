@@ -8,6 +8,7 @@ import {
 
 import {
   buildSDKTool,
+  newTurnState,
   type AegisToolEntry,
   type AegisToolContext,
 } from '../lib/aegis-v3/tool-types';
@@ -27,6 +28,7 @@ function makeCtx(): AegisToolContext {
     threadId: THREAD_ID,
     operatingMode: 'propose',
     supabase: supabase as unknown as AegisToolContext['supabase'],
+    turnState: newTurnState(),
   };
 }
 
