@@ -1,29 +1,26 @@
-# Ruby fixtures — taint-engine substrate gap
+# Ruby fixtures — taint-engine
 
-The Sinatra fixture pairs (`sinatra-sql-injection-{vuln,safe}` and
-`sinatra-xss-{vuln,safe}`) are checked in but **not yet wired into**
-`test/taint-engine-ruby.test.ts`.
+Per-fixture pairs (`-vuln` / `-safe`) cover the framework specs the engine
+ships with:
 
-**Why:** the Ruby callgraph (`src/taint-engine/ruby/callgraph.ts`) only
-collects `method` and `singleton_method` AST nodes as function entry
-points — i.e. `def foo` / `def self.foo`. Sinatra's idiomatic DSL puts
-the request handler inside a route block:
+- `rails-sql-injection-{vuln,safe}` — controller `def search` style; vuln does
+  raw `where("...#{q}...")`, safe coerces via `Integer()` and uses bound `find_by`.
+- `rails-command-injection-{vuln,safe}` — controller `def export` style;
+  vuln pipes `params[:filename]` to backticks, safe sanitizes via `Shellwords`.
+- `sinatra-sql-injection-{vuln,safe}` — `class App < Sinatra::Base` with
+  `get '/users' do ... end` route DSL. Vuln calls `User.where("name = '#{q}'")`
+  in a helper module; safe calls the non-sink `User.find_by(name: name)`.
+- `sinatra-xss-{vuln,safe}` — same Sinatra DSL shape, with `raw(body)`
+  sink in a helper module. Safe escapes via `CGI.escapeHTML` before passing
+  the value across the file boundary.
 
-```ruby
-get '/users' do
-  q = params[:q]
-  ...
-end
-```
+The Sinatra fixtures exercise the route-block lowering in the Ruby
+callgraph (`src/taint-engine/ruby/callgraph.ts`): for any class extending
+`Sinatra::Base` / `Sinatra::Application`, every HTTP-verb DSL call with a
+trailing `do ... end` / `{ ... }` block is collected as a synthetic
+instance method on the class. The block body becomes the method body and
+is lowered like any other Ruby method.
 
-That `do ... end` is a `block` node, not a method definition, so the
-substrate sees zero functions to analyze and emits zero flows for any
-sinatra-style fixture even when the pattern matchers and specs are
-correct. Confirmed against the live engine on 2026-04-29.
-
-The committed sinatra fixtures faithfully capture how real Sinatra apps
-are written — they will pass automatically once the Ruby substrate is
-extended to lower `Sinatra::Base`-class route DSL blocks (or any block
-attached to a Rack-style framework verb call) as synthetic methods on
-the enclosing class. Until then, Rails fixtures (which use explicit
-`def search` controller methods) are the only ruby-vulns we exercise.
+Hanami / Roda / Padrino share the same DSL shape (HTTP-verb call on a
+known base class) and could be added by extending the
+`SINATRA_BASE_CLASSES` / `SINATRA_HTTP_VERBS` constants.
