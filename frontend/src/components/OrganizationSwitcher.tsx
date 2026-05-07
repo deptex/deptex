@@ -144,12 +144,7 @@ export default function OrganizationSwitcher({
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, handleEscape]);
 
-  const handleSelectOrganization = async (orgId: string) => {
-    try {
-      await api.updateUserProfile({ default_organization_id: orgId });
-    } catch {
-      // Non-blocking
-    }
+  const handleSelectOrganization = (orgId: string) => {
     navigate(`/organizations/${orgId}`);
     setIsOpen(false);
   };
@@ -180,15 +175,9 @@ export default function OrganizationSwitcher({
       // Remove from local state
       setOrganizations(orgs => orgs.filter(org => org.id !== orgToLeave.id));
 
-      // If leaving the current org, navigate to landing (redirects to default or empty state)
+      // If leaving the current org, navigate to landing (OrganizationsLanding will
+      // resolve the correct default from the user's profile or fall back to orgs[0]).
       if (orgToLeave.id === currentOrganizationId) {
-        try {
-          const remaining = organizations.filter((o) => o.id !== orgToLeave.id);
-          const newDefaultId = remaining.length > 0 ? remaining[0].id : null;
-          await api.updateUserProfile({ default_organization_id: newDefaultId });
-        } catch {
-          // Non-blocking
-        }
         navigate('/organizations');
       }
 

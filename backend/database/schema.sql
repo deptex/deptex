@@ -24,7 +24,7 @@ CREATE TYPE public.asset_tier AS ENUM ('CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', '
 CREATE TABLE IF NOT EXISTS public.activities (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
-  user_id uuid NOT NULL,
+  user_id uuid,
   activity_type text NOT NULL,
   description text NOT NULL,
   metadata jsonb DEFAULT '{}'::jsonb,
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS public.activities (
 CREATE TABLE IF NOT EXISTS public.aegis_chat_invite_codes (
   thread_id uuid NOT NULL,
   code text NOT NULL,
-  created_by uuid NOT NULL,
+  created_by uuid,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   revoked_at timestamp with time zone
 );
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS public.aegis_chat_threads (
   context_type text,
   context_id text,
   total_tokens_used integer DEFAULT 0,
-  created_by uuid NOT NULL,
+  created_by uuid,
   active_stream_until timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.aegis_chat_user_state (
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS public.aegis_slack_config (
 CREATE TABLE IF NOT EXISTS public.aegis_tool_executions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
-  user_id uuid NOT NULL,
+  user_id uuid,
   thread_id uuid,
   task_id uuid,
   tool_name text NOT NULL,
@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS public.organization_ip_allowlist (
   organization_id uuid NOT NULL,
   cidr text NOT NULL,
   label text,
-  created_by uuid NOT NULL,
+  created_by uuid,
   created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.organization_malicious_allowlist (
@@ -554,7 +554,7 @@ CREATE TABLE IF NOT EXISTS public.organization_mfa_exemptions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   user_id uuid NOT NULL,
-  exempted_by uuid NOT NULL,
+  exempted_by uuid,
   reason text NOT NULL,
   expires_at timestamp with time zone NOT NULL,
   created_at timestamp with time zone DEFAULT now()
@@ -699,7 +699,7 @@ CREATE TABLE IF NOT EXISTS public.organization_sso_bypass_tokens (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   token_hash text NOT NULL,
-  created_by uuid NOT NULL,
+  created_by uuid,
   used_at timestamp with time zone,
   expires_at timestamp with time zone NOT NULL,
   created_at timestamp with time zone DEFAULT now()
@@ -1436,7 +1436,7 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   fix_type text NOT NULL,
   strategy text NOT NULL,
   status text NOT NULL DEFAULT 'planning'::text,
-  triggered_by uuid NOT NULL,
+  triggered_by uuid,
   osv_id text,
   dependency_id uuid,
   project_dependency_id uuid,
@@ -6156,13 +6156,13 @@ ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_job_type_check
 ALTER TABLE public.watchtower_jobs ADD CONSTRAINT watchtower_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text])));
 ALTER TABLE public.activities ADD CONSTRAINT activities_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.activities ADD CONSTRAINT activities_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_invite_codes ADD CONSTRAINT aegis_chat_invite_codes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_participants ADD CONSTRAINT aegis_chat_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE public.aegis_chat_threads ADD CONSTRAINT aegis_chat_threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6172,7 +6172,7 @@ ALTER TABLE public.aegis_event_triggers ADD CONSTRAINT aegis_event_triggers_orga
 ALTER TABLE public.aegis_slack_config ADD CONSTRAINT aegis_slack_config_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE CASCADE;
-ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id);
+ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6212,21 +6212,21 @@ ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_ch
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_ip_allowlist ADD CONSTRAINT organization_ip_allowlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_added_by_fkey FOREIGN KEY (added_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT organization_malicious_allowlist_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_exempted_by_fkey FOREIGN KEY (exempted_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_exempted_by_fkey FOREIGN KEY (exempted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -6241,14 +6241,14 @@ ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_polic
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_reachability_settings ADD CONSTRAINT organization_reachability_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization_registry_credentials_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_roles ADD CONSTRAINT organization_roles_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_scim_configs ADD CONSTRAINT organization_scim_configs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_asset_tier_id_fkey FOREIGN KEY (asset_tier_id) REFERENCES organization_asset_tiers(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_sso_bypass_tokens ADD CONSTRAINT organization_sso_bypass_tokens_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_default_role_id_fkey FOREIGN KEY (default_role_id) REFERENCES organization_roles(id);
 ALTER TABLE public.organization_sso_providers ADD CONSTRAINT organization_sso_providers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -6284,7 +6284,7 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_li
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_linked_sca_project_dependency_id_fkey FOREIGN KEY (linked_sca_project_dependency_id) REFERENCES project_dependencies(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_target_id_fkey FOREIGN KEY (target_id) REFERENCES project_dast_targets(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -6304,8 +6304,8 @@ ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_f
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id);
-ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_suppressed_by_fkey FOREIGN KEY (suppressed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6329,14 +6329,14 @@ ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_inte
 ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_malicious_finding_id_fkey FOREIGN KEY (malicious_finding_id) REFERENCES project_malicious_findings(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE SET NULL;
-ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id);
+ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
@@ -6357,12 +6357,12 @@ ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_target_id_fkey FOREIGN KEY
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id);
+ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id);
+ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_edited_by_user_id_fkey FOREIGN KEY (edited_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -6370,7 +6370,7 @@ ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_or
 ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.team_banned_versions ADD CONSTRAINT team_banned_versions_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
-ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id);
+ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.team_deprecations ADD CONSTRAINT team_deprecations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.team_integrations ADD CONSTRAINT team_integrations_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.team_members ADD CONSTRAINT team_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES team_roles(id) ON DELETE SET NULL;

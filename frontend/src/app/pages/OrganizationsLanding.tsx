@@ -92,12 +92,6 @@ export default function OrganizationsLanding() {
     setCreating(true);
     try {
       const org = await api.createOrganization(createName.trim());
-      localStorage.setItem('deptex_default_org', org.id);
-      try {
-        await api.updateUserProfile({ default_organization_id: org.id });
-      } catch {
-        // Non-blocking
-      }
       navigate(`/organizations/${org.id}`, { replace: true });
     } catch (err: any) {
       setCreateError(err.message || 'Failed to create organization');
@@ -110,11 +104,6 @@ export default function OrganizationsLanding() {
     setAcceptingId(inv.id);
     try {
       const result = await api.acceptInvitation(inv.organization_id, inv.id);
-      try {
-        await api.updateUserProfile({ default_organization_id: result.organization_id });
-      } catch {
-        // Non-blocking
-      }
       navigate(`/organizations/${result.organization_id}`, { replace: true });
     } catch (err: any) {
       toast({

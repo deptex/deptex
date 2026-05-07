@@ -14,8 +14,7 @@ import {
 } from '../../components/ui/select';
 import { Edit2, Loader2, Trash2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
-
-const NO_DEFAULT_ORG = '__none__';
+import { Skeleton } from '../../components/ui/skeleton';
 
 export default function AccountSettingsPage() {
   const { pathname } = useLocation();
@@ -44,20 +43,10 @@ export default function AccountSettingsPage() {
   const isDefaultOrgDirty = pendingDefaultOrgId !== defaultOrgId;
   const canSaveDefaultOrg = !savingDefaultOrg && organizations !== null && isDefaultOrgDirty;
 
-  const [emailEditing, setEmailEditing] = useState(false);
-  const [newEmail, setNewEmail] = useState('');
-  const [savingEmail, setSavingEmail] = useState(false);
-
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteBlockedOrgs, setDeleteBlockedOrgs] = useState<{ id: string; name: string }[] | null>(null);
-
-  // Supabase exposes a pending email change as `new_email` on the user object
-  // until the new address is confirmed. Treat it as the source of truth for
-  // the "verification pending" state.
-  const pendingEmail = (user as unknown as { new_email?: string } | null)?.new_email ?? null;
-  const emailVerified = !!user?.email_confirmed_at;
 
   const trimmedName = displayName.trim();
   const currentName = (fullName || '').trim();
@@ -109,8 +98,10 @@ export default function AccountSettingsPage() {
         ]);
         if (cancelled) return;
         setOrganizations(orgs);
+        // If no explicit default is set, pre-select the first org joined.
+        const effectiveDefault = profile.default_organization_id ?? (orgs[0]?.id ?? null);
         setDefaultOrgId(profile.default_organization_id);
-        setPendingDefaultOrgId(profile.default_organization_id);
+        setPendingDefaultOrgId(effectiveDefault);
       } catch (error) {
         console.error('Failed to load organizations / default org:', error);
       }
@@ -119,7 +110,7 @@ export default function AccountSettingsPage() {
   }, []);
 
   const handleSelectDefaultOrg = (value: string) => {
-    setPendingDefaultOrgId(value === NO_DEFAULT_ORG ? null : value);
+    setPendingDefaultOrgId(value);
   };
 
   const handleSaveDefaultOrg = async () => {
@@ -276,53 +267,6 @@ export default function AccountSettingsPage() {
     }
   };
 
-  const handleStartEmailEdit = () => {
-    setNewEmail(user?.email ?? '');
-    setEmailEditing(true);
-  };
-
-  const handleCancelEmailEdit = () => {
-    setEmailEditing(false);
-    setNewEmail('');
-  };
-
-  const handleSaveEmail = async () => {
-    if (savingEmail) return;
-    const trimmed = newEmail.trim();
-    if (!trimmed || !trimmed.includes('@')) {
-      toast({
-        title: 'Invalid email',
-        description: 'Please enter a valid email address.',
-        variant: 'destructive',
-      });
-      return;
-    }
-    if (trimmed.toLowerCase() === (user?.email ?? '').toLowerCase()) {
-      handleCancelEmailEdit();
-      return;
-    }
-
-    setSavingEmail(true);
-    try {
-      const { error } = await supabase.auth.updateUser({ email: trimmed });
-      if (error) throw error;
-      toast({
-        title: 'Verification sent',
-        description: `Check ${trimmed} for a confirmation link to complete the change.`,
-      });
-      handleCancelEmailEdit();
-    } catch (error) {
-      console.error('Error updating email:', error);
-      toast({
-        title: 'Could not change email',
-        description: 'Please try again or contact support.',
-        variant: 'destructive',
-      });
-    } finally {
-      setSavingEmail(false);
-    }
-  };
-
   const handleOpenDeleteConfirm = () => {
     setDeleteConfirmInput('');
     setDeleteBlockedOrgs(null);
@@ -407,7 +351,7 @@ export default function AccountSettingsPage() {
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
                         maxLength={32}
-                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-ring transition-colors"
                       />
                     </div>
                   </div>
@@ -429,127 +373,62 @@ export default function AccountSettingsPage() {
                             e.currentTarget.src = '/images/blank_profile_image.png';
                           }}
                         />
-                        {savingGeneral && isAvatarPending ? (
-                          <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
-                            <span className="animate-spin h-6 w-6 border-2 border-white border-t-transparent rounded-full" />
-                          </div>
-                        ) : (
-                          <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Edit2 className="h-5 w-5 text-white" />
-                          </div>
-                        )}
+                        <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Edit2 className="h-5 w-5 text-white" />
+                        </div>
                       </div>
                     </label>
                   </div>
                 </div>
               </div>
-              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                <p className="text-xs text-foreground-secondary">
-                  Please use 32 characters at maximum.
-                </p>
+              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                 <Button
                   onClick={handleSaveGeneral}
-                  disabled={!canSave}
-                  size="sm"
-                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
+                  disabled={!canSave || savingGeneral}
+                  variant="white"
                 >
-                  {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
+                  <span className={savingGeneral ? 'invisible' : ''}>Save</span>
+                  {savingGeneral && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
                 </Button>
               </div>
             </div>
 
-            {/* Email Card */}
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <div className="p-6 space-y-3">
-                <h3 className="text-base font-semibold text-foreground">Email</h3>
-                <p className="text-sm text-foreground-secondary">
-                  Used for sign-in and notifications. Changing it requires confirming the new address.
-                </p>
-
-                {!emailEditing ? (
-                  <div className="flex items-center gap-3 max-w-md">
-                    <div className="flex-1 min-w-0 px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground truncate">
-                      {user?.email ?? '—'}
-                    </div>
-                    {emailVerified && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20 flex-shrink-0">
-                        Verified
-                      </span>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleStartEmailEdit}
-                      className="h-9 flex-shrink-0"
-                    >
-                      Change
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 max-w-md">
-                    <input
-                      type="email"
-                      value={newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
-                      placeholder="new@example.com"
-                      autoFocus
-                      className="flex-1 min-w-0 px-3 py-2 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={handleSaveEmail}
-                      disabled={savingEmail || newEmail.trim().length === 0}
-                      className="h-9 min-w-[88px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
-                    >
-                      {savingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Send link'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleCancelEmailEdit}
-                      disabled={savingEmail}
-                      className="h-9"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                )}
-
-                {pendingEmail && pendingEmail !== user?.email && (
-                  <p className="text-xs text-foreground-secondary">
-                    Verification pending for <span className="text-foreground font-medium">{pendingEmail}</span>. Click the link in your inbox to complete the change.
-                  </p>
-                )}
-              </div>
-            </div>
 
             {/* Default Organization Card */}
             <div className="bg-background-card border border-border rounded-lg overflow-hidden">
               <div className="p-6 space-y-3">
                 <h3 className="text-base font-semibold text-foreground">Default Organization</h3>
                 <p className="text-sm text-foreground-secondary">
-                  When you open Deptex, you'll land in this organization. Pick "No default" to land on the org switcher instead.
+                  When you open Deptex, you'll land in this organization.
                 </p>
                 <div className="max-w-md">
                   <Select
-                    value={pendingDefaultOrgId ?? NO_DEFAULT_ORG}
+                    value={pendingDefaultOrgId ?? ''}
                     onValueChange={handleSelectDefaultOrg}
-                    disabled={savingDefaultOrg || organizations === null}
+                    disabled={organizations === null}
                   >
                     <SelectTrigger className="w-full h-10 bg-black/20 border-border [&>span]:flex [&>span]:items-center [&>span]:gap-2 [&>span]:min-w-0 [&>span]:flex-1">
-                      <SelectValue placeholder={organizations === null ? 'Loading...' : 'Select an organization'} />
+                      {organizations === null ? (
+                        <div className="flex items-center gap-2.5 flex-1">
+                          <Skeleton className="h-6 w-6 rounded-full flex-shrink-0" />
+                          <Skeleton className="h-4 w-28" />
+                        </div>
+                      ) : (
+                        <SelectValue placeholder="Select an organization" />
+                      )}
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={NO_DEFAULT_ORG}>
-                        <span className="text-foreground-secondary">No default</span>
-                      </SelectItem>
                       {organizations?.map((org) => (
                         <SelectItem key={org.id} value={org.id}>
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-2.5 min-w-0">
                             <img
                               src={org.avatar_url || '/images/org_profile.png'}
                               alt={org.name}
-                              className="h-5 w-5 rounded-full object-cover bg-transparent flex-shrink-0"
+                              className="h-6 w-6 rounded-full object-cover bg-transparent flex-shrink-0"
                             />
                             <span className="truncate">{org.name}</span>
                           </div>
@@ -559,17 +438,18 @@ export default function AccountSettingsPage() {
                   </Select>
                 </div>
               </div>
-              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                <p className="text-xs text-foreground-secondary">
-                  Members of an org can be set as default. You can always switch in the sidebar.
-                </p>
+              <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                 <Button
                   onClick={handleSaveDefaultOrg}
-                  disabled={!canSaveDefaultOrg}
-                  size="sm"
-                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
+                  disabled={!canSaveDefaultOrg || savingDefaultOrg}
+                  variant="white"
                 >
-                  {savingDefaultOrg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
+                  <span className={savingDefaultOrg ? 'invisible' : ''}>Save</span>
+                  {savingDefaultOrg && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
                 </Button>
               </div>
             </div>
@@ -590,9 +470,9 @@ export default function AccountSettingsPage() {
                   {!showDeleteConfirm && (
                     <Button
                       onClick={handleOpenDeleteConfirm}
-                      variant="outline"
+                      variant="destructive"
                       size="sm"
-                      className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                      className="flex-shrink-0"
                     >
                       <Trash2 className="h-3.5 w-3.5 mr-2" />
                       Delete
