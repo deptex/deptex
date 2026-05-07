@@ -43,6 +43,19 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      # Backend's jest config crosses into depscanner/ and fix-worker/ via roots
+      # (and via the deptex-depscanner file: dep). Jest follows the file: symlink
+      # to each worker's canonical path, so module resolution for transitive deps
+      # like web-tree-sitter walks up from depscanner/ — which means depscanner
+      # needs its own node_modules populated. Same for fix-worker.
+      - name: Install depscanner dependencies
+        working-directory: depscanner
+        run: npm ci
+
+      - name: Install fix-worker dependencies
+        working-directory: fix-worker
+        run: npm ci
+
       - name: Run backend tests
         working-directory: backend
         run: npm test
