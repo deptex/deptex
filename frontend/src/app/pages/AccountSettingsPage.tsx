@@ -451,7 +451,7 @@ export default function AccountSettingsPage() {
                   onClick={handleSaveGeneral}
                   disabled={!canSave}
                   size="sm"
-                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85"
+                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
                 >
                   {savingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
                 </Button>
@@ -499,7 +499,7 @@ export default function AccountSettingsPage() {
                       size="sm"
                       onClick={handleSaveEmail}
                       disabled={savingEmail || newEmail.trim().length === 0}
-                      className="h-9 min-w-[88px] bg-foreground text-background hover:bg-foreground/85"
+                      className="h-9 min-w-[88px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
                     >
                       {savingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Send link'}
                     </Button>
@@ -567,7 +567,7 @@ export default function AccountSettingsPage() {
                   onClick={handleSaveDefaultOrg}
                   disabled={!canSaveDefaultOrg}
                   size="sm"
-                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85"
+                  className="h-8 min-w-[64px] bg-foreground text-background hover:bg-foreground/85 disabled:bg-background-subtle disabled:text-foreground-secondary disabled:opacity-100"
                 >
                   {savingDefaultOrg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
                 </Button>
