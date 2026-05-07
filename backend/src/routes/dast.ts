@@ -133,7 +133,7 @@ router.get('/:projectId/dast/config', async (req: AuthRequest, res) => {
 
     const { data, error } = await supabase
       .from('project_dast_config')
-      .select('enabled, target_url, scan_profile, scan_timeout_minutes, scope_config')
+      .select('enabled, scan_profile, scan_timeout_minutes, scope_config')
       .eq('project_id', projectId)
       .maybeSingle();
 
@@ -147,7 +147,6 @@ router.get('/:projectId/dast/config', async (req: AuthRequest, res) => {
     const config: DastConfigDTO = data
       ? {
           enabled: !!data.enabled,
-          target_url: data.target_url ?? null,
           scan_profile: data.scan_profile,
           scan_timeout_minutes: data.scan_timeout_minutes,
           scope_config: data.scope_config ?? {},
@@ -155,7 +154,6 @@ router.get('/:projectId/dast/config', async (req: AuthRequest, res) => {
         }
       : {
           enabled: false,
-          target_url: null,
           scan_profile: 'auto',
           scan_timeout_minutes: 30,
           scope_config: {},
@@ -879,49 +877,40 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
 
-    if (filterTargetId) {
-      const guard = await loadTargetOrDeny(
-        supabase,
-        filterTargetId,
-        projectId,
-        access.organizationId,
-      );
-      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+    if (!filterTargetId) {
+      // v2.1b: target_id is required. The legacy projects.active_dast_run_id
+      // fallback was retired with phase24b — every finding belongs to a
+      // project_dast_targets row, so callers must specify which target's
+      // findings to load.
+      return res.json([]);
     }
 
-    // Resolve the active dast_run_id per filter scope. With a target filter we
-    // read the per-target pointer; without, fall back to the legacy
-    // projects.active_dast_run_id (covers v1 single-target findings during the
-    // shadow window).
-    let activeRunIds: string[] = [];
-    if (filterTargetId) {
-      const { data } = await supabase
-        .from('project_dast_targets')
-        .select('active_dast_run_id')
-        .eq('id', filterTargetId)
-        .maybeSingle();
-      if (data?.active_dast_run_id) activeRunIds = [data.active_dast_run_id];
-    } else {
-      const { data: project } = await supabase
-        .from('projects')
-        .select('active_dast_run_id')
-        .eq('id', projectId)
-        .single();
-      if (project?.active_dast_run_id) activeRunIds = [project.active_dast_run_id];
-    }
+    const guard = await loadTargetOrDeny(
+      supabase,
+      filterTargetId,
+      projectId,
+      access.organizationId,
+    );
+    if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
 
-    if (activeRunIds.length === 0) return res.json([]);
+    const { data: targetRow } = await supabase
+      .from('project_dast_targets')
+      .select('active_dast_run_id')
+      .eq('id', filterTargetId)
+      .maybeSingle();
+    if (!targetRow?.active_dast_run_id) return res.json([]);
+    const activeRunId = targetRow.active_dast_run_id;
 
-    let query = supabase
+    const query = supabase
       .from('project_dast_findings')
       .select(
         'id, target_id, auth_state, engine, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
       )
       .eq('project_id', projectId)
-      .in('dast_run_id', activeRunIds)
+      .eq('target_id', filterTargetId)
+      .eq('dast_run_id', activeRunId)
       .order('severity', { ascending: true })
       .limit(limit);
-    if (filterTargetId) query = query.eq('target_id', filterTargetId);
 
     const { data, error } = await query;
     if (error) {

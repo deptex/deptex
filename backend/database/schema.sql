@@ -987,7 +987,6 @@ CREATE TABLE IF NOT EXISTS public.project_dast_config (
   project_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   enabled boolean NOT NULL DEFAULT false,
-  target_url text,
   scan_profile text NOT NULL DEFAULT 'auto'::text,
   scan_timeout_minutes integer NOT NULL DEFAULT 30,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
@@ -1034,7 +1033,7 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   risk_accepted_at timestamp with time zone,
   risk_accepted_reason text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  target_id uuid,
+  target_id uuid NOT NULL,
   auth_state text NOT NULL DEFAULT 'anonymous'::text,
   engine text NOT NULL DEFAULT 'zap'::text,
   linked_sast_finding_id uuid,
@@ -1584,8 +1583,6 @@ CREATE TABLE IF NOT EXISTS public.projects (
   canvas_position_updated_by uuid,
   active_extraction_run_id text,
   previous_extraction_run_id text,
-  active_dast_run_id text,
-  previous_dast_run_id text,
   infra_types text[] NOT NULL DEFAULT '{}'::text[]
 );
 CREATE TABLE IF NOT EXISTS public.scan_jobs (
@@ -2513,38 +2510,16 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.commit_dast_run(p_project_id uuid, p_dast_run_id text)
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-DECLARE
-  v_target_id UUID;
-BEGIN
-  SELECT id INTO v_target_id
-  FROM project_dast_targets
-  WHERE project_id = p_project_id
-  ORDER BY created_at LIMIT 1;
-
-  IF v_target_id IS NULL THEN
-    RAISE EXCEPTION 'commit_dast_run wrapper: no target found for project %', p_project_id;
-  END IF;
-
-  PERFORM commit_dast_target_run(v_target_id, p_dast_run_id);
-END;
-$function$
-;
-
 CREATE OR REPLACE FUNCTION public.commit_dast_target_run(p_target_id uuid, p_dast_run_id text)
  RETURNS void
  LANGUAGE plpgsql
 AS $function$
 DECLARE
   v_prior_run_id TEXT;
-  v_project_id UUID;
 BEGIN
-  SELECT active_dast_run_id, project_id INTO v_prior_run_id, v_project_id
-  FROM project_dast_targets WHERE id = p_target_id FOR UPDATE;
+  SELECT active_dast_run_id INTO v_prior_run_id
+  FROM project_dast_targets WHERE id = p_target_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'commit_dast_target_run: target % not found', p_target_id;
@@ -2582,11 +2557,6 @@ BEGIN
       active_dast_run_id   = p_dast_run_id,
       last_scanned_at      = NOW()
   WHERE id = p_target_id;
-
-  UPDATE projects
-  SET previous_dast_run_id = active_dast_run_id,
-      active_dast_run_id   = p_dast_run_id
-  WHERE id = v_project_id;
 END;
 $function$
 ;
@@ -4833,7 +4803,6 @@ CREATE OR REPLACE FUNCTION public.queue_scan_job(p_project_id uuid, p_organizati
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-  v_resolved_target_id UUID;
   v_target_org_id UUID;
   v_target_project_id UUID;
   v_org_concurrent INT;
@@ -4845,36 +4814,30 @@ DECLARE
 BEGIN
   IF p_type IN ('dast', 'dast_zap', 'dast_nuclei') THEN
     IF p_target_id IS NULL THEN
-      SELECT id INTO v_resolved_target_id
-      FROM project_dast_targets WHERE project_id = p_project_id
-      ORDER BY created_at LIMIT 1;
-    ELSE
-      v_resolved_target_id := p_target_id;
-    END IF;
-
-    IF v_resolved_target_id IS NULL THEN
-      RAISE EXCEPTION 'queue_scan_job: no DAST target found for project %', p_project_id
+      RAISE EXCEPTION 'queue_scan_job: p_target_id is required for dast* types'
         USING ERRCODE = 'P0001';
     END IF;
 
     SELECT project_id, organization_id INTO v_target_project_id, v_target_org_id
-    FROM project_dast_targets WHERE id = v_resolved_target_id;
+    FROM project_dast_targets
+    WHERE id = p_target_id;
 
     IF v_target_project_id IS NULL THEN
-      RAISE EXCEPTION 'queue_scan_job: target % vanished mid-call', v_resolved_target_id
+      RAISE EXCEPTION 'queue_scan_job: target % not found', p_target_id
         USING ERRCODE = 'P0001';
     END IF;
 
     IF v_target_project_id <> p_project_id OR v_target_org_id <> p_organization_id THEN
       RAISE EXCEPTION
         'queue_scan_job: tenant drift — target % belongs to (project=%, org=%); caller passed (project=%, org=%)',
-        v_resolved_target_id, v_target_project_id, v_target_org_id, p_project_id, p_organization_id
+        p_target_id, v_target_project_id, v_target_org_id, p_project_id, p_organization_id
         USING ERRCODE = 'P0001';
     END IF;
 
     IF p_target_url IS NULL THEN
       SELECT target_url INTO p_target_url
-      FROM project_dast_targets WHERE id = v_resolved_target_id;
+      FROM project_dast_targets
+      WHERE id = p_target_id;
     END IF;
 
     v_host := lower(substring(p_target_url FROM '^[a-z]+://([^:/?#]+)'));
@@ -4884,18 +4847,26 @@ BEGIN
         USING ERRCODE = 'P0001';
     END IF;
 
-    IF v_host = 'localhost' OR v_host = '0.0.0.0' OR v_host = '::1'
-       OR v_host LIKE '127.%' OR v_host LIKE '10.%' OR v_host LIKE '192.168.%'
+    IF v_host = 'localhost'
+       OR v_host = '0.0.0.0'
+       OR v_host = '::1'
+       OR v_host LIKE '127.%'
+       OR v_host LIKE '10.%'
+       OR v_host LIKE '192.168.%'
        OR v_host ~ '^172\.(1[6-9]|2[0-9]|3[0-1])\.'
-       OR v_host LIKE '169.254.%' OR v_host LIKE 'fe80:%' OR v_host LIKE 'fdaa:%'
-       OR v_host LIKE '%.internal' OR v_host LIKE '%.fly.dev.internal' THEN
+       OR v_host LIKE '169.254.%'
+       OR v_host LIKE 'fe80:%'
+       OR v_host LIKE 'fdaa:%'
+       OR v_host LIKE '%.internal'
+       OR v_host LIKE '%.fly.dev.internal' THEN
       RAISE EXCEPTION 'queue_scan_job: target_url host % rejected (private/loopback/internal)', v_host
         USING ERRCODE = 'P0001';
     END IF;
 
     SELECT id, encode(digest(encrypted_payload, 'sha256'), 'hex')
     INTO v_credential_id, v_credential_hash
-    FROM project_dast_credentials WHERE target_id = v_resolved_target_id;
+    FROM project_dast_credentials
+    WHERE target_id = p_target_id;
 
     SELECT COUNT(*) INTO v_proj_concurrent
     FROM scan_jobs
@@ -4924,12 +4895,16 @@ BEGIN
 
   INSERT INTO scan_jobs (
     project_id, organization_id, type, status, payload,
-    target_id, target_url, scan_profile, timeout_minutes,
-    trigger_source, triggered_by, credential_id, credential_payload_hash
+    target_id, target_url,
+    scan_profile, timeout_minutes,
+    trigger_source, triggered_by,
+    credential_id, credential_payload_hash
   ) VALUES (
     p_project_id, p_organization_id, p_type, 'queued', COALESCE(p_payload, '{}'::jsonb),
-    v_resolved_target_id, p_target_url, p_scan_profile, p_timeout_minutes,
-    p_trigger_source, p_triggered_by, v_credential_id, v_credential_hash
+    p_target_id, p_target_url,
+    p_scan_profile, p_timeout_minutes,
+    p_trigger_source, p_triggered_by,
+    v_credential_id, v_credential_hash
   )
   RETURNING * INTO v_inserted;
 
@@ -6635,7 +6610,6 @@ CREATE INDEX idx_project_teams_project_id ON public.project_teams USING btree (p
 CREATE INDEX idx_project_teams_team_id ON public.project_teams USING btree (team_id);
 CREATE INDEX idx_project_watchlist_project ON public.project_watchlist USING btree (project_id);
 CREATE INDEX idx_project_watchlist_watchlist ON public.project_watchlist USING btree (organization_watchlist_id);
-CREATE INDEX idx_projects_active_dast_run ON public.projects USING btree (active_dast_run_id) WHERE (active_dast_run_id IS NOT NULL);
 CREATE INDEX idx_projects_asset_tier_id ON public.projects USING btree (asset_tier_id);
 CREATE INDEX idx_projects_canvas_position_updated_by ON public.projects USING btree (canvas_position_updated_by) WHERE (canvas_position_updated_by IS NOT NULL);
 CREATE INDEX idx_projects_framework ON public.projects USING btree (framework);
@@ -6738,10 +6712,8 @@ CREATE UNIQUE INDEX idx_project_teams_single_owner ON public.project_teams USING
 CREATE UNIQUE INDEX idx_pve_unique_per_run ON public.project_vulnerability_events USING btree (project_id, osv_id, event_type, extraction_run_id, project_dependency_id) WHERE (extraction_run_id IS NOT NULL);
 CREATE UNIQUE INDEX organization_deprecations_organization_id_dependency_id_key ON public.organization_deprecations USING btree (organization_id, dependency_id);
 CREATE UNIQUE INDEX organization_watchlist_cleared_commits_org_dependency_id_commit ON public.organization_watchlist_cleared_commits USING btree (organization_id, dependency_id, commit_sha);
-CREATE UNIQUE INDEX project_dast_findings_resolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE (handler_file_path IS NOT NULL);
-CREATE UNIQUE INDEX project_dast_findings_target_resolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE ((handler_file_path IS NOT NULL) AND (target_id IS NOT NULL));
-CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE ((handler_file_path IS NULL) AND (target_id IS NOT NULL));
-CREATE UNIQUE INDEX project_dast_findings_unresolved ON public.project_dast_findings USING btree (project_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE (handler_file_path IS NULL);
+CREATE UNIQUE INDEX project_dast_findings_target_resolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, handler_file_path, handler_function_name, vulnerability_type) WHERE (handler_file_path IS NOT NULL);
+CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_dast_findings USING btree (target_id, dast_run_id, rule_id, endpoint_url, http_method, vulnerability_type) WHERE (handler_file_path IS NULL);
 CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);

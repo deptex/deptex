@@ -98,7 +98,6 @@ describe('GET /api/projects/:projectId/dast/config — v2 shape', () => {
     setTableResponse('project_dast_config', 'maybeSingle', {
       data: {
         enabled: true,
-        target_url: 'https://app.example.com',
         scan_profile: 'auto',
         scan_timeout_minutes: 30,
         scope_config: { include_patterns: ['/api/.*'] },
@@ -476,6 +475,21 @@ describe('GET /api/projects/:projectId/dast/jobs?target_id=...', () => {
     );
     expect(r.status).toBe(404);
     expect(r.body.error).toBe('target_not_found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /dast/findings — v2.1b empty-array path when target_id is omitted.
+// The legacy projects.active_dast_run_id fallback was retired with phase24b.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/projects/:projectId/dast/findings — v2.1b empty path', () => {
+  it('returns [] when target_id query param is omitted', async () => {
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+
+    const r = await request(makeApp()).get(`/api/projects/${PROJECT_A}/dast/findings`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
   });
 });
 
