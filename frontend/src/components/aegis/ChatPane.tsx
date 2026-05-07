@@ -387,6 +387,19 @@ export function ChatPane({
   const isStreaming = status === 'streaming' || status === 'submitted';
   useEffect(() => { sendMessageRef.current = sendMessage; });
 
+  // On unmount (thread switch), abort the local SSE fetch. The server-side
+  // resumable-stream tee keeps writing to Redis regardless of socket state, so
+  // when the user navigates back, the seed-load + resumeStream() useEffect
+  // reconnects and replays whatever ran while they were away. Without this,
+  // the browser holds zombie SSE sockets open per thread switch — the new
+  // ChatPane mounts fine, but the orphaned old fetch keeps consuming memory
+  // and (in some browsers) blocks navigation back to the original thread.
+  useEffect(() => {
+    return () => {
+      try { stop(); } catch { /* no-op when not streaming */ }
+    };
+  }, [stop]);
+
   // Seed load + live resume. On mount we fetch the thread's messages once.
   // If the most recent persisted message is a user turn, the assistant
   // response is either still streaming server-side (user navigated away

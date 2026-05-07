@@ -381,7 +381,15 @@ router.get('/by-thread/:threadId', async (req: AuthRequest, res) => {
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ fixes: (data ?? []).map((row: any) => shapeFixRow(row)) });
+  // Skip rows where plan generation crashed before producing anything (no plan,
+  // status=failed). They have no actionable surface — no PlanCard pill in chat,
+  // no plan to view in the panel — and would otherwise auto-open the panel to
+  // a useless "Plan unavailable" placeholder. The chat tool-result already
+  // surfaces the underlying error to the user inline.
+  const visible = (data ?? []).filter(
+    (row: any) => !(row.status === 'failed' && row.plan == null),
+  );
+  return res.json({ fixes: visible.map((row: any) => shapeFixRow(row)) });
 });
 
 router.get('/:fixId', async (req: AuthRequest, res) => {

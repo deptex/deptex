@@ -118,17 +118,20 @@ export function FixPanelProvider({ children, threadId }: FixPanelProviderProps) 
     };
   }, [threadId, refresh]);
 
-  // Auto-open rules. Fires once per thread once the initial fetch has
-  // returned at least one fix; user-dismissed wins.
+  // Auto-open rules. Fires once per thread once at least one fix has an
+  // actual plan to show — opening on a row that's still in `planning`
+  // surfaces the skeleton (or worse, "Plan unavailable") before the user
+  // has anything to look at. User-dismissed wins.
   useEffect(() => {
     if (loading || userDismissed || autoOpenedRef.current) return;
-    if (fixes.length === 0) return;
+    const openable = fixes.filter((f) => f.plan != null);
+    if (openable.length === 0) return;
     autoOpenedRef.current = true;
-    if (fixes.length >= 2) {
+    if (openable.length >= 2) {
       setView('list');
       setActiveFixId(null);
     } else {
-      setActiveFixId(fixes[0].id);
+      setActiveFixId(openable[0].id);
       setView('detail');
     }
   }, [fixes, loading, userDismissed]);

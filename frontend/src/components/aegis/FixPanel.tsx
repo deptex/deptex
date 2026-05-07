@@ -78,8 +78,20 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const refresh = useCallback(async () => {
     try {
       const { fix: refreshed } = await api.getFix(fixId);
-      setFix(refreshed);
-      if (refreshed.plan) setPlan(refreshed.plan);
+      // Mid-revise / mid-regenerate suppression: when the row flips back to
+      // 'planning' but a plan already exists locally, hold the old view.
+      // Otherwise the sidebar would hide the Start button and surface a
+      // "Planning" pill for ~60s while the new plan generates — Henry
+      // explicitly wants the sidebar steady-state until the new plan lands
+      // and replaces the old one atomically.
+      setFix((prev) => {
+        if (refreshed.status === 'planning' && prev?.plan) return prev;
+        return refreshed;
+      });
+      setPlan((prev) => {
+        if (refreshed.status === 'planning' && prev != null) return prev;
+        return refreshed.plan ?? prev;
+      });
     } catch {
       // ignore — realtime will fill in eventually
     } finally {
@@ -210,7 +222,24 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   }, [fixId]);
 
   if (!plan && (loading || status === 'planning')) return <FixPanelSkeleton />;
-  if (!plan) return <div className="p-6 text-sm text-foreground-secondary">Plan unavailable.</div>;
+  if (!plan) {
+    if (status === 'failed') {
+      return (
+        <div className="px-6 pt-5 pb-6">
+          <div className="text-lg font-semibold text-foreground leading-snug">Plan generation failed</div>
+          <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
+            <div className="flex gap-2.5 items-start">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="min-w-0 flex-1 break-words">
+                {fix?.errorMessage ?? 'The fix engine could not produce a plan for this finding.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return <div className="p-6 text-sm text-foreground-secondary">Plan unavailable.</div>;
+  }
 
   const refusal = plan.refusal;
 

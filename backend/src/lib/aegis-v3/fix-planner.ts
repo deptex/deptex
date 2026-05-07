@@ -140,7 +140,11 @@ PLANNING RULES:
 4. estimatedDiffSize: small (<100 LOC), medium (100-500), large (>500). Plans estimated as "large" should be split.
 5. wallClockBudgetSec defaults to 300. Increase only when the language toolchain is slow (e.g., Java/Maven up to 600).
 6. fileChanges should list each touched file with a one-sentence rationale. Do not include diffs — those are produced during execution.
-7. summary is one short title-style sentence a developer can scan in two seconds (e.g. "Fix exposed AWS key in src/config.js" — verb + object, ≤80 chars).
+7. summary is one short title-style sentence a developer can scan in two seconds (e.g. "Fix exposed AWS key in src/config.js" — verb + object, ≤80 chars). The summary MUST reference the finding's stable identifier so users and the agent can recognize it across revisions:
+   - vulnerability findings: include the CVE id (e.g. "Patch CVE-2021-44228 by bumping log4j-core to 2.17.0").
+   - semgrep findings: include the rule id or the file:line locator (e.g. "Remove SSRF in src/api/proxy.ts:42 (rule: javascript.lang.security.ssrf)").
+   - secret findings: include the detector type and file (e.g. "Remove leaked AWS access key in src/config.ts").
+   This is non-negotiable — a summary that doesn't reference the finding causes the user to lose track of which plan is which when multiple are open, and breaks the agent's later planMatch lookups during revisions.
 8. description is 1-2 short sentences explaining WHAT THE FIX DOES — the plan, in plain English. Do NOT just restate the summary; add a fact the title alone doesn't convey. No bullet points. The issue itself goes in \`issue\`, not here. Verification details go in verificationSteps.
 8a. issue is markdown explaining WHAT THE PROBLEM IS — the user reads this to understand why a fix is needed. Aim for 2-4 sentences. When the finding has affected source code (Semgrep findings, secrets, sometimes reachable vulnerabilities), include a fenced code block with the relevant excerpt INSIDE the issue field. Use the actual snippet from the context (do NOT fabricate code). Use language tags that match the file extension (\`\`\`ts, \`\`\`py, \`\`\`go, etc.) and immediately precede or follow the fence with one line citing the file and line (e.g. \`src/api.ts:42\`). For dependency vulnerabilities where there's no specific file excerpt to show, omit the code fence and instead describe the package + advisory in prose. Keep the whole field under 4000 characters. Never paraphrase identifiers or pretend data exists that isn't in the context.
 9. todos is an ordered list of short imperative steps the user reads to understand WHAT will happen. Use as many or as few as the change actually requires — a one-line bump is one todo, a multi-step refactor may be many. Each todo is { title, detail? }:
@@ -159,15 +163,36 @@ Include refusal.reason ONLY when a fix cannot be safely produced. Examples of re
 - No patched version exists for this vulnerability.
 - The finding is ambiguous or already remediated.
 - The required change is too large for v1 (>500 LOC) and must be split.
-- Language not in the v1 ship gate (anything outside js/ts/python/go) — set refusal.reason to "Language X is not supported by Aegis Fix Agent v1." with no manualSuggestion needed.
+- Language not in the supported list — see the LANGUAGE_GATE info on each user prompt for the languages enabled in this org. Refuse with "Language X is not supported by this Aegis Fix Agent deployment." for anything outside that list. Do NOT refuse Java / Ruby / PHP / Rust / C# unless the LANGUAGE_GATE says so — those have toolchain bootstrap wired in the worker and ship via env config, not a hardcoded list.
 
 When you DO set refusal, still populate the other fields with best-effort placeholders so the schema validates; humans will read the refusal first.`;
 
+// Languages enabled for this deployment. Mirrors fix-worker's getEnabledLanguages
+// (in backend/fix-worker/src/plan-types.ts) — the planner shouldn't refuse
+// anything the worker can actually execute. Set LANGUAGE_GATE env to a CSV
+// (e.g. "js,ts,python,go,java") or "all" to expand beyond the v1 ship gate.
+const SHIP_GATE_LANGS = ['js', 'ts', 'python', 'go', 'other'] as const;
+const ALL_PLAN_LANGS = ['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other'] as const;
+
+function getEnabledPlannerLanguages(): readonly string[] {
+  const raw = process.env.LANGUAGE_GATE?.trim();
+  if (!raw) return SHIP_GATE_LANGS;
+  if (raw.toLowerCase() === 'all') return ALL_PLAN_LANGS;
+  const parsed = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => (ALL_PLAN_LANGS as readonly string[]).includes(s));
+  if (parsed.length === 0) return SHIP_GATE_LANGS;
+  return parsed.includes('other') ? parsed : ([...parsed, 'other'] as const);
+}
+
 function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: RepoLookup): string {
+  const enabledLangs = getEnabledPlannerLanguages().join(', ');
   const lines = [
     `Finding type: ${input.findingType}`,
     `Finding id: ${input.findingId}`,
     `Repository: ${repo.repoFullName} (default branch: ${repo.defaultBranch})`,
+    `Languages enabled in this deployment (LANGUAGE_GATE): ${enabledLangs}. Anything outside this list MUST refuse.`,
     '',
     'CONTEXT:',
     JSON.stringify(ctx, null, 2),
