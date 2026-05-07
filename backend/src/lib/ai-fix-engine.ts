@@ -3,7 +3,7 @@ import { getActiveExtractionId, NO_ACTIVE_RUN } from './active-extraction';
 
 // The legacy aider-worker orchestrator (requestFix / cancelFixJob / status
 // queries) was retired with the aider-worker itself. The new flow lives in
-// lib/aegis-v3/fix-planner.ts (planning) and backend/fix-worker (execution).
+// lib/aegis-v3/fix-planner.ts (planning) and fix-worker (execution).
 // Only the context-gathering helpers below remain — they're consumed by
 // the planner to build its prompt.
 

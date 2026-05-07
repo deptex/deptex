@@ -78,9 +78,9 @@ const STUB_SQL = `
 `;
 
 function defaultSchemaPath(): string {
-  // src/storage/pglite.ts → ../../../../database/schema.sql (from dist: .ts compiled to dist/storage/pglite.js).
+  // depscanner/src/storage/pglite.ts → ../../../backend/database/schema.sql.
   // Resolve at runtime from this file.
-  return path.resolve(__dirname, '../../../database/schema.sql');
+  return path.resolve(__dirname, '../../../backend/database/schema.sql');
 }
 
 /**
@@ -148,7 +148,7 @@ export async function createPGLiteStorage(
     if (!fs.existsSync(schemaPath)) {
       throw new Error(
         `PGLiteStorage: schema.sql not found at ${schemaPath}. ` +
-          `Run "cd backend/depscanner && npm run schema:dump" to generate it, or pass { schemaPath }.`,
+          `Run "cd depscanner && npm run schema:dump" to generate it, or pass { schemaPath }.`,
       );
     }
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');

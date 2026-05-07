@@ -302,7 +302,7 @@ describe('confidence-thresholds — frontend mirror byte-equal', () => {
     const path = require('path');
     const mirrorPath = path.resolve(
       __dirname,
-      '../../../../frontend/src/lib/security/confidence-thresholds.ts',
+      '../../../frontend/src/lib/security/confidence-thresholds.ts',
     );
     const src = fs.readFileSync(mirrorPath, 'utf8');
     // Match exact `export const NAME = NUMBER;` lines so accidental whitespace

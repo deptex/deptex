@@ -18,7 +18,7 @@ Anchor in what already exists. Web research before knowing the local terrain pro
    - Routes in `backend/src/routes/`
    - Tables in `backend/database/` (read the actual `CREATE TABLE`, not just names)
    - Frontend pages and shared components
-   - Libs in `backend/src/lib/` and `backend/extraction-worker/src/`
+   - Libs in `backend/src/lib/` and `depscanner/src/`
 4. Read 2-3 existing features that are most architecturally similar to what's being proposed.
 
 Produce a short **Current State** paragraph: what exists, what's rudimentary, what's missing. The user should be able to read this and confirm you understand the area before web research starts.

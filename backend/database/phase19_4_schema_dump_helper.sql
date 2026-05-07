@@ -1,6 +1,6 @@
 -- Phase 19.4: Schema dump helper
 --
--- Single SQL function called by backend/extraction-worker/scripts/dump-schema.ts
+-- Single SQL function called by depscanner/scripts/dump-schema.ts
 -- to regenerate backend/database/schema.sql from live Supabase.
 --
 -- Returns DDL for: enums, tables, constraints, indexes, functions, triggers (public schema).
@@ -87,4 +87,4 @@ AS $fn$
 $fn$;
 
 COMMENT ON FUNCTION pg_catalog_dump_v1() IS
-  'Phase 19.4: emits DDL for public schema. Used by backend/extraction-worker/scripts/dump-schema.ts to regenerate backend/database/schema.sql for PGLite local-mode. Do not drop.';
+  'Phase 19.4: emits DDL for public schema. Used by depscanner/scripts/dump-schema.ts to regenerate backend/database/schema.sql for PGLite local-mode. Do not drop.';

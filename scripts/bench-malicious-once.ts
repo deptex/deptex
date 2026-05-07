@@ -24,11 +24,11 @@ import {
   runGuardDog,
   isGuardDogAvailable,
   GUARDDOG_VERSION,
-} from '../backend/extraction-worker/src/malicious/guarddog';
+} from '../depscanner/src/malicious/guarddog';
 import {
   canonicalizeEcosystem,
   type CanonicalEcosystem,
-} from '../backend/extraction-worker/src/malicious/ecosystem';
+} from '../depscanner/src/malicious/ecosystem';
 
 interface FixtureEntry {
   name: string;

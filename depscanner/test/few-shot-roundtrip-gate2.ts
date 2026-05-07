@@ -15,7 +15,7 @@
  * osv_id rejection) for every entry plus Gate 2 for the JS subset (TS
  * Compiler API path); this script is the all-language Gate 2.
  *
- * Run: cd backend/depscanner && npm run test:few-shot-gate2
+ * Run: cd depscanner && npm run test:few-shot-gate2
  */
 
 import { FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES } from '../src/rule-generator/few-shot-examples';

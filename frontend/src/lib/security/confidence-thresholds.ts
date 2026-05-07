@@ -1,5 +1,5 @@
 /**
- * Frontend mirror of `backend/depscanner/src/taint-engine/confidence-thresholds.ts`.
+ * Frontend mirror of `depscanner/src/taint-engine/confidence-thresholds.ts`.
  *
  * MUST stay byte-equal to the worker module. A unit test asserts the values
  * match (`__tests__/confidence-thresholds-mirror.test.ts`); CI fails if they

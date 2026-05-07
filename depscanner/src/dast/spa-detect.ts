@@ -4,7 +4,7 @@
 //   1. backend/src/routes/dast.ts — POST /dast/targets (initial probe at create
 //      time) + POST /dast/targets/:id/recheck-runtime + POST /dast/scan
 //      (re-probe when 30-day TTL expires).
-//   2. backend/depscanner/src/dast/pipeline.ts (Task 7) — re-probes at scan
+//   2. depscanner/src/dast/pipeline.ts (Task 7) — re-probes at scan
 //      time when the cached runtime is missing or stale.
 //
 // Best-effort: a probe failure / non-HTML response / timeout returns

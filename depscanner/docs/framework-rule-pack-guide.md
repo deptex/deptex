@@ -204,7 +204,7 @@ describe('myframework', () => {
 Run them:
 
 ```bash
-cd backend/extraction-worker
+cd depscanner
 NODE_OPTIONS=--experimental-vm-modules npx jest src/framework-rules/__tests__/javascript.test.ts
 ```
 
@@ -223,7 +223,7 @@ The only fixture that currently exercises framework detection end-to-end is `tes
 Regenerate snapshots after any detector-affecting change:
 
 ```bash
-cd backend/extraction-worker
+cd depscanner
 npm run test:fixtures -- --include-slow --update    # regenerate
 npm run test:fixtures -- --include-slow             # verify idempotent
 ```

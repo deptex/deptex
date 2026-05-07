@@ -2,7 +2,7 @@
 --
 -- Adds organization-level knobs for the EPD (Exploitable Path Dominance)
 -- contextual scoring pass that runs in the extraction worker's pipeline.
--- The scorer is in backend/extraction-worker/src/epd.ts; both columns
+-- The scorer is in depscanner/src/epd.ts; both columns
 -- are optional and fall back to the EPD_MAX_RUN_COST_USD and
 -- EPD_BUDGET_EXCEEDED_BEHAVIOR env vars when NULL so single-tenant
 -- self-hosters don't need to touch the database to tune EPD.

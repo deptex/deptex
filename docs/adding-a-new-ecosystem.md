@@ -175,9 +175,9 @@ Repository scan          Extraction pipeline (worker)
 | `backend/src/lib/detect-monorepo.ts` | Scans GitHub repo tree for manifest files, returns detected projects with ecosystem |
 | `backend/src/routes/projects.ts` | API endpoints — repo listing with framework detection, connect endpoint |
 | `backend/src/lib/redis.ts` | Queues extraction job (includes `ecosystem` field) |
-| `backend/extraction-worker/src/index.ts` | Worker entry — reads jobs from Redis queue |
-| `backend/extraction-worker/src/pipeline.ts` | Full extraction pipeline — cdxgen, depscan, vuln parsing |
-| `backend/extraction-worker/src/sbom.ts` | CycloneDX SBOM parser — generic PURL parsing |
+| `depscanner/src/index.ts` | Worker entry — reads jobs from Redis queue |
+| `depscanner/src/pipeline.ts` | Full extraction pipeline — cdxgen, depscan, vuln parsing |
+| `depscanner/src/sbom.ts` | CycloneDX SBOM parser — generic PURL parsing |
 | `frontend/src/components/framework-icon.tsx` | Icon component — maps framework id → SVG icon |
 | `frontend/src/utils/detect-framework.ts` | Client-side framework detection (optional, backend is primary) |
 

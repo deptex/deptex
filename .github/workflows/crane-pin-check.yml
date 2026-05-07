@@ -1,6 +1,6 @@
 name: Crane pin sync check
 
-# Enforces: any PR that bumps CRANE_VERSION in backend/depscanner/Dockerfile
+# Enforces: any PR that bumps CRANE_VERSION in depscanner/Dockerfile
 # MUST also bump BOTH CRANE_SHA256_AMD64 and CRANE_SHA256_ARM64 in the same
 # PR. Otherwise the build will silently install the new release under the
 # old SHA pin (sha256sum -c will fail at build time, but we want the failure
@@ -13,7 +13,7 @@ on:
   pull_request:
     branches: [main, master]
     paths:
-      - backend/depscanner/Dockerfile
+      - depscanner/Dockerfile
 
 jobs:
   check-crane-pins-synced:
@@ -28,7 +28,7 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
-          DIFF=$(git diff "$BASE" "$HEAD" -- backend/depscanner/Dockerfile)
+          DIFF=$(git diff "$BASE" "$HEAD" -- depscanner/Dockerfile)
 
           # Look for `+ARG CRANE_VERSION=` / `+ARG CRANE_SHA256_AMD64=` /
           # `+ARG CRANE_SHA256_ARM64=` lines in the diff. A bare `+` prefix
@@ -50,7 +50,7 @@ jobs:
       - name: Fail if version bumped without matching SHA bumps
         if: steps.diff.outputs.version_changed != '' && (steps.diff.outputs.amd64_changed == '' || steps.diff.outputs.arm64_changed == '')
         run: |
-          echo "::error::This PR bumps CRANE_VERSION in backend/depscanner/Dockerfile but does NOT update both CRANE_SHA256_AMD64 and CRANE_SHA256_ARM64."
+          echo "::error::This PR bumps CRANE_VERSION in depscanner/Dockerfile but does NOT update both CRANE_SHA256_AMD64 and CRANE_SHA256_ARM64."
           echo ""
           echo "Crane runs in the worker holding decrypted registry creds."
           echo "Bumping the version without re-pinning both arch SHAs leaves the"
