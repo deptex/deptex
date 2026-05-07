@@ -60,11 +60,10 @@ function buildUserPrompt(plan: FixPlan, workDir: string): string {
   lines.push(`PLAN SUMMARY: ${plan.summary}`);
   lines.push(`FINDING: ${plan.finding.type}/${plan.finding.id} (severity: ${plan.finding.severity ?? 'n/a'})`);
   lines.push('');
-  lines.push('CURRENT STATE:');
-  for (const b of plan.currentState) lines.push(`- ${b}`);
-  lines.push('');
-  lines.push('DESIRED STATE:');
-  for (const b of plan.desiredState) lines.push(`- ${b}`);
+  lines.push('DESCRIPTION:');
+  // Fallback to summary for plans persisted under the prior schema (which
+  // had currentState/desiredState bullets instead of a description field).
+  lines.push(plan.description ?? plan.summary);
   lines.push('');
   lines.push('FILES TO CHANGE:');
   for (const fc of plan.fileChanges) {

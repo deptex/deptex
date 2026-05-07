@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
-export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 export type FileChangeAction = 'modify' | 'create' | 'delete';
 
@@ -25,6 +25,7 @@ export const PLAN_LANGUAGES: readonly PlanLanguage[] = [
   'php',
   'rust',
   'csharp',
+  'other',
 ] as const;
 
 export const SHIP_GATE_LANGUAGES: readonly PlanLanguage[] = ['js', 'ts', 'python', 'go'] as const;
@@ -32,6 +33,16 @@ export const SHIP_GATE_LANGUAGES: readonly PlanLanguage[] = ['js', 'ts', 'python
 export interface PlanFileChange {
   path: string;
   action: FileChangeAction;
+  description: string;
+}
+
+export interface PlanTodo {
+  title: string;
+  detail?: string;
+}
+
+export interface VerificationStep {
+  command: string;
   description: string;
 }
 
@@ -43,10 +54,13 @@ export interface PlanRefusal {
 export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
-  currentState: string[];
-  desiredState: string[];
+  description: string;
+  issue?: string;
+  todos?: PlanTodo[];
   fileChanges: PlanFileChange[];
   testCommand: string;
+  verification?: string;
+  verificationSteps?: VerificationStep[];
   language: PlanLanguage;
   estimatedDiffSize: PlanDiffSize;
   wallClockBudgetSec: number;
@@ -78,6 +92,16 @@ const fileChangeSchema = z.object({
   description: z.string().min(1),
 });
 
+const todoSchema = z.object({
+  title: z.string().min(1).max(160),
+  detail: z.string().max(500).optional(),
+});
+
+const verificationStepSchema = z.object({
+  command: z.string().min(1),
+  description: z.string().min(1),
+});
+
 const refusalSchema = z.object({
   reason: z.string().min(1),
   manualSuggestion: z.string().optional(),
@@ -90,11 +114,14 @@ export const fixPlanSchema = z.object({
     id: z.string().min(1),
     severity: z.string().optional(),
   }),
-  currentState: z.array(z.string().min(1)).min(1),
-  desiredState: z.array(z.string().min(1)).min(1),
+  description: z.string().min(1),
+  issue: z.string().min(1).max(4000).optional(),
+  todos: z.array(todoSchema).min(1).max(50).optional(),
   fileChanges: z.array(fileChangeSchema),
   testCommand: z.string().min(1),
-  language: z.enum(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp']),
+  verification: z.string().min(1).optional(),
+  verificationSteps: z.array(verificationStepSchema).min(1).max(6).optional(),
+  language: z.enum(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other']),
   estimatedDiffSize: z.enum(['small', 'medium', 'large']),
   wallClockBudgetSec: z.number().int().positive().max(900),
   refusal: refusalSchema.optional(),

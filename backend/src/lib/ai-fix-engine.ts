@@ -108,7 +108,7 @@ export async function gatherSemgrepContext(findingId: string, projectId: string)
   const { data } = await supabase
     .from('project_semgrep_findings')
     .select(
-      'id, rule_id, message, severity, file_path, start_line, end_line, cwe_ids, owasp_ids, category',
+      'id, rule_id, message, severity, file_path, start_line, end_line, cwe_ids, owasp_ids, category, code_snippet',
     )
     .eq('id', findingId)
     .eq('extraction_run_id', activeRunId)
@@ -122,7 +122,7 @@ export async function gatherSecretContext(findingId: string, projectId: string):
   const activeRunId = (await getActiveExtractionId(supabase, projectId)) ?? NO_ACTIVE_RUN;
   const { data } = await supabase
     .from('project_secret_findings')
-    .select('detector_type, file_path, line_number, verified')
+    .select('id, detector_type, file_path, start_line, is_verified, description, redacted_value, code_snippet')
     .eq('id', findingId)
     .eq('extraction_run_id', activeRunId)
     .single();

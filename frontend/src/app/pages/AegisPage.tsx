@@ -6,6 +6,8 @@ import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
 import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
+import { FixPanelProvider } from '../../components/aegis/FixPanelContext';
+import { FixPanelHost } from '../../components/aegis/FixPanelHost';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -84,29 +86,32 @@ export default function AegisPage() {
 
   // Called by ChatPane when it creates a thread from the landing state.
   // Updates the URL silently (no remount) and signals OrgSidebar to refresh.
+  // The event payload carries the optimistic thread so OrgSidebar can insert
+  // it immediately — without that, OrgSidebar's API refresh races the
+  // server-side insert and returns the prior list, leaving the sidebar
+  // empty until the first stream completes.
   const handleThreadCreated = useCallback((threadId: string) => {
     if (!orgId) return;
     silentUrlUpdateRef.current = true;
     const now = new Date().toISOString();
-    setThreads((prev) => {
-      if (prev.some((t) => t.id === threadId)) return prev;
-      const optimistic: AegisThread = {
-        id: threadId,
-        organizationId: orgId,
-        userId: user?.id ?? '',
-        createdBy: user?.id ?? '',
-        isCreator: true,
-        participantCount: 1,
-        title: 'New chat',
-        createdAt: now,
-        updatedAt: now,
-        pinnedAt: null,
-        archivedAt: null,
-        fixStatus: null,
-      };
-      return [optimistic, ...prev];
-    });
-    window.dispatchEvent(new CustomEvent('aegis:threadListChanged'));
+    const optimistic: AegisThread = {
+      id: threadId,
+      organizationId: orgId,
+      userId: user?.id ?? '',
+      createdBy: user?.id ?? '',
+      isCreator: true,
+      participantCount: 1,
+      title: 'New chat',
+      createdAt: now,
+      updatedAt: now,
+      pinnedAt: null,
+      archivedAt: null,
+      fixStatus: null,
+    };
+    setThreads((prev) => (prev.some((t) => t.id === threadId) ? prev : [optimistic, ...prev]));
+    window.dispatchEvent(
+      new CustomEvent('aegis:threadCreated', { detail: { thread: optimistic } }),
+    );
     navigate(`/organizations/${orgId}/aegis/${threadId}`, { replace: true });
   }, [orgId, user, navigate]);
 
@@ -158,29 +163,34 @@ export default function AegisPage() {
   }
 
   return (
-    <div className="flex flex-col h-[100vh] bg-background">
-      {routinesActive ? (
-        <RoutinesPanel />
-      ) : (
-        <>
-          {fixIdParam && (
-            <div className="px-4 pt-4">
-              <div className="mx-auto max-w-3xl">
-                <PlanCard fixId={fixIdParam} />
-              </div>
-            </div>
+    <FixPanelProvider threadId={routinesActive ? null : (activeThreadId ?? null)}>
+      <div className="flex h-[100vh] bg-background">
+        <div className="flex-1 flex flex-col min-w-0">
+          {routinesActive ? (
+            <RoutinesPanel />
+          ) : (
+            <>
+              {fixIdParam && (
+                <div className="px-4 pt-4">
+                  <div className="mx-auto max-w-3xl">
+                    <PlanCard fixId={fixIdParam} />
+                  </div>
+                </div>
+              )}
+              <ChatPane
+                key={chatKey}
+                organizationId={orgId}
+                threadId={activeThreadId}
+                currentUserId={user?.id ?? ''}
+                displayName={displayName}
+                onThreadCreated={handleThreadCreated}
+                onThreadUpdated={handleThreadUpdated}
+              />
+            </>
           )}
-          <ChatPane
-            key={chatKey}
-            organizationId={orgId}
-            threadId={activeThreadId}
-            currentUserId={user?.id ?? ''}
-            displayName={displayName}
-            onThreadCreated={handleThreadCreated}
-            onThreadUpdated={handleThreadUpdated}
-          />
-        </>
-      )}
+        </div>
+        <FixPanelHost />
+      </div>
       <SearchChatsModal
         open={searchOpen}
         onOpenChange={setSearchOpen}
@@ -188,6 +198,6 @@ export default function AegisPage() {
         onSelect={handleSelect}
         onSetArchived={handleSetArchived}
       />
-    </div>
+    </FixPanelProvider>
   );
 }

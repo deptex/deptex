@@ -37,8 +37,8 @@ function happyPlanText(): string {
       id: 'GHSA-xxxx-yyyy-zzzz',
       severity: 'high',
     },
-    currentState: ['lodash@4.17.20 in package.json', 'Imported by 3 files'],
-    desiredState: ['lodash@4.17.21 (patched)', 'Lockfile regenerated'],
+    description:
+      'lodash@4.17.20 in package.json is vulnerable to GHSA-xxxx-yyyy-zzzz. Bump to 4.17.21 (the patched release) and regenerate the lockfile so the new resolution is locked across the 3 importing files.',
     fileChanges: [
       { path: 'package.json', action: 'modify', description: 'Bump version' },
       { path: 'package-lock.json', action: 'modify', description: 'Regenerate' },
@@ -54,8 +54,7 @@ function refusalPlanText(): string {
   return JSON.stringify({
     summary: 'Cannot fix — no patched version exists.',
     finding: { type: 'vulnerability', id: 'GHSA-aaaa-bbbb-cccc' },
-    currentState: ['vulnerable@1.0.0'],
-    desiredState: ['no patched version available'],
+    description: 'No patched version of vulnerable@1.0.0 is available; manual remediation required.',
     fileChanges: [],
     testCommand: 'npm test',
     language: 'js',
@@ -193,8 +192,8 @@ describe('generateFixPlan', () => {
         JSON.stringify({
           summary: 'Replace eval() with JSON.parse() in parse.js.',
           finding: { type: 'semgrep', id: 'sg-123', severity: 'high' },
-          currentState: ['Uses eval() on user input'],
-          desiredState: ['Uses JSON.parse() with try/catch'],
+          description:
+            'parse.js uses eval() on user input which lets attackers execute arbitrary code. Replace it with JSON.parse() inside a try/catch so malformed input fails safely.',
           fileChanges: [
             { path: 'src/utils/parse.js', action: 'modify', description: 'Replace eval' },
           ],

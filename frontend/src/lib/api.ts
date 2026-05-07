@@ -4,6 +4,34 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001
 
 const REPOS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SCAN_CACHE_TTL_MS = 5 * 60 * 1000;
+// Short TTL: the AI model catalog is small and changes infrequently. The cap
+// keeps the chat picker from re-flashing its skeleton every time the user
+// switches threads, while still picking up settings edits within ~a minute
+// (and immediately on the same tab via updateAIModels write-through).
+const AI_MODELS_TTL_MS = 60 * 1000;
+const aiModelsCache = new Map<string, { value: AIModelsResponse; expires: number }>();
+const aiModelsInflight = new Map<string, Promise<AIModelsResponse>>();
+
+// Cross-tab sync for the AI model catalog. When the settings page (in any
+// tab) updates the catalog, every other open tab updates its cache and
+// notifies subscribers — so a new chat in another tab picks the new default
+// immediately instead of waiting for the 60s TTL.
+type AIModelsListener = (orgId: string, value: AIModelsResponse) => void;
+const aiModelsListeners = new Set<AIModelsListener>();
+const aiModelsChannel: BroadcastChannel | null =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('deptex-ai-models') : null;
+if (aiModelsChannel) {
+  aiModelsChannel.onmessage = (e: MessageEvent) => {
+    const { orgId, value } = (e.data ?? {}) as { orgId?: string; value?: AIModelsResponse };
+    if (!orgId || !value) return;
+    aiModelsCache.set(orgId, { value, expires: Date.now() + AI_MODELS_TTL_MS });
+    aiModelsListeners.forEach((fn) => fn(orgId, value));
+  };
+}
+function broadcastAIModels(orgId: string, value: AIModelsResponse) {
+  aiModelsListeners.forEach((fn) => fn(orgId, value));
+  aiModelsChannel?.postMessage({ orgId, value });
+}
 
 export interface Organization {
   id: string;
@@ -198,7 +226,7 @@ export type FixStatus =
   | 'failed'
   | 'rejected';
 export type PlanLanguage =
-  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp';
+  | 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 
 export interface PlanFileChange {
@@ -210,10 +238,13 @@ export interface PlanFileChange {
 export interface FixPlan {
   summary: string;
   finding: { type: FindingType; id: string; severity?: string };
-  currentState: string[];
-  desiredState: string[];
+  description: string;
+  issue?: string;
+  todos?: { title: string; detail?: string }[];
   fileChanges: PlanFileChange[];
   testCommand: string;
+  verification?: string;
+  verificationSteps?: { command: string; description: string }[];
   language: PlanLanguage;
   estimatedDiffSize: PlanDiffSize;
   wallClockBudgetSec: number;
@@ -221,6 +252,7 @@ export interface FixPlan {
 }
 
 export interface FixRecord {
+  threadId?: string | null;
   id: string;
   organizationId: string;
   projectId: string;
@@ -410,6 +442,25 @@ export const api = {
 
   async getOrganizationMembers(organizationId: string): Promise<OrganizationMember[]> {
     return fetchWithAuth(`/api/organizations/${organizationId}/members`);
+  },
+
+  _organizationMembersPrefetchCache: new Map<string, Promise<OrganizationMember[]>>(),
+
+  /**
+   * Cached fetcher used by chat embed cards so each `<member>` token doesn't
+   * refire the full members list. Promise-deduped: concurrent callers share
+   * the same in-flight request.
+   */
+  async getOrganizationMembersCached(organizationId: string): Promise<OrganizationMember[]> {
+    const cache = this._organizationMembersPrefetchCache;
+    const existing = cache.get(organizationId);
+    if (existing) return existing;
+    const inflight = this.getOrganizationMembers(organizationId).catch((err) => {
+      cache.delete(organizationId);
+      throw err;
+    });
+    cache.set(organizationId, inflight);
+    return inflight;
   },
 
   async getOrganizationInvitations(organizationId: string): Promise<OrganizationInvitation[]> {
@@ -1248,6 +1299,54 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ provider }),
     });
+  },
+
+  // Synchronous cache peek for callers that want to seed initial render state
+  // without waiting for the promise microtask (otherwise the chat input shows
+  // a one-frame skeleton flash even on a hot cache).
+  peekAIModels(orgId: string): AIModelsResponse | null {
+    const cached = aiModelsCache.get(orgId);
+    return cached && cached.expires > Date.now() ? cached.value : null;
+  },
+
+  // Subscribe to AI model catalog changes. Fires when:
+  //  - this tab calls updateAIModels (write-through)
+  //  - another tab calls updateAIModels (BroadcastChannel)
+  // Returns the unsubscribe fn.
+  subscribeAIModels(fn: (orgId: string, value: AIModelsResponse) => void): () => void {
+    aiModelsListeners.add(fn);
+    return () => { aiModelsListeners.delete(fn); };
+  },
+
+  async getAIModels(orgId: string): Promise<AIModelsResponse> {
+    const cached = aiModelsCache.get(orgId);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    const inflight = aiModelsInflight.get(orgId);
+    if (inflight) return inflight;
+    const promise: Promise<AIModelsResponse> = fetchWithAuth(`/api/organizations/${orgId}/ai-models`)
+      .then((value: AIModelsResponse) => {
+        aiModelsCache.set(orgId, { value, expires: Date.now() + AI_MODELS_TTL_MS });
+        return value;
+      })
+      .finally(() => { aiModelsInflight.delete(orgId); });
+    aiModelsInflight.set(orgId, promise);
+    return promise;
+  },
+
+  async updateAIModels(
+    orgId: string,
+    patch: { defaultModel?: string; enabledModels?: string[] },
+  ): Promise<AIModelsResponse> {
+    const value: AIModelsResponse = await fetchWithAuth(`/api/organizations/${orgId}/ai-models`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    // Write-through so the chat picker sees the toggle/default change on the
+    // next ChatPane mount without a refetch. Broadcast so other open tabs
+    // (e.g. an active chat) refresh their picker too.
+    aiModelsCache.set(orgId, { value, expires: Date.now() + AI_MODELS_TTL_MS });
+    broadcastAIModels(orgId, value);
+    return value;
   },
 
   async getAIUsageDaily(orgId: string, days = 30): Promise<DailyUsageResponse> {
@@ -3195,6 +3294,10 @@ export const api = {
     return fetchWithAuth(`/api/aegis/fix/${fixId}/regenerate`, { method: 'POST' });
   },
 
+  async getFixesByThread(threadId: string): Promise<{ fixes: FixRecord[] }> {
+    return fetchWithAuth(`/api/aegis/fix/by-thread/${threadId}`);
+  },
+
   async getPendingFixes(organizationId: string): Promise<{ fixes: FixRecord[] }> {
     const qs = new URLSearchParams({ organizationId });
     return fetchWithAuth(`/api/aegis/fix/pending?${qs.toString()}`);
@@ -3501,6 +3604,7 @@ export interface Project {
   status_id?: string | null;
   status_name?: string;
   status_color?: string;
+  status_is_passing?: boolean | null;
   status_violations?: string[];
   asset_tier_id?: string | null;
   asset_tier_name?: string;
@@ -3510,6 +3614,10 @@ export interface Project {
   compliance_score_pct?: number | null;
   canvas_position_x?: number | null;
   canvas_position_y?: number | null;
+  /** Primary linked repository (single-project GET). */
+  repo_full_name?: string | null;
+  /** e.g. github | gitlab | bitbucket — from project_repositories */
+  repo_provider?: string | null;
 }
 
 export interface ProjectRepository {
@@ -4336,6 +4444,25 @@ export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra'
 export interface AIDefaultProvider {
   provider: PlatformAIProvider;
   model: string;
+}
+
+export interface AIModelMetadata {
+  id: string;
+  provider: PlatformAIProvider;
+  label: string;
+  description: string;
+  contextWindow: number;
+  inputPricePer1M: number;
+  outputPricePer1M: number;
+  sweBenchVerified?: number;
+  releasedAt: string;
+}
+
+export interface AIModelsResponse {
+  models: AIModelMetadata[];
+  enabledModels: string[];
+  defaultModel: string;
+  defaultProvider: PlatformAIProvider;
 }
 
 export interface DailyUsagePoint {

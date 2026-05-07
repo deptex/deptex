@@ -1,4 +1,4 @@
-import { generateObject } from 'ai';
+import { generateObject, NoObjectGeneratedError } from 'ai';
 import { supabase } from '../../lib/supabase';
 import { getLanguageModelForOrg } from '../aegis/llm-provider';
 import { createInstallationToken, getBranchSha } from '../github';
@@ -21,6 +21,16 @@ export interface PlannerInput {
   findingType: FindingType;
   findingId: string;
   triggeredByUserId: string;
+  // Free-form revision feedback the user gave in chat. When present the
+  // planner treats it as binding direction over its own defaults
+  // (e.g. "add more tests", "use the env var X", "skip the rollback step").
+  userInstructions?: string;
+  // The current plan's `summary` when this is a revision. Tells the planner
+  // to keep the title stable across revisions unless the user explicitly
+  // asked to change it — otherwise the title drifts with each revision and
+  // subsequent planMatch lookups (which the agent does by remembered title)
+  // start failing.
+  existingSummary?: string;
 }
 
 export interface PlannerResult {
@@ -126,11 +136,21 @@ PLANNING RULES:
    - python: \`pytest\` — the executor sets up a venv with pytest available, so just write \`pytest\` (or \`pytest path/to/test.py\` to scope). Do NOT prefix with \`.venv/bin/\`.
    - go: \`go test ./...\` (or a narrower package path if appropriate). \`go mod download\` runs automatically before tests.
    - java: \`mvn test\`. ruby: \`bundle exec rspec\`. php: \`composer test\`. rust: \`cargo test\`. csharp: \`dotnet test\`.
+   - other (config files, env files, dockerfile, yaml/json, shell scripts, terraform, etc.): pick the lightest reasonable check the repo supports — \`echo ok\` is acceptable when no test exists, but prefer a real syntax/lint check when one is wired up (e.g. \`yq -y . file.yml > /dev/null\`, \`docker build --target validate\`, \`terraform validate\`). Use \`language: "other"\` for any file that isn't a primary code language.
 4. estimatedDiffSize: small (<100 LOC), medium (100-500), large (>500). Plans estimated as "large" should be split.
 5. wallClockBudgetSec defaults to 300. Increase only when the language toolchain is slow (e.g., Java/Maven up to 600).
 6. fileChanges should list each touched file with a one-sentence rationale. Do not include diffs — those are produced during execution.
-7. currentState bullets describe what's broken today. desiredState bullets describe the post-fix state.
-8. summary is one or two sentences a developer can scan in two seconds.
+7. summary is one short title-style sentence a developer can scan in two seconds (e.g. "Fix exposed AWS key in src/config.js" — verb + object, ≤80 chars).
+8. description is 1-2 short sentences explaining WHAT THE FIX DOES — the plan, in plain English. Do NOT just restate the summary; add a fact the title alone doesn't convey. No bullet points. The issue itself goes in \`issue\`, not here. Verification details go in verificationSteps.
+8a. issue is markdown explaining WHAT THE PROBLEM IS — the user reads this to understand why a fix is needed. Aim for 2-4 sentences. When the finding has affected source code (Semgrep findings, secrets, sometimes reachable vulnerabilities), include a fenced code block with the relevant excerpt INSIDE the issue field. Use the actual snippet from the context (do NOT fabricate code). Use language tags that match the file extension (\`\`\`ts, \`\`\`py, \`\`\`go, etc.) and immediately precede or follow the fence with one line citing the file and line (e.g. \`src/api.ts:42\`). For dependency vulnerabilities where there's no specific file excerpt to show, omit the code fence and instead describe the package + advisory in prose. Keep the whole field under 4000 characters. Never paraphrase identifiers or pretend data exists that isn't in the context.
+9. todos is an ordered list of short imperative steps the user reads to understand WHAT will happen. Use as many or as few as the change actually requires — a one-line bump is one todo, a multi-step refactor may be many. Each todo is { title, detail? }:
+   - title: an imperative sentence ≤80 chars naming the action ("Bump axios from 1.5.0 to 1.6.0", "Move the hardcoded API key to an environment variable", "Update the lockfile and re-run installs"). NOT a file path — file-level work belongs in fileChanges.
+   - detail: OPTIONAL one-sentence elaboration when the title alone would be ambiguous. Omit when the title is self-explanatory.
+   These are the user-facing plan; fileChanges is the executor's work breakdown. Do not pad with filler ("Review the change", "Make sure tests pass" — verification belongs in verificationSteps).
+10. verificationSteps is an array of 1-4 concrete checks the user should expect to pass before merging. Each step is { command, description }:
+   - command: the exact shell command we'd run, named with the tool this project actually uses (look at the context — package.json scripts, language ecosystem, lockfiles). Examples: "npm test", "npm run lint", "tsc --noEmit", "ruff check .", "mypy src/", "go vet ./...", "go test ./...".
+   - description: ONE sentence explaining WHAT this check covers and why it's relevant to THIS fix (not a generic "runs the test suite" filler).
+   The first step MUST match testCommand (so the worker's verification step is represented). Add lint / type check / build steps when the project clearly uses those tools. If the change is too small or isolated for tests to meaningfully cover (e.g. removing a hardcoded secret, deleting a single line), still include testCommand but be honest in its description ("the secret removal is a one-line delete; tests confirm nothing else broke") and lean on lint/type-check.
 
 REFUSAL RULES:
 The refusal field is OPTIONAL. OMIT it entirely from your output when the fix is feasible. Do NOT emit \`refusal: null\`, \`refusal: {}\`, \`refusal: { reason: "" }\`, \`refusal: { reason: "null" }\`, or \`refusal: { reason: "none" }\` — those will be treated as a real refusal and the plan will fail.
@@ -144,7 +164,7 @@ Include refusal.reason ONLY when a fix cannot be safely produced. Examples of re
 When you DO set refusal, still populate the other fields with best-effort placeholders so the schema validates; humans will read the refusal first.`;
 
 function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: RepoLookup): string {
-  return [
+  const lines = [
     `Finding type: ${input.findingType}`,
     `Finding id: ${input.findingId}`,
     `Repository: ${repo.repoFullName} (default branch: ${repo.defaultBranch})`,
@@ -153,8 +173,288 @@ function buildUserPrompt(input: PlannerInput, ctx: Record<string, any>, repo: Re
     JSON.stringify(ctx, null, 2),
     '',
     `Default wall-clock budget: ${DEFAULT_WALL_CLOCK_BUDGET_SEC}s.`,
-    'Produce the plan now.',
-  ].join('\n');
+  ];
+  if (input.userInstructions && input.userInstructions.trim().length > 0) {
+    lines.push(
+      '',
+      'USER REVISION REQUEST (binding — incorporate over your own defaults):',
+      input.userInstructions.trim(),
+    );
+  }
+  if (input.existingSummary && input.existingSummary.trim().length > 0) {
+    lines.push(
+      '',
+      'EXISTING PLAN SUMMARY (this is a REVISION):',
+      input.existingSummary.trim(),
+      '',
+      "Reuse this exact `summary` in your output VERBATIM unless the user's revision request explicitly asks for a title change. The summary is the plan's stable identifier across revisions; rewriting it makes follow-up lookups by the user / agent fail. Update `description`, `issue`, `todos`, `verificationSteps`, `fileChanges` freely to match the revision request — but the `summary` field must stay byte-for-byte identical unless the user said otherwise.",
+    );
+  }
+  lines.push('Produce the plan now.');
+  return lines.join('\n');
+}
+
+// Cheap-tier models (DeepSeek V4 Flash, Qwen 3.6, GPT-5 nano) flake on nested
+// structured output and several DeepInfra models don't even support the SDK's
+// JSON schema mode (warning: `responseFormat is only supported with
+// structuredOutputs`). The actual model output is usually sensible content
+// with a slightly off shape — flat `findingId` / `findingType` instead of a
+// nested `finding` object, `"javascript/typescript"` instead of `"js"`,
+// extra fields like `fixStrategy`. Massaging the raw text into the right
+// shape recovers far more attempts than retrying with a stricter prompt.
+function normalizePlanShape(raw: any, input: PlannerInput): any {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out: any = { ...raw };
+
+  // Flat `findingId` + `findingType` -> nested `finding: { type, id }`.
+  if (!out.finding && (out.findingId || out.findingType)) {
+    out.finding = {
+      type: out.findingType ?? input.findingType,
+      id: out.findingId ?? input.findingId,
+    };
+  }
+  if (!out.finding) {
+    out.finding = { type: input.findingType, id: input.findingId };
+  }
+  delete out.findingId;
+  delete out.findingType;
+  delete out.fixStrategy; // common extra field models invent
+
+  // Old-shape fallback: if the model still emits currentState / desiredState
+  // arrays (the prior schema), join them into a description paragraph so we
+  // don't lose the content. Drop the bullets afterward.
+  if (!out.description) {
+    const parts: string[] = [];
+    if (Array.isArray(out.currentState) && out.currentState.length > 0) {
+      parts.push(`Currently: ${out.currentState.join('. ')}.`);
+    }
+    if (Array.isArray(out.desiredState) && out.desiredState.length > 0) {
+      parts.push(`After the fix: ${out.desiredState.join('. ')}.`);
+    }
+    if (parts.length > 0) out.description = parts.join(' ');
+  }
+  delete out.currentState;
+  delete out.desiredState;
+
+  // Language aliases. Some models output natural-language combos.
+  // Anything that doesn't map to a real code language (config files, env
+  // files, dockerfile, yaml, json, etc.) collapses to 'other' so plans for
+  // non-code edits don't blow up the validator.
+  const VALID_LANGS = new Set(['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other']);
+  if (typeof out.language === 'string') {
+    const langAliases: Record<string, string> = {
+      javascript: 'js',
+      'javascript/typescript': 'js',
+      'js/ts': 'js',
+      typescript: 'ts',
+      py: 'python',
+      golang: 'go',
+      'c#': 'csharp',
+      cs: 'csharp',
+      // Common non-code categories the model might emit for config / env /
+      // infra-only edits — all collapse to 'other'.
+      env: 'other',
+      dotenv: 'other',
+      config: 'other',
+      yaml: 'other',
+      yml: 'other',
+      json: 'other',
+      toml: 'other',
+      ini: 'other',
+      dockerfile: 'other',
+      docker: 'other',
+      shell: 'other',
+      bash: 'other',
+      sh: 'other',
+      hcl: 'other',
+      terraform: 'other',
+      tf: 'other',
+      markdown: 'other',
+      md: 'other',
+      none: 'other',
+      n_a: 'other',
+      'n/a': 'other',
+    };
+    const key = out.language.toLowerCase().trim();
+    if (langAliases[key]) out.language = langAliases[key];
+    else if (!VALID_LANGS.has(out.language)) out.language = 'other';
+  } else if (out.language == null) {
+    out.language = 'other';
+  }
+
+  // todos normalization. Cheap models often emit strings instead of
+  // { title, detail } objects, or wrap them under `steps` / `plan` keys.
+  if (!Array.isArray(out.todos)) {
+    if (Array.isArray(out.steps)) out.todos = out.steps;
+    else if (Array.isArray(out.plan)) out.todos = out.plan;
+  }
+  if (Array.isArray(out.todos)) {
+    out.todos = out.todos
+      .map((t: any) => {
+        if (typeof t === 'string') return { title: t };
+        if (t && typeof t === 'object') {
+          const title = t.title ?? t.step ?? t.name ?? t.summary;
+          if (typeof title === 'string' && title.trim().length > 0) {
+            const detail = typeof t.detail === 'string' && t.detail.trim().length > 0
+              ? t.detail
+              : typeof t.description === 'string' && t.description.trim().length > 0
+                ? t.description
+                : undefined;
+            return detail ? { title, detail } : { title };
+          }
+        }
+        return null;
+      })
+      .filter((t: any) => t !== null);
+    if (out.todos.length === 0) delete out.todos;
+  }
+  delete out.steps;
+  delete out.plan;
+
+  // fileChanges normalization. Drop entries with empty paths, accept
+  // `rationale` as `description`, default unknown actions to "modify".
+  if (Array.isArray(out.fileChanges)) {
+    out.fileChanges = out.fileChanges
+      .filter((fc: any) => fc && typeof fc.path === 'string' && fc.path.trim().length > 0)
+      .map((fc: any) => ({
+        path: String(fc.path),
+        action: ['modify', 'create', 'delete'].includes(fc.action) ? fc.action : 'modify',
+        description: fc.description ?? fc.rationale ?? `Update ${fc.path}`,
+      }));
+  }
+
+  // Strip refusal sentinels — the prompt warns about these but cheap models
+  // still emit them. Real refusals have a substantive reason.
+  if (out.refusal) {
+    const reason = String(out.refusal.reason ?? '').trim().toLowerCase();
+    const sentinels = new Set(['', 'null', 'none', 'n/a', 'na', 'no', 'false']);
+    if (sentinels.has(reason)) {
+      delete out.refusal;
+    }
+  }
+
+  return out;
+}
+
+function extractJSONFromText(text: string): any {
+  const trimmed = String(text ?? '').trim();
+  // Strip markdown fences like ```json ... ``` or ``` ... ```.
+  const fenceMatch = /^```(?:json)?\s*([\s\S]*?)\s*```\s*$/m.exec(trimmed);
+  const candidate = fenceMatch ? fenceMatch[1] : trimmed;
+  // Locate first { and last } as the JSON object boundary; tolerates the
+  // model emitting a brief prose preamble before the JSON.
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`No JSON object found in model output: ${candidate.slice(0, 200)}`);
+  }
+  return JSON.parse(candidate.slice(start, end + 1));
+}
+
+async function generatePlanWithRetry(
+  model: any,
+  userPrompt: string,
+  input: PlannerInput,
+): Promise<{ object: any; attempts: number; recoveredFrom?: string }> {
+  const baseArgs = { model, schema: fixPlanSchema, system: PLANNER_SYSTEM_PROMPT };
+
+  try {
+    const result = await generateObject({ ...baseArgs, prompt: userPrompt });
+    return { object: result.object, attempts: 1 };
+  } catch (err: any) {
+    if (!NoObjectGeneratedError.isInstance(err)) throw err;
+
+    const rawText = (err as any).text ?? '';
+    const firstZodIssue = (err as any).cause?.message ?? err.message ?? 'unknown schema error';
+    console.warn(
+      '[fix-planner] First attempt failed schema. Trying shape recovery.',
+      `\nzod issue: ${String(firstZodIssue).slice(0, 600)}`,
+      `\nraw model output (truncated): ${String(rawText).slice(0, 1200)}`,
+    );
+
+    // Recovery path 1: parse + normalize + re-validate.
+    if (rawText) {
+      try {
+        const parsed = extractJSONFromText(rawText);
+        const massaged = normalizePlanShape(parsed, input);
+        const validated = fixPlanSchema.parse(massaged);
+        console.log('[fix-planner] Recovered via shape normalization.');
+        return { object: validated, attempts: 1, recoveredFrom: 'shape_normalization' };
+      } catch (recoverErr: any) {
+        console.warn(
+          '[fix-planner] Shape recovery failed; retrying with feedback prompt.',
+          recoverErr?.message ?? recoverErr,
+        );
+      }
+    }
+
+    // Recovery path 2: retry with the validator error as feedback.
+    const retryPrompt = [
+      userPrompt,
+      '',
+      'CRITICAL: your previous response did NOT match the required schema.',
+      `Validator error: ${firstZodIssue}`,
+      '',
+      'Output ONLY a JSON object with EXACTLY these top-level fields and no others:',
+      '{',
+      '  "summary": "<short title sentence, verb + object, ≤80 chars>",',
+      `  "finding": { "type": "${input.findingType}", "id": "${input.findingId}" },`,
+      '  "description": "<1-2 sentences describing WHAT THE FIX DOES>",',
+      '  "issue": "<markdown describing WHAT THE PROBLEM IS, optionally with a fenced code block from the context>",',
+      '  "todos": [',
+      '    { "title": "<imperative step, ≤80 chars, NO file paths>", "detail": "<optional one-sentence clarifier>" },',
+      '    { "title": "<imperative step>" }',
+      '  ],',
+      '  "fileChanges": [ { "path": "src/foo.ts", "action": "modify", "description": "..." } ],',
+      '  "testCommand": "npm test",',
+      '  "verificationSteps": [',
+      '    { "command": "npm test", "description": "<one sentence on what this covers for THIS fix>" },',
+      '    { "command": "npm run lint", "description": "<one sentence>" }',
+      '  ],',
+      '  "language": "js" | "ts" | "python" | "go" | "java" | "ruby" | "php" | "rust" | "csharp" | "other",',
+      '  "estimatedDiffSize": "small" | "medium" | "large",',
+      '  "wallClockBudgetSec": 300',
+      '}',
+      '',
+      'Rules:',
+      '- Do NOT wrap in markdown fences. Pure JSON only.',
+      '- Do NOT include findingId or findingType at top level — they go INSIDE the `finding` object.',
+      '- Do NOT include `currentState`, `desiredState`, `fixStrategy`, or any other field not listed above.',
+      '- `description` is prose — do NOT use bullet points or numbered lists in this field.',
+      '- OMIT the `refusal` field entirely unless a real refusal is needed.',
+    ].join('\n');
+
+    try {
+      const result = await generateObject({ ...baseArgs, prompt: retryPrompt });
+      return { object: result.object, attempts: 2 };
+    } catch (retryErr: any) {
+      if (!NoObjectGeneratedError.isInstance(retryErr)) throw retryErr;
+      const retryText = (retryErr as any).text ?? '';
+      const retryIssue = (retryErr as any).cause?.message ?? retryErr.message;
+
+      // One more shape-recovery attempt on the retry text.
+      if (retryText) {
+        try {
+          const parsed = extractJSONFromText(retryText);
+          const massaged = normalizePlanShape(parsed, input);
+          const validated = fixPlanSchema.parse(massaged);
+          console.log('[fix-planner] Recovered via shape normalization on retry.');
+          return { object: validated, attempts: 2, recoveredFrom: 'shape_normalization_retry' };
+        } catch {
+          // Fall through to throw.
+        }
+      }
+
+      console.error(
+        '[fix-planner] All recovery paths exhausted.',
+        `\nzod issue: ${String(retryIssue).slice(0, 600)}`,
+        `\nraw model output (truncated): ${String(retryText).slice(0, 1200)}`,
+      );
+      throw new Error(
+        `Planner could not produce a schema-valid plan after 2 attempts and shape recovery. Last validator error: ${retryIssue}`,
+      );
+    }
+  }
 }
 
 export async function generateFixPlan(input: PlannerInput): Promise<PlannerResult> {
@@ -167,12 +467,14 @@ export async function generateFixPlan(input: PlannerInput): Promise<PlannerResul
 
   const model = await getLanguageModelForOrg(input.organizationId);
 
-  const { object } = await generateObject({
-    model,
-    schema: fixPlanSchema,
-    system: PLANNER_SYSTEM_PROMPT,
-    prompt: buildUserPrompt(input, findingContext, repo),
-  });
+  const userPrompt = buildUserPrompt(input, findingContext, repo);
+  const { object, attempts, recoveredFrom } = await generatePlanWithRetry(model, userPrompt, input);
+  if (attempts > 1 || recoveredFrom) {
+    console.log(
+      `[fix-planner] Plan succeeded for ${input.findingType}/${input.findingId} ` +
+        `(attempts=${attempts}${recoveredFrom ? `, recovered=${recoveredFrom}` : ''})`,
+    );
+  }
 
   const plan: FixPlan = {
     ...object,

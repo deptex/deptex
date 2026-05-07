@@ -7,7 +7,7 @@ import {
 } from '../test/mocks/supabaseSingleton';
 
 import { ALL_AEGIS_TOOLS } from '../lib/aegis-v3/tools';
-import type { AegisToolContext, AegisToolEntry } from '../lib/aegis-v3/tool-types';
+import { newTurnState, type AegisToolContext, type AegisToolEntry } from '../lib/aegis-v3/tool-types';
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
@@ -23,6 +23,7 @@ function makeCtx(): AegisToolContext {
     threadId: THREAD_ID,
     operatingMode: 'propose',
     supabase: supabase as unknown as AegisToolContext['supabase'],
+    turnState: newTurnState(),
   };
 }
 
@@ -75,25 +76,44 @@ describe('registry shape', () => {
         'list_policies',
         'list_project_dependencies',
         'list_projects',
+        'list_teams',
         'reject_fix',
         'request_fix',
+        'revise_fix',
+        'list_organization_members',
+        'list_team_members',
+        'list_organization_roles',
+        'list_team_roles',
+        'list_project_issues',
+        'set_todos',
       ].sort(),
     );
 
-    const readOnly = ALL_AEGIS_TOOLS.filter(
-      (t) => !['request_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(t.name),
+    const safeNoPermissionTools = ALL_AEGIS_TOOLS.filter(
+      (t) =>
+        !['request_fix', 'revise_fix', 'approve_fix', 'reject_fix', 'check_fix_status'].includes(
+          t.name,
+        ),
     );
-    for (const t of readOnly) {
+    for (const t of safeNoPermissionTools) {
       expect(t.danger).toBe('safe');
       expect(t.permission).toBeUndefined();
     }
 
     const writeTools = ALL_AEGIS_TOOLS.filter((t) =>
-      ['request_fix', 'approve_fix', 'reject_fix'].includes(t.name),
+      ['request_fix', 'revise_fix', 'approve_fix', 'reject_fix'].includes(t.name),
     );
     for (const t of writeTools) {
       expect(t.permission).toBe('trigger_fix');
     }
+  });
+
+  it('set_todos is registered with audit:false and safe danger', () => {
+    const entry = ALL_AEGIS_TOOLS.find((t) => t.name === 'set_todos');
+    expect(entry).toBeDefined();
+    expect(entry?.danger).toBe('safe');
+    expect(entry?.permission).toBeUndefined();
+    expect(entry?.audit).toBe(false);
   });
 
   it('no read-only tool advertises a UUID-formatted arg', () => {
@@ -111,7 +131,7 @@ describe('registry shape', () => {
 });
 
 describe('list_projects', () => {
-  it('returns rows in the new flat shape with no UUIDs leaked', async () => {
+  it('returns rows with id and embedded fields used by the UI', async () => {
     setTableResponse('projects', 'then', {
       data: [
         {
@@ -130,17 +150,18 @@ describe('list_projects', () => {
     expect(out).toEqual({
       projects: [
         {
+          id: 'p1',
           name: 'Web',
           health_score: 90,
           status: 'OK',
+          status_is_passing: null,
           framework: 'next',
           repo_status: 'connected',
           repo_full_name: 'org/web',
+          provider: null,
         },
       ],
     });
-    // Sanity: no `id` field on the result row.
-    expect(out.projects[0].id).toBeUndefined();
   });
 
   it('returns multi-match error from resolveTeam when teamName is ambiguous', async () => {
@@ -155,6 +176,55 @@ describe('list_projects', () => {
     pushTableResponse('teams', { data: [], error: null });
     const out = (await tool('list_projects').execute({ teamName: 'platform' }, makeCtx())) as any;
     expect(out.error).toContain('Multiple teams match');
+  });
+});
+
+describe('list_teams', () => {
+  const TEAM_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const TEAM_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  it('returns teams with ids and aggregated counts', async () => {
+    setTableResponse('teams', 'then', {
+      data: [
+        { id: TEAM_A, name: 'Alpha', description: 'First' },
+        { id: TEAM_B, name: 'Beta', description: null },
+      ],
+      error: null,
+    });
+    setTableResponse('team_members', 'then', {
+      data: [{ team_id: TEAM_A }, { team_id: TEAM_A }, { team_id: TEAM_B }],
+      error: null,
+    });
+    setTableResponse('project_teams', 'then', {
+      data: [{ team_id: TEAM_A }, { team_id: TEAM_B }, { team_id: TEAM_B }],
+      error: null,
+    });
+    const out = (await tool('list_teams').execute({}, makeCtx())) as any;
+    expect(out).toEqual({
+      team_count: 2,
+      teams: [
+        {
+          id: TEAM_A,
+          name: 'Alpha',
+          description: 'First',
+          member_count: 2,
+          project_count: 1,
+        },
+        {
+          id: TEAM_B,
+          name: 'Beta',
+          description: null,
+          member_count: 1,
+          project_count: 2,
+        },
+      ],
+    });
+  });
+
+  it('returns an empty array when no teams exist', async () => {
+    setTableResponse('teams', 'then', { data: [], error: null });
+    const out = (await tool('list_teams').execute({}, makeCtx())) as any;
+    expect(out).toEqual({ team_count: 0, teams: [] });
   });
 });
 

@@ -3,9 +3,10 @@ import type { UIMessage } from 'ai';
 import { AlertCircle, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
-import { PlanCard } from './PlanCard';
+import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { FixStatusCard } from './FixStatusCard';
 import type { AegisChatError } from '../../lib/aegis-api';
+import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -29,21 +30,6 @@ function mapState(state: ToolStateKey | string | undefined): 'running' | 'done' 
   if (state === 'output-available') return 'done';
   if (state === 'output-error') return 'error';
   return 'running';
-}
-
-function isToolPart(part: any): boolean {
-  return (
-    part?.type === 'dynamic-tool' ||
-    (typeof part?.type === 'string' && part.type.startsWith('tool-'))
-  );
-}
-
-function toolNameFor(part: any): string {
-  if (part.toolName) return part.toolName as string;
-  if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
-    return part.type.replace(/^tool-/, '');
-  }
-  return 'tool';
 }
 
 export function MessageBubble({
@@ -83,9 +69,10 @@ export function MessageBubble({
 
   // Group consecutive tool-call parts so the bubble shows one
   // expandable "N tool calls" block per cluster instead of a row per call.
-  // Exception: request_fix / approve_fix tool calls render as full PlanCard /
-  // FixStatusCard blocks alongside the gray pill — those write tools deserve
-  // visual prominence.
+  // request_fix and approve_fix bypass the gray pill entirely: request_fix
+  // renders as a PlanCardSkeleton while running and a PlanCard once
+  // resolved; approve_fix renders as FixStatusCard. Errors fall through to
+  // the gray pill so the user still sees the failure.
   const elements: ReactNode[] = [];
   let toolBuffer: ToolCallEntry[] = [];
   const flushTools = () => {
@@ -98,26 +85,57 @@ export function MessageBubble({
   parts.forEach((part: any, i: number) => {
     if (part.type === 'text') {
       flushTools();
-      elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} />);
+      elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} organizationId={organizationId} />);
       return;
     }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
+      // set_todos is pure UI bookkeeping for the ChatTodos strip — it
+      // should never render as a tool-call pill or PlanCard inline. Must
+      // come BEFORE the request_fix branch so a turn ending with
+      // [set_todos, request_fix(error)] still falls through to the error
+      // pill cleanly.
+      if (toolName === 'set_todos') return;
+      const output = part.output as { fixId?: string; error?: string; revised?: boolean } | undefined;
+      // Treat both runtime errors AND tool-returned `{error: "..."}` as
+      // errors. Without the latter check, request_fix calls that returned
+      // a handled error (missing handle, no GitHub installation, etc.)
+      // would slip through with state='output-available' but no fixId,
+      // leaving the chat with a permanent "Generating plan…" skeleton.
+      const isError = part.state === 'output-error' || !!output?.error;
+      const resolved = part.state === 'output-available' && output?.fixId;
+
+      if ((toolName === 'request_fix' || toolName === 'revise_fix') && !isError) {
+        flushTools();
+        const isRevise = toolName === 'revise_fix';
+        if (resolved) {
+          elements.push(
+            <PlanCard
+              key={`plan-${i}`}
+              fixId={output.fixId!}
+              organizationId={organizationId}
+              revised={isRevise}
+            />,
+          );
+        } else {
+          elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} revised={isRevise} />);
+        }
+        return;
+      }
+
       toolBuffer.push({ toolName, state: mapState(part.state) });
 
-      // When a write tool resolves with a fixId, surface a dedicated card.
-      const output = part.output as { fixId?: string } | undefined;
-      const resolved = part.state === 'output-available' && output?.fixId;
-      if (resolved && toolName === 'request_fix') {
-        flushTools();
-        elements.push(<PlanCard key={`plan-${i}`} fixId={output.fixId!} />);
-      } else if (resolved && toolName === 'approve_fix') {
+      if (resolved && toolName === 'approve_fix') {
         flushTools();
         elements.push(<FixStatusCard key={`status-${i}`} fixId={output.fixId!} />);
       }
     }
   });
   flushTools();
+
+  // A turn whose only parts were set_todos calls produces zero elements; we
+  // skip the wrapping bubble entirely instead of rendering empty padding.
+  if (!isUser && !error && elements.length === 0) return null;
 
   return (
     <div className="px-4 py-2">
