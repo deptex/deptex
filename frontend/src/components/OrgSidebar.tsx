@@ -858,7 +858,12 @@ export default function OrgSidebar({
                 <DropdownMenuItem
                   onClick={async () => {
                     setProfileOpen(false);
-                    await onSignOut?.();
+                    try {
+                      await onSignOut?.();
+                    } catch {
+                      toast({ title: 'Sign out failed', description: 'Please try again.', variant: 'destructive' });
+                      return;
+                    }
                     navigate('/');
                   }}
                   className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
