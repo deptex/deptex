@@ -317,8 +317,15 @@ export function ChatPane({
   // sendMessage exists) can call the latest sendMessage to drain the queue.
   const sendMessageRef = useRef<((arg: { text: string }) => Promise<void> | void) | null>(null);
 
-  const { messages, setMessages, sendMessage, regenerate, stop, status, error, clearError } =
+  const { messages, setMessages, sendMessage, regenerate, stop, status, error, clearError, resumeStream } =
     useChat({
+      // Pin the chat id to the threadId so the SDK's reconnectToStream calls
+      // GET `${api}/${threadId}/stream` — that's the resume endpoint we added
+      // to `backend/src/routes/aegis-v3.ts`. For brand-new chats this is the
+      // client-generated UUID created at mount; the server uses the same id
+      // in `getOrCreateThread`, so the reconnect URL always lands on the
+      // right thread even before the first response.
+      id: activeThreadId,
       transport,
       onFinish: () => {
         inFlightRef.current = false;
@@ -380,19 +387,47 @@ export function ChatPane({
   const isStreaming = status === 'streaming' || status === 'submitted';
   useEffect(() => { sendMessageRef.current = sendMessage; });
 
-  // One-shot seed load: if we mounted with a threadId prop, load history.
-  // Never runs again — fresh thread = fresh mount via parent `key`.
+  // Seed load + live resume. On mount we fetch the thread's messages once.
+  // If the most recent persisted message is a user turn, the assistant
+  // response is either still streaming server-side (user navigated away
+  // mid-stream and came back) or already finished but not yet flushed to DB.
+  //
+  // resumeStream() hits the GET reconnect endpoint, which:
+  //   * 204s when there's no active stream → no-op, the seed-load is the
+  //     final state
+  //   * replays every captured SSE byte from Redis when the stream is live
+  //     → the SDK splices the partial assistant message in and continues
+  //     streaming new bytes as they land
+  //
+  // We always call resumeStream — even if the seed-load shows a finished
+  // assistant turn — because Redis is the authoritative source for "is the
+  // stream still going right now" and a 204 is cheap. Resume is also a
+  // backstop for the rare case where the stream finished after seed-load
+  // started but before it returned (the assistant row might be missing
+  // from the DB read but already done in Redis).
   useEffect(() => {
     if (!propThreadId) return;
     let cancelled = false;
-    aegisApi
-      .getMessages(propThreadId)
-      .then((msgs) => {
+    (async () => {
+      try {
+        const msgs = await aegisApi.getMessages(propThreadId);
         if (cancelled) return;
         setMessages(buildInitialMessages(msgs));
-      })
-      .catch(() => { /* leave message list empty on load failure */ });
-    return () => { cancelled = true; };
+      } catch {
+        /* leave whatever is on screen on load failure */
+      }
+      if (cancelled) return;
+      try {
+        await resumeStream();
+      } catch (err) {
+        // resumeStream failures are non-fatal — the user can resend or the
+        // tail-state on the server will land via the next interaction.
+        console.warn('[aegis] resumeStream failed', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

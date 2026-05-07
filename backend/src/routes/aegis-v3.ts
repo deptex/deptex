@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
 import { checkRateLimit } from '../lib/rate-limit';
@@ -9,6 +10,13 @@ import { saveUserMessage } from '../lib/aegis-v3/persistence';
 import { classifyChatError, writeAegisChatError } from '../lib/aegis-v3/errors';
 import { generateThreadTitle } from '../lib/aegis-v3/title';
 import { getProviderInfoForOrg } from '../lib/aegis-v3/provider';
+import {
+  registerStream,
+  createChunkSink,
+  clearActiveStream,
+  getActiveStreamId,
+  replayStream,
+} from '../lib/aegis-v3/resumable-stream';
 import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
 import { getThreadForParticipant } from '../lib/aegis/participants';
 import type { ModelMessage } from 'ai';
@@ -132,9 +140,32 @@ router.post('/stream', async (req: AuthRequest, res) => {
     const messages: ModelMessage[] = [...history, { role: 'user', content: message }];
     const result = await agent.stream({ messages });
 
-    // Manual pipe (replicates pipeUIMessageStreamToResponse's read/write/drain
-    // loop). We can't use that helper because it calls res.writeHead a second
-    // time, which Node rejects after our eager flush above.
+    // Force the agent to drive to completion regardless of whether the HTTP
+    // response is consumed. This is the canonical AI SDK guarantee for
+    // "client might disconnect mid-stream but I need onFinish to fire" —
+    // without it, when the user navigates to another chat mid-stream the
+    // server-side response gets torn down, the SDK stops generating, and
+    // the agent's onFinish (which calls saveAssistantMessage) never runs.
+    // consumeStream tees the underlying generation into a background drain
+    // that's independent of the response pipe, so the agent always runs to
+    // completion and onFinish always fires. Errors are swallowed — any
+    // meaningful failure surfaces in toUIMessageStreamResponse's onError
+    // below and/or in the agent's onFinish error path.
+    void result.consumeStream({
+      onError: (err: unknown) =>
+        console.error('[aegis-v3] consumeStream error:', err),
+    });
+
+    // Resumable-stream registration. Each stream gets a fresh streamId; we
+    // store thread->streamId in Redis so a reconnecting client can find it
+    // via GET /:threadId/stream. The chunk sink tees every SSE byte into a
+    // Redis list so the resume endpoint can replay. Best-effort — a Redis
+    // outage just means resume falls back to the seed-load + tail-poll path
+    // (the live HTTP write is the source of truth).
+    const streamId = randomUUID();
+    await registerStream(resolvedThreadId, streamId);
+    const sink = createChunkSink(streamId);
+
     // onError fires for mid-stream failures (provider 429/5xx, network drops).
     // We persist the error as an assistant message so a subsequent /stream
     // call loads it as part of history; the SDK still sends a generic string
@@ -152,18 +183,31 @@ router.post('/stream', async (req: AuthRequest, res) => {
       },
     });
 
+    // Pipe SDK response bytes to BOTH the live HTTP socket AND the Redis
+    // chunk sink. The Redis tee is independent of the HTTP socket — if the
+    // user navigates away, we keep capturing bytes for them to replay on
+    // return. The agent itself keeps generating via consumeStream regardless.
     const reader = sseResponse.body!.getReader();
+    let httpAlive = !res.writableEnded && !res.destroyed;
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (res.writableEnded || res.destroyed) break;
-        const canContinue = res.write(value);
-        if (!canContinue) {
-          await new Promise<void>((resolve) => res.once('drain', () => resolve()));
+        sink.append(value);
+        if (httpAlive) {
+          const canContinue = res.write(value);
+          if (!canContinue) {
+            await new Promise<void>((resolve) => res.once('drain', () => resolve()));
+          }
+          if (res.writableEnded || res.destroyed) httpAlive = false;
         }
       }
     } finally {
+      // Sentinel + mapping cleanup happen regardless of how the loop exits.
+      // Replay readers see __END__ and close out cleanly; the thread mapping
+      // is dropped so a re-resume after completion returns 204 immediately.
+      await sink.end();
+      await clearActiveStream(resolvedThreadId);
       if (!res.writableEnded) res.end();
     }
   } catch (err: any) {
@@ -179,6 +223,48 @@ router.post('/stream', async (req: AuthRequest, res) => {
     } else if (!res.writableEnded) {
       res.end();
     }
+  }
+});
+
+// Resume an in-flight stream. The AI SDK's HttpChatTransport.reconnectToStream
+// hits this endpoint by default when useChat.resumeStream() is called — its
+// canonical URL shape is `${api}/${chatId}/stream`. We look up the active
+// streamId for the thread, replay every SSE byte already captured, then
+// tail the Redis chunk list for new bytes until __END__. If there's no
+// active stream (already finished, or never started), we 204 — the SDK
+// treats that as "nothing to resume" and proceeds with whatever messages
+// are already in state.
+router.get('/stream/:threadId/stream', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { threadId } = req.params;
+  if (!threadId) return res.status(400).end();
+
+  const thread = await getThreadForParticipant(threadId, userId);
+  if (!thread) return res.status(404).end();
+  if (!(await hasAegisPermission(thread.organization_id, userId))) {
+    return res.status(403).end();
+  }
+
+  const streamId = await getActiveStreamId(threadId);
+  if (!streamId) {
+    // No live stream to resume. SDK reads this as null and is a no-op.
+    return res.status(204).end();
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Vercel-AI-UI-Message-Stream': 'v1',
+    'X-Accel-Buffering': 'no',
+  });
+
+  try {
+    await replayStream(streamId, res);
+  } catch (err) {
+    console.error('[aegis-v3] resume replay error', err);
+  } finally {
+    if (!res.writableEnded) res.end();
   }
 });
 
