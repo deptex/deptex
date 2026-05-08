@@ -200,13 +200,13 @@ COPY src ./src
 # `docker:build` npm script stages the backend/database folder into
 # depscanner/.schema before invoking docker build so we can COPY it
 # in here. On Fly.io (which uses Supabase, not PGLite) this dir is unused.
-COPY .schema/schema.sql /database/schema.sql
+COPY .schema/schema.sql /backend/database/schema.sql
 
 RUN npm run build
 
 RUN rm -rf src tsconfig.json && npm ci --only=production
 
-RUN chown -R worker:worker /app /tmp /data /database /zap
+RUN chown -R worker:worker /app /tmp /data /backend/database /zap
 
 USER worker
 

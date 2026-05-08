@@ -111,18 +111,18 @@ export async function seedLocalDb(
       });
     if (rgErr) throw new Error(`seed reachability settings failed: ${rgErr.message}`);
 
-    // 5) extraction_jobs — synthetic row so persistJobTelemetry can write the
+    // 5) scan_jobs — synthetic row so persistJobTelemetry can write the
     //    four reachability_* counters. The pipeline uses job.jobId as the WHERE
     //    target; without this row in CLI mode telemetry is silently dropped.
     jobId = generateUuid();
-    const { error: jobErr } = await storage.from('extraction_jobs').insert({
+    const { error: jobErr } = await storage.from('scan_jobs').insert({
       id: jobId,
       project_id: projectId,
       organization_id: LOCAL_ORG_ID,
       status: 'processing',
       payload: { source: 'local-cli', label: repoLabel },
     });
-    if (jobErr) throw new Error(`seed extraction_jobs failed: ${jobErr.message}`);
+    if (jobErr) throw new Error(`seed scan_jobs failed: ${jobErr.message}`);
   }
 
   return {

@@ -137,7 +137,7 @@ function makeStorage(settings: Partial<{
   // No org-existing rules and no AI usage yet by default.
   fs.set('organization_generated_rules', []);
   fs.set('ai_usage_logs', []);
-  fs.set('extraction_jobs', [{ id: 'job-1' }]);
+  fs.set('scan_jobs', [{ id: 'job-1' }]);
   fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: null }]);
   return fs;
 }
@@ -426,7 +426,7 @@ describe('runRuleGenerationStep — trigger-policy edge cases', () => {
 });
 
 describe('runRuleGenerationStep — telemetry persistence', () => {
-  it('writes the four reachability_* counters to extraction_jobs when generation runs', async () => {
+  it('writes the four reachability_* counters to scan_jobs when generation runs', async () => {
     const fs = makeStorage({});
     fs.set('organization_generated_rules', [
       // Pretend one of the candidates is already covered.
@@ -448,11 +448,11 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       },
       vulns,
     );
-    const jobUpdates = fs.updates.filter((u) => u.table === 'extraction_jobs');
+    const jobUpdates = fs.updates.filter((u) => u.table === 'scan_jobs');
     expect(jobUpdates).toEqual([]);
   });
 
-  it('does not touch extraction_jobs when generation never ran', async () => {
+  it('does not touch scan_jobs when generation never ran', async () => {
     const fs = makeStorage({ auto_generate_enabled: false });
     await runRuleGenerationStep(
       {
@@ -463,7 +463,7 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       },
       [sampleVuln],
     );
-    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+    expect(fs.updates.filter((u) => u.table === 'scan_jobs')).toEqual([]);
   });
 
   it('persists telemetry with cost=0 when budget cap skips generation entirely', async () => {
@@ -479,8 +479,8 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
     );
     // Budget skip path returns ran=true but doesn't reach persistJobTelemetry —
     // telemetry only gets written when generation actually completed (even if
-    // 0 rules were produced). Verify no extraction_jobs update happened.
-    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+    // 0 rules were produced). Verify no scan_jobs update happened.
+    expect(fs.updates.filter((u) => u.table === 'scan_jobs')).toEqual([]);
   });
 
   it('writes telemetry with the cost/counts emitted by generation when AI call throws', async () => {
@@ -503,7 +503,7 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       },
       vulns,
     );
-    const jobUpdates = fs.updates.filter((u) => u.table === 'extraction_jobs');
+    const jobUpdates = fs.updates.filter((u) => u.table === 'scan_jobs');
     expect(jobUpdates.length).toBe(1);
     expect(jobUpdates[0].filter).toEqual({ id: 'job-1', organization_id: ORG_ID });
     expect(jobUpdates[0].values).toEqual({
@@ -539,10 +539,10 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       [sampleVuln],
     );
     expect(result.ran).toBe(true);
-    expect(fs.updates.filter((u) => u.table === 'extraction_jobs')).toEqual([]);
+    expect(fs.updates.filter((u) => u.table === 'scan_jobs')).toEqual([]);
   });
 
-  it('emits a success log line whose four counters match the extraction_jobs columns', async () => {
+  it('emits a success log line whose four counters match the scan_jobs columns', async () => {
     const fs = makeStorage({});
     await runRuleGenerationStep(
       {
