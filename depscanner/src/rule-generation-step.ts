@@ -948,7 +948,7 @@ async function persistJobTelemetry(args: JobTelemetryArgs): Promise<void> {
   if (!args.jobId) return;
   try {
     await args.supabase
-      .from('extraction_jobs')
+      .from('scan_jobs')
       .update({
         // total_detectable counts the candidates we saw (trigger-matched).
         // matched is the count of CVEs where a rule already exists OR was
@@ -966,7 +966,7 @@ async function persistJobTelemetry(args: JobTelemetryArgs): Promise<void> {
       // jobId externally from cross-tenant overwriting telemetry.
       .eq('organization_id', args.organizationId);
   } catch (err) {
-    await args.log.warn(STEP_NAME, `Failed to persist telemetry on extraction_jobs: ${err instanceof Error ? err.message : String(err)}`);
+    await args.log.warn(STEP_NAME, `Failed to persist telemetry on scan_jobs: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

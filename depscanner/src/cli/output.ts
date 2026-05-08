@@ -73,7 +73,7 @@ export async function writeOutputs(
     fetchRows(storage, 'project_reachable_flows', 'project_id', opts.projectId),
     fetchRows(storage, 'project_entry_points', 'project_id', opts.projectId),
     fetchRows(storage, 'organization_generated_rules', 'organization_id', opts.organizationId),
-    fetchRows(storage, 'extraction_jobs', 'project_id', opts.projectId),
+    fetchRows(storage, 'scan_jobs', 'project_id', opts.projectId),
   ]);
 
   const vulns = opts.severityFilter
