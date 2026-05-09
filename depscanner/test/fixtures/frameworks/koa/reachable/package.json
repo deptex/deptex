@@ -1,0 +1,11 @@
+{
+  "name": "deptex-fixture-koa-reachable",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "koa": "2.13.4",
+    "@koa/router": "10.1.1",
+    "request": "2.81.0"
+  }
+}
