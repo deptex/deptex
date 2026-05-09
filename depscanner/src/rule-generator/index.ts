@@ -97,6 +97,7 @@ export interface GenerationResult {
 /** Breakdown for results that bailed before the AI call ever ran. */
 const PRE_ATTEMPT_BREAKDOWN: ValidationBreakdown = {
   schema_pass: false,
+  pattern_compile_pass: null,
   fixture_pre_match: false,
   fixture_safe_clean: false,
   patch_pre_match: null,

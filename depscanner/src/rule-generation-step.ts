@@ -1079,6 +1079,9 @@ async function persistGeneratedRule(
 export interface AggregatedValidationBreakdown {
   candidates: number;
   schema_pass: number;
+  /** Count of candidates whose pattern-syntax pre-flight passed. null
+   *  per-candidate (pre-attempt bail / spec_load throw) is not counted. */
+  pattern_compile_pass: number;
   fixture_pre_pass: number;
   fixture_safe_pass: number;
   patch_pre_pass: number;
@@ -1092,9 +1095,10 @@ export interface AggregatedValidationBreakdown {
  * files), so a low count there is informational, not a regression signal.
  */
 export function aggregateBreakdowns(breakdowns: ValidationBreakdown[]): AggregatedValidationBreakdown {
-  let schema = 0, fixturePre = 0, fixtureSafe = 0, patchPre = 0, patchPost = 0;
+  let schema = 0, patternCompile = 0, fixturePre = 0, fixtureSafe = 0, patchPre = 0, patchPost = 0;
   for (const b of breakdowns) {
     if (b.schema_pass) schema++;
+    if (b.pattern_compile_pass === true) patternCompile++;
     if (b.fixture_pre_match) fixturePre++;
     if (b.fixture_safe_clean) fixtureSafe++;
     if (b.patch_pre_match === true) patchPre++;
@@ -1103,6 +1107,7 @@ export function aggregateBreakdowns(breakdowns: ValidationBreakdown[]): Aggregat
   return {
     candidates: breakdowns.length,
     schema_pass: schema,
+    pattern_compile_pass: patternCompile,
     fixture_pre_pass: fixturePre,
     fixture_safe_pass: fixtureSafe,
     patch_pre_pass: patchPre,

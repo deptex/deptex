@@ -247,6 +247,7 @@ describe('buildAttemptFailureFeedback', () => {
       took_ms: 100,
       validation_breakdown: {
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: false,
         fixture_safe_clean: true,
         patch_pre_match: null,
@@ -279,6 +280,7 @@ describe('buildAttemptFailureFeedback', () => {
       took_ms: 100,
       validation_breakdown: {
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: true,
         fixture_safe_clean: false,
         patch_pre_match: null,

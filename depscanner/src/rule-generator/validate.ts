@@ -45,6 +45,7 @@ import { propagateCSharp } from '../taint-engine/csharp/propagate';
 import { loadSpec } from '../taint-engine/spec-loader';
 import type { FrameworkSpec, FrameworkLanguage, VulnClass } from '../taint-engine/spec';
 import type { PropagateResult } from '../taint-engine/propagator';
+import { validatePatternSyntax } from '../taint-engine/pattern-syntax';
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
@@ -87,6 +88,12 @@ export interface PerFileValidationBreakdown {
  */
 export interface ValidationBreakdown {
   schema_pass: boolean;
+  /** Pre-flight pattern-syntax check on every source/sink/sanitizer pattern.
+   *  null = the gate didn't run (pre-attempt bail before the AI called, or
+   *  spec_load threw before we reached the pattern check). true = every
+   *  pattern is structurally well-formed. false = at least one was rejected,
+   *  with the reason in `validation_log.errors[]` tagged `pattern_compile:`. */
+  pattern_compile_pass: boolean | null;
   fixture_pre_match: boolean;
   fixture_safe_clean: boolean;
   patch_pre_match: boolean | null;
@@ -162,11 +169,56 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
         took_ms: Date.now() - start,
         validation_breakdown: {
           schema_pass: true,
+          pattern_compile_pass: null,
           fixture_pre_match: false,
           fixture_safe_clean: false,
           patch_pre_match: null,
           patch_post_clean: null,
           semgrep_parse_error: msg.slice(0, 500),
+        },
+      },
+    };
+  }
+
+  // --- Pattern-syntax pre-flight: cheap structural check on every source /
+  // sink / sanitizer pattern. Closes the gap left when Phase 5 retired
+  // `semgrep --validate` -- malformed patterns like `_.template((*` would
+  // otherwise pass zod (string + min(1)) and `validateSpec` (string-only)
+  // and silently no-op inside `matchesCallPattern` at flow-walk time.
+  // Runs BEFORE Gate 2 because fixture round-trip is expensive and a
+  // structurally-broken pattern can never round-trip anyway.
+  const patternErrors: string[] = [];
+  for (const src of engineSpec.sources) {
+    const r = validatePatternSyntax(src.pattern);
+    if (!r.ok) patternErrors.push(`pattern_compile: source ${JSON.stringify(src.pattern)}: ${r.reason}`);
+  }
+  for (const sink of engineSpec.sinks) {
+    const r = validatePatternSyntax(sink.pattern);
+    if (!r.ok) patternErrors.push(`pattern_compile: sink ${JSON.stringify(sink.pattern)} (${sink.vuln_class}): ${r.reason}`);
+  }
+  for (const san of engineSpec.sanitizers) {
+    const r = validatePatternSyntax(san.pattern);
+    if (!r.ok) patternErrors.push(`pattern_compile: sanitizer ${JSON.stringify(san.pattern)}: ${r.reason}`);
+  }
+  if (patternErrors.length > 0) {
+    return {
+      status: 'failed_validation',
+      log: {
+        fixture_pre_matches: 0,
+        fixture_post_matches: 0,
+        patch_pre_matches: null,
+        patch_post_matches: null,
+        semgrep_stderr_excerpt: null,
+        errors: patternErrors,
+        took_ms: Date.now() - start,
+        validation_breakdown: {
+          schema_pass: true,
+          pattern_compile_pass: false,
+          fixture_pre_match: false,
+          fixture_safe_clean: false,
+          patch_pre_match: null,
+          patch_post_clean: null,
+          semgrep_parse_error: null,
         },
       },
     };
@@ -281,6 +333,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       patch_per_file: patchPerFile,
       validation_breakdown: {
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: fixturePre > 0,
         fixture_safe_clean: fixturePost === 0,
         patch_pre_match: patchPre === null ? null : patchPre > 0,

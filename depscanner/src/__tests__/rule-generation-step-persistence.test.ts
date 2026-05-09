@@ -203,6 +203,7 @@ const sampleVuln: PipelineVulnRow = {
 
 const PASSING_BREAKDOWN: ValidationBreakdown = {
   schema_pass: true,
+  pattern_compile_pass: true,
   fixture_pre_match: true,
   fixture_safe_clean: true,
   patch_pre_match: true,
@@ -212,6 +213,7 @@ const PASSING_BREAKDOWN: ValidationBreakdown = {
 
 const PRE_ATTEMPT_BREAKDOWN: ValidationBreakdown = {
   schema_pass: false,
+  pattern_compile_pass: null,
   fixture_pre_match: false,
   fixture_safe_clean: false,
   patch_pre_match: null,

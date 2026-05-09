@@ -517,6 +517,7 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
       reachability_validation_breakdown: {
         candidates: 2,
         schema_pass: 0,
+        pattern_compile_pass: 0,
         fixture_pre_pass: 0,
         fixture_safe_pass: 0,
         patch_pre_pass: 0,
@@ -577,6 +578,7 @@ describe('aggregateBreakdowns — funnel rollup', () => {
   // Convenience for tests that read better as named cases.
   const b = (over: Partial<ValidationBreakdown> = {}): ValidationBreakdown => ({
     schema_pass: false,
+    pattern_compile_pass: null,
     fixture_pre_match: false,
     fixture_safe_clean: false,
     patch_pre_match: null,
@@ -589,6 +591,7 @@ describe('aggregateBreakdowns — funnel rollup', () => {
     expect(aggregateBreakdowns([])).toEqual({
       candidates: 0,
       schema_pass: 0,
+      pattern_compile_pass: 0,
       fixture_pre_pass: 0,
       fixture_safe_pass: 0,
       patch_pre_pass: 0,
@@ -611,11 +614,21 @@ describe('aggregateBreakdowns — funnel rollup', () => {
     expect(out.patch_post_pass).toBe(1);
   });
 
-  it('rolls up all six counters across mixed rows', () => {
+  it('only counts pattern_compile_pass when the underlying field is true (null is skip, not fail)', () => {
+    const out = aggregateBreakdowns([
+      b({ pattern_compile_pass: true }),
+      b({ pattern_compile_pass: false }),
+      b({ pattern_compile_pass: null }),
+    ]);
+    expect(out.pattern_compile_pass).toBe(1);
+  });
+
+  it('rolls up all seven counters across mixed rows', () => {
     const out = aggregateBreakdowns([
       // Fully validated row
       b({
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: true,
         fixture_safe_clean: true,
         patch_pre_match: true,
@@ -624,6 +637,7 @@ describe('aggregateBreakdowns — funnel rollup', () => {
       // Fixture FP — rule too broad, fires on safe code
       b({
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: true,
         fixture_safe_clean: false,
         patch_pre_match: null,
@@ -635,6 +649,7 @@ describe('aggregateBreakdowns — funnel rollup', () => {
     expect(out).toEqual({
       candidates: 3,
       schema_pass: 2,
+      pattern_compile_pass: 2,
       fixture_pre_pass: 2,
       fixture_safe_pass: 1,
       patch_pre_pass: 1,
