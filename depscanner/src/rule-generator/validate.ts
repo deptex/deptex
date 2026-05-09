@@ -105,6 +105,12 @@ export interface ValidationLog {
   patch_validation_skipped_reason?: string;
   patch_per_file?: PerFileValidationBreakdown[];
   validation_breakdown: ValidationBreakdown;
+  /** When the row is a non-validated outcome (no_advisory / no_fix_commit /
+   *  fetch_failed / vuln_class_out_of_scope / prompt_injection_suspect /
+   *  failed_validation / provider_error), this carries the GenerationStatus
+   *  string so the org-settings UI can render "we tried this CVE; uncoverable
+   *  because: <reason>". Absent on validated rows. */
+  terminal_reason?: string;
 }
 
 export interface ValidationResult {

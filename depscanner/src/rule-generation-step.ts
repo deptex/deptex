@@ -221,6 +221,27 @@ export async function runRuleGenerationStep(
   // would never have suppressed a generation attempt regardless. Any CVE the
   // org has already validated stays in the skip set.
   const orgExistingCves = await loadOrgExistingRuleCves(organizationId, supabase);
+  if (orgExistingCves === null) {
+    // Fail-closed: a Supabase read failure here would have us treat every CVE
+    // as uncovered and regenerate everything — runaway BYOK spend on a
+    // transient outage. Skip the entire step and let the next scan retry.
+    await log.warn(
+      STEP_NAME,
+      'Skipping rule generation: organization_generated_rules read failed; cannot determine existing coverage. Generation will resume when Supabase recovers.',
+    );
+    if (jobId) {
+      await logStepError(supabase, {
+        jobId,
+        projectId,
+        step: STEP_NAME,
+        code: 'org_rules_read_failed',
+        message: `Failed to read existing rules for organization ${organizationId}; skipping generation to avoid regenerating already-covered CVEs.`,
+        severity: 'warn',
+      });
+    }
+    bumpReason('org_rules_read_failed');
+    return { ...ZERO_RESULT, ran: true, triggerMatched: triggerMatchedVulns.length, skipReasons };
+  }
   const coveredCves = new Set([...orgExistingCves]);
 
   const candidates: PipelineVulnRow[] = [];
@@ -443,11 +464,24 @@ export async function runRuleGenerationStep(
     if (r.result.status === 'provider_error') providerErrorCount++;
   }
   if (providerErrorCount > 0 && providerErrorCount >= Math.max(3, Math.floor(candidates.length * 0.25))) {
+    const pct = Math.round((providerErrorCount / candidates.length) * 100);
     await log.warn(
       STEP_NAME,
       `cve_spec_generation_partial: ${providerErrorCount}/${candidates.length} CVEs ended in provider_error after retries — likely a sustained provider outage`,
       { error_classes: errorClasses, provider: settings.ai_provider, model: effectiveModel },
     );
+    // Surface to extraction_step_errors so a sustained provider outage shows
+    // up in the extraction-failures admin UI and isn't only visible in stdout.
+    if (jobId) {
+      await logStepError(supabase, {
+        jobId,
+        projectId,
+        step: STEP_NAME,
+        code: 'provider_outage_suspect',
+        message: `${pct}% of CVEs (${providerErrorCount}/${candidates.length}) failed with provider_error in this batch via ${settings.ai_provider}/${effectiveModel}`,
+        severity: 'warn',
+      });
+    }
   }
 
   // --- 8. Persist validated rules + tally stats ---
@@ -462,6 +496,25 @@ export async function runRuleGenerationStep(
     }
     totalCost += r.result.costUsd;
     breakdownAccumulator.push(r.result.validationBreakdown);
+    // P0-A: persist BYOK spend to ai_usage_logs so the per-org monthly budget
+    // cap (readRuleGenMonthlySpend / applyBudgetCap) actually sees the spend
+    // we just incurred. Without this row, monthlySpend stays at $0 forever
+    // and the cap is non-functional. Skip for pre-attempt bails (no token
+    // usage recorded — costUsd=0 and inputTokens=0).
+    if (r.result.inputTokens > 0 || r.result.outputTokens > 0 || r.result.costUsd > 0) {
+      await logRuleGenAiUsage(supabase, log, {
+        organizationId,
+        provider: r.result.generatedWith.provider,
+        model: r.result.generatedWith.model,
+        inputTokens: r.result.inputTokens,
+        outputTokens: r.result.outputTokens,
+        costUsd: r.result.costUsd,
+        cveId: r.cveId,
+        jobId,
+        success: r.result.status === 'validated',
+        errorMessage: r.result.status === 'validated' ? null : r.result.status,
+      });
+    }
     if (r.result.status !== 'validated') {
       bumpReason(`status:${r.result.status}`);
       const errSummary = (r.result.errors ?? []).join(' | ').slice(0, 240);
@@ -469,6 +522,19 @@ export async function runRuleGenerationStep(
         STEP_NAME,
         `${r.cveId}: status=${r.result.status}${errSummary ? ` errors=${errSummary}` : ''}`,
       );
+      // P0-B: prompt_injection_suspect specifically also lands in
+      // extraction_step_errors so the security signal is visible in the
+      // admin extraction-failures UI, not just stdout.
+      if (r.result.status === 'prompt_injection_suspect' && jobId) {
+        await logStepError(supabase, {
+          jobId,
+          projectId,
+          step: STEP_NAME,
+          code: 'prompt_injection_suspect',
+          message: `${r.cveId}: model emitted osv_id on a sink (prompt-injection guard tripped). Provider=${r.result.generatedWith.provider} model=${r.result.generatedWith.model}.`,
+          severity: 'warn',
+        });
+      }
       // Persist the failed attempt too — gives the org a record they can
       // see in the Settings UI ("we tried this CVE, failed at validation").
       await persistGeneratedRule(supabase, organizationId, r.result, log, jobId, projectId);
@@ -571,12 +637,18 @@ function canonicalCveId(osvId: string, aliases: string[] | null): string | null 
   return null;
 }
 
-async function loadOrgExistingRuleCves(orgId: string, supabase: Storage): Promise<Set<string>> {
+/**
+ * Read the org's already-generated CVE coverage set. Returns null on read
+ * failure — callers MUST fail-closed (skip generation) rather than treat the
+ * read failure as "no coverage", which would silently regenerate every CVE on
+ * a Supabase blip and amplify BYOK spend. Mirrors readRuleGenMonthlySpend.
+ */
+async function loadOrgExistingRuleCves(orgId: string, supabase: Storage): Promise<Set<string> | null> {
   const { data, error } = await supabase
     .from('organization_generated_rules')
     .select('cve_id, validation_status')
     .eq('organization_id', orgId);
-  if (error) return new Set();
+  if (error) return null;
   // Treat both validated and pending as "already covered" — we don't want to
   // re-fire generation for a CVE that's mid-regenerate or that previously
   // failed (the org admin can manually delete the row to retry).
@@ -625,6 +697,72 @@ async function readRuleGenMonthlySpend(
     return sum;
   } catch {
     return null;
+  }
+}
+
+interface RuleGenAiUsageEntry {
+  organizationId: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  cveId: string;
+  jobId: string | undefined;
+  success: boolean;
+  errorMessage: string | null;
+}
+
+/**
+ * P0-A: persist a single rule-generation AI call to ai_usage_logs so the
+ * monthly BYOK budget cap (readRuleGenMonthlySpend / applyBudgetCap) sees
+ * the spend on the next iteration. Without this the cap is non-functional —
+ * monthlySpend stays $0 and runaway BYOK spend is possible. ai_usage_logs
+ * was originally schema'd around an end-user-driven call (`user_id NOT
+ * NULL`), but the user_id column has no FK so a system sentinel is safe.
+ * Failures here are non-fatal: a Supabase blip on the analytics insert
+ * shouldn't abort the rule-generation step. The error bubbles to extraction
+ * step errors only when jobId is in scope.
+ */
+const RULE_GEN_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+async function logRuleGenAiUsage(
+  supabase: Storage,
+  log: LogLike,
+  entry: RuleGenAiUsageEntry,
+): Promise<void> {
+  try {
+    const { error } = await supabase.from('ai_usage_logs').insert({
+      organization_id: entry.organizationId,
+      // user_id is NOT NULL but has no FK; a sentinel UUID flags this as a
+      // system-driven (worker) call so per-user analytics queries can filter
+      // it out via WHERE user_id != '00000000-...'.
+      user_id: RULE_GEN_SYSTEM_USER_ID,
+      feature: 'rule_generation',
+      tier: 'byok',
+      provider: entry.provider,
+      model: entry.model,
+      input_tokens: entry.inputTokens,
+      output_tokens: entry.outputTokens,
+      estimated_cost: entry.costUsd,
+      // context_type/context_id give the analytics layer a join path back to
+      // the originating CVE + scan. context_id is text, so cveId fits.
+      context_type: 'cve',
+      context_id: entry.cveId,
+      duration_ms: null,
+      success: entry.success,
+      error_message: entry.errorMessage,
+    });
+    if (error) {
+      await log.warn(
+        STEP_NAME,
+        `ai_usage_logs insert failed for ${entry.cveId}: ${(error as { message?: string }).message ?? String(error)}. Monthly budget cap may understate spend until next successful write.`,
+      );
+    }
+  } catch (err) {
+    await log.warn(
+      STEP_NAME,
+      `ai_usage_logs insert threw for ${entry.cveId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -831,6 +969,42 @@ async function persistGeneratedRule(
     );
   }
 
+  // P0-B / P1-C: previously dropped any non-validated, ruleless result. That
+  // silenced prompt_injection_suspect and pre-attempt bail outcomes
+  // (no_advisory / no_fix_commit / fetch_failed / vuln_class_out_of_scope) —
+  // the org-settings UI has no way to render "we tried CVE-X; uncoverable
+  // because: <reason>". Now we persist a stub row for those statuses too,
+  // tagged with terminal_reason=<status> in validation_log so the UI can
+  // disambiguate. Other ruleless statuses still drop (defensive default).
+  const PERSIST_RULELESS_STATUSES = new Set<GenerationResult['status']>([
+    'failed_validation',
+    'prompt_injection_suspect',
+    'no_advisory',
+    'no_fix_commit',
+    'fetch_failed',
+    'vuln_class_out_of_scope',
+  ]);
+  if (!result.rule && !PERSIST_RULELESS_STATUSES.has(result.status)) {
+    return false;
+  }
+
+  // For ruleless-but-persistable rows the spec_shape_chk CHECK constraint
+  // requires framework_spec NOT NULL when spec_format='framework_spec'. Use
+  // {} as a stub — osv_match_chk returns true when the spec lacks a
+  // well-formed sinks array, so the constraint is satisfied.
+  const frameworkSpecForRow: unknown = result.rule ? substitutedSpec : {};
+
+  const validationLogForRow: Record<string, unknown> = {
+    ...(result.validationLog ?? { errors: result.errors }),
+    prompt_version: FRAMEWORK_SPEC_PROMPT_VERSION,
+    attempts: result.attempts,
+  };
+  if (result.status !== 'validated') {
+    // P0-B / P1-C tag: the UI keys on validation_log.terminal_reason to
+    // render "uncoverable because <reason>".
+    validationLogForRow.terminal_reason = result.status;
+  }
+
   const baseRow = {
     organization_id: organizationId,
     cve_id: result.cveId,
@@ -843,7 +1017,7 @@ async function persistGeneratedRule(
     // is what the loader keys on; legacy 'semgrep_yaml' rows continue to
     // load via the old path until M5 retires Phase 5 entirely.
     rule_yaml: null,
-    framework_spec: substitutedSpec,
+    framework_spec: frameworkSpecForRow,
     spec_format: 'framework_spec',
     vulnerable_fixture: result.rule?.vulnerable_fixture ?? '',
     safe_fixture: result.rule?.safe_fixture ?? '',
@@ -857,21 +1031,10 @@ async function persistGeneratedRule(
     // (the table predates Phase 5h's prompt-version tracking) — fold it into
     // validation_log so the row still carries enough metadata to forensically
     // disambiguate which generator authored it.
-    validation_log: {
-      ...(result.validationLog ?? { errors: result.errors }),
-      prompt_version: FRAMEWORK_SPEC_PROMPT_VERSION,
-      attempts: result.attempts,
-    },
+    validation_log: validationLogForRow,
     enabled: result.status === 'validated',
     generated_at: new Date().toISOString(),
   };
-
-  // Drop empty-rule rows when there's nothing useful to persist (e.g.
-  // status=no_advisory or prompt_injection_suspect with no payload) — the
-  // row would just be noise in the UI.
-  if (!result.rule && result.status !== 'failed_validation') {
-    return false;
-  }
 
   try {
     if (existing) {
