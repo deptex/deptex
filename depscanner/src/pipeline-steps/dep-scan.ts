@@ -1,0 +1,520 @@
+/**
+ * STEP: Vulnerability scan (OPTIONAL).
+ *
+ * Runs `depscan` (CycloneDX VDR profile) against the workspace, then post-
+ * processes results into project_dependency_vulnerabilities rows. Uses the
+ * dep-scan VDR JSON as the source of truth for severity/affects/EPSS hints,
+ * cross-referenced against the per-extraction PDV map to assign
+ * project_dependency_id.
+ *
+ * Phase 6.5 / M5 task 34 — atom integration retired. The taint engine's
+ * CVE-targeted FrameworkSpec rules + cross-file taint engine replace atom's
+ * SemanticReachability path entirely. We keep dep-scan running for
+ * vulnerability detection (`-i` + `-t`), dropping `--deep` (atom-only flag)
+ * and `--reachability-analyzer SemanticReachability` (atom phase) so dep-scan
+ * stops paying the atom CPU/OOM cost. `--explain` is also dropped — the
+ * LLM-prompts path was atom-only.
+ *
+ * Side effects:
+ *   - inserts rows into project_dependency_vulnerabilities (deduped by
+ *     (pd_id, osv_id))
+ *   - uploads dep-scan.json to project-imports storage (non-fatal)
+ *   - fetches CISA KEV + EPSS feeds (non-fatal)
+ *   - logs vuln_scan completion (the `Vulnerability scan complete` line is
+ *     emitted later by the reachability step which owns the same scanStart
+ *     timer in pipeline.ts — preserved here for shape parity).
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { execSync, spawn } from 'child_process';
+import { runStage } from '../pipeline-stage-runner';
+import {
+  calculateBaseDepscoreNoReachability,
+  calculateDepscore,
+  SEVERITY_TO_CVSS,
+} from '../depscore';
+import {
+  stripAnsi,
+  updateStep,
+  clearVdbVolumeForRecovery,
+} from '../pipeline-helpers';
+import type { PipelineContext, PipelineLogger } from '../pipeline-types';
+
+function runDepScanProcess(
+  depScanExe: string,
+  args: string[],
+  cwd: string,
+  logger: Pick<PipelineLogger, 'info' | 'warn'>,
+  heartbeat: () => Promise<void>,
+  timeoutMs: number = 180 * 60 * 1000,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const verboseLogs =
+    process.env.DEPSCAN_VERBOSE_LOG === '1' || /^true$/i.test(process.env.DEPSCAN_VERBOSE_LOG ?? '');
+
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('dep-scan aborted before start'));
+      return;
+    }
+
+    const child = spawn(depScanExe, args, { cwd, stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      if (verboseLogs) {
+        const trimmed = stripAnsi(chunk).trim();
+        if (trimmed) {
+          logger.info('depscan', trimmed).catch(() => {});
+        }
+      }
+    });
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        await heartbeat();
+      } catch {}
+    }, 60_000);
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      clearInterval(heartbeatInterval);
+      reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
+    }, timeoutMs);
+
+    // On outer abort: kill the child only. Don't reject — SIGTERM is an async
+    // OS signal so child.on('close') fires on a later I/O tick, by which time
+    // Promise.race in withTimeout has already rejected with StepTimeoutError.
+    // Rejecting here would race StepTimeoutError and win (synchronous reject
+    // queues its microtask before the outer's), leaking an opaque error that
+    // classifyError can't map to code='timeout'.
+    const onAbort = () => {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    child.on('close', (code: number | null) => {
+      clearInterval(heartbeatInterval);
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    });
+
+    child.on('error', (err: Error) => {
+      clearInterval(heartbeatInterval);
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+  });
+}
+
+export interface DepScanOutput {
+  /** Wall-clock start of vuln_scan, used by the reachability step to log scan completion. */
+  scanStart: number;
+}
+
+export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
+  const { supabase, job, projectId, log, workspaceRoot, jobEcosystem, runId, heartbeat, assetTier, tierMultiplier } = ctx;
+
+  await updateStep(supabase, projectId, 'scanning');
+  await log.info('vuln_scan', 'Running vulnerability scan...');
+
+  const scanStart = Date.now();
+  const reportsDir = path.join(workspaceRoot, 'depscan-reports');
+  let depScanSucceeded = false;
+
+  await runStage({
+    name: 'dep_scan',
+    timeoutMs: 45 * 60_000,
+    severity: 'warn',
+    supabase,
+    jobId: job.jobId,
+    projectId,
+    log,
+    onError: async ({ err }) => {
+      const msg = (err as Error).message ?? String(err);
+      if (/timed out|timeout/i.test(msg)) {
+        await log.warn('vuln_scan', 'Vulnerability scan timed out');
+      } else {
+        await log.warn('vuln_scan', `Vulnerability scan failed: ${msg}`);
+      }
+    },
+    fn: async (signal) => {
+      fs.mkdirSync(reportsDir, { recursive: true });
+      const outArg = reportsDir;
+
+      let depScanExe = 'depscan';
+      if (process.platform === 'win32') {
+        try {
+          const whereOut = execSync('where depscan.exe', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+          const first = whereOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
+          if (first && fs.existsSync(first)) depScanExe = first;
+        } catch { /* ignore */ }
+
+        if (depScanExe === 'depscan') {
+          try {
+            const scriptsDir = execSync('py -c "import sysconfig; print(sysconfig.get_path(\'scripts\'))"', {
+              encoding: 'utf8',
+              stdio: ['pipe', 'pipe', 'pipe'],
+            }).trim();
+            const exePath = path.join(scriptsDir, 'depscan.exe');
+            if (fs.existsSync(exePath)) depScanExe = exePath;
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Phase 6.5 / M5 task 34 — atom integration retired. See file header.
+      const depScanArgs = [
+        '--profile', 'research',
+        '-i', workspaceRoot,
+        '--reports-dir', outArg,
+        '-t', jobEcosystem,
+        '--no-banner',
+      ];
+
+      // dep-scan command logged at debug level only
+      if (process.env.DEPTEX_CLI_MODE !== '1') {
+        console.log(`[depscan] ${depScanExe} ${depScanArgs.join(' ')}`);
+      }
+
+      const heartbeatFn = heartbeat ?? (async () => {});
+      try {
+        let res = await runDepScanProcess(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
+        const rawStderr = stripAnsi((res.stderr ?? '').trim());
+        const isVdbCorrupt = /CorruptError|malformed|database disk image is malformed/i.test(rawStderr);
+
+        if (res.exitCode !== 0 && isVdbCorrupt) {
+          await log.warn('vuln_scan', 'VDB on volume is corrupted (e.g. from previous out-of-space); clearing and retrying once...');
+          clearVdbVolumeForRecovery();
+          res = await runDepScanProcess(depScanExe, depScanArgs, workspaceRoot, log, heartbeatFn, undefined, signal);
+        }
+
+        if (res.exitCode !== 0) {
+          const finalStderr = stripAnsi((res.stderr ?? '').trim());
+          const lines = finalStderr ? finalStderr.split(/\r?\n/) : [];
+          const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : finalStderr;
+          const stderrSnippet = excerpt.slice(-2000) || 'unknown error';
+          if (res.exitCode === 137) {
+            await log.warn('vuln_scan', 'dep-scan out of memory during atom analysis — falling back to basic scan results');
+          } else {
+            await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrSnippet}`);
+          }
+        } else {
+          depScanSucceeded = true;
+        }
+
+        // Log stderr only on failure (exit code > 0)
+        if (res.exitCode !== 0) {
+          const stderrLines = stripAnsi((res.stderr ?? '').trim()).split(/\r?\n/).filter(Boolean);
+          if (stderrLines.length > 0) {
+            const stderrExcerpt = stderrLines.slice(-20).join('\n').slice(-2000);
+            await log.warn('vuln_scan', `dep-scan stderr:\n${stderrExcerpt}`);
+          }
+        }
+
+      } catch (spawnErr: any) {
+        if (spawnErr.code === 'ENOENT') {
+          await log.warn('vuln_scan', 'Vulnerability scanning unavailable (dep-scan not installed)');
+        } else {
+          throw spawnErr;
+        }
+      }
+    },
+  });
+
+  // === Process dep-scan results ===
+  const listVdrFiles = (dir: string): string[] => {
+    try {
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isFile() && (d.name.endsWith('.vdr.json') || d.name === 'dep-scan.json'))
+        .map((d) => path.join(dir, d.name));
+    } catch { return []; }
+  };
+
+  const vdrInReports = listVdrFiles(reportsDir);
+  const vdrInRoot = listVdrFiles(workspaceRoot);
+  let vdrFiles = [...vdrInReports, ...vdrInRoot];
+
+  if (vdrFiles.length === 0) {
+    const isVdrFile = (name: string) => name.endsWith('.vdr.json') || name === 'dep-scan.json';
+    const seenDirs = new Set<string>();
+    const stack: string[] = [workspaceRoot];
+    const found: string[] = [];
+    const MAX_DIRS = 5000;
+    while (stack.length > 0 && seenDirs.size < MAX_DIRS && found.length === 0) {
+      const dir = stack.pop()!;
+      if (seenDirs.has(dir)) continue;
+      seenDirs.add(dir);
+      let fsEntries: fs.Dirent[];
+      try { fsEntries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of fsEntries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) stack.push(fullPath);
+        else if (entry.isFile() && isVdrFile(entry.name)) found.push(fullPath);
+      }
+    }
+    if (found.length > 0) vdrFiles = found;
+  }
+
+  const tryParseJson = (p: string): Record<string, unknown> | null => {
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+  };
+
+  const candidatePaths: string[] = [];
+  const addCandidate = (p: string) => {
+    if (!p || candidatePaths.includes(p) || !fs.existsSync(p)) return;
+    candidatePaths.push(p);
+  };
+  for (const p of vdrFiles) addCandidate(p);
+  try {
+    for (const d of fs.readdirSync(reportsDir, { withFileTypes: true })) {
+      if (d.isFile() && d.name.endsWith('.json')) addCandidate(path.join(reportsDir, d.name));
+    }
+  } catch { /* ignore */ }
+
+  let depScanPath: string | null = null;
+  for (const p of candidatePaths) {
+    const parsed = tryParseJson(p);
+    const vulns = parsed && (parsed as { vulnerabilities?: unknown }).vulnerabilities;
+    if (Array.isArray(vulns)) { depScanPath = p; break; }
+  }
+  if (!depScanPath) depScanPath = vdrFiles[0] ?? path.join(workspaceRoot, 'dep-scan.json');
+
+  const reportExists = fs.existsSync(depScanPath);
+
+  if (reportExists) {
+    try {
+      const depScanContent = fs.readFileSync(depScanPath, 'utf8');
+      try {
+        await supabase.storage
+          .from('project-imports')
+          .upload(`${projectId}/${runId}/dep-scan.json`, depScanContent, {
+            contentType: 'application/json',
+            upsert: true,
+          });
+      } catch { /* upload failure is non-fatal */ }
+
+      const depScan = JSON.parse(depScanContent) as Record<string, unknown>;
+      const parsePurl = (ref: string): { name: string; version: string } | null => {
+        if (!ref || typeof ref !== 'string') return null;
+        const match = ref.match(/^pkg:[^/]+\/(.+?)@([^?#]+)/);
+        if (!match) return null;
+        return { name: decodeURIComponent(match[1]), version: decodeURIComponent(match[2]) };
+      };
+
+      type CycloneAffect = { ref?: string; versions?: Array<{ version?: string; status?: string; range?: string }> };
+      type CycloneVuln = {
+        id?: string; description?: string; detail?: string;
+        ratings?: Array<{ severity?: string; score?: number }>;
+        affects?: CycloneAffect[];
+        properties?: Array<{ name?: string; value?: string }>;
+        published?: string;
+      };
+      type LegacyVuln = {
+        vuln_id?: string; id?: string; severity?: string; summary?: string;
+        aliases?: string[]; fixed_version?: string; fixedVersions?: string[];
+        epss?: number; component?: string; version?: string;
+        ratings?: Array<{ severity?: string }>;
+      };
+
+      const topLevelVulns = Array.isArray(depScan.vulnerabilities) ? (depScan.vulnerabilities as unknown[]) : [];
+      const isCycloneVdr =
+        topLevelVulns.length > 0 &&
+        typeof topLevelVulns[0] === 'object' &&
+        topLevelVulns[0] !== null &&
+        Array.isArray((topLevelVulns[0] as any).affects);
+
+      const vulnsCyclone = (isCycloneVdr ? (topLevelVulns as CycloneVuln[]) : []) ?? [];
+      const vulnsLegacy: LegacyVuln[] = (!isCycloneVdr ? (depScan.vulnerabilities as LegacyVuln[]) : []) || [];
+
+      const { data: pdRows } = await supabase
+        .from('project_dependencies')
+        .select('id, name, version')
+        .eq('project_id', projectId)
+        .eq('last_seen_extraction_run_id', runId);
+
+      const pdByNameVersion = new Map<string, string>();
+      if (pdRows) {
+        for (const r of pdRows) pdByNameVersion.set(`${r.name}@${r.version}`, r.id);
+      }
+
+      const kevCveSet = new Set<string>();
+      try {
+        const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
+        if (kevRes.ok) {
+          const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
+          for (const entry of kevJson.vulnerabilities ?? []) {
+            if (entry.cveID) kevCveSet.add(entry.cveID);
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      const vulnRows: Array<{
+        project_id: string; project_dependency_id: string; osv_id: string;
+        extraction_run_id: string;
+        severity: string | null; summary: string | null; aliases: string[] | null;
+        fixed_versions: string[] | null; is_reachable: boolean; epss_score: number | null;
+        cvss_score: number | null; cisa_kev: boolean; depscore: number | null; published_at: string | null;
+        base_depscore_no_reachability: number | null;
+        reachability_status: string;
+        epd_status: string;
+        epd_schema_version: string;
+        epd_prompt_version: string;
+      }> = [];
+
+      if (isCycloneVdr) {
+        for (const v of vulnsCyclone) {
+          const osvId = (v.id ?? 'unknown').toString();
+          const severity = v.ratings?.[0]?.severity ?? null;
+          const summary = (v.description ?? v.detail ?? null) as string | null;
+          const insights = (v.properties || []).find((p) => p?.name === 'depscan:insights')?.value ?? null;
+          const isReachable = typeof insights === 'string' ? insights.startsWith('Used in') : false;
+          const epssProp = (v.properties || []).find((p) => p?.name === 'depscan:epss' || p?.name === 'epss')?.value;
+          const epssFromVdr = epssProp != null ? parseFloat(String(epssProp)) : null;
+          const epssFromVdrNum = Number.isFinite(epssFromVdr) ? epssFromVdr : null;
+          const cvssRaw = v.ratings?.[0]?.score;
+          const cvssFromVdr = cvssRaw != null && Number.isFinite(cvssRaw) ? cvssRaw : (severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null);
+          const fixedSet = new Set<string>();
+          for (const a of v.affects || []) {
+            for (const ver of a.versions || []) {
+              if (ver?.status === 'unaffected' && ver?.version) fixedSet.add(ver.version);
+            }
+          }
+          const fixed_versions = fixedSet.size > 0 ? Array.from(fixedSet) : null;
+          for (const a of v.affects || []) {
+            const parsed = parsePurl(a.ref ?? '');
+            if (!parsed) continue;
+            // For Maven/Go PURLs, the name includes group/artifact with '/'.
+            // Try: full name, colon separator, and artifact-only (after last '/').
+            let pdId = pdByNameVersion.get(`${parsed.name}@${parsed.version}`);
+            if (!pdId && parsed.name.includes('/')) {
+              const colonName = parsed.name.replace(/\//g, ':');
+              pdId = pdByNameVersion.get(`${colonName}@${parsed.version}`);
+            }
+            if (!pdId && parsed.name.includes('/')) {
+              const artifactOnly = parsed.name.split('/').pop()!;
+              pdId = pdByNameVersion.get(`${artifactOnly}@${parsed.version}`);
+            }
+            if (!pdId) continue;
+            vulnRows.push({
+              project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
+              extraction_run_id: runId,
+              severity, summary, aliases: null, fixed_versions, is_reachable: isReachable,
+              epss_score: epssFromVdrNum, cvss_score: cvssFromVdr, cisa_kev: false,
+              depscore: null, published_at: v.published ?? null,
+              base_depscore_no_reachability: null,
+              reachability_status: isReachable ? 'reachable' : 'unreachable',
+              epd_status: 'pending',
+              epd_schema_version: 'epd-v1',
+              epd_prompt_version: 'epd-v1',
+            });
+          }
+        }
+      } else {
+        for (const v of vulnsLegacy) {
+          const compName = (v.component ?? '').trim();
+          const compVersion = (v.version ?? '').trim();
+          const pdId = pdByNameVersion.get(`${compName}@${compVersion}`);
+          if (!pdId) continue;
+          const severity = v.severity ?? v.ratings?.[0]?.severity ?? null;
+          vulnRows.push({
+            project_id: projectId, project_dependency_id: pdId,
+            osv_id: (v.vuln_id ?? v.id ?? 'unknown').toString(),
+            extraction_run_id: runId,
+            severity,
+            summary: v.summary ?? null, aliases: v.aliases ?? null,
+            fixed_versions: v.fixed_version ? [v.fixed_version] : null,
+            is_reachable: true, epss_score: v.epss ?? null,
+            cvss_score: severity ? (SEVERITY_TO_CVSS[severity] ?? null) : null,
+            cisa_kev: false, depscore: null, published_at: null,
+            base_depscore_no_reachability: null,
+            reachability_status: 'reachable',
+            epd_status: 'pending',
+            epd_schema_version: 'epd-v1',
+            epd_prompt_version: 'epd-v1',
+          });
+        }
+      }
+
+      const CVE_ID_RE = /^CVE-\d{4}-\d+$/i;
+      const cvesToFetch = [...new Set(vulnRows.map((r) => r.osv_id).filter((id) => CVE_ID_RE.test(id)))];
+      if (cvesToFetch.length > 0) {
+        const epssByCve = new Map<string, number>();
+        const EPSS_BATCH = 80;
+        for (let i = 0; i < cvesToFetch.length; i += EPSS_BATCH) {
+          const batch = cvesToFetch.slice(i, i + EPSS_BATCH);
+          try {
+            const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`);
+            if (epssRes.ok) {
+              const json = (await epssRes.json()) as { data?: Array<{ cve?: string; epss?: string }> };
+              for (const row of json.data ?? []) {
+                if (row?.cve && row?.epss != null) {
+                  const score = parseFloat(row.epss);
+                  if (Number.isFinite(score)) epssByCve.set(row.cve, score);
+                }
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
+        for (const row of vulnRows) {
+          if (row.epss_score != null) continue;
+          const score = epssByCve.get(row.osv_id);
+          if (score != null) row.epss_score = score;
+        }
+      }
+
+      for (const row of vulnRows) {
+        const allIds = [row.osv_id, ...(row.aliases ?? [])];
+        row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
+        const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
+        const epss = row.epss_score ?? 0;
+        row.base_depscore_no_reachability = calculateBaseDepscoreNoReachability({
+          cvss,
+          epss,
+          cisaKev: row.cisa_kev,
+          assetTier,
+          tierMultiplier,
+        });
+        // Keep legacy depscore for compatibility during rollout.
+        row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier, tierMultiplier });
+      }
+
+      if (vulnRows.length > 0) {
+        // Deduplicate within this extraction run (same vuln reported twice by dep-scan
+        // under different affects entries). Stable ID for this run: (pd_id, osv_id).
+        const seenVuln = new Set<string>();
+        const dedupedVulns = vulnRows.filter((r) => {
+          const k = `${r.project_dependency_id}|${r.osv_id}`;
+          if (seenVuln.has(k)) return false;
+          seenVuln.add(k);
+          return true;
+        });
+        for (let i = 0; i < dedupedVulns.length; i += 100) {
+          const chunk = dedupedVulns.slice(i, i + 100);
+          const { error: insertErr } = await supabase
+            .from('project_dependency_vulnerabilities')
+            .insert(chunk);
+          if (insertErr) throw insertErr;
+        }
+      }
+
+    } catch (e: any) {
+      await log.warn('vuln_scan', `Vulnerability processing failed: ${e.message}`);
+    }
+  } else if (!depScanSucceeded) {
+    await log.warn('vuln_scan', 'No vulnerability scan results available');
+  }
+
+  return { scanStart };
+}
