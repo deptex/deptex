@@ -5,6 +5,13 @@
  * diffs each JSON output file against the committed snapshot under
  * `fixtures/<name>/snapshots/`. Fails with a unified-ish diff on mismatch.
  *
+ * Bootstrap behavior: a missing snapshot file (or a fixture with no
+ * `snapshots/` dir at all) is NOT treated as a failure. The runner writes
+ * the file and reports it as a bootstrap; the contributor commits it in the
+ * same PR. Subsequent runs compare against the now-committed snapshot and
+ * fail on mismatch. Matches jest's `toMatchSnapshot()` / vitest's
+ * `toMatchFileSnapshot()` UX. Only existing-snapshot mismatches fail.
+ *
  * Usage:
  *   tsx test/snapshot.ts                       run all fixtures
  *   tsx test/snapshot.ts --fixture=test-npm    run one fixture
@@ -375,7 +382,7 @@ function runCli(
   return res.status ?? 2;
 }
 
-interface DiffOptions {
+export interface DiffOptions {
   update: boolean;
   /** When true, print intended changes but never write to snapshotDir. */
   diffOnly: boolean;
@@ -384,14 +391,14 @@ interface DiffOptions {
   fixtureIgnore: Set<string>;
 }
 
-interface DiffResult {
+export interface DiffResult {
   ok: boolean;
   message: string;
   /** Count of files that differ in --diff-only mode (would-be writes). */
   intendedChanges?: number;
 }
 
-function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions): DiffResult {
+export function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions): DiffResult {
   if (!fs.existsSync(resultDir)) {
     return { ok: false, message: `no results dir at ${resultDir}` };
   }
@@ -414,6 +421,16 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
 
   // Diff path (covers both default mode and --diff-only). The --diff-only
   // caller treats `intendedChanges > 0` as informational, not a failure.
+  //
+  // Bootstrap policy (matches jest's `toMatchSnapshot()` and vitest's
+  // `toMatchFileSnapshot()`): a missing snapshot file (or missing snapshot
+  // dir entirely) on a default-mode run is NOT a failure — we write the file
+  // and report it as a bootstrap. The contributor commits the now-written
+  // snapshot in the same PR, and subsequent runs compare against it. Only
+  // mismatches against an EXISTING snapshot fail the run.
+  //
+  // --diff-only still behaves as a dry-run: bootstrap candidates are reported
+  // as `intendedChanges` and the file is not written.
   if (!fs.existsSync(snapshotDir)) {
     if (opts.diffOnly) {
       // Treat as "everything is new" rather than a hard fail.
@@ -423,13 +440,22 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
         intendedChanges: outputs.length,
       };
     }
+    // Auto-bootstrap: write every output as a snapshot and pass.
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    for (const file of outputs) {
+      const src = path.join(resultDir, file);
+      const dst = path.join(snapshotDir, file);
+      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore);
+      writeJson(dst, redacted);
+    }
     return {
-      ok: false,
-      message: `no snapshot dir at ${snapshotDir} — run with --update to create it`,
+      ok: true,
+      message: `bootstrapped ${outputs.length} snapshot(s) at ${snapshotDir} (commit them to lock the baseline)`,
     };
   }
 
   const mismatches: string[] = [];
+  const bootstrapped: string[] = [];
   let changedFiles = 0;
   for (const file of outputs) {
     const actual = stripIgnored(
@@ -438,8 +464,17 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
     );
     const expectedPath = path.join(snapshotDir, file);
     if (!fs.existsSync(expectedPath)) {
-      mismatches.push(`  ${file}: new file (not in snapshot dir)`);
-      changedFiles++;
+      // Per-file bootstrap: missing snapshot for a fixture that already has
+      // a snapshots/ dir (e.g. a new output file was added to the pipeline).
+      // In default mode, write it and continue. In --diff-only, count it as
+      // an intended change without writing.
+      if (opts.diffOnly) {
+        mismatches.push(`  ${file}: new file (not in snapshot dir)`);
+        changedFiles++;
+      } else {
+        writeJson(expectedPath, actual);
+        bootstrapped.push(file);
+      }
       continue;
     }
     const expected = readJson(expectedPath);
@@ -464,6 +499,15 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
     return {
       ok: false,
       message: `snapshot mismatches:\n${mismatches.join('\n')}`,
+    };
+  }
+  if (bootstrapped.length > 0) {
+    const matched = outputs.length - bootstrapped.length;
+    return {
+      ok: true,
+      message:
+        `${matched} file(s) match snapshot; ` +
+        `bootstrapped ${bootstrapped.length} new (${bootstrapped.join(', ')}) — commit them to lock the baseline`,
     };
   }
   return { ok: true, message: `${outputs.length} file(s) match snapshot` };

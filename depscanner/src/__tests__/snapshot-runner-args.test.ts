@@ -10,10 +10,15 @@
  * on `require.main === module`.
  */
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   parseSnapshotArgs,
   truncateDiffLines,
   DEFAULT_MAX_DIFF,
+  diffSnapshots,
+  type DiffOptions,
 } from '../../test/snapshot';
 
 describe('parseSnapshotArgs', () => {
@@ -144,5 +149,123 @@ describe('truncateDiffLines', () => {
   it('handles empty input', () => {
     expect(truncateDiffLines([], 10)).toEqual([]);
     expect(truncateDiffLines([], 0)).toEqual([]);
+  });
+});
+
+describe('diffSnapshots bootstrap behavior', () => {
+  // Each case spins up an isolated tmp scratch with a "result" dir holding
+  // synthetic CLI outputs, then runs diffSnapshots against a snapshot dir
+  // that may or may not exist yet. Mirrors jest's toMatchSnapshot() UX:
+  // missing snapshot file = bootstrap + pass; existing snapshot = compare.
+
+  let scratch: string;
+  let resultDir: string;
+  let snapshotDir: string;
+
+  const baseOpts: DiffOptions = {
+    update: false,
+    diffOnly: false,
+    maxDiff: DEFAULT_MAX_DIFF,
+    fixtureIgnore: new Set<string>(),
+  };
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-bootstrap-'));
+    resultDir = path.join(scratch, 'result');
+    snapshotDir = path.join(scratch, 'snapshots');
+    fs.mkdirSync(resultDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(resultDir, 'summary.json'),
+      JSON.stringify({ vulnerabilities_count: 3 }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(resultDir, 'deps.json'),
+      JSON.stringify([{ name: 'lodash', version: '4.17.20' }]),
+      'utf8',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('bootstraps a missing snapshots/ dir on first run and passes', () => {
+    expect(fs.existsSync(snapshotDir)).toBe(false);
+    const result = diffSnapshots(resultDir, snapshotDir, baseOpts);
+    expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/bootstrapped 2 snapshot/);
+    expect(fs.existsSync(snapshotDir)).toBe(true);
+    expect(fs.existsSync(path.join(snapshotDir, 'summary.json'))).toBe(true);
+    expect(fs.existsSync(path.join(snapshotDir, 'deps.json'))).toBe(true);
+    // Bootstrapped content should round-trip through stripIgnored: with no
+    // fixture-specific ignores, the JSON should be byte-equivalent (modulo
+    // pretty-print formatting).
+    const written = JSON.parse(
+      fs.readFileSync(path.join(snapshotDir, 'summary.json'), 'utf8'),
+    );
+    expect(written).toEqual({ vulnerabilities_count: 3 });
+  });
+
+  it('--diff-only on a missing snapshot dir reports intended changes without writing', () => {
+    const result = diffSnapshots(resultDir, snapshotDir, {
+      ...baseOpts,
+      diffOnly: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.intendedChanges).toBe(2);
+    expect(fs.existsSync(snapshotDir)).toBe(false);
+  });
+
+  it('bootstraps a single missing snapshot file when other files already exist', () => {
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(snapshotDir, 'summary.json'),
+      JSON.stringify({ vulnerabilities_count: 3 }, null, 2) + '\n',
+      'utf8',
+    );
+    // deps.json is missing — should be bootstrapped.
+
+    const result = diffSnapshots(resultDir, snapshotDir, baseOpts);
+    expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/bootstrapped 1 new \(deps\.json\)/);
+    expect(fs.existsSync(path.join(snapshotDir, 'deps.json'))).toBe(true);
+  });
+
+  it('still fails on a real diff against an existing snapshot', () => {
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    // Committed snapshot says count=999; runtime says 3 → real mismatch.
+    fs.writeFileSync(
+      path.join(snapshotDir, 'summary.json'),
+      JSON.stringify({ vulnerabilities_count: 999 }, null, 2) + '\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(snapshotDir, 'deps.json'),
+      JSON.stringify([{ name: 'lodash', version: '4.17.20' }], null, 2) + '\n',
+      'utf8',
+    );
+
+    const result = diffSnapshots(resultDir, snapshotDir, baseOpts);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/snapshot mismatches/);
+    expect(result.message).toMatch(/vulnerabilities_count/);
+  });
+
+  it('--diff-only on a missing per-file snapshot reports it without writing', () => {
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(snapshotDir, 'summary.json'),
+      JSON.stringify({ vulnerabilities_count: 3 }, null, 2) + '\n',
+      'utf8',
+    );
+
+    const result = diffSnapshots(resultDir, snapshotDir, {
+      ...baseOpts,
+      diffOnly: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.intendedChanges).toBe(1);
+    expect(fs.existsSync(path.join(snapshotDir, 'deps.json'))).toBe(false);
   });
 });
