@@ -45,6 +45,7 @@
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
     "test:fixtures": "tsx test/snapshot.ts",
+    "test:fixtures:update": "tsx test/snapshot.ts --update",
     "bench:rule-generation": "tsx test/rule-generation-bench.ts",
     "iterate": "tsx test/iterate/cli.ts",
     "iterate:tournament": "tsx test/iterate/tournament.ts"
