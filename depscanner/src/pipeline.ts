@@ -408,13 +408,23 @@ function clearVdbVolumeForRecovery(): void {
 /** Logger interface for pipeline; full ExtractionLogger or minimal mock for tests. */
 export type PipelineLogger = Pick<ExtractionLogger, 'info' | 'success' | 'warn' | 'error'>;
 
+/**
+ * Pipeline result shape. The CLI uses `finalizeSummary` to populate
+ * `summary.json.finalize_summary` (the jsonb returned by the
+ * `finalize_extraction` RPC: deps_removed, vulns_new, etc.). The production
+ * worker discards this — early returns / cancellation paths return undefined.
+ */
+export interface RunPipelineResult {
+  finalizeSummary: unknown;
+}
+
 export async function runPipeline(
   job: ExtractionJob,
   logger?: ExtractionLogger | PipelineLogger,
   checkCancelled?: () => Promise<boolean>,
   heartbeat?: () => Promise<void>,
   storage?: Storage,
-): Promise<void> {
+): Promise<RunPipelineResult | undefined> {
   const supabase: Storage = storage ?? (getSupabase() as unknown as Storage);
   const projectId = job.projectId;
   const organizationId = job.organizationId;
@@ -2497,8 +2507,9 @@ export async function runPipeline(
     //   - Reaps finding rows from any run_id that is neither (new active, previous)
     //   - Returns summary JSONB — use for vulnerability_updates notification emission
     const finalizeStart = Date.now();
+    let finalizeSummary: unknown = null;
     try {
-      const { error: finalizeErr } = await withTimeout(
+      const { data: finalizeData, error: finalizeErr } = await withTimeout(
         async () => await supabase.rpc('finalize_extraction', {
           p_job_id: job.jobId ?? null,
           p_project_id: projectId,
@@ -2535,6 +2546,10 @@ export async function runPipeline(
         await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
         throw new Error(`finalize_extraction: ${finalizeErr.message}`);
       }
+      // RPC returns jsonb (deps_removed, vulns_new, extraction_run_id, etc.).
+      // CLI plumbs this into summary.json.finalize_summary; production worker
+      // discards it.
+      finalizeSummary = finalizeData ?? null;
     } catch (finalizeErr: any) {
       if (job.jobId) {
         const { code, message, stack } = classifyError(finalizeErr);
@@ -2569,6 +2584,7 @@ export async function runPipeline(
       }
     }
 
+    return { finalizeSummary };
   } catch (error: any) {
     await setError(supabase, projectId, error.message);
     throw error;

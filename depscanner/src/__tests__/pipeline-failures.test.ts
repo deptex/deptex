@@ -208,7 +208,9 @@ describe('runPipeline', () => {
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeUndefined();
+    // runPipeline now returns { finalizeSummary } on success; the test only
+    // cares that the pipeline doesn't throw on this missing-dep-scan path.
+    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
     expect(mockLog.warn).toHaveBeenCalledWith('vuln_scan', expect.stringContaining('dep-scan not installed'));
   });
 
@@ -246,7 +248,9 @@ describe('runPipeline', () => {
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeUndefined();
+    // runPipeline now returns { finalizeSummary } on success; the test only
+    // cares that the pipeline doesn't throw on this semgrep-OOM path.
+    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
     expect(mockLog.warn).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
   });
 });

@@ -82,6 +82,15 @@ const DEFAULT_IGNORE_FIELDS = new Set([
   'sla_due_at',
   'first_seen_at',
   'last_seen_at',
+  // Volatile vuln fields fetched live from EPSS / NVD / CISA KEV APIs in
+  // pipeline.ts. Values drift daily, so a contributor regenerating snapshots
+  // a day after they were committed would diff-fail without these in the
+  // ignore list. Stubbing via env-var was rejected — that introduces a
+  // stale-mock failure mode the snapshot suite can't catch.
+  'epss_score',
+  'cvss_score',
+  'cisa_kev',
+  'published_at',
 ]);
 
 async function main() {

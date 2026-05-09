@@ -121,7 +121,7 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
     };
 
     log(opts, `running pipeline against ${absWorkspace}...`);
-    await runPipeline(job, logger, undefined, undefined, storage);
+    const pipelineResult = await runPipeline(job, logger, undefined, undefined, storage);
 
     // finalize_extraction already wrote active_extraction_run_id into
     // projects. Re-read it for the summary (the pipeline may have generated
@@ -144,6 +144,7 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
       ecosystem,
       startedAtMs: startedAt,
       severityFilter: severitySet,
+      finalizeSummary: pipelineResult?.finalizeSummary ?? null,
     });
 
     const exitCode = computeExitCode(vulns, opts.failOn ?? null);
