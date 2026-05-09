@@ -71,9 +71,10 @@ router.post('/stream', async (req: AuthRequest, res) => {
     );
 
     // PREFLIGHT — every read-only setup that can fail goes BEFORE writeHead,
-    // so a BYOK loader rejection / cost-cap block / DB error returns a clean
-    // 500 + JSON body instead of a half-flushed SSE stream the client can't
-    // make sense of. Once writeHead fires, we're committed to the SSE channel.
+    // so a provider loader rejection / cost-cap block / DB error returns a
+    // clean 500 + JSON body instead of a half-flushed SSE stream the client
+    // can't make sense of. Once writeHead fires, we're committed to the SSE
+    // channel.
     const [history, memoryContext, providerInfo] = await Promise.all([
       loadThreadHistory(resolvedThreadId),
       queryRelevantMemories(organizationId, message),
@@ -88,8 +89,9 @@ router.post('/stream', async (req: AuthRequest, res) => {
     );
 
     // Build the agent here too — getLanguageModelForOrg throws on missing /
-    // disabled BYOK keys, and we want that as a 500 not as a torn-down SSE.
-    // If cap blocked above we skip agent construction (no model call needed).
+    // disabled platform keys, and we want that as a 500 not as a torn-down
+    // SSE. If cap blocked above we skip agent construction (no model call
+    // needed).
     const agent = cap.allowed
       ? await createAegisAgent({
           orgId: organizationId,
@@ -107,8 +109,8 @@ router.post('/stream', async (req: AuthRequest, res) => {
     // start streaming — but only AFTER preflight has succeeded. The client
     // needs the threadId on the wire before any SSE chunks arrive so a fast
     // Stop click during submission can still resolve the thread; flushing
-    // earlier (pre-BYOK) means a BYOK failure can't return a 500 anymore
-    // because the status is already 200. We bypass pipeUIMessageStreamToResponse
+    // earlier (pre-preflight) means a provider failure can't return a 500
+    // anymore because the status is already 200. We bypass pipeUIMessageStreamToResponse
     // here so we control when writeHead fires.
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',

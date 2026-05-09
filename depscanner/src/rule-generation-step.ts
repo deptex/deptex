@@ -2,8 +2,8 @@
  * Per-extraction rule generation pipeline step.
  *
  * Sits between vuln_scan and reachability_rules in pipeline.ts. Given the
- * scan's vulnerabilities, the org's trigger policy, and the org's BYOK key,
- * this step:
+ * scan's vulnerabilities, the org's trigger policy, and a platform AI key
+ * (read from the worker environment), this step:
  *
  *   1. Loads organization_reachability_settings; bails fast when generation
  *      is disabled or the row is missing.
@@ -98,8 +98,9 @@ export interface RunRuleGenerationArgs {
   supabase: Storage;
   log: LogLike;
   signal?: AbortSignal;
-  /** Override the BYOK key resolver — exposed for tests. Production path
-   *  reads from organization_ai_providers + AI_ENCRYPTION_KEY. */
+  /** Override the platform-key resolver — exposed for tests. Production
+   *  path reads from the worker environment (OPENAI_API_KEY /
+   *  ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY). */
   resolveApiKey?: (orgId: string, provider: AiProviderName) => Promise<string | null>;
 }
 
@@ -223,7 +224,7 @@ export async function runRuleGenerationStep(
   const orgExistingCves = await loadOrgExistingRuleCves(organizationId, supabase);
   if (orgExistingCves === null) {
     // Fail-closed: a Supabase read failure here would have us treat every CVE
-    // as uncovered and regenerate everything — runaway BYOK spend on a
+    // as uncovered and regenerate everything — runaway platform AI spend on a
     // transient outage. Skip the entire step and let the next scan retry.
     await log.warn(
       STEP_NAME,
@@ -265,27 +266,26 @@ export async function runRuleGenerationStep(
     return { ...ZERO_RESULT, ran: true, triggerMatched: triggerMatchedVulns.length, alreadyCovered, skipReasons };
   }
 
-  // --- 5. Resolve BYOK key for the chosen provider ---
-  // Pass the worker logger into the default resolver so a "BYOK ciphertext
-  // exists but won't decrypt" condition surfaces as a warn instead of being
-  // swallowed under the friendly "no key configured" message below. The test
-  // override (args.resolveApiKey) doesn't take a log; that's fine — tests
-  // don't exercise the decrypt path.
+  // --- 5. Resolve platform AI key for the chosen provider ---
+  // After phase29_drop_byok the only key source is the worker's environment
+  // (OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY). The test
+  // override (args.resolveApiKey) lets tests inject a key without setting
+  // env vars.
   const apiKey = args.resolveApiKey
     ? await args.resolveApiKey(organizationId, settings.ai_provider)
-    : await defaultResolveApiKey(organizationId, settings.ai_provider, log);
+    : await defaultResolveApiKey(settings.ai_provider);
   if (!apiKey) {
     await log.warn(
       STEP_NAME,
-      `No BYOK key for ${settings.ai_provider}; skipping generation. Configure one in Organization Settings → AI Configuration.`,
+      `No platform API key for ${settings.ai_provider}; skipping generation. Set ${envVarFor(settings.ai_provider)} on the worker.`,
     );
     if (jobId) {
       await logStepError(supabase, {
         jobId,
         projectId,
         step: STEP_NAME,
-        code: 'byok_missing',
-        message: `No ${settings.ai_provider} BYOK key configured for organization ${organizationId}`,
+        code: 'platform_key_missing',
+        message: `No ${settings.ai_provider} platform API key configured for organization ${organizationId}`,
         severity: 'warn',
       });
     }
@@ -496,7 +496,7 @@ export async function runRuleGenerationStep(
     }
     totalCost += r.result.costUsd;
     breakdownAccumulator.push(r.result.validationBreakdown);
-    // P0-A: persist BYOK spend to ai_usage_logs so the per-org monthly budget
+    // P0-A: persist platform AI spend to ai_usage_logs so the per-org monthly budget
     // cap (readRuleGenMonthlySpend / applyBudgetCap) actually sees the spend
     // we just incurred. Without this row, monthlySpend stays at $0 forever
     // and the cap is non-functional. Skip for pre-attempt bails (no token
@@ -641,7 +641,7 @@ function canonicalCveId(osvId: string, aliases: string[] | null): string | null 
  * Read the org's already-generated CVE coverage set. Returns null on read
  * failure — callers MUST fail-closed (skip generation) rather than treat the
  * read failure as "no coverage", which would silently regenerate every CVE on
- * a Supabase blip and amplify BYOK spend. Mirrors readRuleGenMonthlySpend.
+ * a Supabase blip and amplify platform AI spend. Mirrors readRuleGenMonthlySpend.
  */
 async function loadOrgExistingRuleCves(orgId: string, supabase: Storage): Promise<Set<string> | null> {
   const { data, error } = await supabase
@@ -715,9 +715,9 @@ interface RuleGenAiUsageEntry {
 
 /**
  * P0-A: persist a single rule-generation AI call to ai_usage_logs so the
- * monthly BYOK budget cap (readRuleGenMonthlySpend / applyBudgetCap) sees
+ * monthly platform AI budget cap (readRuleGenMonthlySpend / applyBudgetCap) sees
  * the spend on the next iteration. Without this the cap is non-functional —
- * monthlySpend stays $0 and runaway BYOK spend is possible. ai_usage_logs
+ * monthlySpend stays $0 and runaway platform AI spend is possible. ai_usage_logs
  * was originally schema'd around an end-user-driven call (`user_id NOT
  * NULL`), but the user_id column has no FK so a system sentinel is safe.
  * Failures here are non-fatal: a Supabase blip on the analytics insert
@@ -738,7 +738,7 @@ async function logRuleGenAiUsage(
       // it out via WHERE user_id != '00000000-...'.
       user_id: RULE_GEN_SYSTEM_USER_ID,
       feature: 'rule_generation',
-      tier: 'byok',
+      tier: 'platform',
       provider: entry.provider,
       model: entry.model,
       input_tokens: entry.inputTokens,
@@ -771,7 +771,7 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
 
   // Fail-closed on read error: previously we fell back to monthlySpend=0 on
   // a Supabase outage, which silently disabled the per-org cap — the only
-  // thing standing between us and a runaway BYOK bill. Now: skip generation.
+  // thing standing between us and a runaway platform AI bill. Now: skip generation.
   const monthlySpend = await readRuleGenMonthlySpend(supabase, organizationId);
   if (monthlySpend === null) {
     await log.warn(
@@ -809,96 +809,39 @@ async function applyBudgetCap(args: ApplyBudgetArgs): Promise<{ effectiveModel: 
   return { effectiveModel: settings.ai_model, budgetSkipped: true };
 }
 
-async function defaultResolveApiKey(orgId: string, provider: AiProviderName, log?: LogLike): Promise<string | null> {
-  // Mirror the same env-var escape EPD uses for the local CLI / self-host
-  // path: when DEPTEX_LOCAL_CLI=1 and the matching env key is set, prefer
-  // it. Cloud workers ignore this branch.
-  if (process.env.DEPTEX_LOCAL_CLI === '1') {
-    // For provider='openai' the actual host may be DeepInfra / OpenRouter /
-    // Alibaba via DEPTEX_RULE_BASE_URL; pick the matching key env-var by
-    // hostname so a single .env file with all three keys works without
-    // forcing the user to also juggle OPENAI_API_KEY.
-    if (provider === 'openai') {
-      const baseUrl = process.env.DEPTEX_RULE_BASE_URL ?? '';
-      if (baseUrl.includes('deepinfra')) {
-        if (process.env.DEEPINFRA_API_KEY) return process.env.DEEPINFRA_API_KEY;
-      } else if (baseUrl.includes('openrouter')) {
-        if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
-      } else if (baseUrl.includes('aliyuncs') || baseUrl.includes('dashscope')) {
-        if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY;
-      }
-      if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-      return null;
-    }
-    const envKey = provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY
-      // Accept GOOGLE_AI_API_KEY (the Tier-1 platform key name in
-      // CLAUDE.md / backend/.env) as a fallback for plain GOOGLE_API_KEY.
-      // A self-host operator who already wired the platform AI key in
-      // shouldn't have to duplicate it.
-      : provider === 'google' ? (process.env.GOOGLE_API_KEY || process.env.GOOGLE_AI_API_KEY)
-      : null;
-    if (envKey) return envKey;
-  }
-
-  // Cloud path: pull from organization_ai_providers and decrypt with
-  // AI_ENCRYPTION_KEY (same envelope as Aegis + EPD).
-  const { createClient } = await import('@supabase/supabase-js');
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return null;
-  const sb = createClient(url, key);
-  const { data } = await sb
-    .from('organization_ai_providers')
-    .select('encrypted_api_key, encryption_key_version')
-    .eq('organization_id', orgId)
-    .eq('provider', provider)
-    .maybeSingle();
-  const row = data as { encrypted_api_key?: string; encryption_key_version?: number } | null;
-  if (!row?.encrypted_api_key) return null;
-  try {
-    return decryptApiKey(row.encrypted_api_key, Number(row.encryption_key_version ?? 1));
-  } catch (err) {
-    // Distinguish "BYOK row exists but ciphertext can't be decrypted" from the
-    // "no row" path above: same null return, but operator-visible warn so a
-    // rotated AI_ENCRYPTION_KEY (or corrupt ciphertext) doesn't masquerade
-    // as the friendly "no key configured" message that the upstream caller
-    // emits.
-    if (log) {
-      await log.warn(
-        STEP_NAME,
-        `BYOK key for org=${orgId} provider=${provider} exists but failed to decrypt. Likely a rotated AI_ENCRYPTION_KEY without AI_ENCRYPTION_KEY_PREV, or corrupt ciphertext. Re-save the key in Org Settings to recover. Original error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    return null;
-  }
+function envVarFor(provider: AiProviderName): string {
+  if (provider === 'anthropic') return 'ANTHROPIC_API_KEY';
+  if (provider === 'google') return 'GOOGLE_AI_API_KEY';
+  return 'OPENAI_API_KEY';
 }
 
-function decryptApiKey(encrypted: string, storedVersion: number): string {
-  const crypto = require('crypto') as typeof import('crypto');
-  const parts = encrypted.split(':');
-  if (parts.length !== 3) throw new Error('Invalid encrypted key format');
-  const keyHex = process.env.AI_ENCRYPTION_KEY;
-  if (!keyHex) throw new Error('AI_ENCRYPTION_KEY is not configured');
-  const key = Buffer.from(keyHex, 'hex');
-  if (key.length !== 32) throw new Error('AI_ENCRYPTION_KEY must be 32-byte hex');
-  const nonce = Buffer.from(parts[0], 'base64');
-  const ciphertext = Buffer.from(parts[1], 'base64');
-  const authTag = Buffer.from(parts[2], 'base64');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
-  decipher.setAuthTag(authTag);
-  try {
-    return decipher.update(ciphertext) + decipher.final('utf8');
-  } catch {
-    const prevHex = process.env.AI_ENCRYPTION_KEY_PREV;
-    const currentVersion = Number(process.env.AI_ENCRYPTION_KEY_VERSION || '1');
-    if (prevHex && storedVersion < currentVersion) {
-      const prevKey = Buffer.from(prevHex, 'hex');
-      const prevDecipher = crypto.createDecipheriv('aes-256-gcm', prevKey, nonce, { authTagLength: 16 });
-      prevDecipher.setAuthTag(authTag);
-      return prevDecipher.update(ciphertext) + prevDecipher.final('utf8');
+async function defaultResolveApiKey(provider: AiProviderName): Promise<string | null> {
+  // After phase29_drop_byok, the only key source is the worker's environment.
+  // For provider='openai' the actual host may be DeepInfra / OpenRouter /
+  // Alibaba via DEPTEX_RULE_BASE_URL; pick the matching key env-var by
+  // hostname so a single .env file with all three keys works without
+  // forcing the user to also juggle OPENAI_API_KEY.
+  if (provider === 'openai') {
+    const baseUrl = process.env.DEPTEX_RULE_BASE_URL ?? '';
+    if (baseUrl.includes('deepinfra')) {
+      if (process.env.DEEPINFRA_API_KEY) return process.env.DEEPINFRA_API_KEY;
+    } else if (baseUrl.includes('openrouter')) {
+      if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+    } else if (baseUrl.includes('aliyuncs') || baseUrl.includes('dashscope')) {
+      if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY;
     }
-    throw new Error('Unable to decrypt BYOK key');
+    return process.env.OPENAI_API_KEY ?? null;
   }
+  if (provider === 'anthropic') {
+    return process.env.ANTHROPIC_API_KEY ?? null;
+  }
+  if (provider === 'google') {
+    // Accept GOOGLE_AI_API_KEY (the Tier-1 platform key name in
+    // CLAUDE.md / backend/.env) as a fallback for plain GOOGLE_API_KEY so
+    // operators don't have to duplicate the same value into two env vars.
+    return process.env.GOOGLE_API_KEY ?? process.env.GOOGLE_AI_API_KEY ?? null;
+  }
+  return null;
 }
 
 /**

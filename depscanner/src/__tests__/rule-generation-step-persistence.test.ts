@@ -3,7 +3,7 @@
  * fix-agent #2 commits ee72cb2 + 65b96da:
  *
  *   TG-1: ai_usage_logs row written per successful rule generation so the
- *         monthly BYOK budget cap actually sees the spend.
+ *         monthly platform AI budget cap actually sees the spend.
  *   TG-2: prompt_injection_suspect lands in BOTH extraction_step_errors
  *         (security signal) AND organization_generated_rules (UI surface).
  *   TG-5: loadOrgExistingRuleCves null-return triggers fail-closed early-skip
@@ -298,7 +298,7 @@ describe('TG-1 — ai_usage_logs insert after successful generation', () => {
     expect(row).toMatchObject({
       organization_id: ORG_ID,
       feature: 'rule_generation',
-      tier: 'byok',
+      tier: 'platform',
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
       context_type: 'cve',
@@ -334,7 +334,7 @@ describe('TG-1 — ai_usage_logs insert after successful generation', () => {
     expect(usageRows.length).toBe(1);
     expect(usageRows[0].row).toMatchObject({
       feature: 'rule_generation',
-      tier: 'byok',
+      tier: 'platform',
       success: false,
       error_message: 'prompt_injection_suspect',
     });

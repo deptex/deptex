@@ -244,7 +244,7 @@ describe('runRuleGenerationStep — early-exit paths', () => {
     expect(result.attempted).toBe(0);
   });
 
-  it('warns + skips when no BYOK key is resolvable', async () => {
+  it('warns + skips when no platform API key is resolvable', async () => {
     const fs = makeStorage({});
     const result = await runRuleGenerationStep(
       {
@@ -258,7 +258,7 @@ describe('runRuleGenerationStep — early-exit paths', () => {
     expect(result.attempted).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
       'rule_generation',
-      expect.stringContaining('No BYOK key for anthropic'),
+      expect.stringContaining('No platform API key for anthropic'),
     );
   });
 
@@ -441,7 +441,7 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
         organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
         supabase: fs as unknown as Storage, log,
         platformRulesDir: '/nonexistent',
-        // No BYOK key — short-circuits before any AI call. Telemetry should
+        // No platform key — short-circuits before any AI call. Telemetry should
         // still NOT be persisted since the step bailed before reaching the
         // telemetry write. Verify that explicitly.
         resolveApiKey: async () => null,

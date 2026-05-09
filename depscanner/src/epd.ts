@@ -27,7 +27,6 @@ export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFL
 export type EpdStatus =
   // legacy (Phase 4)
   | 'ai_verified'
-  | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded'
@@ -139,35 +138,6 @@ function getRunBudgetCapUsd(): number {
   const raw = process.env.EPD_MAX_RUN_COST_USD;
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_RUN_COST_USD;
-}
-
-function decryptApiKey(encrypted: string, storedVersion: number): string {
-  const parts = encrypted.split(':');
-  if (parts.length !== 3) throw new Error('Invalid encrypted key format');
-  const keyHex = process.env.AI_ENCRYPTION_KEY;
-  if (!keyHex) throw new Error('AI_ENCRYPTION_KEY is not configured');
-  const key = Buffer.from(keyHex, 'hex');
-  if (key.length !== 32) throw new Error('AI_ENCRYPTION_KEY must be 32-byte hex');
-
-  const nonce = Buffer.from(parts[0], 'base64');
-  const ciphertext = Buffer.from(parts[1], 'base64');
-  const authTag = Buffer.from(parts[2], 'base64');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
-  decipher.setAuthTag(authTag);
-  try {
-    return decipher.update(ciphertext) + decipher.final('utf8');
-  } catch {
-    // optional key rotation fallback
-    const prevHex = process.env.AI_ENCRYPTION_KEY_PREV;
-    const currentVersion = Number(process.env.AI_ENCRYPTION_KEY_VERSION || '1');
-    if (prevHex && storedVersion < currentVersion) {
-      const prevKey = Buffer.from(prevHex, 'hex');
-      const prevDecipher = crypto.createDecipheriv('aes-256-gcm', prevKey, nonce, { authTagLength: 16 });
-      prevDecipher.setAuthTag(authTag);
-      return prevDecipher.update(ciphertext) + prevDecipher.final('utf8');
-    }
-    throw new Error('Unable to decrypt Anthropic BYOK key');
-  }
 }
 
 function sanitizeVerificationResult(raw: unknown): AiVerificationResult | null {
@@ -822,8 +792,13 @@ export async function applyEpdScoringFallback(
     .eq('id', projectId)
     .single();
 
-  let hasAnthropicByok = false;
-  let decryptedApiKey: string | null = null;
+  // After the BYOK retirement (phase29_drop_byok), the Anthropic fallback
+  // path uses the platform ANTHROPIC_API_KEY env var directly. The
+  // `hasAnthropicKey` flag preserves the legacy gate semantics: when no
+  // platform key is configured, the gated fallback short-circuits and the
+  // PDV stays on the aggregator's verdict.
+  let hasAnthropicKey = false;
+  let anthropicApiKey: string | null = null;
   let anthropicModel = DEFAULT_ANTHROPIC_MODEL;
   let orgRunBudgetCapUsd: number | null = null;
   let orgBudgetExceededBehavior: 'fail_job' | 'continue_with_fallback' | null = null;
@@ -840,8 +815,6 @@ export async function applyEpdScoringFallback(
   let monthlyAiCostCapUsd: number | null = null;
   const organizationId = (projectRow as { organization_id?: string } | null)?.organization_id;
   if (organizationId) {
-    // Read BYOK provider + EPD per-org settings together. Both live on
-    // the org, and the scorer needs both before the first AI call.
     const { data: orgRow } = await supabase
       .from('organizations')
       .select('epd_max_run_cost_usd, epd_budget_exceeded_behavior')
@@ -876,56 +849,15 @@ export async function applyEpdScoringFallback(
         if (Number.isFinite(parsed) && parsed > 0) monthlyAiCostCapUsd = parsed;
       }
     }
-
-    const { data: providerRow } = await supabase
-      .from('organization_ai_providers')
-      .select('id, provider, encrypted_api_key, encryption_key_version, model_preference')
-      .eq('organization_id', organizationId)
-      .eq('provider', 'anthropic')
-      .limit(1)
-      .maybeSingle();
-    hasAnthropicByok = !!providerRow?.encrypted_api_key;
-    anthropicModel = providerRow?.model_preference || DEFAULT_ANTHROPIC_MODEL;
-    if (hasAnthropicByok && providerRow?.encrypted_api_key) {
-      try {
-        decryptedApiKey = decryptApiKey(providerRow.encrypted_api_key, Number(providerRow.encryption_key_version ?? 1));
-      } catch (err: any) {
-        hasAnthropicByok = false;
-        await logger.warn('epd', `BYOK decryption failed; using conservative fallback only: ${err.message}`, {
-          epd_phase: 'byok_decrypt',
-          organization_id: organizationId,
-          error_message: err?.message ?? String(err),
-        });
-      }
-    }
   }
 
-  // Local CLI / self-host escape: the cloud path expects an encrypted
-  // BYOK row keyed by AI_ENCRYPTION_KEY, which the local PGLite scan
-  // doesn't set up. When ANTHROPIC_API_KEY is present in the env and
-  // we don't already have a decrypted key from the DB, use it directly.
-  // ANTHROPIC_MODEL overrides the model_preference (defaults still apply
-  // to costing). Keys are never persisted — only used for this run.
-  //
-  // The `DEPTEX_LOCAL_CLI=1` gate ensures this only fires when invoked
-  // through bin/deptex-scan (which sets it explicitly). A cloud worker
-  // that happens to have ANTHROPIC_API_KEY in its environment will NOT
-  // silently fall back to it on a customer BYOK decryption failure —
-  // the customer instead gets `byok_missing` until they re-add their key.
-  // Self-hosters who deploy this worker in their own cloud and want the
-  // env-var path can opt in by setting DEPTEX_LOCAL_CLI=1 themselves.
-  if (
-    !decryptedApiKey
-    && process.env.DEPTEX_LOCAL_CLI === '1'
-    && process.env.ANTHROPIC_API_KEY
-  ) {
-    decryptedApiKey = process.env.ANTHROPIC_API_KEY;
-    hasAnthropicByok = true;
+  // Platform-key path: cloud workers ship with ANTHROPIC_API_KEY in env;
+  // self-host operators set it manually; the local CLI also reads it from
+  // .env. ANTHROPIC_MODEL overrides DEFAULT_ANTHROPIC_MODEL when set.
+  if (process.env.ANTHROPIC_API_KEY) {
+    anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    hasAnthropicKey = true;
     if (process.env.ANTHROPIC_MODEL) anthropicModel = process.env.ANTHROPIC_MODEL;
-    await logger.info('epd', 'Using ANTHROPIC_API_KEY env var (local CLI / self-host path)', {
-      epd_phase: 'byok_env',
-      anthropic_model: anthropicModel,
-    });
   }
 
   const { data: pdvRows, error: pdvErr } = await supabase
@@ -1087,7 +1019,7 @@ export async function applyEpdScoringFallback(
     epd_phase: 'start',
     project_id: projectId,
     organization_id: organizationId ?? null,
-    has_anthropic_byok: hasAnthropicByok,
+    has_anthropic_key: hasAnthropicKey,
     pdv_count: pdvRows.length,
     project_dependency_rows: deps?.length ?? 0,
     flow_row_count: flows?.length ?? 0,
@@ -1099,7 +1031,7 @@ export async function applyEpdScoringFallback(
     budget_cap_usd: runBudgetCap,
     monthly_ai_cap_usd: monthlyAiCostCapUsd,
     alpha: DEFAULT_ALPHA,
-    anthropic_model: hasAnthropicByok ? anthropicModel : null,
+    anthropic_model: hasAnthropicKey ? anthropicModel : null,
   });
 
   const updates: EpdRowUpdate[] = [];
@@ -1153,8 +1085,8 @@ export async function applyEpdScoringFallback(
     // for this PDV AND no high-confidence flow exists, OR when this
     // extraction's overall kept_on_error rate is high enough to justify
     // a sweep. Skipped entirely when the per-org flag is off (FLAG-OFF
-    // GUARD), when BYOK is missing, or when the burn breaker has already
-    // engaged for this extraction.
+    // GUARD), when no Anthropic platform key is set, or when the burn
+    // breaker has already engaged for this extraction.
     const tripleIsDegraded =
       aggregated.entry_point_classification === 'UNKNOWN' && aggregated.is_sanitized === false
       && (aggregated.epd_status === 'no_flows_evaluated' || aggregated.flowsAggregated === 0);
@@ -1179,8 +1111,8 @@ export async function applyEpdScoringFallback(
       wantsFallback
       && reachabilityStatus === 'reachable'
       && aiEligibleLevel
-      && hasAnthropicByok
-      && decryptedApiKey
+      && hasAnthropicKey
+      && anthropicApiKey
       && idx < maxVulns
       && !burnBreakerEngaged
     ) {
@@ -1289,7 +1221,7 @@ ${sourceContext || 'none'}`;
       } else {
         const callStart = Date.now();
         try {
-          const apiKey = decryptedApiKey as string;
+          const apiKey = anthropicApiKey as string;
           const ai = await verifyWithAnthropic(apiKey, anthropicModel, contextPayload, nonce);
           const callCost = estimateCostUsd(anthropicModel, ai.inputTokens, ai.outputTokens);
           runSpendUsd += callCost;
@@ -1305,7 +1237,7 @@ ${sourceContext || 'none'}`;
               organization_id: organizationId,
               user_id: organizationId,
               feature: 'taint_engine_anthropic_fallback',
-              tier: 'byok',
+              tier: 'platform',
               provider: 'anthropic',
               model: anthropicModel,
               input_tokens: ai.inputTokens,
@@ -1366,7 +1298,7 @@ ${sourceContext || 'none'}`;
                 organization_id: organizationId,
                 user_id: organizationId,
                 feature: 'taint_engine_anthropic_fallback',
-                tier: 'byok',
+                tier: 'platform',
                 provider: 'anthropic',
                 model: anthropicModel,
                 input_tokens: 0,
@@ -1390,23 +1322,13 @@ ${sourceContext || 'none'}`;
       }
     }
 
-    // No-flow PDVs on legacy / pre-Phase 6.5 schemas: when the aggregator
-    // has nothing to vote on AND no BYOK is configured, emit `byok_missing`
-    // so existing UI states keep showing the right hint. This preserves
-    // the legacy test surface without introducing a separate code path.
+    // No-flow PDVs on legacy / pre-Phase 6.5 schemas: fall back to the
+    // heuristic entry-point classification and tag fallback_no_ai so admins
+    // can tell the AI path was bypassed entirely. (Pre-phase29 this branch
+    // also emitted byok_missing when no BYOK Anthropic key was configured;
+    // BYOK is gone, so the heuristic path is now uniform.)
     let finalEpdStatus: EpdStatus = aggregated.epd_status;
-    if (
-      aggregated.epd_status === 'no_flows_evaluated'
-      && !hasAnthropicByok
-    ) {
-      finalEpdStatus = 'byok_missing';
-    } else if (
-      aggregated.epd_status === 'no_flows_evaluated'
-      && hasAnthropicByok
-    ) {
-      // BYOK is set but the aggregator path produced nothing — fall back
-      // to the heuristic entry-point classification and tag fallback_no_ai
-      // so admins can tell the AI path was bypassed entirely.
+    if (aggregated.epd_status === 'no_flows_evaluated') {
       const heuristicTag = dependencyId ? flowByDependencyId.get(dependencyId)?.tag ?? null : null;
       const heuristic = classifyFallbackEntryPoint(heuristicTag);
       const factor = reachabilityStatus === 'reachable'

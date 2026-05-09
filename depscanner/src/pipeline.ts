@@ -1392,7 +1392,7 @@ export async function runPipeline(
     // === STEP: AI rule generation (Phase 5) ===
     // For each CVE in this scan that matches the org's trigger policy AND
     // doesn't already have a rule (platform or org-generated), draft +
-    // validate a Semgrep rule via the org's BYOK provider. Validated rules
+    // validate a Semgrep rule via the platform AI key. Validated rules
     // land in organization_generated_rules and the next step
     // (reachability_rules) loads them into the same Semgrep pass that
     // matches the platform-shipped 20.
@@ -1407,7 +1407,7 @@ export async function runPipeline(
     // Skipped silently when:
     //   - no Semgrep binary (validation requires it)
     //   - no organization_reachability_settings row OR auto_generate_enabled=false
-    //   - no BYOK key for the org's chosen provider
+    //   - no platform key for the org's chosen provider
     //   - no candidate CVEs after trigger filter + dedup
     if (!(checkCancelled && await checkCancelled())) {
       if (binaryAvailable('semgrep')) {

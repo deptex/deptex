@@ -95,7 +95,7 @@ export class GenerationError extends Error {
 // ---------------------------------------------------------------------------
 // Pricing — keep in sync with backend/src/lib/ai/pricing.ts. Numbers are
 // USD per token. Models we don't recognize fall back to the cheapest known
-// price so depscanner doesn't crash on an unfamiliar BYOK model.
+// price so depscanner doesn't crash on an unfamiliar model id.
 // ---------------------------------------------------------------------------
 
 interface ModelPricing {

@@ -16,7 +16,6 @@ import type { EpdStatus } from '../../../lib/api';
 
 const ALL_STATUSES: EpdStatus[] = [
   'ai_verified',
-  'byok_missing',
   'fallback_no_ai',
   'ai_error_fallback',
   'budget_exceeded',

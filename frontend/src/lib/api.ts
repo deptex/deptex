@@ -4113,7 +4113,7 @@ export interface ProjectVulnerability {
   contextual_depscore?: number | null;
   /** EPD entry-point classification. Drives the Public/Authenticated/Background badge. */
   entry_point_classification?: EpdEntryPointClassification | null;
-  /** EPD scoring lifecycle state (ai_verified / byok_missing / fallback_no_ai / ai_error_fallback / budget_exceeded). */
+  /** EPD scoring lifecycle state (ai_verified / fallback_no_ai / ai_error_fallback / budget_exceeded). */
   epd_status?: EpdStatus | null;
   /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
@@ -5260,7 +5260,6 @@ export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'O
 export type EpdStatus =
   // legacy (Phase 4)
   | 'ai_verified'
-  | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded'
