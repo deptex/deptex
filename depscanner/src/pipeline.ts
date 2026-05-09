@@ -20,6 +20,7 @@ import { updateReachabilityLevels, computeImportCountsFromUsageSlices } from './
 import { updateJobPayloadCommit, updateJobStatus } from './job-db';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from './epd';
 import { withTimeout, logStepError, classifyError } from './with-timeout';
+import { runStage } from './pipeline-stage-runner';
 import { runIaCAndContainerScans, type ScannerSummary } from './scanners/orchestrator';
 import {
   runEngine as runTaintEngine,
@@ -462,31 +463,22 @@ export async function runPipeline(
       await log.success('cloning', 'Local workspace ready', Date.now() - cloneStart);
     } else {
       await log.info('cloning', `Cloning repository from ${(job.provider || 'github').charAt(0).toUpperCase() + (job.provider || 'github').slice(1)}...`);
-      try {
-        repoPath = await withTimeout(
-          () => retry(() => cloneByProvider(job), 'clone'),
-          15 * 60_000,
-          'clone'
-        );
-      } catch (e: any) {
-        if (job.jobId) {
-          const { code, message, stack } = classifyError(e);
-          await logStepError(supabase, {
-            jobId: job.jobId,
-            projectId,
-            step: 'clone',
-            code,
-            message,
-            stack,
-            durationMs: Date.now() - cloneStart,
-            severity: 'error',
-          });
-        }
-        const userMsg = classifyCloneError(e.message);
-        await log.error('cloning', userMsg, e);
-        await setError(supabase, projectId, userMsg);
-        throw new Error(userMsg);
-      }
+      repoPath = (await runStage({
+        name: 'clone',
+        timeoutMs: 15 * 60_000,
+        fn: () => retry(() => cloneByProvider(job), 'clone'),
+        supabase,
+        jobId: job.jobId,
+        projectId,
+        log,
+        severity: 'error',
+        onError: async ({ err }) => {
+          const userMsg = classifyCloneError((err as Error).message ?? String(err));
+          await log.error('cloning', userMsg, err);
+          await setError(supabase, projectId, userMsg);
+          return { rethrow: true, throwAs: new Error(userMsg) };
+        },
+      })) as string;
       await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
     }
 
@@ -519,29 +511,19 @@ export async function runPipeline(
     const jobEcosystem = job.ecosystem || 'npm';
 
     // === STEP: Dependency resolution (ecosystem-specific install before SBOM) ===
-    const resolveStart = Date.now();
-    try {
-      await withTimeout(
-        () => resolveDependencies(workspaceRoot, jobEcosystem, log),
-        10 * 60_000,
-        'resolve'
-      );
-    } catch (resolveErr: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(resolveErr);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'resolve',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - resolveStart,
-          severity: 'warn',
-        });
-      }
-      await log.warn('resolve', `Dependency resolution failed (non-fatal): ${resolveErr.message}`);
-    }
+    await runStage({
+      name: 'resolve',
+      timeoutMs: 10 * 60_000,
+      fn: () => resolveDependencies(workspaceRoot, jobEcosystem, log),
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      severity: 'warn',
+      onError: async ({ err }) => {
+        await log.warn('resolve', `Dependency resolution failed (non-fatal): ${(err as Error).message ?? String(err)}`);
+      },
+    });
 
     // === STEP: SBOM (CRITICAL) ===
     if (checkCancelled && await checkCancelled()) return;
@@ -549,32 +531,22 @@ export async function runPipeline(
     await log.info('sbom', 'Generating software bill of materials...');
 
     const sbomStart = Date.now();
-    let sbomPath: string;
-    try {
-      sbomPath = await withTimeout(
-        () => retry(() => Promise.resolve(runCdxgen(workspaceRoot, jobEcosystem)), 'cdxgen'),
-        15 * 60_000,
-        'sbom'
-      );
-    } catch (e: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(e);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'sbom',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - sbomStart,
-          severity: 'error',
-        });
-      }
-      const userMsg = classifyCdxgenError(e.message);
-      await log.error('sbom', userMsg, e);
-      await setError(supabase, projectId, userMsg);
-      throw new Error(userMsg);
-    }
+    const sbomPath = (await runStage({
+      name: 'sbom',
+      timeoutMs: 15 * 60_000,
+      fn: () => retry(() => Promise.resolve(runCdxgen(workspaceRoot, jobEcosystem)), 'cdxgen'),
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      severity: 'error',
+      onError: async ({ err }) => {
+        const userMsg = classifyCdxgenError((err as Error).message ?? String(err));
+        await log.error('sbom', userMsg, err);
+        await setError(supabase, projectId, userMsg);
+        return { rethrow: true, throwAs: new Error(userMsg) };
+      },
+    })) as string;
 
     const sbomContent = fs.readFileSync(sbomPath, 'utf8');
     const sbom = JSON.parse(sbomContent) as Parameters<typeof parseSbom>[0];
@@ -633,9 +605,15 @@ export async function runPipeline(
     await updateStep(supabase, projectId, 'deps_synced');
     // deps sync — no user-facing log
 
-    const syncStart = Date.now();
-    try {
-      await withTimeout(async () => {
+    await runStage({
+      name: 'deps_sync',
+      timeoutMs: 5 * 60_000,
+      severity: 'error',
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      fn: async () => {
 
     const uniqueDeps = new Map<string, ParsedSbomDep>();
     for (const d of dependencies) {
@@ -801,23 +779,8 @@ export async function runPipeline(
     const transitiveCount = projectDepsToUpsert.length - directCount;
     // deps sync complete (no user-facing log — internal step)
 
-      }, 5 * 60_000, 'deps_sync');
-    } catch (depsSyncErr: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(depsSyncErr);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'deps_sync',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - syncStart,
-          severity: 'error',
-        });
-      }
-      throw depsSyncErr;
-    }
+      },
+    });
 
     // === Usage extraction (tree-sitter) ===
     // Replaces the old oxc-based npm-only AST pass. Language modules land
@@ -827,9 +790,15 @@ export async function runPipeline(
     let astParsedSuccessfully = false;
     await updateStep(supabase, projectId, 'usage_extraction');
     {
-      const extractStart = Date.now();
-      try {
-        await withTimeout(async () => {
+      await runStage({
+        name: 'usage_extraction',
+        timeoutMs: 5 * 60_000,
+        severity: 'warn',
+        supabase,
+        jobId: job.jobId,
+        projectId,
+        log,
+        fn: async () => {
           const deps: Array<{ name: string; namespace: string | null }> = [];
           {
             const { data: depRows, error: depFetchErr } = await supabase
@@ -937,23 +906,9 @@ export async function runPipeline(
           } else if (entryResult.count > 0) {
             await log.info('framework_detection', `Detected ${entryResult.count} framework entry point(s)`);
           }
-        }, 5 * 60_000, 'usage_extraction');
-      } catch (err: any) {
-        if (job.jobId) {
-          const { code, message, stack } = classifyError(err);
-          await logStepError(supabase, {
-            jobId: job.jobId,
-            projectId,
-            step: 'usage_extraction',
-            code,
-            message,
-            stack,
-            durationMs: Date.now() - extractStart,
-            severity: 'warn',
-          });
-        }
-        /* non-fatal */
-      }
+        },
+        // non-fatal — runner persists the failure as warn and swallows.
+      });
     }
 
     // (taint_engine step runs later — after reachability_rules — so its
@@ -987,8 +942,23 @@ export async function runPipeline(
     const reportsDir = path.join(workspaceRoot, 'depscan-reports');
     let depScanSucceeded = false;
 
-    try {
-      await withTimeout(async (signal) => {
+    await runStage({
+      name: 'dep_scan',
+      timeoutMs: 45 * 60_000,
+      severity: 'warn',
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      onError: async ({ err }) => {
+        const msg = (err as Error).message ?? String(err);
+        if (/timed out|timeout/i.test(msg)) {
+          await log.warn('vuln_scan', 'Vulnerability scan timed out');
+        } else {
+          await log.warn('vuln_scan', `Vulnerability scan failed: ${msg}`);
+        }
+      },
+      fn: async (signal) => {
       fs.mkdirSync(reportsDir, { recursive: true });
       const bomArg = path.join(workspaceRoot, 'sbom.json');
       const outArg = reportsDir;
@@ -1076,27 +1046,8 @@ export async function runPipeline(
           throw spawnErr;
         }
       }
-      }, 45 * 60_000, 'dep_scan');
-    } catch (e: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(e);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'dep_scan',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - scanStart,
-          severity: 'warn',
-        });
-      }
-      if (/timed out|timeout/i.test(e.message)) {
-        await log.warn('vuln_scan', 'Vulnerability scan timed out');
-      } else {
-        await log.warn('vuln_scan', `Vulnerability scan failed: ${e.message}`);
-      }
-    }
+      },
+    });
 
     // Process dep-scan results (same logic as before, but with logger)
     const listVdrFiles = (dir: string): string[] => {
@@ -1411,7 +1362,19 @@ export async function runPipeline(
     //   - no candidate CVEs after trigger filter + dedup
     if (!(checkCancelled && await checkCancelled())) {
       if (binaryAvailable('semgrep')) {
-        try {
+        await runStage({
+          name: 'rule_generation',
+          severity: 'warn',
+          omitDuration: true,
+          supabase,
+          jobId: job.jobId,
+          projectId,
+          log,
+          onError: async ({ err }) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            await log.warn('rule_generation', `Step failed: ${msg}`);
+          },
+          fn: async () => {
           const candidatesQuery = await supabase
             .from('project_dependency_vulnerabilities')
             .select('osv_id, severity, cisa_kev, reachability_level, aliases, project_dependency_id')
@@ -1482,22 +1445,8 @@ export async function runPipeline(
             },
             pipelineVulns,
           );
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (job.jobId) {
-            const { code, message, stack } = classifyError(e);
-            await logStepError(supabase, {
-              jobId: job.jobId,
-              projectId,
-              step: 'rule_generation',
-              code,
-              message,
-              stack,
-              severity: 'warn',
-            });
-          }
-          await log.warn('rule_generation', `Step failed: ${msg}`);
-        }
+          },
+        });
       }
     }
 
@@ -1910,6 +1859,9 @@ export async function runPipeline(
     try {
       await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, taintEngineFpFilterCostUsd);
     } catch (epdErr: any) {
+      // EpdBudgetExceededError must propagate WITHOUT persisting an
+      // extraction_step_errors row — env / per-org `fail_job` is the only
+      // intended consumer and a stray warn-row would muddy ops triage.
       if (epdErr instanceof EpdBudgetExceededError) throw epdErr;
       if (job.jobId) {
         const { code, message, stack } = classifyError(epdErr);
@@ -1938,7 +1890,20 @@ export async function runPipeline(
     // warn step_error and the pipeline continues.
     let scannerSummary: ScannerSummary | null = null;
     if (checkCancelled && await checkCancelled()) return;
-    try {
+    const scannerSummaryResult = await runStage<ScannerSummary | null>({
+      name: 'iac_container_scan',
+      severity: 'warn',
+      omitDuration: true,
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      onError: async ({ err }) => {
+        // Top-level orchestrator failure (shouldn't happen — orchestrator
+        // catches per-scanner failures internally — but defensive).
+        await log.warn('iac_scan', `IaC + container scan failed: ${(err as Error)?.message ?? err}`);
+      },
+      fn: async () => {
       // Resolve the org's GitHub App installation id once (used by ghcr.io
       // namespace check during container scan). Failure to resolve is OK —
       // the scanner will conservatively skip ghcr.io images.
@@ -1954,7 +1919,7 @@ export async function runPipeline(
             ?.github_installation_id ?? null;
       } catch { /* non-fatal */ }
 
-      scannerSummary = await runIaCAndContainerScans({
+      return await runIaCAndContainerScans({
         supabase: supabase as any,
         projectId,
         organizationId,
@@ -1970,29 +1935,24 @@ export async function runPipeline(
           if (heartbeat) await heartbeat();
         },
       });
-    } catch (err: any) {
-      // Top-level orchestrator failure (shouldn't happen — orchestrator
-      // catches per-scanner failures internally — but defensive).
-      await log.warn('iac_scan', `IaC + container scan failed: ${err?.message ?? err}`);
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(err);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'iac_container_scan',
-          code,
-          message,
-          stack,
-          severity: 'warn',
-        });
-      }
-    }
+      },
+    });
+    if (scannerSummaryResult !== undefined) scannerSummary = scannerSummaryResult;
 
     // === STEP: Malicious-package scan (OPTIONAL, soft-fail) ===
     if (checkCancelled && await checkCancelled()) return;
     {
-      const malStart = Date.now();
-      try {
+      await runStage({
+        name: 'malicious_scan',
+        severity: 'warn',
+        supabase,
+        jobId: job.jobId,
+        projectId,
+        log,
+        onError: async ({ err }) => {
+          await log.warn('malicious_scan', `Malicious-package scan failed: ${(err as Error)?.message ?? err}`);
+        },
+        fn: async () => {
         const { data: pdRows, error: pdErr } = await supabase
           .from('project_dependencies')
           .select('id, name, version, dependency_id')
@@ -2128,22 +2088,8 @@ export async function runPipeline(
               .eq('id', job.jobId);
           } catch { /* column landed in malicious_packages_scan_status.sql */ }
         }
-      } catch (err: any) {
-        if (job.jobId) {
-          const { code, message, stack } = classifyError(err);
-          await logStepError(supabase, {
-            jobId: job.jobId,
-            projectId,
-            step: 'malicious_scan',
-            code,
-            message,
-            stack,
-            durationMs: Date.now() - malStart,
-            severity: 'warn',
-          });
-        }
-        await log.warn('malicious_scan', `Malicious-package scan failed: ${err?.message ?? err}`);
-      }
+        },
+      });
     }
 
     // === STEP: Semgrep (OPTIONAL) ===
@@ -2154,8 +2100,23 @@ export async function runPipeline(
     await log.info('semgrep', 'Running static code analysis...');
     const semgrepStart = Date.now();
     let semgrepFindings = 0;
-    try {
-      await withTimeout(async () => {
+    await runStage({
+      name: 'semgrep',
+      timeoutMs: 20 * 60_000,
+      severity: 'warn',
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      onError: async ({ err }) => {
+        const e = err as { status?: number; message?: string };
+        if (e?.status === 137) {
+          await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
+        } else {
+          await log.warn('semgrep', 'Static analysis failed');
+        }
+      },
+      fn: async () => {
       execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null || true`, {
         stdio: 'pipe',
         timeout: 60000,
@@ -2259,27 +2220,8 @@ export async function runPipeline(
       } else {
         await log.warn('semgrep', 'Static analysis skipped (Semgrep not installed)');
       }
-      }, 20 * 60_000, 'semgrep');
-    } catch (e: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(e);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'semgrep',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - semgrepStart,
-          severity: 'warn',
-        });
-      }
-      if (e.status === 137) {
-        await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
-      } else {
-        await log.warn('semgrep', 'Static analysis failed');
-      }
-    }
+      },
+    });
     }
 
     // === STEP: TruffleHog (OPTIONAL) ===
@@ -2289,8 +2231,18 @@ export async function runPipeline(
     } else {
     await log.info('trufflehog', 'Scanning for exposed secrets...');
     const thStart = Date.now();
-    try {
-      await withTimeout(async () => {
+    await runStage({
+      name: 'trufflehog',
+      timeoutMs: 10 * 60_000,
+      severity: 'warn',
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      onError: async ({ err }) => {
+        await log.warn('trufflehog', `Secret scanning failed: ${(err as Error).message ?? String(err)}`);
+      },
+      fn: async () => {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
       const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
 
@@ -2445,23 +2397,8 @@ export async function runPipeline(
       } else {
         await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or no output)');
       }
-      }, 10 * 60_000, 'trufflehog');
-    } catch (thErr: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(thErr);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'trufflehog',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - thStart,
-          severity: 'warn',
-        });
-      }
-      await log.warn('trufflehog', `Secret scanning failed: ${thErr.message}`);
-    }
+      },
+    });
     }
 
     // === STEP: Finalize ===
@@ -2508,65 +2445,61 @@ export async function runPipeline(
     //   - Returns summary JSONB — use for vulnerability_updates notification emission
     const finalizeStart = Date.now();
     let finalizeSummary: unknown = null;
-    try {
-      const { data: finalizeData, error: finalizeErr } = await withTimeout(
-        async () => await supabase.rpc('finalize_extraction', {
+    await runStage({
+      name: 'finalize',
+      // 10min budget. Finalize does mark-removed + carry-forward + trigger
+      // detection + lifecycle events + SLA computation + pointer flip + reap
+      // in a single transaction. For projects with 100k+ PDVs the carry-
+      // forward / reap stages can legitimately take minutes on shared
+      // Supabase infra. Original 2min budget caused premature timeouts on
+      // large monorepos, leaving the active_extraction_run_id pointer
+      // un-flipped and findings invisible until the next successful run.
+      timeoutMs: 10 * 60_000,
+      severity: 'error',
+      supabase,
+      jobId: job.jobId,
+      projectId,
+      log,
+      onError: async ({ err }) => {
+        await log.error('finalize', `Atomic commit failed: ${(err as Error).message ?? String(err)}`);
+        return { rethrow: true };
+      },
+      fn: async () => {
+        const { data: finalizeData, error: finalizeErr } = await supabase.rpc('finalize_extraction', {
           p_job_id: job.jobId ?? null,
           p_project_id: projectId,
           p_extraction_run_id: runId,
-        }),
-        // 10min budget. Finalize does mark-removed + carry-forward + trigger
-        // detection + lifecycle events + SLA computation + pointer flip + reap
-        // in a single transaction. For projects with 100k+ PDVs the carry-
-        // forward / reap stages can legitimately take minutes on shared
-        // Supabase infra. Original 2min budget caused premature timeouts on
-        // large monorepos, leaving the active_extraction_run_id pointer
-        // un-flipped and findings invisible until the next successful run.
-        10 * 60_000,
-        'finalize'
-      );
-      if (finalizeErr) {
-        // Persist the original RPC error directly — by the time this re-throws
-        // and lands in the outer catch, classifyError sees only the wrapped
-        // 'unexpected' string and the structured Supabase error code is lost.
-        // Match the structure of the async-throw catch below.
-        if (job.jobId) {
-          const { code, message, stack } = classifyError(finalizeErr);
-          await logStepError(supabase, {
-            jobId: job.jobId,
-            projectId,
-            step: 'finalize',
-            code,
-            message,
-            stack,
-            durationMs: Date.now() - finalizeStart,
-            severity: 'error',
-          });
-        }
-        await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
-        throw new Error(`finalize_extraction: ${finalizeErr.message}`);
-      }
-      // RPC returns jsonb (deps_removed, vulns_new, extraction_run_id, etc.).
-      // CLI plumbs this into summary.json.finalize_summary; production worker
-      // discards it.
-      finalizeSummary = finalizeData ?? null;
-    } catch (finalizeErr: any) {
-      if (job.jobId) {
-        const { code, message, stack } = classifyError(finalizeErr);
-        await logStepError(supabase, {
-          jobId: job.jobId,
-          projectId,
-          step: 'finalize',
-          code,
-          message,
-          stack,
-          durationMs: Date.now() - finalizeStart,
-          severity: 'error',
         });
-      }
-      await log.error('finalize', `Atomic commit failed: ${finalizeErr.message}`);
-      throw finalizeErr;
-    }
+        if (finalizeErr) {
+          // Persist the original RPC error directly — by the time this
+          // re-throws and the runner's catch sees the wrapped Error,
+          // classifyError loses the structured Supabase error code. So we
+          // write the structured row here BEFORE re-throwing; the runner
+          // will then write a second row keyed on the wrapped 'unexpected'
+          // shape (matching the prior dual-row behavior of the inline
+          // try/catch this stage replaced).
+          if (job.jobId) {
+            const { code, message, stack } = classifyError(finalizeErr);
+            await logStepError(supabase, {
+              jobId: job.jobId,
+              projectId,
+              step: 'finalize',
+              code,
+              message,
+              stack,
+              durationMs: Date.now() - finalizeStart,
+              severity: 'error',
+            });
+          }
+          await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
+          throw new Error(`finalize_extraction: ${finalizeErr.message}`);
+        }
+        // RPC returns jsonb (deps_removed, vulns_new, extraction_run_id, etc.).
+        // CLI plumbs this into summary.json.finalize_summary; production worker
+        // discards it.
+        finalizeSummary = finalizeData ?? null;
+      },
+    });
 
     // Post-finalize: write detected infra types onto the projects row. This
     // happens AFTER finalize_extraction returns success (architect-f5: NOT
