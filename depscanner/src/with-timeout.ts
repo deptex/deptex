@@ -116,6 +116,21 @@ export async function logStepError(
       step: opts.step,
       code: opts.code,
     });
+    // Last-ditch structured marker: when Supabase is down, this is the only
+    // record of the original error we were trying to persist. Operators can
+    // grep `[LOGSTEPERROR_FALLBACK]` to recover the swallowed errors.
+    console.error(
+      '[LOGSTEPERROR_FALLBACK]',
+      JSON.stringify({
+        jobId: opts.jobId,
+        projectId: opts.projectId,
+        step: opts.step,
+        code: opts.code,
+        severity: opts.severity ?? 'error',
+        originalErrorMessage: opts.message,
+        insertFailureReason: error.message,
+      }),
+    );
   }
 }
 

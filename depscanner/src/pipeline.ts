@@ -580,8 +580,20 @@ export async function runPipeline(
           contentType: 'application/json',
           upsert: true,
         });
-    } catch {
-      await log.warn('sbom', 'SBOM upload to storage failed (non-fatal)');
+    } catch (e: any) {
+      await log.warn('sbom', `SBOM storage upload failed; downstream tools may reference missing SBOM: ${e?.message ?? e}`);
+      if (job.jobId) {
+        const { code, message, stack } = classifyError(e);
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'sbom',
+          code,
+          message,
+          stack,
+          severity: 'warn',
+        });
+      }
     }
 
     const { dependencies, relationships } = parseSbom(sbom);
@@ -841,6 +853,22 @@ export async function runPipeline(
               perFileErrorCount++;
               if (perFileErrorCount <= 5) {
                 log.warn('usage_extraction', `Failed to parse ${filePath}: ${fileErr.message}`).catch(() => {});
+                // Match the 5-log cap: persist the same first-5 per-file
+                // errors so ops triage sees what surfaced in the realtime
+                // stream. The outer timeout/throw catch (below) covers the
+                // tail; this fills in granular tree-sitter failures.
+                if (job.jobId) {
+                  const { code, message, stack } = classifyError(fileErr);
+                  logStepError(supabase, {
+                    jobId: job.jobId,
+                    projectId,
+                    step: 'usage_extraction',
+                    code,
+                    message: `${filePath}: ${message}`,
+                    stack,
+                    severity: 'warn',
+                  }).catch(() => {});
+                }
               }
             },
           });
@@ -866,6 +894,16 @@ export async function runPipeline(
             astParsedSuccessfully = true;
           } else if (storeResult.error) {
             await log.warn('usage_extraction', `Usage-extraction write failed: ${storeResult.error}`);
+            if (job.jobId) {
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'usage_extraction',
+                code: 'usage_store_failed',
+                message: storeResult.error,
+                severity: 'warn',
+              });
+            }
           }
 
           // Framework entry-point detection. Each language module already ran
@@ -876,6 +914,16 @@ export async function runPipeline(
           const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files);
           if (!entryResult.success && entryResult.error) {
             await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);
+            if (job.jobId) {
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'usage_extraction',
+                code: 'entry_point_write_failed',
+                message: entryResult.error,
+                severity: 'warn',
+              });
+            }
           } else if (entryResult.count > 0) {
             await log.info('framework_detection', `Detected ${entryResult.count} framework entry point(s)`);
           }
@@ -2109,7 +2157,21 @@ export async function runPipeline(
         try {
           semgrepParsed = JSON.parse(content);
           semgrepFindings = Array.isArray(semgrepParsed?.results) ? semgrepParsed.results.length : 0;
-        } catch { /* ignore parse errors */ }
+        } catch (e: any) {
+          await log.warn('semgrep', `Semgrep emitted malformed JSON; findings for this run dropped: ${e?.message ?? e}`);
+          if (job.jobId) {
+            const { code, message, stack } = classifyError(e);
+            await logStepError(supabase, {
+              jobId: job.jobId,
+              projectId,
+              step: 'semgrep',
+              code,
+              message,
+              stack,
+              severity: 'warn',
+            });
+          }
+        }
         try {
           await supabase.storage
             .from('project-imports')
@@ -2453,6 +2515,23 @@ export async function runPipeline(
         'finalize'
       );
       if (finalizeErr) {
+        // Persist the original RPC error directly — by the time this re-throws
+        // and lands in the outer catch, classifyError sees only the wrapped
+        // 'unexpected' string and the structured Supabase error code is lost.
+        // Match the structure of the async-throw catch below.
+        if (job.jobId) {
+          const { code, message, stack } = classifyError(finalizeErr);
+          await logStepError(supabase, {
+            jobId: job.jobId,
+            projectId,
+            step: 'finalize',
+            code,
+            message,
+            stack,
+            durationMs: Date.now() - finalizeStart,
+            severity: 'error',
+          });
+        }
         await log.error('finalize', `finalize_extraction RPC failed: ${finalizeErr.message}`);
         throw new Error(`finalize_extraction: ${finalizeErr.message}`);
       }

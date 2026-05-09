@@ -471,10 +471,10 @@ export async function runRuleGenerationStep(
       );
       // Persist the failed attempt too — gives the org a record they can
       // see in the Settings UI ("we tried this CVE, failed at validation").
-      await persistGeneratedRule(supabase, organizationId, r.result, log);
+      await persistGeneratedRule(supabase, organizationId, r.result, log, jobId, projectId);
       continue;
     }
-    const persisted = await persistGeneratedRule(supabase, organizationId, r.result, log);
+    const persisted = await persistGeneratedRule(supabase, organizationId, r.result, log, jobId, projectId);
     if (persisted) generatedCount++;
   }
 
@@ -509,6 +509,7 @@ export async function runRuleGenerationStep(
   await persistJobTelemetry({
     supabase,
     jobId,
+    projectId,
     organizationId,
     triggerMatched: triggerMatchedVulns.length,
     alreadyCovered,
@@ -795,6 +796,8 @@ async function persistGeneratedRule(
   organizationId: string,
   result: GenerationResult,
   log: LogLike,
+  jobId: string | undefined,
+  projectId: string,
 ): Promise<boolean> {
   // Look up an existing pending row (the regenerate endpoint marks rows
   // pending; the next scan picks those up). If found, update in place to
@@ -892,8 +895,20 @@ async function persistGeneratedRule(
   } catch (err) {
     await log.warn(
       STEP_NAME,
-      `Failed to persist rule for ${result.cveId}: ${err instanceof Error ? err.message : String(err)}`,
+      `persistGeneratedRule upsert failed; generated rule lost for ${result.cveId}: ${err instanceof Error ? err.message : String(err)}`,
     );
+    if (jobId) {
+      const { code, message, stack } = classifyError(err);
+      await logStepError(supabase, {
+        jobId,
+        projectId,
+        step: STEP_NAME,
+        code,
+        message,
+        stack,
+        severity: 'warn',
+      });
+    }
     return false;
   }
 }
@@ -935,6 +950,7 @@ export function aggregateBreakdowns(breakdowns: ValidationBreakdown[]): Aggregat
 interface JobTelemetryArgs {
   supabase: Storage;
   jobId: string | undefined;
+  projectId: string;
   organizationId: string;
   triggerMatched: number;
   alreadyCovered: number;
@@ -967,6 +983,20 @@ async function persistJobTelemetry(args: JobTelemetryArgs): Promise<void> {
       .eq('organization_id', args.organizationId);
   } catch (err) {
     await args.log.warn(STEP_NAME, `Failed to persist telemetry on scan_jobs: ${err instanceof Error ? err.message : String(err)}`);
+    // Telemetry persistence is correctness-critical (cost tracking, CVE
+    // coverage metrics). Surface the failure to extraction_step_errors
+    // so ops can detect breakage like the extraction_jobs→scan_jobs rename
+    // that silently dropped 100% of telemetry writes pre-PR-#39.
+    const { code, message, stack } = classifyError(err);
+    await logStepError(args.supabase, {
+      jobId: args.jobId,
+      projectId: args.projectId,
+      step: STEP_NAME,
+      code,
+      message,
+      stack,
+      severity: 'error',
+    });
   }
 }
 
