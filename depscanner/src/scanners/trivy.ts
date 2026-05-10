@@ -114,7 +114,12 @@ export function extractGhcrOwner(imageRef: string): string | null {
 // Trivy IaC (config) — Dockerfile misconfig
 // ============================================================
 
-const TRIVY_RULE_RE = /^trivy:[A-Z0-9-]+:[\w./@\-+:#=,]+$/;
+// Trivy emits Resource strings like `Dockerfile:RUN apt-get install foo`,
+// where the cause segment legitimately contains whitespace and a handful of
+// shell-shaped chars. The fingerprint validator must accept these so we don't
+// drop real findings; the rule-id segment stays restrictive (uppercase
+// alphanum + dashes) since Trivy's IDs are stable.
+const TRIVY_RULE_RE = /^trivy:[A-Z0-9-]+:[\w./@\-+:#=,\s\[\](){}'"$*?!|<>]+$/;
 
 interface TrivyConfigMisconfig {
   ID?: string;

@@ -169,6 +169,37 @@ describe('parseTrivyConfigOutput', () => {
     expect(findings[0].iac_fingerprint).toBe('trivy:AVD-DS-0001:Dockerfile:RUN');
   });
 
+  it('accepts Resource values containing whitespace (Dockerfile RUN/COPY/etc.)', () => {
+    // Trivy commonly emits Resource strings like `Dockerfile:RUN apt-get install foo`.
+    // The fingerprint validator must allow whitespace inside the cause segment.
+    const sample = JSON.stringify({
+      Results: [
+        {
+          Target: 'Dockerfile',
+          Type: 'dockerfile',
+          Misconfigurations: [
+            {
+              ID: 'AVD-DS-0026',
+              AVDID: 'AVD-DS-0026',
+              Title: 'no-healthcheck',
+              Severity: 'LOW',
+              CauseMetadata: {
+                Resource: 'Dockerfile:RUN apt-get install -y curl',
+                StartLine: 7,
+                EndLine: 7,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const findings = parseTrivyConfigOutput(sample, 'trivy@0.50.4');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].iac_fingerprint).toBe(
+      'trivy:AVD-DS-0026:Dockerfile:RUN apt-get install -y curl',
+    );
+  });
+
   it('returns [] on malformed JSON', () => {
     expect(parseTrivyConfigOutput('not json {{{', 'trivy@0.50.4')).toEqual([]);
   });
