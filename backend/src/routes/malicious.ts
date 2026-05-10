@@ -56,16 +56,24 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
     // of the canonical levels; unrecognised values are silently dropped
     // so a malformed URL doesn't 500 the page.
     const VALID_LEVELS = ['function', 'module', 'imported_unused', 'unimported'];
-    const requested = String(req.query.reachability ?? '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
+    const rawQuery = String(req.query.reachability ?? '').trim();
+    const requested = rawQuery
+      ? rawQuery.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
     const reachabilityLevels = requested.filter(s => VALID_LEVELS.includes(s));
     const includeUnknown = requested.includes('unknown');
+    // Early-return shortcut: the param wasn't supplied (or contained only
+    // unrecognised values), so we have no filter to apply. Skip the
+    // closure-and-branch dance below entirely — the two callsites can hit
+    // the base query directly. Keeps the hot read path one stack frame
+    // shorter and makes the "sentinel only" / "levels only" branches the
+    // sole reason `applyReachabilityFilter` exists.
+    const hasReachabilityFilter = reachabilityLevels.length > 0 || includeUnknown;
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const applyReachabilityFilter = <T extends { or: any; in: any; is: any }>(q: T): T => {
+      if (!hasReachabilityFilter) return q;
       if (reachabilityLevels.length > 0 && includeUnknown) {
         // mix of "function,unknown" — OR clause across the list + null check
         const inList = reachabilityLevels.map(l => `"${l}"`).join(',');
@@ -74,10 +82,9 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
       if (reachabilityLevels.length > 0) {
         return q.in('reachability_level', reachabilityLevels);
       }
-      if (includeUnknown) {
-        return q.is('reachability_level', null);
-      }
-      return q;
+      // includeUnknown — must be true here, since hasReachabilityFilter held
+      // and reachabilityLevels was empty.
+      return q.is('reachability_level', null);
     };
 
     const { count } = await applyReachabilityFilter(
