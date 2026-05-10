@@ -88,9 +88,20 @@ async function recordWebhookDelivery(
   payloadSize: number,
   status: string = 'received'
 ) {
+  // See backend/src/routes/integrations.ts:recordWebhookDelivery for the
+  // rationale: collapsing missing-header deliveries onto the literal
+  // 'unknown' silently breaks dedup once the UNIQUE (delivery_id, provider)
+  // index is in place. Synthetic UUID + warning preserves the audit row.
+  let resolvedDeliveryId = deliveryId;
+  if (!resolvedDeliveryId) {
+    resolvedDeliveryId = crypto.randomUUID();
+    console.warn(
+      `[bitbucket webhook] missing x-request-uuid header; assigned synthetic id ${resolvedDeliveryId}`
+    );
+  }
   try {
     await supabase.from('webhook_deliveries').insert({
-      delivery_id: deliveryId || 'unknown',
+      delivery_id: resolvedDeliveryId,
       provider: 'bitbucket',
       event_type: eventType,
       action,

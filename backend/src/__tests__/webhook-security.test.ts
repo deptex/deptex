@@ -17,6 +17,7 @@ import {
   setTableResponse,
   clearTableRegistry,
 } from '../test/mocks/supabaseSingleton';
+import { queryBuilder } from '../test/mocks/supabaseSingleton';
 
 // Disable real outbound rate limit (it falls back to allow when Redis envs are
 // missing in the test env, but we set this anyway to avoid surprises).
@@ -270,5 +271,106 @@ describe('GitHub webhook signature verification', () => {
 
     expect(res.body.received).toBe(true);
     expect([200, 202]).toContain(res.status);
+  });
+});
+
+describe('recordWebhookDelivery — synthetic id when delivery header is missing', () => {
+  // delivery_id used to default to the literal 'unknown' when the upstream
+  // header was absent. With the new UNIQUE (delivery_id, provider) index
+  // (phase32) every header-less delivery would have collided; we now
+  // generate a UUID and warn. This guard ensures we never regress to
+  // 'unknown' or to a NULL insert.
+  function findInsertFor(provider: string): Record<string, any> | undefined {
+    return queryBuilder.insert.mock.calls
+      .map((c: any[]) => c[0])
+      .find((p: any) => p && p.provider === provider);
+  }
+
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    queryBuilder.insert.mockClear();
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('GitLab: assigns a UUID and warns when x-gitlab-event-uuid is absent', async () => {
+    setTableResponse('project_repositories', 'then', {
+      data: [{ webhook_secret: 'gl-secret' }],
+      error: null,
+    });
+
+    const app = makeApp((a) => a.use('/api/integrations', gitlabRouter));
+    await request(app)
+      .post('/api/integrations/webhooks/gitlab')
+      .set('x-gitlab-token', 'gl-secret')
+      .set('x-gitlab-event', 'Push Hook')
+      // x-gitlab-event-uuid intentionally omitted
+      .send({ project: { path_with_namespace: 'acme/repo' } });
+
+    const inserted = findInsertFor('gitlab');
+    expect(inserted).toBeDefined();
+    expect(inserted!.delivery_id).not.toBe('unknown');
+    expect(inserted!.delivery_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/missing x-gitlab-event-uuid header/)
+    );
+  });
+
+  it('GitLab: preserves the upstream delivery_id when present', async () => {
+    setTableResponse('project_repositories', 'then', {
+      data: [{ webhook_secret: 'gl-secret' }],
+      error: null,
+    });
+
+    const app = makeApp((a) => a.use('/api/integrations', gitlabRouter));
+    await request(app)
+      .post('/api/integrations/webhooks/gitlab')
+      .set('x-gitlab-token', 'gl-secret')
+      .set('x-gitlab-event', 'Push Hook')
+      .set('x-gitlab-event-uuid', 'gl-real-id-99')
+      .send({ project: { path_with_namespace: 'acme/repo' } });
+
+    const inserted = findInsertFor('gitlab');
+    expect(inserted!.delivery_id).toBe('gl-real-id-99');
+    // Other warnings (Upstash Redis missing-env in the test runner) are
+    // expected; ours specifically must NOT fire when the header is present.
+    const synthWarn = warnSpy.mock.calls.find((c) =>
+      typeof c[0] === 'string' && c[0].includes('missing x-gitlab-event-uuid')
+    );
+    expect(synthWarn).toBeUndefined();
+  });
+
+  it('Bitbucket: assigns a UUID and warns when x-request-uuid is absent', async () => {
+    setTableResponse('project_repositories', 'then', {
+      data: [{ webhook_secret: 'bb-secret' }],
+      error: null,
+    });
+
+    const app = makeApp((a) => a.use('/api/integrations', bitbucketRouter));
+    const body = JSON.stringify({ repository: { full_name: 'acme/repo' } });
+    const sig = 'sha256=' + crypto.createHmac('sha256', 'bb-secret').update(body).digest('hex');
+    await request(app)
+      .post('/api/integrations/webhooks/bitbucket')
+      .set('x-event-key', 'repo:push')
+      // x-request-uuid intentionally omitted
+      .set('x-hub-signature', sig)
+      .set('Content-Type', 'application/json')
+      .send(body);
+
+    const inserted = findInsertFor('bitbucket');
+    expect(inserted).toBeDefined();
+    expect(inserted!.delivery_id).not.toBe('unknown');
+    expect(inserted!.delivery_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/missing x-request-uuid header/)
+    );
   });
 });

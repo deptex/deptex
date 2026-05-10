@@ -1669,9 +1669,23 @@ async function recordWebhookDelivery(
   payloadSize: number,
   status: string = 'received'
 ) {
+  // delivery_id used to fall back to the literal 'unknown' when the
+  // x-github-delivery header was absent. Every such row collided with every
+  // other under the new UNIQUE (delivery_id, provider) index and dedup
+  // silently broke (one 'unknown' would shadow all later ones for an hour).
+  // Generate a UUID instead so each header-less delivery still gets an
+  // audit row that doesn't collide; emit a warning so the upstream bug
+  // (forged webhook? proxy stripping headers?) is visible.
+  let resolvedDeliveryId = deliveryId;
+  if (!resolvedDeliveryId) {
+    resolvedDeliveryId = crypto.randomUUID();
+    console.warn(
+      `[github webhook] missing x-github-delivery header; assigned synthetic id ${resolvedDeliveryId}`
+    );
+  }
   try {
     await supabase.from('webhook_deliveries').insert({
-      delivery_id: deliveryId || 'unknown',
+      delivery_id: resolvedDeliveryId,
       provider: 'github',
       event_type: eventType,
       action,
