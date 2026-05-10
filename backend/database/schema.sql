@@ -4926,6 +4926,8 @@ DECLARE
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
+  v_iac_deleted INTEGER := 0;
+  v_container_deleted INTEGER := 0;
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -4995,6 +4997,20 @@ BEGIN
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_entry_points_deleted = ROW_COUNT;
 
+  DELETE FROM project_iac_findings
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_iac_deleted = ROW_COUNT;
+
+  DELETE FROM project_container_findings
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_container_deleted = ROW_COUNT;
+
   RETURN jsonb_build_object(
     'project_id', p_project_id,
     'active', v_active,
@@ -5006,7 +5022,9 @@ BEGIN
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
     'dep_functions_deleted', v_fns_deleted,
-    'entry_points_deleted', v_entry_points_deleted
+    'entry_points_deleted', v_entry_points_deleted,
+    'iac_deleted', v_iac_deleted,
+    'container_deleted', v_container_deleted
   );
 END;
 $function$
@@ -5030,6 +5048,8 @@ DECLARE
   v_fns_deleted INTEGER := 0;
   v_events_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
+  v_iac_deleted INTEGER := 0;
+  v_container_deleted INTEGER := 0;
   v_temp INTEGER;
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
@@ -5094,6 +5114,16 @@ BEGIN
     GET DIAGNOSTICS v_temp = ROW_COUNT;
     v_entry_points_deleted := v_entry_points_deleted + v_temp;
 
+    DELETE FROM project_iac_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_iac_deleted := v_iac_deleted + v_temp;
+
+    DELETE FROM project_container_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_container_deleted := v_container_deleted + v_temp;
+
     DELETE FROM project_dependencies
     WHERE project_id = v_orphan.project_id
       AND last_seen_extraction_run_id = v_orphan.run_id;
@@ -5120,6 +5150,8 @@ BEGIN
     'fns_deleted', v_fns_deleted,
     'events_deleted', v_events_deleted,
     'entry_points_deleted', v_entry_points_deleted,
+    'iac_deleted', v_iac_deleted,
+    'container_deleted', v_container_deleted,
     'orphan_runs', v_orphan_runs
   );
 END;
@@ -5184,7 +5216,6 @@ AS $function$
       heartbeat_at = NULL,
       run_id      = gen_random_uuid()
   WHERE status = 'processing'
-    AND type = 'extraction'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
     AND attempts < max_attempts
   RETURNING *;

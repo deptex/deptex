@@ -80,6 +80,26 @@ describe('parseDockerfileFinalStage (Patch E)', () => {
     const f = writeTempDockerfile('no-from', `# just a comment\nRUN echo hi\n`);
     expect(parseDockerfileFinalStage(f)).toBeNull();
   });
+
+  it('returns null when the final FROM references an earlier stage alias', () => {
+    // `FROM builder AS production` flatten — the alias points to a prior
+    // stage, not an external image. Without the alias-vs-imageRef check,
+    // resolveImageDigest would crane-probe "builder" and waste budget.
+    const f = writeTempDockerfile(
+      'alias-final',
+      `FROM node:20 AS builder\nRUN npm run build\nFROM builder AS production\nCMD ["node", "."]\n`
+    );
+    expect(parseDockerfileFinalStage(f)).toBeNull();
+  });
+
+  it('handles a FROM line that wraps with a backslash continuation', () => {
+    const f = writeTempDockerfile(
+      'continuation',
+      `FROM \\\n  --platform=linux/amd64 \\\n  nginx:alpine AS final\nCOPY . /\n`
+    );
+    const stage = parseDockerfileFinalStage(f);
+    expect(stage?.imageRef).toBe('nginx:alpine');
+  });
 });
 
 describe('extractGhcrOwner', () => {

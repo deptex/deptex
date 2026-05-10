@@ -506,17 +506,28 @@ async function buildDockerConfigDir(
       authedHosts.add(planEntry.credHostname);
       // Stamp last_used_at so the UI can surface stale-credential nudges.
       // Best-effort — a failed UPDATE here must not abort envelope build.
-      ctx.supabase
-        .from('organization_registry_credentials')
-        .update({ last_used_at: new Date().toISOString() })
-        .eq('id', credId)
-        .eq('organization_id', ctx.organizationId)
+      // Wrapping in Promise.resolve() so that any transport-level rejection
+      // from supabase-js (AbortError, ENETUNREACH, etc.) doesn't bubble up
+      // as an UnhandledPromiseRejection that crashes the worker. The query
+      // builder is `PromiseLike` (no `.catch`) so we adapt it first.
+      void Promise.resolve(
+        ctx.supabase
+          .from('organization_registry_credentials')
+          .update({ last_used_at: new Date().toISOString() })
+          .eq('id', credId)
+          .eq('organization_id', ctx.organizationId)
+      )
         .then(({ error }: { error: any }) => {
           if (error) {
             ctx.logger
               .warn('container_scan.build_auth_envelope', `last_used_at update failed for ${credId}: ${error.message}`)
               .catch(() => {});
           }
+        })
+        .catch((err: any) => {
+          ctx.logger
+            .warn('container_scan.build_auth_envelope', `last_used_at update threw for ${credId}: ${err?.message ?? err}`)
+            .catch(() => {});
         });
     } catch (e: any) {
       // Per Patch 8 — per-cred failure doesn't abort envelope build; the

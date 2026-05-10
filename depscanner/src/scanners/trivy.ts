@@ -49,8 +49,23 @@ export function parseDockerfileFinalStage(
     return null;
   }
   const stages: DockerfileStage[] = [];
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
+  const rawLines = text.split(/\r?\n/);
+  // Coalesce backslash line continuations so a multi-line `FROM \\\n nginx`
+  // still parses. Without this, the trailing `\` makes the first physical
+  // line not match FROM_LINE_RE, and the second line ("  nginx:alpine") doesn't
+  // start with FROM, so the directive is dropped silently.
+  const logicalLines: string[] = [];
+  let buf = '';
+  for (const raw of rawLines) {
+    if (raw.endsWith('\\')) {
+      buf += raw.slice(0, -1) + ' ';
+      continue;
+    }
+    logicalLines.push(buf + raw);
+    buf = '';
+  }
+  if (buf) logicalLines.push(buf);
+  for (const line of logicalLines) {
     const m = FROM_LINE_RE.exec(line);
     if (!m) continue;
     stages.push({ imageRef: m[1], alias: m[2] ?? null, index: stages.length });
@@ -58,6 +73,19 @@ export function parseDockerfileFinalStage(
   if (stages.length === 0) return null;
   const final = stages[stages.length - 1];
   if (/^scratch(:|@|$)/i.test(final.imageRef)) return null;
+  // Skip when the final stage's "imageRef" is actually an earlier stage's
+  // alias (case-insensitive per Docker's stage-name matching). E.g.
+  // `FROM builder AS production` flattens — `production` is built from the
+  // `builder` layer locally, not pulled from a registry. Probing it would
+  // 404 and waste budget.
+  for (let i = 0; i < stages.length - 1; i++) {
+    if (
+      stages[i].alias &&
+      stages[i].alias!.toLowerCase() === final.imageRef.toLowerCase()
+    ) {
+      return null;
+    }
+  }
   return {
     imageRef: final.imageRef,
     stageIndex: final.index,
