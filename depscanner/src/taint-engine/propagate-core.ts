@@ -155,6 +155,14 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
   }
 
   let sourcesAddedThisPass = 0;
+  // Track whether `return`-step taint grew this pass, but DO NOT bail out
+  // mid-IR. The IR flattens branches into a straight-line list per design
+  // (see ir.ts `walkStatement` — if/else/try/switch all flatten), so a
+  // mid-body `return` step is regularly followed by post-return sinks,
+  // sources, and calls from other branches. Bailing on the first growth
+  // would silently drop those (bad FN). Convergence is still bounded by
+  // worklist iterations + monotonic state growth.
+  let changedReturn = false;
 
   for (const step of state.ir.steps) {
     switch (step.kind) {
@@ -278,7 +286,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             // already subsumed
           } else {
             state.returnTaint = augmented;
-            return { changedReturn: true, sourcesAddedThisPass };
+            changedReturn = true;
           }
         }
         break;
@@ -286,7 +294,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
     }
   }
 
-  return { changedReturn: false, sourcesAddedThisPass };
+  return { changedReturn, sourcesAddedThisPass };
 }
 
 function mergeParamTaint(callee: FunctionState, paramIdx: number, trace: TaintTrace): boolean {

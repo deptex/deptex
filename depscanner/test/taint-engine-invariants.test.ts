@@ -863,6 +863,114 @@ function sectionG_crossLanguageSpecFilter(): void {
 }
 
 // ---------------------------------------------------------------------------
+// SECTION H — Post-`return` step analysis (regression for early-bail bug)
+//
+// The IR flattens branches into a straight-line list (per ir.ts walkStatement
+// — if/else/try/catch/switch cases all flatten). This means a flattened
+// function regularly has a `return` step in the MIDDLE of the IR followed by
+// sources / sinks / calls from another branch. The propagator must continue
+// analyzing post-return steps; otherwise any vulnerability introduced after a
+// mid-body return is silently dropped (FN).
+// ---------------------------------------------------------------------------
+
+function sectionH_postReturnSinkAnalysis() {
+  console.log('\n[H] post-return step analysis (regression: do not early-bail mid-IR)');
+
+  // Test 1: source → return → sink. The classic mid-body return shape:
+  //   function handler(req) {
+  //     const cmd = req.body.cmd;     // source
+  //     if (req.user) return cmd;     // mid-body return
+  //     proc.exec(cmd);               // post-return sink (must still fire)
+  //   }
+  // After flattening: [source, return, call]. Without the fix the call step
+  // never executes on the iteration that grew returnTaint, and worst case the
+  // worklist marks the function `analyzed` without ever revisiting (it only
+  // re-queues callers, not itself).
+  {
+    const handlerNode = makeFuncNode('handler', 300);
+    const ir: IrFunction = {
+      id: handlerNode.id,
+      params: ['req'],
+      steps: [
+        // const cmd = req.body.cmd
+        { kind: 'source', target: 'cmd', sourceText: 'req.body.cmd', loc: loc(301) },
+        // if (cond) return cmd
+        { kind: 'return', from: 'cmd', loc: loc(302) },
+        // proc.exec(cmd) — args[0]=proc receiver, args[1]=cmd user arg
+        {
+          kind: 'call',
+          target: null,
+          callee: { kind: 'external', calleeText: 'proc.exec' },
+          args: ['proc', 'cmd'],
+          argTexts: ['proc', 'cmd'],
+          loc: loc(303),
+        },
+      ],
+    };
+    const stateById = new Map<FunctionId, FunctionState>([
+      [handlerNode.id, makeState(handlerNode, ir)],
+    ]);
+    const result = runWorklistAndAggregate({
+      stateById,
+      callersByCallee: buildCallersByCallee([]),
+      specs: [TEST_SPEC],
+    });
+    assert(
+      result.flows.length === 1,
+      `post-return sink still detected (got ${result.flows.length} flows; pre-fix: 0)`,
+    );
+    assertEqual(
+      result.flows[0]?.vuln_class,
+      'command_injection',
+      'post-return flow vuln_class = command_injection',
+    );
+  }
+
+  // Test 2: source → return → SECOND source → sink. Multiple sinks after a
+  // mid-body return: the early-bail bug also dropped the second source/sink
+  // chain. This catches the case even when the function has multiple branches
+  // that each introduce taint independently.
+  {
+    const handlerNode = makeFuncNode('handler', 310);
+    const ir: IrFunction = {
+      id: handlerNode.id,
+      params: ['req'],
+      steps: [
+        { kind: 'source', target: 'a', sourceText: 'req.body.a', loc: loc(311) },
+        { kind: 'return', from: 'a', loc: loc(312) },
+        // post-return: introduce a fresh tainted local + sink it
+        { kind: 'source', target: 'b', sourceText: 'req.body.b', loc: loc(313) },
+        {
+          kind: 'call',
+          target: null,
+          callee: { kind: 'external', calleeText: 'db.query' },
+          args: ['b'],
+          argTexts: ['b'],
+          loc: loc(314),
+        },
+      ],
+    };
+    const stateById = new Map<FunctionId, FunctionState>([
+      [handlerNode.id, makeState(handlerNode, ir)],
+    ]);
+    const result = runWorklistAndAggregate({
+      stateById,
+      callersByCallee: buildCallersByCallee([]),
+      specs: [TEST_SPEC],
+    });
+    assert(
+      result.flows.length === 1,
+      `post-return source+sink chain detected (got ${result.flows.length}; pre-fix: 0)`,
+    );
+    assertEqual(
+      result.flows[0]?.vuln_class,
+      'sql_injection',
+      'post-return flow vuln_class = sql_injection',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -877,6 +985,7 @@ async function main() {
   await sectionE_rustFieldExpressionReroute();
   sectionF_callPatternWildcards();
   sectionG_crossLanguageSpecFilter();
+  sectionH_postReturnSinkAnalysis();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
 }
