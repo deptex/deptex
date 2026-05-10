@@ -21,6 +21,20 @@ const DEFAULT_MODELS: Record<AIProvider, string> = {
   deepinfra: 'deepseek-ai/DeepSeek-V3.1',
 };
 
+// Model-id → provider mapping for `organizations.default_model`. Backend's
+// llm-provider keeps the canonical map in `lib/ai/models.ts` but we can't
+// reach across the worker boundary; we infer provider from the prefix. If
+// the prefix is unrecognised we fall through to default_ai_provider so the
+// worker behaves like the backend's resolveOrgModel().
+function inferProviderFromModelId(modelId: string): AIProvider | null {
+  const id = modelId.toLowerCase();
+  if (id.startsWith('claude-')) return 'anthropic';
+  if (id.startsWith('gpt-') || id.startsWith('o1-') || id.startsWith('o3-') || id.startsWith('o4-')) return 'openai';
+  if (id.startsWith('gemini-')) return 'google';
+  if (id.startsWith('deepseek-') || id.includes('/')) return 'deepinfra';
+  return null;
+}
+
 function getPlatformKey(provider: AIProvider): string | undefined {
   switch (provider) {
     case 'openai':
@@ -63,16 +77,38 @@ export async function getLanguageModelForOrg(
 ): Promise<LanguageModel> {
   const { data, error } = await supabase
     .from('organizations')
-    .select('default_ai_provider')
+    .select('default_ai_provider, default_model')
     .eq('id', organizationId)
     .single();
   if (error) throw new Error(`Failed to load organization: ${error.message}`);
-  const provider = ((data?.default_ai_provider as AIProvider) ?? 'anthropic') as AIProvider;
+
+  // Mirror backend resolveOrgModel(): prefer default_model when the prefix
+  // unambiguously identifies a provider, fall back to default_ai_provider
+  // with the worker's hard-coded default for that provider. Without this
+  // sync, the user sees their chosen model in the UI but the worker quietly
+  // runs against gpt-4o / sonnet / etc.
+  const defaultModel = data?.default_model as string | null | undefined;
+  let provider: AIProvider;
+  let modelName: string;
+  if (defaultModel) {
+    const inferred = inferProviderFromModelId(defaultModel);
+    if (inferred) {
+      provider = inferred;
+      modelName = defaultModel;
+    } else {
+      provider = ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
+      modelName = DEFAULT_MODELS[provider];
+    }
+  } else {
+    provider = ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
+    modelName = DEFAULT_MODELS[provider];
+  }
+
   const apiKey = getPlatformKey(provider);
   if (!apiKey) {
     throw new Error(
       `Platform API key for ${provider} is not configured on the fix-worker. Set ${envVarFor(provider)}.`,
     );
   }
-  return buildModel(provider, apiKey, DEFAULT_MODELS[provider]);
+  return buildModel(provider, apiKey, modelName);
 }

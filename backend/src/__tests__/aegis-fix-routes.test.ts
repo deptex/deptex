@@ -302,6 +302,79 @@ describe('PATCH /api/aegis/fix/:fixId/approve', () => {
     expect(res.body.fix).toBeTruthy();
   });
 
+  it('rejects with 401 when token has the wrong length', async () => {
+    // Regression: the route now uses crypto.timingSafeEqual gated by an
+    // explicit length-mismatch early-exit, instead of `token !== row.approval_token`.
+    // timingSafeEqual throws on length mismatch — make sure the early-exit
+    // catches that without crashing and returns a clean 401.
+    const generatedAt = new Date().toISOString();
+    setLoadFixRow({
+      id: FIX_ID,
+      organization_id: ORG_ID,
+      project_id: PROJECT_ID,
+      fix_type: 'vulnerability',
+      status: 'awaiting_approval',
+      plan: happyPlan(),
+      plan_generated_at: generatedAt,
+      plan_base_sha: 'sha123',
+      plan_base_branch: 'main',
+      approval_token: signApprovalToken(FIX_ID, ORG_ID, generatedAt),
+      approved_at: null,
+      rejected_at: null,
+      pr_url: null,
+      pr_number: null,
+      diff_summary: null,
+      error_message: null,
+      created_at: generatedAt,
+      triggered_by: USER_ID,
+      osv_id: 'GHSA-abc',
+      semgrep_finding_id: null,
+      secret_finding_id: null,
+    });
+    setOwnerWithTriggerFix();
+
+    const res = await request(makeApp())
+      .patch(`/api/aegis/fix/${FIX_ID}/approve`)
+      .send({ token: 'short' });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects with 401 when token is not a string', async () => {
+    // Number/object tokens historically slipped through to the comparison
+    // and crashed the worker process. Make sure the typeof guard turns them
+    // into a clean 401.
+    const generatedAt = new Date().toISOString();
+    setLoadFixRow({
+      id: FIX_ID,
+      organization_id: ORG_ID,
+      project_id: PROJECT_ID,
+      fix_type: 'vulnerability',
+      status: 'awaiting_approval',
+      plan: happyPlan(),
+      plan_generated_at: generatedAt,
+      plan_base_sha: 'sha123',
+      plan_base_branch: 'main',
+      approval_token: signApprovalToken(FIX_ID, ORG_ID, generatedAt),
+      approved_at: null,
+      rejected_at: null,
+      pr_url: null,
+      pr_number: null,
+      diff_summary: null,
+      error_message: null,
+      created_at: generatedAt,
+      triggered_by: USER_ID,
+      osv_id: 'GHSA-abc',
+      semgrep_finding_id: null,
+      secret_finding_id: null,
+    });
+    setOwnerWithTriggerFix();
+
+    const res = await request(makeApp())
+      .patch(`/api/aegis/fix/${FIX_ID}/approve`)
+      .send({ token: 12345 });
+    expect(res.status).toBe(401);
+  });
+
   it('returns 409 when fix is not awaiting_approval', async () => {
     setLoadFixRow({
       id: FIX_ID,
