@@ -133,3 +133,60 @@ describe('dast-encryption — key rotation with previous-key fallback', () => {
     expect(() => lib.decryptCredential('not-a-valid-format', 1)).toThrow(/Invalid encrypted/);
   });
 });
+
+describe('dast-encryption — UTF-8 multibyte boundary regression', () => {
+  // Pre-fix bug: `decipher.update(ciphertext) + decipher.final('utf8')`
+  // implicitly stringified the update Buffer with default toString('utf8'),
+  // then concatenated. If a multi-byte UTF-8 codepoint crossed the
+  // update/final chunk boundary, each half decoded independently and yielded
+  // U+FFFD replacement chars — silently corrupting credentials with non-ASCII
+  // characters (passwords with é/ñ, cookies with emoji-bearing values, etc.).
+  // The fix concatenates the two Buffers FIRST, then decodes once.
+  beforeEach(() => {
+    process.env.DAST_CREDENTIAL_KEY = KEY_A;
+    delete process.env.DAST_CREDENTIAL_KEY_PREV;
+    process.env.DAST_CREDENTIAL_KEY_VERSION = '1';
+  });
+
+  it('round-trips a non-ASCII password (Latin-1 supplement)', () => {
+    const lib = loadFresh();
+    const plaintext = 'pässwörd-français-€-naïve';
+    const { encrypted, version } = lib.encryptCredential(plaintext);
+    expect(lib.decryptCredential(encrypted, version)).toBe(plaintext);
+  });
+
+  it('round-trips emoji + 4-byte UTF-8 sequences', () => {
+    const lib = loadFresh();
+    // 4-byte UTF-8: 🔐 (U+1F510), 🦄 (U+1F984), and CJK characters.
+    const plaintext = '🔐s3cret🦄-中文-кириллица-日本語';
+    const { encrypted, version } = lib.encryptCredential(plaintext);
+    expect(lib.decryptCredential(encrypted, version)).toBe(plaintext);
+  });
+
+  it('round-trips long inputs that force multiple cipher blocks', () => {
+    const lib = loadFresh();
+    // AES block size is 16 bytes; long repeated payload guarantees update()
+    // returns content rather than only final(). Mix multibyte chars throughout
+    // so the boundary lands on a partial codepoint with high probability.
+    const plaintext = '🚨' + 'á'.repeat(500) + 'β'.repeat(500) + '🔥';
+    const { encrypted, version } = lib.encryptCredential(plaintext);
+    expect(lib.decryptCredential(encrypted, version)).toBe(plaintext);
+  });
+
+  it('round-trips a JSON form-credential payload with non-ASCII fields', () => {
+    const lib = loadFresh();
+    const plaintext = JSON.stringify({
+      kind: 'form',
+      login_url: 'https://example.com/login',
+      username_field: 'email',
+      password_field: 'password',
+      username: 'jürgen@example.com',
+      password: 'P@sswörd!🔑',
+    });
+    const { encrypted, version } = lib.encryptCredential(plaintext);
+    const decrypted = lib.decryptCredential(encrypted, version);
+    expect(decrypted).toBe(plaintext);
+    // Round-trip survives JSON.parse without producing replacement chars.
+    expect(JSON.parse(decrypted).password).toBe('P@sswörd!🔑');
+  });
+});

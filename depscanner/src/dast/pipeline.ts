@@ -127,6 +127,16 @@ interface ProjectRow {
   organization_id: string;
 }
 
+// Stored scope_config shape (DB JSONB). Validated route-side via
+// validateScopeConfig — keys are include_patterns / exclude_patterns /
+// header_rules (NOT camelCase). The yaml-builder takes the camelCase shape;
+// loadScopeConfig() does the rename on the way through the pipeline.
+interface StoredScopeConfig {
+  include_patterns?: unknown;
+  exclude_patterns?: unknown;
+  header_rules?: unknown;
+}
+
 interface DastFindingInsert {
   project_id: string;
   organization_id: string;
@@ -420,6 +430,57 @@ async function loadCredentialOrAbort(
   }
 
   return { credentialRow: credRow, payload };
+}
+
+// ---------------------------------------------------------------------------
+// Scope config load (project_dast_config.scope_config → ScopeConfig)
+// ---------------------------------------------------------------------------
+
+async function loadScopeConfig(
+  supabase: Storage,
+  projectId: string,
+): Promise<ScopeConfig | undefined> {
+  const { data, error } = await supabase
+    .from('project_dast_config')
+    .select('scope_config')
+    .eq('project_id', projectId)
+    .maybeSingle();
+  if (error || !data) return undefined;
+  const raw = (data as { scope_config?: StoredScopeConfig | null }).scope_config;
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  const out: ScopeConfig = {};
+
+  // include / exclude patterns: route layer already enforces string[], cap of
+  // 32, ReDoS-safe (safe-regex2). Defense-in-depth: drop non-strings and cap
+  // here too in case a row was inserted via raw SQL or a stale migration.
+  if (Array.isArray(raw.include_patterns)) {
+    const arr = raw.include_patterns.filter((v): v is string => typeof v === 'string').slice(0, 32);
+    if (arr.length > 0) out.includePaths = arr;
+  }
+  if (Array.isArray(raw.exclude_patterns)) {
+    const arr = raw.exclude_patterns.filter((v): v is string => typeof v === 'string').slice(0, 32);
+    if (arr.length > 0) out.excludePaths = arr;
+  }
+  if (Array.isArray(raw.header_rules)) {
+    const rules: NonNullable<ScopeConfig['headerRules']> = [];
+    for (const r of raw.header_rules.slice(0, 16)) {
+      if (
+        r != null &&
+        typeof r === 'object' &&
+        typeof (r as { name?: unknown }).name === 'string' &&
+        typeof (r as { value?: unknown }).value === 'string'
+      ) {
+        const rec = r as { name: string; value: string; scope?: unknown };
+        const scope: 'all' | 'requests' | 'responses' =
+          rec.scope === 'requests' || rec.scope === 'responses' ? rec.scope : 'all';
+        rules.push({ name: rec.name, value: rec.value, scope });
+      }
+    }
+    if (rules.length > 0) out.headerRules = rules;
+  }
+
+  return out.includePaths || out.excludePaths || out.headerRules ? out : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +798,14 @@ export async function runDastPipeline(
     throw e;
   }
 
-  // Step 3: cross-link prerequisites. Loaded BEFORE the scan so we don't add
+  // Step 3a: load project_dast_config.scope_config and convert to ScopeConfig.
+  // The route layer (PUT /dast/config) already validated this shape — we
+  // re-shape DB-side snake_case to the yaml-builder's camelCase here. Without
+  // this load, every customer's include/exclude paths and header rules were
+  // silently ignored (regression caught in v2.1a critical review).
+  const scope = await loadScopeConfig(supabase, job.project_id);
+
+  // Step 3b: cross-link prerequisites. Loaded BEFORE the scan so we don't add
   // wallclock to the credentialed window.
   const extractionRunId = await getActiveExtractionRunId(supabase, job.project_id);
   let entryPoints: EntryPointRow[] = [];
@@ -765,6 +833,7 @@ export async function runDastPipeline(
         targetUrl: target.target_url,
         scanProfile: afProfile,
         detectedRuntime: target.detected_runtime,
+        scope,
         authStrategy: cred?.credentialRow.auth_strategy,
         authPayload: cred?.payload,
         loggedInIndicator: cred?.credentialRow.logged_in_indicator ?? undefined,
@@ -908,3 +977,4 @@ export { crossLinkFinding } from './cross-link';
 // Internal exports used by the pipeline test harness in Task 9.
 export { loadTenantGuardRows as __test_loadTenantGuardRows };
 export { loadCredentialOrAbort as __test_loadCredentialOrAbort };
+export { loadScopeConfig as __test_loadScopeConfig };

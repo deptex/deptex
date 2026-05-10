@@ -353,6 +353,95 @@ describe('runDastPipeline — credential abort paths', () => {
 });
 
 // ---------------------------------------------------------------------------
+// scope_config propagation regression. The route layer validates and saves
+// scope_config to project_dast_config, but the worker never read it back —
+// silently dropping every customer's include/exclude paths and header rules.
+// ---------------------------------------------------------------------------
+
+import { __test_loadScopeConfig } from '../dast/pipeline';
+
+describe('runDastPipeline — scope_config propagation', () => {
+  it('loads scope_config from project_dast_config and shapes it for the YAML builder', async () => {
+    const mock = makeMockSupabase();
+    mock.pushTableResponse('project_dast_config', {
+      data: {
+        scope_config: {
+          include_patterns: ['^https://example\\.com/api/.*$'],
+          exclude_patterns: ['^https://example\\.com/admin/.*$'],
+          header_rules: [
+            { name: 'X-Tenant-Id', value: 'org-42', scope: 'all' },
+            { name: 'X-Trace-Id', value: 'trace-1', scope: 'requests' },
+          ],
+        },
+      },
+      error: null,
+    });
+
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    expect(out).toBeDefined();
+    expect(out!.includePaths).toEqual(['^https://example\\.com/api/.*$']);
+    expect(out!.excludePaths).toEqual(['^https://example\\.com/admin/.*$']);
+    expect(out!.headerRules).toEqual([
+      { name: 'X-Tenant-Id', value: 'org-42', scope: 'all' },
+      { name: 'X-Trace-Id', value: 'trace-1', scope: 'requests' },
+    ]);
+  });
+
+  it('returns undefined when project_dast_config has no scope_config row', async () => {
+    const mock = makeMockSupabase();
+    mock.pushTableResponse('project_dast_config', { data: null, error: null });
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    expect(out).toBeUndefined();
+  });
+
+  it('returns undefined when scope_config is empty {}', async () => {
+    const mock = makeMockSupabase();
+    mock.pushTableResponse('project_dast_config', {
+      data: { scope_config: {} },
+      error: null,
+    });
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    expect(out).toBeUndefined();
+  });
+
+  it('drops malformed entries instead of failing loudly (defense-in-depth)', async () => {
+    const mock = makeMockSupabase();
+    mock.pushTableResponse('project_dast_config', {
+      data: {
+        scope_config: {
+          include_patterns: ['ok', 42, null, 'also-ok'], // non-strings dropped
+          header_rules: [
+            { name: 'X-Ok', value: 'v' }, // missing scope → defaults 'all'
+            { name: 'X-Bad', value: 123 }, // value not string → dropped
+            null, // dropped
+            { name: 'X-Bad-Scope', value: 'v', scope: 'invalid' }, // bad scope → defaults 'all'
+          ],
+        },
+      },
+      error: null,
+    });
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    expect(out!.includePaths).toEqual(['ok', 'also-ok']);
+    expect(out!.headerRules).toEqual([
+      { name: 'X-Ok', value: 'v', scope: 'all' },
+      { name: 'X-Bad-Scope', value: 'v', scope: 'all' },
+    ]);
+  });
+
+  it('caps include/exclude arrays at 32 entries', async () => {
+    const mock = makeMockSupabase();
+    const big = Array.from({ length: 50 }, (_, i) => `pat-${i}`);
+    mock.pushTableResponse('project_dast_config', {
+      data: { scope_config: { include_patterns: big, exclude_patterns: big } },
+      error: null,
+    });
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    expect(out!.includePaths).toHaveLength(32);
+    expect(out!.excludePaths).toHaveLength(32);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Anonymous scan path: target with no credential row should NOT abort.
 // We don't run the full ZAP spawn (no /zap/zap.sh in tests), so we assert
 // the pipeline reaches the spawn step rather than aborting at cred load.
