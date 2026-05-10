@@ -110,7 +110,7 @@ This is the load-bearing decision. Target reuse: **~95%**. Concrete mapping:
 | PoliciesPage tab structure | `PoliciesPage.tsx:128,512,564-689` |  | add a 4th `subTab` value + branch (~80 lines, mirror lines 573-647) |  |
 | Wrap-body helper (Monaco shows function body, not full `function packagePolicy(ctx) { ... }` shell) | `wrapPackagePolicyBody` |  |  | `wrapIaCPolicyBody` (~10 lines) |
 | API client | `frontend/src/lib/api.ts` |  | add `iac_policy` to existing union types in `validatePolicyCode` + `updateOrganizationPolicyCode` |  |
-| `getProviderForOrg` / Tier-2 BYOK | n/a | n/a (this code is sandboxed JS, not LLM-generated) | | |
+| LLM-provider plumbing | n/a | n/a (this code is sandboxed JS, not LLM-generated) | | |
 | Pipeline integration | `orchestrator.ts:1018` |  |  | new `evaluateIaCFindings()` call before `upsertIaCFindings` (~50 lines) |
 | Testing lane (run-against-last-N-findings) | n/a |  |  | new endpoint + worker-side helper (~120 lines total) |
 

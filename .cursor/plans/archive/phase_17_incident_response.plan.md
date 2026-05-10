@@ -845,6 +845,8 @@ async function generatePostMortem(incidentId: string): Promise<string> {
 ```markdown
 # Security Incident Report: [Title]
 
+> **Historical context (2026-05-09):** This archived plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. The references to BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, and `AI_ENCRYPTION_KEY` for AI key envelopes are historical only — current AI runs on platform keys.
+
 ## Summary
 - **Type**: [incident_type]
 - **Severity**: [severity]

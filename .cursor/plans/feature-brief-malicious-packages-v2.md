@@ -1,5 +1,7 @@
 # Malicious Packages v2 — Feature Brief
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Problem Statement
 
 v1 (PR #20, merged 2026-04-30) put Deptex at **table-stakes** on malicious-package detection — OSV+GHSA feed lookup, GuardDog source-code scan, AI-explained findings, per-finding evidence, soft-fail pipeline. But Socket and Endor have moved on: both ship reachability-filtered malicious findings, Socket has capability detection across 70+ signals, Endor flags account-takeover patterns, and the Shai-Hulud worm (Sep 2025) made postinstall maintainer-signal triage urgent rather than nice-to-have. v2 closes that frontier-parity gap, finishes the v1 testing-pass loose ends, and broadens feed coverage. Quarantine Agent (autonomous PR removal) and pre-merge PR gating both remain whitespace differentiators but are explicitly deferred to later features so v2 stays a focused parity ship.

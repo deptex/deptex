@@ -1,5 +1,7 @@
 # Aegis v3 — Phase 0 (Foundations) Implementation Plan
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Overview
 
 Phase 0 of the multi-year aegis roadmap (`.cursor/plans/research-aegis-multiyear.md`). The goal is a **structural refactor of the Aegis chat backend** from the current `executor-v2.ts` (which calls `streamText` directly with hand-rolled config) to AI SDK v6's `ToolLoopAgent` abstraction, behind a clean per-category tool registry. No new user-visible features — but it unlocks every later phase (Agent Core, Write Tools, PR Review, Aegis Fix, Skills, Compliance, etc.) by giving us:

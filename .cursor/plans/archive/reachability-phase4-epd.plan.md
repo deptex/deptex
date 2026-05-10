@@ -1,5 +1,7 @@
 # Reachability Phase 4: EPD Wiring + Gap Closure — Implementation Plan
 
+> **Historical context (2026-05-09):** This archived plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. The references to BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, and `AI_ENCRYPTION_KEY` for AI key envelopes are historical only — current AI runs on platform keys.
+
 ## Overview
 
 Activate the existing `applyEpdScoringFallback()` in the extraction pipeline, close the two gaps Phase 3 created (Semgrep taint flows write `entry_point_tag=null`; rule packs don't declare an entry-point class), surface contextual scoring in the vulnerability UI via a small entry-point badge, and let org admins set their own per-extraction AI cost cap. Approach is **wire + close gaps**, not rebuild — `epd.ts` (~760 lines) already implements the full BYOK Anthropic verification, sanitization detection, source snippet extraction, and conservative `PUBLIC_UNAUTH` heuristic fallback. Total estimated scope: 4 milestones, ~5 days.

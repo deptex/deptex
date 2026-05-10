@@ -37,7 +37,7 @@
 ## Section 1 — Why this is the wedge (3 bullets, all from `docs/depscanner-hardening-report.md:344-376`)
 
 1. **Every DAST competitor demands an OpenAPI doc; we synthesize it.** StackHawk's HawkAI, Endor's API discovery, Snyk DAST, Probely, Aikido, Bright all require the customer to upload or auto-fetch an OpenAPI spec. Most teams either don't maintain one or maintain a stale one. We extract `project_entry_points` from source on every extraction (30 frameworks across 8 languages — `framework-rules/detectors/`), so we already have the route inventory the customer didn't write down.
-2. **No LLM in the synthesis path.** HawkAI's wedge is "AI-driven API testing" — they spend prompt tokens to *guess* endpoints. We read tree-sitter ASTs deterministically. Cheaper, faster, reproducible, no model-gen drift. Crucially, this means the feature works in airgapped self-host without a BYOK key.
+2. **No LLM in the synthesis path.** HawkAI's wedge is "AI-driven API testing" — they spend prompt tokens to *guess* endpoints. We read tree-sitter ASTs deterministically. Cheaper, faster, reproducible, no model-gen drift. Crucially, this means the feature works in airgapped self-host without any AI key configured.
 3. **ZAP already supports it natively.** `zap-api-scan.py` ships in the image (`Dockerfile:170`). The AF YAML accepts an `openapi` job out of the box. The integration cost is ~120 LOC of YAML emitter + ~150 LOC of synthesizer; the *moat* is the entry-point data we already extract.
 
 ---

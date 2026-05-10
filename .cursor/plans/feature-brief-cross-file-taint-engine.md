@@ -1,5 +1,7 @@
 # Feature Brief: Deptex Cross-File Taint Engine (Phase 6)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## One-liner
 A deterministic forward-propagation cross-file taint engine for JS/TS — built on the TypeScript Compiler API and wired into the `reachability_rules` pipeline — paired with an IRIS-style AI augmentation layer (spec inference + FP filter), designed to replace `atom` as the canonical reachability engine over time.
 
