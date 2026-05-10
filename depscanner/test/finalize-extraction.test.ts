@@ -18,6 +18,7 @@ import { vector } from '@electric-sql/pglite/vector';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import * as fs from 'fs';
 import * as path from 'path';
+import { stripPgliteIncompatible } from '../src/storage/pglite';
 
 const SCHEMA_FILE = path.resolve(__dirname, '../../backend/database/schema.sql');
 
@@ -59,7 +60,7 @@ async function bootDb(): Promise<PGlite> {
       expires_at timestamptz
     );
   `);
-  const schemaSql = fs.readFileSync(SCHEMA_FILE, 'utf8');
+  const schemaSql = stripPgliteIncompatible(fs.readFileSync(SCHEMA_FILE, 'utf8'));
   await db.exec(schemaSql);
   return db;
 }

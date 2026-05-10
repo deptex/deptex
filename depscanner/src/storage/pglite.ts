@@ -103,7 +103,7 @@ function defaultSchemaPath(): string {
  *    `function ... does not exist`. Safe to drop because PGLite local-mode
  *    doesn't insert into this table during reachability tests.
  */
-function stripPgliteIncompatible(sql: string): string {
+export function stripPgliteIncompatible(sql: string): string {
   let out = sql;
 
   // (1) Drop the dump-helper functions entirely.
