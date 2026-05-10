@@ -531,6 +531,35 @@ function resolveSuperFqn(classNode: Node, wc: WalkCtx): string | null {
   return wc.fileIndex.imports.get(simple) ?? wc.ctx.classFqnBySimpleName.get(simple) ?? null;
 }
 
+// Annotation simple-names that mark a controller/handler parameter as
+// HTTP-tainted. Must stay in sync with the `@<Name>` source patterns in
+// the framework-models/*.yaml files (spring-boot, quarkus, micronaut). The
+// IR matches by simple name only, so JAX-RS and javax.ws.rs.* both flow
+// through the same entry — no per-package distinction needed.
+const HTTP_INPUT_ANNOTATIONS: ReadonlySet<string> = new Set<string>([
+  // Spring MVC / Spring Boot
+  'RequestParam',
+  'PathVariable',
+  'RequestBody',
+  'RequestHeader',
+  'CookieValue',
+  'ModelAttribute',
+  // JAX-RS / RESTEasy / Quarkus REST
+  'QueryParam',
+  'PathParam',
+  'FormParam',
+  'HeaderParam',
+  'CookieParam',
+  'MatrixParam',
+  'BeanParam',
+  // Micronaut HTTP
+  'QueryValue',
+  'Header',
+  'Body',
+  'Part',
+  'RequestBean',
+]);
+
 function sourceAnnotationOnParam(paramNode: Node, source: string): string | null {
   const modifiers = paramNode.namedChild(0);
   if (!modifiers || modifiers.type !== 'modifiers') return null;
@@ -540,14 +569,7 @@ function sourceAnnotationOnParam(paramNode: Node, source: string): string | null
     const nameNode = c.childForFieldName('name') ?? c.namedChild(0);
     if (!nameNode) continue;
     const name = textOf(nameNode, source);
-    if (
-      name === 'RequestParam' ||
-      name === 'PathVariable' ||
-      name === 'RequestBody' ||
-      name === 'RequestHeader' ||
-      name === 'CookieValue' ||
-      name === 'ModelAttribute'
-    ) {
+    if (HTTP_INPUT_ANNOTATIONS.has(name)) {
       return `@${name}`;
     }
   }
