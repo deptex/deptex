@@ -5,6 +5,7 @@
 
 // @ts-nocheck
 import express from 'express';
+import * as crypto from 'crypto';
 import { supabase } from '../lib/supabase';
 import { queueExtractionJob } from '../lib/extraction-jobs';
 import { invalidateProjectCaches } from '../lib/cache';
@@ -19,18 +20,43 @@ const router = express.Router();
 const DEPTEX_COMMENT_MARKER = '<!-- deptex-pr-check -->';
 const MAX_EXTRACTION_PER_PUSH = 10;
 
+function constantTimeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf8');
+  const bBuf = Buffer.from(b, 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  try {
+    return crypto.timingSafeEqual(aBuf, bBuf);
+  } catch {
+    return false;
+  }
+}
+
 async function verifyGitLabWebhookToken(req: express.Request): Promise<{ valid: boolean; repoFullName: string | null }> {
   const token = req.headers['x-gitlab-token'] as string;
   const repoFullName = req.body?.project?.path_with_namespace;
   if (!token || !repoFullName) return { valid: false, repoFullName: null };
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('project_repositories')
     .select('webhook_secret')
     .eq('repo_full_name', repoFullName)
     .eq('provider', 'gitlab');
 
-  const valid = (data ?? []).some((r: any) => r.webhook_secret === token);
+  // Fail closed on lookup error.
+  if (error) return { valid: false, repoFullName };
+
+  // Constant-time compare against every configured secret. JS string `===`
+  // short-circuits at the first mismatched byte — measurable across many
+  // probes and lets an attacker recover the secret one byte at a time.
+  let valid = false;
+  for (const row of data ?? []) {
+    if (!row.webhook_secret) continue;
+    if (constantTimeStringEqual(token, row.webhook_secret)) {
+      valid = true;
+      // Don't break — keep comparing so total work is roughly constant
+      // regardless of which row matches.
+    }
+  }
   return { valid, repoFullName };
 }
 
@@ -748,14 +774,13 @@ router.post('/webhooks/gitlab', async (req: express.Request, res: express.Respon
     const eventType = req.headers['x-gitlab-event'] as string || 'unknown';
     const payloadSize = Buffer.byteLength(JSON.stringify(req.body));
 
-    const startMs = Date.now();
-    await recordWebhookDelivery(deliveryId, eventType, req.body?.object_attributes?.action, repoFullName, payloadSize);
-
+    // Dedup BEFORE recording — retried deliveries shouldn't accumulate rows.
     if (await deduplicateDelivery(deliveryId)) {
-      await supabase.from('webhook_deliveries').update({ processing_status: 'skipped' })
-        .eq('delivery_id', deliveryId || '').eq('provider', 'gitlab');
       return res.json({ received: true, skipped: 'duplicate' });
     }
+
+    const startMs = Date.now();
+    await recordWebhookDelivery(deliveryId, eventType, req.body?.object_attributes?.action, repoFullName, payloadSize);
 
     res.json({ received: true });
 
@@ -781,7 +806,9 @@ router.post('/webhooks/gitlab', async (req: express.Request, res: express.Respon
     }
   } catch (error: any) {
     console.error('[gitlab-webhook] Error:', error);
-    res.status(200).json({ received: true, error: error.message });
+    if (!res.headersSent) {
+      res.status(200).json({ received: true, error: error.message });
+    }
   }
 });
 

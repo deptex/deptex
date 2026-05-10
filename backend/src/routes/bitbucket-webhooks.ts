@@ -21,46 +21,45 @@ const DEPTEX_COMMENT_MARKER = '<!-- deptex-pr-check -->';
 const MAX_EXTRACTION_PER_PUSH = 10;
 const BB_COMMENT_MAX = 32000;
 
-function verifyBitbucketWebhookSignature(req: express.Request): boolean {
-  const rawBody = (req as any).rawBody;
-  if (typeof rawBody !== 'string') return false;
-
-  const { data: repos } = (null as any); // Will be checked per-repo below
-  const signature = req.headers['x-hub-signature'] as string | undefined;
-  if (!signature) {
-    if (process.env.NODE_ENV === 'production') return false;
-    return true;
-  }
-
-  return true; // Actual verification happens in the handler after we load the secret
-}
-
 async function verifyBitbucketSignatureForRepo(req: express.Request, repoFullName: string): Promise<boolean> {
   const signature = req.headers['x-hub-signature'] as string | undefined;
   const rawBody = (req as any).rawBody;
 
+  if (typeof rawBody !== 'string') return false;
   if (!signature) {
     if (process.env.NODE_ENV === 'production') return false;
     return true;
   }
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('project_repositories')
     .select('webhook_secret')
     .eq('repo_full_name', repoFullName)
     .eq('provider', 'bitbucket');
 
-  for (const row of data ?? []) {
-    if (!row.webhook_secret) continue;
+  // If the lookup itself errored we cannot verify — fail closed.
+  if (error) return false;
+
+  // No matching repo OR no configured secret on any matching row =>
+  // no trust anchor exists, so we MUST reject. Previously this path
+  // returned true, which let an attacker skip verification by pointing
+  // at a repo we don't track.
+  const rows = data ?? [];
+  if (rows.length === 0) return false;
+  const rowsWithSecret = rows.filter((r: any) => !!r.webhook_secret);
+  if (rowsWithSecret.length === 0) return false;
+
+  for (const row of rowsWithSecret) {
     const expected = 'sha256=' + crypto.createHmac('sha256', row.webhook_secret).update(rawBody).digest('hex');
+    const sigBuf = Buffer.from(signature, 'utf8');
+    const expBuf = Buffer.from(expected, 'utf8');
+    if (sigBuf.length !== expBuf.length) continue;
     try {
-      if (crypto.timingSafeEqual(Buffer.from(signature, 'utf8'), Buffer.from(expected, 'utf8'))) {
-        return true;
-      }
-    } catch {}
+      if (crypto.timingSafeEqual(sigBuf, expBuf)) return true;
+    } catch { /* length mismatch → not equal */ }
   }
 
-  return (data ?? []).length === 0;
+  return false;
 }
 
 async function deduplicateDelivery(deliveryId: string | undefined): Promise<boolean> {
@@ -744,24 +743,28 @@ router.post('/webhooks/bitbucket', async (req: express.Request, res: express.Res
     const eventKey = req.headers['x-event-key'] as string || 'unknown';
     const repoFullName = req.body?.repository?.full_name;
 
-    if (repoFullName) {
-      const sigValid = await verifyBitbucketSignatureForRepo(req, repoFullName);
-      if (!sigValid) {
-        return res.status(401).json({ error: 'Invalid webhook signature' });
-      }
+    // Reject any payload without a repo identifier — without it we cannot
+    // resolve the per-repo secret, and skipping verification would let an
+    // attacker pump arbitrary payloads through this endpoint.
+    if (!repoFullName) {
+      return res.status(400).json({ error: 'Missing repository.full_name' });
+    }
+
+    const sigValid = await verifyBitbucketSignatureForRepo(req, repoFullName);
+    if (!sigValid) {
+      return res.status(401).json({ error: 'Invalid webhook signature' });
     }
 
     const deliveryId = req.headers['x-request-uuid'] as string | undefined;
     const payloadSize = Buffer.byteLength(JSON.stringify(req.body));
-    const startMs = Date.now();
 
-    await recordWebhookDelivery(deliveryId, eventKey, undefined, repoFullName, payloadSize);
-
+    // Dedup BEFORE recording — retried deliveries shouldn't accumulate rows.
     if (await deduplicateDelivery(deliveryId)) {
-      await supabase.from('webhook_deliveries').update({ processing_status: 'skipped' })
-        .eq('delivery_id', deliveryId || '').eq('provider', 'bitbucket');
       return res.json({ received: true, skipped: 'duplicate' });
     }
+
+    const startMs = Date.now();
+    await recordWebhookDelivery(deliveryId, eventKey, undefined, repoFullName, payloadSize);
 
     res.json({ received: true });
 
@@ -801,7 +804,9 @@ router.post('/webhooks/bitbucket', async (req: express.Request, res: express.Res
     }
   } catch (error: any) {
     console.error('[bitbucket-webhook] Error:', error);
-    res.status(200).json({ received: true, error: error.message });
+    if (!res.headersSent) {
+      res.status(200).json({ received: true, error: error.message });
+    }
   }
 });
 
