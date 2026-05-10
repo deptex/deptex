@@ -252,6 +252,51 @@ describe('parseTrivyImageOutput', () => {
     });
     expect(parseTrivyImageOutput(sample, 'nginx:alpine', 'trivy@0.50.4').findings).toEqual([]);
   });
+
+  it('returns empty imageDigest when neither RepoDigests nor ImageID is present (no tag fallback)', () => {
+    // Trivy occasionally omits both RepoDigests and ImageID for images
+    // pulled by tag from a registry that doesn't expose digests. Falling
+    // back to the tag (e.g. `nginx:1.25`) would make every later rescan of
+    // the same tag look like a different image once upstream re-pushes.
+    // The parser must surface '' so the runner can warn instead.
+    const sample = JSON.stringify({
+      ArtifactName: 'nginx:1.25',
+      Metadata: {},
+      Results: [
+        {
+          Class: 'os-pkgs',
+          Type: 'alpine',
+          Vulnerabilities: [
+            {
+              VulnerabilityID: 'CVE-2024-9999',
+              PkgName: 'curl',
+              InstalledVersion: '8.5.0-r0',
+              Severity: 'MEDIUM',
+            },
+          ],
+        },
+      ],
+    });
+    const parsed = parseTrivyImageOutput(sample, 'nginx:1.25', 'trivy@0.50.4');
+    expect(parsed.imageDigest).toBe('');
+    expect(parsed.findings).toHaveLength(1);
+    // image_reference still carries the tag for human-readable display, but
+    // image_digest must NOT be the tag.
+    expect(parsed.findings[0].image_reference).toBe('nginx:1.25');
+    expect(parsed.findings[0].image_digest).toBe('');
+  });
+
+  it('falls back to ImageID when RepoDigests is empty', () => {
+    const sample = JSON.stringify({
+      Metadata: {
+        ImageID: 'sha256:deadbeef',
+        RepoDigests: [],
+      },
+      Results: [],
+    });
+    const parsed = parseTrivyImageOutput(sample, 'nginx:1.25', 'trivy@0.50.4');
+    expect(parsed.imageDigest).toBe('sha256:deadbeef');
+  });
 });
 
 // =============================================================================

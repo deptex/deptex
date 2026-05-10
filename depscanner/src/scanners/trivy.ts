@@ -314,8 +314,14 @@ export function parseTrivyImageOutput(
   }
   if (!parsed) return { findings: [], imageDigest: '' };
 
-  const imageDigest =
-    parsed.Metadata?.RepoDigests?.[0] ?? parsed.Metadata?.ImageID ?? imageReference;
+  // Prefer RepoDigests (immutable `<repo>@sha256:<hex>`) and fall back to
+  // ImageID (also content-addressed, `sha256:<hex>`). Do NOT fall back to
+  // imageReference — that's a tag like `nginx:1.25` whose target can change
+  // over time, producing fragile fingerprints that conflate distinct images.
+  // Callers receive '' (empty string) when no immutable identifier is
+  // available; the runner pushes a `trivy_image_no_digest` warning so the
+  // signal isn't silently lost.
+  const imageDigest = parsed.Metadata?.RepoDigests?.[0] ?? parsed.Metadata?.ImageID ?? '';
 
   const out: ContainerFinding[] = [];
   for (const result of parsed.Results ?? []) {
@@ -411,6 +417,12 @@ export async function runTrivyImage(
     return { findings: [], imageDigest: '', version: `trivy@${version}`, warnings };
   }
   const parsed = parseTrivyImageOutput(result.stdout, opts.imageRef, `trivy@${version}`);
+  if (!parsed.imageDigest) {
+    // Trivy returned neither RepoDigests nor ImageID — the image is
+    // identifiable only by its mutable tag, which we refuse to use as a
+    // fingerprint. Surface a warning so callers can flag the affected scan.
+    warnings.push('trivy_image_no_digest');
+  }
   return {
     findings: parsed.findings,
     imageDigest: parsed.imageDigest,
