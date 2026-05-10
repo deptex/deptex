@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Malicious-package finding routes.
  *
@@ -486,7 +485,7 @@ router.post('/:id/projects/:projectId/malicious-findings/:findingId/explain', as
       maintainerContext,
     });
 
-    if (!outcome.ok) {
+    if (outcome.ok !== true) {
       return res.status(outcome.status).json({ error: outcome.reason });
     }
     res.json(outcome.result);
