@@ -3493,7 +3493,7 @@ BEGIN
       error_message = 'Fix machine terminated unexpectedly after ' || attempts || ' attempt(s).',
       error_category = 'machine_crash',
       completed_at = NOW()
-  WHERE status = 'running'
+  WHERE status = 'executing'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
     AND attempts >= max_attempts
   RETURNING *;
@@ -5154,23 +5154,21 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.recover_stuck_fix_jobs()
- RETURNS integer
+ RETURNS SETOF project_security_fixes
  LANGUAGE plpgsql
 AS $function$
-DECLARE
-  v_count integer;
 BEGIN
+  RETURN QUERY
   UPDATE project_security_fixes
-    SET status = 'approved',
-        machine_id = NULL,
-        heartbeat_at = NULL,
-        error_message = COALESCE(error_message, '') ||
-          E'\n[recovered from stuck state at ' || NOW()::text || ']'
-    WHERE status = 'executing'
-      AND heartbeat_at < NOW() - INTERVAL '5 minutes'
-      AND attempts < max_attempts;
-  GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
+  SET status = 'approved',
+      machine_id = NULL,
+      heartbeat_at = NULL,
+      error_message = COALESCE(error_message, '') ||
+        E'\n[recovered from stuck state at ' || NOW()::text || ']'
+  WHERE status = 'executing'
+    AND heartbeat_at < NOW() - INTERVAL '5 minutes'
+    AND attempts < max_attempts
+  RETURNING *;
 END;
 $function$
 ;
