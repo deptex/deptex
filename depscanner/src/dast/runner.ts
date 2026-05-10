@@ -41,10 +41,17 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   // GitHub tokens
   [/\bghp_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHP]'],
   [/\bghs_[A-Za-z0-9]{36}\b/g, '[REDACTED_GHS]'],
-  // Password assignments
-  [/(?:password|passwd|pwd)["']?\s*[:=]\s*["']?[^\s"',}]+/gi, 'password=[REDACTED]'],
-  // API key assignments
-  [/(?:api[_-]?key|apikey|access[_-]?key)["']?\s*[:=]\s*["']?[A-Za-z0-9_-]{12,}/gi, 'api_key=[REDACTED]'],
+  // Password assignments — stop at URL / cookie delimiters (`?`, `&`, `;`, `#`)
+  // and structural chars (`)`, `]`, `>`, `\`) in addition to whitespace and
+  // JSON quote/comma/brace boundaries. Without this the assignment value
+  // greedily swallowed surrounding query-string state, and downstream rules
+  // (e.g. the api_key matcher) couldn't fire on credentials embedded later
+  // in the same URL.
+  [/(?:password|passwd|pwd)["']?\s*[:=]\s*["']?[^\s"',;&?#}\])>\\]+/gi, 'password=[REDACTED]'],
+  // API key assignments — accept base64 (`+`, `/`, `=`) so padded tokens
+  // aren't truncated mid-redact, and stop at the same URL / cookie
+  // delimiter set as the password matcher.
+  [/(?:api[_-]?key|apikey|access[_-]?key)["']?\s*[:=]\s*["']?[A-Za-z0-9+/=_-]{12,}(?=[\s"',;&?#}\])>\\]|$)/gi, 'api_key=[REDACTED]'],
   // Slack tokens
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED_SLACK]'],
 ];
