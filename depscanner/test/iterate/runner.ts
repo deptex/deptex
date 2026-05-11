@@ -22,7 +22,7 @@ import pLimit from 'p-limit';
 import { callProviderAndParse, GenerationError, type AiProviderName, type GeneratedPayload } from '../../src/rule-generator/generate';
 import { validateRule, makeRuleGenWorkdir, type ValidationLog } from '../../src/rule-generator/validate';
 import type { BuildPromptArgs } from '../../src/rule-generator/prompt-builder';
-import { loadFewShotExamples, type FewShotExample } from '../../src/rule-generator/few-shot-loader';
+import { selectFrameworkSpecFewShots, type FrameworkSpecFewShot } from '../../src/rule-generator/few-shot-examples';
 import { MAX_GENERATION_ATTEMPTS, buildRevisionPrompt, buildAttemptFailureFeedback } from '../../src/rule-generator';
 import { CANDIDATES, type Candidate } from './candidates';
 import { fetchAndCache, type CachedCveData } from './cache';
@@ -127,7 +127,7 @@ async function runOne(args: {
   model: string;
   apiKey: string;
   baseUrl?: string;
-  fewShotExamples: FewShotExample[];
+  fewShotExamples: FrameworkSpecFewShot[];
   perCveTimeoutMs: number;
   maxOutputTokens?: number;
 }): Promise<PerCveResult> {
@@ -336,11 +336,17 @@ export async function runVariant(opts: RunVariantOptions): Promise<VariantRunRep
     fetched.push(await fetchAndCache(c, githubToken));
   }
 
-  // Few-shot examples per ecosystem (deterministic on the corpus).
-  const platformRulesDir = opts.platformRulesDir ?? path.resolve(__dirname, '..', '..', 'reachability-rules');
+  // Few-shot examples per ecosystem. Sourced from the hand-ported
+  // FrameworkSpec library (`few-shot-examples.ts`) — same selection logic
+  // production uses via `generateRuleForCve` so the iteration harness's
+  // recall reflects what production sees on the corpus. (Phase 5's
+  // legacy `reachability-rules/` Semgrep YAML loader has been retired
+  // here; that directory doesn't exist in the depscanner tree any more
+  // and silently returned [] before this fix, making every iterate run
+  // execute with zero few-shots in the prompt.)
   const fewShotCount = opts.fewShotCount ?? 3;
-  function fewShotsFor(eco: string, excludeCveId: string): FewShotExample[] {
-    return loadFewShotExamples(platformRulesDir, eco, fewShotCount + 1)
+  function fewShotsFor(eco: string, excludeCveId: string): FrameworkSpecFewShot[] {
+    return selectFrameworkSpecFewShots(eco, fewShotCount + 1)
       .filter((ex) => ex.cveId !== excludeCveId)
       .slice(0, fewShotCount);
   }
