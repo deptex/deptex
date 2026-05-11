@@ -67,6 +67,27 @@ const CASES: FixtureCase[] = [
     specs: ['sinatra'],
     expectedVulnClass: 'xss',
   },
+  {
+    name: 'Sinatra Rack-middleware ReDoS (CVE-2024-25126 shape)',
+    vulnDir: 'sinatra-rack-redos-vuln',
+    safeDir: 'sinatra-rack-redos-safe',
+    specs: ['sinatra'],
+    expectedVulnClass: 'redos',
+  },
+  {
+    name: 'Rails Rack-middleware ReDoS (Rack::Utils.parse_query → Regexp.new)',
+    vulnDir: 'rails-rack-redos-vuln',
+    safeDir: 'rails-rack-redos-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'redos',
+  },
+  {
+    name: 'Rails cross-file XSS (controller → raw)',
+    vulnDir: 'rails-xss-vuln',
+    safeDir: 'rails-xss-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'xss',
+  },
 ];
 
 function summarize(flows: Flow[]): string {
