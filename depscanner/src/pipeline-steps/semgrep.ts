@@ -95,7 +95,20 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
               })
               .map((r: any) => {
                 const severity = r.extra?.severity ?? 'INFO';
-                const cweIds = r.extra?.metadata?.cwe ?? [];
+                // Semgrep rule authors emit metadata.cwe / metadata.owasp as
+                // either a string (e.g. "CWE-79") or an array depending on the
+                // rule. The DB column is text[] and depscore calls .some() on
+                // cweIds, so both branches need to land as arrays here.
+                const cweIds: string[] = Array.isArray(r.extra?.metadata?.cwe)
+                  ? r.extra.metadata.cwe
+                  : r.extra?.metadata?.cwe != null
+                  ? [String(r.extra.metadata.cwe)]
+                  : [];
+                const owaspIds: string[] = Array.isArray(r.extra?.metadata?.owasp)
+                  ? r.extra.metadata.owasp
+                  : r.extra?.metadata?.owasp != null
+                  ? [String(r.extra.metadata.owasp)]
+                  : [];
                 const category = r.extra?.metadata?.category ?? 'security';
                 const filePath = r.path ?? 'unknown';
                 const startLine = r.start?.line ?? null;
@@ -125,7 +138,7 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
                   severity,
                   message: r.extra?.message ?? null,
                   cwe_ids: cweIds,
-                  owasp_ids: r.extra?.metadata?.owasp ?? [],
+                  owasp_ids: owaspIds,
                   category,
                   metadata: sanitizeMetadata(r.extra?.metadata),
                   code_snippet: codeSnippet,

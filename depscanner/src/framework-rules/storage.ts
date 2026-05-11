@@ -39,19 +39,33 @@ export async function storeEntryPoints(
 
     if (rows.length === 0) return { success: true, count: 0 };
 
+    // Same class of bug as depscanner/src/tree-sitter-extractor/storage.ts:
+    // multiple framework detectors can emit the same entry-point tuple
+    // (e.g. an express app.get('/x') is reported by both the file-level
+    // detector and the AST-level detector, with different metadata blobs but
+    // identical conflict keys). PGLite rejects the batch with "ON CONFLICT DO
+    // UPDATE command cannot affect row a second time"; dedupe last-write-wins
+    // to match Postgres ON CONFLICT DO UPDATE semantics.
+    const onConflict = 'project_id,extraction_run_id,file_path,line_number,framework,handler_name';
+    const keyFields = onConflict.split(',').map((s) => s.trim());
+    const deduped = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const key = keyFields.map((f) => String(row[f] ?? '')).join('\x00');
+      deduped.set(key, row);
+    }
+    const finalRows = Array.from(deduped.values());
+
     const BATCH = 200;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const slice = rows.slice(i, i + BATCH);
+    for (let i = 0; i < finalRows.length; i += BATCH) {
+      const slice = finalRows.slice(i, i + BATCH);
       const { error } = await supabase
         .from('project_entry_points')
-        .upsert(slice, {
-          onConflict: 'project_id,extraction_run_id,file_path,line_number,framework,handler_name',
-        });
+        .upsert(slice, { onConflict });
       if (error) {
         return { success: false, error: error.message, count: 0 };
       }
     }
-    return { success: true, count: rows.length };
+    return { success: true, count: finalRows.length };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, error: message, count: 0 };
