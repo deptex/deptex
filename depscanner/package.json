@@ -50,7 +50,8 @@
     "test:snapshot-runner": "tsx test/snapshot-runner.test.ts",
     "bench:rule-generation": "tsx test/rule-generation-bench.ts",
     "iterate": "tsx test/iterate/cli.ts",
-    "iterate:tournament": "tsx test/iterate/tournament.ts"
+    "iterate:tournament": "tsx test/iterate/tournament.ts",
+    "tournament:rule-gen": "tsx test/iterate/tournament-2026-05-10/runner.ts"
   },
   "keywords": [
     "extraction",
