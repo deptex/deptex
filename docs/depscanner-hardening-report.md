@@ -1,8 +1,8 @@
 # Depscanner Hardening Report
 
 **Started:** 2026-05-08
-**Status:** In flight (Day 1)
-**Last updated:** 2026-05-08 — wave 1 mostly harvested (6/7); fix-agent #1 in flight
+**Status:** In flight (Day 3 — Wave 11 measurement landed)
+**Last updated:** 2026-05-10 late night — Wave 11 88-CVE at 35.2% (+4.5pp); OSS corpus mid-run; P1 PGLite dedup bug fixed at `ae7637b`
 **Worktree:** `worktree-depscanner-hardening` @ origin/main `c44d070`
 
 ---
@@ -466,6 +466,50 @@ None yet (no live AI rule gen runs on the corpus).
 ### Per-section breakdown
 
 (populated as track-completions land)
+
+---
+
+## Wave 11 — measurement-grade evidence (2026-05-10)
+
+### 88-CVE recall benchmark
+Commit `c004aff`. Run dir `depscanner/test/iterate/runs/2026-05-10-wave10/v_base/2026-05-11T03-54-36/`. Full report `docs/88-cve-benchmark-2026-05-10-wave10.md`.
+
+| Metric | Value |
+|--------|-------|
+| Global validation rate | **31/88 = 35.2%** |
+| Δ vs Wave 8 (30.7%) | +4.5pp |
+| Δ vs marathon baseline (33.0%) | +2.2pp |
+| DeepInfra spend | $0.3024 |
+| Wall time | 19.4 min |
+
+Per-ecosystem:
+| Eco | Wave 10 | Δ vs Wave 8 | What worked |
+|-----|---------|-------------|-------------|
+| npm | 22/34 (64.7%) | −2.9pp (variance) | — |
+| pypi | 7/23 (30.4%) | **+13.0pp** | SSRF few-shot exemplar lifted urllib3 family |
+| rubygems | 2/6 (33.3%) | **+33.3pp** | small-base noise + general fixture quality |
+| maven | 0/16 (0%) | 0pp | engine relaxation didn't translate to recall |
+| golang | 0/9 (0%) | 0pp | not targeted by Wave 10 |
+
+**Critical finding: maven 0/16 is direct production evidence the rule-gen pipeline has a deeper architectural ceiling than originally diagnosed.** Both layers contribute:
+- For ~36 npm/pypi CVEs: `fixture_round_trip_failed: pre>0, post=0` — flows fire, but `validate.ts` Gate 2 only counts model-rule sinks (Spike A in 3-spike bundle).
+- For 9 maven CVEs: `fixture_round_trip_failed: pre=0, post=0` — model fixtures don't even trigger taint into the relaxed sinks; fixture-shape issue upstream of Gate 2 (Spike B in 3-spike bundle, NEW).
+
+Three spike memos with line-level grounding live in `.cursor/plans/depscanner-hardening-DAILY-LOG.md` ticks 38, 39, 41. All pending Henry sign-off.
+
+### OSS corpus scan (in flight)
+
+Run dir `depscanner/oss-corpus-runs/2026-05-11-fresh/`. cdxgen `--deep` was dropped by default in `2a193cb` after the OSS smoke that hit the 300s scan cap. Real 10-repo run is now mid-scan across express/fastify/flask/nextjs/... in parallel.
+
+**OSS-found P1 bug already fixed at `ae7637b`:** tree-sitter extractor's `batchUpsert` in `depscanner/src/tree-sitter-extractor/storage.ts` was silently dropping `project_usage_slices` rows when the AST emitted multiple `(file, line, target)` variants for the same call site. PGLite rejected the batch with `ON CONFLICT DO UPDATE command cannot affect row a second time`; error was console.error-swallowed; data was lost. Fix: dedupe by `onConflict` fields inside `batchUpsert`, last-write-wins, 16 LOC, protects all three batchUpsert call sites. Fixture tests didn't catch it because their row counts are too low for duplicates to land in the same 200-row slice — needed OSS-scale repos to surface. **This is the marathon scan→find→fix loop working as designed.**
+
+### What's next (architectural, pending Henry sign-off)
+
+| Spike | File | Risk | Projected lift |
+|-------|------|------|----------------|
+| A — Gate 2 vuln_class-bounded count | `validate.ts:230-231,:365` | Safe fixtures may regress | npm/pypi unlock on `fixture_round_trip_failed` |
+| B — Maven Jackson + Log4j fixture-template few-shots | `few-shot-examples.ts` (new entries) | Cheap, low-risk | +4-6pp on maven (per c004aff report) |
+| C — fp-filter SNIPPET_CONTEXT_LINES Variant B | `fp-filter.ts:90, 838-839` | Larger prompts | Catches cross-class precondition (Jackson @Configuration etc.) |
 
 ---
 
