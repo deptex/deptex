@@ -22,26 +22,43 @@
 #
 # Coexists with java-stdlib.yaml.
 #   java-stdlib previously owned `*.info(*)` / `*.warn(*)` as `log_injection`
-#   sinks. That mapping has been retired in this PR — the SLF4J / Log4j /
-#   Logback Logger surface is framework-owned, not language-stdlib, so its
-#   per-level call patterns now live exclusively here as `code_injection`
-#   sinks. The propagator's matchSinkPattern returns the first matching
-#   sink across all loaded specs in directory order; without the retired
-#   stdlib entries, log4j.yaml is the unambiguous owner of the Logger
-#   call shapes. Other log_injection coverage (django/flask/fastapi/rails
-#   /actix-web/etc.) is unaffected — those specs declare their own
-#   framework-specific logger entries.
+#   sinks. That mapping was retired — the SLF4J / Log4j / Logback Logger
+#   surface is framework-owned, not language-stdlib, so its per-level call
+#   patterns live exclusively here as `code_injection` sinks. The propagator's
+#   matchSinkPattern returns the first matching sink across all loaded specs
+#   in directory order; without the retired stdlib entries, log4j.yaml is the
+#   unambiguous owner of the Logger call shapes. Other log_injection coverage
+#   (django/flask/fastapi/rails/actix-web/etc.) is unaffected.
 #
-# Spec-format gap accepted.
+# --------------------------------------------------------------------------
+# Wave 10 relaxation (2026-05-10): "any tainted Logger argument is a sink".
+# --------------------------------------------------------------------------
+# Background. Wave 8 added these per-level Logger sinks already, but the
+# Wave 9 88-CVE rerun showed all 5/5 Log4j family CVEs still failing at
+# `fixture_round_trip_failed`. Root cause: the Qwen fixtures for
+# CVE-2021-44228 routinely write
+#
+#     logger.error("User input: {}", "${jndi:ldap://" + userInput + "/a}");
+#
+# — i.e. the format string is at arg 0 (untainted) and the JNDI payload is
+# at arg 1 (tainted via `userInput`). Wave 8 declared `argument_indices: [0]`
+# on every per-level sink, so arg-1 taint never fired.
+#
+# The Wave 10 stance: declare `argument_indices: []` on every Logger sink so
+# **any** tainted argument fires the sink. This subsumes the previous arg-0
+# behavior AND catches the parameterised-message shape Qwen's fixtures use.
+#
+# Spec-format gap accepted (precondition-free sinks).
 #   The engine's pattern grammar matches by call-expression text, not by
 #   argument content. We cannot express "the message argument contains a
 #   `${jndi:` substring" as a precondition — every Logger.<level>(*) call
-#   that receives tainted data triggers the sink, even when the actual
-#   string is safe ("user=" + userId). The fp-filter LLM stage downstream
-#   prunes those false positives at scan time. This trade-off is documented
-#   in the framework-rule-pack-guide.md "precondition-free sinks" section
-#   and matches how java-stdlib models other "any tainted arg is unsafe"
-#   sinks (Runtime.exec, ObjectInputStream.readObject).
+#   that receives tainted data at ANY position triggers the sink, even
+#   when the actual string is safe ("user=" + userId, with no `${...}`
+#   interpolation). The fp-filter LLM stage downstream prunes those false
+#   positives at scan time. This trade-off matches how java-stdlib models
+#   other "any tainted arg is unsafe" sinks (Runtime.exec,
+#   ObjectInputStream.readObject). The FP risk is now load-bearing on the
+#   fp-filter — see follow-up note at end of file.
 #
 # Sources are NOT redeclared here — Spring's @RequestHeader / @RequestParam,
 # Quarkus's @HeaderParam, and HttpServletRequest.getHeader are all already
@@ -49,6 +66,14 @@
 # micronaut.yaml). The cross-spec load order means a Log4Shell flow from a
 # Spring controller's `@RequestHeader("User-Agent")` parameter through into
 # `logger.info(ua)` resolves with no additional source wiring.
+#
+# Follow-up — fp-filter audit.
+#   Wave 10 makes the fp-filter load-bearing for Log4j. Recommended audit:
+#   ensure fp-filter.ts's prompt knows to look for `${jndi:` /
+#   `${lower:jndi:` / `${env:...}` lookup substrings in the surrounding
+#   source before approving a Log4Shell flow, and to recognise that
+#   Log4j 2.16+ default config (`formatMsgNoLookups=true`) defangs the
+#   lookup. Without that, recall lift here translates 1:1 into FP burden.
 
 framework: log4j
 language: java
@@ -62,51 +87,56 @@ sinks:
   # via LogManager.getLogger().<level>(...) — the call-expression text of
   # the chained form still ends in `.info(...)` and the engine matches by
   # the trailing call site).
+  #
+  # `argument_indices: []` means ANY tainted argument fires the sink. This
+  # catches both the simple shape `logger.info(taintedString)` AND the
+  # parameterised shape `logger.error("User input: {}", taintedString)`,
+  # which is how Qwen most commonly writes Log4Shell fixtures.
   - pattern: "*.info(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.info — JNDI lookup substitution (Log4Shell)
+    argument_indices: []
+    description: Log4j 2 Logger.info — any tainted argument treated as JNDI-substitution sink (FP risk accepted, fp-filter gates)
   - pattern: "*.warn(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.warn — JNDI lookup substitution
+    argument_indices: []
+    description: Log4j 2 Logger.warn — any tainted argument treated as JNDI-substitution sink
   - pattern: "*.error(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.error — JNDI lookup substitution
+    argument_indices: []
+    description: Log4j 2 Logger.error — any tainted argument treated as JNDI-substitution sink
   - pattern: "*.debug(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.debug — JNDI lookup substitution
+    argument_indices: []
+    description: Log4j 2 Logger.debug — any tainted argument treated as JNDI-substitution sink
   - pattern: "*.trace(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.trace — JNDI lookup substitution
+    argument_indices: []
+    description: Log4j 2 Logger.trace — any tainted argument treated as JNDI-substitution sink
   - pattern: "*.fatal(*)"
     vuln_class: code_injection
-    argument_indices: [0]
-    description: Log4j 2 Logger.fatal — JNDI lookup substitution
-  # Generic Logger.log(Level, message[, throwable]) overloads. Both
-  # arguments can carry the JNDI payload — index 0 is `Level`, index 1
-  # is the message. The closed argument_indices list pins to message
-  # positions only; the engine's pattern matcher binds tainted args to
-  # `argument_indices`.
+    argument_indices: []
+    description: Log4j 2 Logger.fatal — any tainted argument treated as JNDI-substitution sink
+  # Generic Logger.log(Level, message[, throwable]) overloads. Wave 10 broadens
+  # this to ANY tainted argument: the Level arg is normally untainted but the
+  # message + throwable args are common payload carriers. `[]` collapses the
+  # arg-indices machinery for this surface.
   - pattern: "*.log(*)"
     vuln_class: code_injection
-    argument_indices: [1]
-    description: Log4j 2 Logger.log(Level, message) — JNDI substitution
+    argument_indices: []
+    description: Log4j 2 Logger.log(Level, message, ...) — any tainted argument treated as JNDI substitution
   # ParameterizedMessage / printf-shaped helpers. Same JNDI-substitution
-  # path: Log4j formats the message AFTER lookup expansion.
+  # path: Log4j formats the message AFTER lookup expansion. ANY tainted arg
+  # fires (the format string OR the parameters).
   - pattern: "*.printf(*)"
     vuln_class: code_injection
-    argument_indices: [1]
-    description: Log4j 2 Logger.printf(level, format, args) — JNDI substitution
+    argument_indices: []
+    description: Log4j 2 Logger.printf — any tainted argument treated as JNDI substitution
   # Direct MessageFactory / ParameterizedMessage construction with tainted
   # bytes also triggers the lookup once the message is rendered.
   - pattern: "new ParameterizedMessage"
     vuln_class: code_injection
     argument_indices: []
-    description: Log4j 2 ParameterizedMessage constructor — JNDI substitution
+    description: Log4j 2 ParameterizedMessage constructor — any tainted argument treated as JNDI substitution
 
 sanitizers:
   # The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
