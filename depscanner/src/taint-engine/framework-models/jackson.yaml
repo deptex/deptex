@@ -7,8 +7,8 @@
 # generator could not pick a Jackson sink that the engine recognises, so
 # every model-written vulnerable fixture round-tripped to zero findings.
 #
-# CVEs unlocked by this spec (all jackson-databind, all gadget-chain RCE
-# triggered by ObjectMapper.readValue / convertValue / treeToValue against
+# CVEs covered (all jackson-databind, all gadget-chain RCE triggered by
+# ObjectMapper.readValue / convertValue / treeToValue against
 # attacker-controlled JSON when polymorphic typing is enabled):
 #
 #   - CVE-2017-7525 — initial jackson-databind polymorphic deser RCE
@@ -17,30 +17,56 @@
 #   - CVE-2019-14439 — logback-core via SubTypeValidator bypass
 #   - CVE-2020-9548  — br.com.anteros / Anteros-DBCP gadget
 #
-# Projected recall lift on the 88-CVE corpus: ~+5pp (5 CVEs / 88 = 5.7%).
-# Sister gadget classes in `YAMLMapper` / `XmlMapper` / `CBORMapper` come
-# along automatically — every Jackson `*Mapper` subclass exposes the same
-# `readValue` family on `ObjectMapper`.
+# --------------------------------------------------------------------------
+# Wave 10 relaxation (2026-05-10): "any tainted readValue is a sink".
+# --------------------------------------------------------------------------
+# Background. Wave 8 added these sinks already, but Wave 9's 88-CVE rerun
+# showed all 5/5 Jackson CVEs still failing at `fixture_round_trip_failed`.
+# Inspection of Qwen's generated fixtures (e.g. CVE-2017-7525 attempt: a
+# `public static void main(String[] args)` shim that calls
+# `mapper.readValue(args[0], Object.class)` with no `enableDefaultTyping`
+# in scope) showed the gadget-chain *precondition* is rarely present in
+# fixture-grade snippets — and the spec format has no `precondition`
+# field anyway (see "Gate gap" below).
 #
-# Generic Java stdlib already ships a coarse `*.readValue(*)` deser sink in
-# java-stdlib.yaml. This spec layers Jackson-specific shapes the generic
-# pattern misses (`readerFor(...).readValue`, `convertValue`, `treeToValue`,
-# `JsonDeserializer.deserialize`) and pins them to the Jackson namespace via
-# the description text so flows attribute correctly. Sources come from the
-# already-loaded Spring / JAX-RS / Quarkus / Micronaut framework specs —
-# Jackson sits behind their `@RequestBody` / `@FormParam` binding and only
-# fires when those frameworks introduce tainted strings into the program.
+# The Wave 10 stance: STOP modelling the gate. Any
+# `ObjectMapper.readValue(*) / readerFor(*).readValue(*) / convertValue(*)
+# / treeToValue(*) / JsonDeserializer.deserialize(*)` call with a tainted
+# argument fires the `deserialization` sink, regardless of whether
+# `enableDefaultTyping` / `activateDefaultTyping` / `@JsonTypeInfo` /
+# `@JsonTypeIdResolver` is reachable. The fp-filter LLM stage downstream
+# (`backend/src/lib/.../fp-filter.ts`) has full source-text context and is
+# expected to suppress flows where no polymorphic-target type is in scope.
+# This pushes the FP filter onto the load-bearing path — see follow-up
+# section at end of file.
 #
-# Gate gap (documented FP risk): the real-world Jackson sinks are only
-# exploitable when `enableDefaultTyping(...)` / `activateDefaultTyping(...)`
-# has been called on the ObjectMapper. The FrameworkSpec schema
-# (spec.ts:97-103) has no `precondition` / `enabler` field, so this spec
-# cannot express the gate at the engine layer. Instead we accept the
-# baseline over-approximation (`mapper.readValue(userInput, T.class)` flows
-# regardless of typing config) and rely on the downstream AI FP filter
-# (`fp-filter.ts`) — which has full source-text context — to reject
-# Jackson flows where no default-typing call is reachable. Documented here
-# so any future "spec-format adds preconditions" work knows where to gate.
+# Generic Java stdlib (`java-stdlib.yaml`) already declares a coarse
+# `*.readValue(*)` deser sink. This spec retains the Jackson-specific
+# call shapes the generic pattern misses (`readerFor(...).readValue`,
+# `convertValue`, `treeToValue`, `JsonDeserializer.deserialize`) and pins
+# them to the Jackson namespace via the description text. Sources come from
+# the already-loaded Spring / JAX-RS / Quarkus / Micronaut framework specs.
+#
+# Gate gap (documented FP risk).
+#   The real-world Jackson sinks are only exploitable when one of
+#   `enableDefaultTyping(...)` / `activateDefaultTyping(...)` /
+#   `@JsonTypeInfo` / `@JsonTypeIdResolver` / a polymorphic target type is
+#   in scope. The FrameworkSpec schema (spec.ts:97-103) has no
+#   `precondition` / `enabler` field, so this spec cannot express the gate
+#   at the engine layer. As of Wave 10 we **explicitly accept the
+#   over-approximation**: the FP filter at scan time is the gate. The
+#   `enableDefaultTyping` / `activateDefaultTyping` marker entries that
+#   used to live in this spec were REMOVED in Wave 10 — they were not
+#   real sinks (the call itself takes no tainted argument in normal use)
+#   and their presence muddied the spec.
+#
+# Follow-up — fp-filter audit.
+#   Wave 10 makes the fp-filter load-bearing for Jackson. The follow-up
+#   task is to audit fp-filter.ts's prompt to ensure it knows to look for
+#   `enableDefaultTyping` / `activateDefaultTyping` / `@JsonTypeInfo` /
+#   `@JsonTypeIdResolver` / `PolymorphicTypeValidator` in the surrounding
+#   source before approving a Jackson deser flow. Without that, recall
+#   lift here translates 1:1 into FP burden at scan time.
 
 framework: jackson
 language: java
@@ -50,10 +76,9 @@ sources: []
 
 sinks:
   # ---------- ObjectMapper.readValue family ----------
-  # Bare `*.readValue(*)` is already in java-stdlib.yaml; re-listing here is
-  # redundant but harmless (duplicate matches are deduped by Flow.id at
-  # storage time). We instead focus on the call shapes java-stdlib doesn't
-  # cover.
+  # Bare `*.readValue(*)` is already in java-stdlib.yaml; the entries below
+  # cover the call shapes java-stdlib doesn't and pin Jackson-specific
+  # attribution via the description text.
 
   # ObjectMapper.readValue called via static-style receiver `ObjectMapper.`
   # rather than instance receiver. Rare in app code but appears in unit-test
@@ -61,7 +86,7 @@ sinks:
   - pattern: "ObjectMapper.readValue(*)"
     vuln_class: deserialization
     argument_indices: [0]
-    description: Jackson ObjectMapper.readValue (static-style receiver)
+    description: Jackson ObjectMapper.readValue (static-style receiver) — any tainted JSON is treated as a sink (FP risk accepted, fp-filter gates)
 
   # ReaderFor chain: `mapper.readerFor(T.class).readValue(json)`. The chained
   # form is the canonical "type-safe" Jackson usage but the same gadget
@@ -72,7 +97,7 @@ sinks:
   - pattern: "*.readerFor(*).readValue(*)"
     vuln_class: deserialization
     argument_indices: [0]
-    description: Jackson ObjectMapper.readerFor(...).readValue chain
+    description: Jackson ObjectMapper.readerFor(...).readValue chain — any tainted JSON is treated as a sink
 
   # ObjectMapper.convertValue — converts a JsonNode / Map into a typed
   # object. Same gadget surface when defaultTyping is on; the attacker
@@ -81,14 +106,14 @@ sinks:
   - pattern: "*.convertValue(*)"
     vuln_class: deserialization
     argument_indices: [0]
-    description: Jackson ObjectMapper.convertValue — typed coercion of untrusted Map/JsonNode
+    description: Jackson ObjectMapper.convertValue — any tainted Map/JsonNode coerced to a typed object is treated as a sink
 
   # ObjectMapper.treeToValue — same as convertValue but the input is a
   # JsonNode parsed earlier via readTree. Same gadget surface.
   - pattern: "*.treeToValue(*)"
     vuln_class: deserialization
     argument_indices: [0]
-    description: Jackson ObjectMapper.treeToValue — typed coercion of untrusted JsonNode
+    description: Jackson ObjectMapper.treeToValue — any tainted JsonNode coerced to a typed object is treated as a sink
 
   # Custom JsonDeserializer.deserialize(parser, ctx) — user-written
   # deserializers that delegate back to the mapper inherit the same gadget
@@ -98,26 +123,14 @@ sinks:
     argument_indices: [0]
     description: Jackson JsonDeserializer.deserialize — custom deserializer hook
 
-  # ---------- enableDefaultTyping marker ----------
-  # The FrameworkSpec format has no `enabler` / `precondition` field; we
-  # cannot use this call to gate the readValue sinks above. We still list it
-  # as a deserialization sink so that:
-  #   (a) Semgrep-style rule.yml generators picking patterns from this spec
-  #       know enableDefaultTyping is the Jackson red flag, and
-  #   (b) the flow itself is surfaced — a project that calls
-  #       `mapper.enableDefaultTyping(...)` with any tainted operand (rare
-  #       but happens for "auto-detect" wrappers) gets flagged.
-  # argument_indices: [] means ANY tainted argument fires the sink; this
-  # matches the over-approximation choice for new ProcessBuilder + readObject
-  # in java-stdlib.yaml.
-  - pattern: "*.enableDefaultTyping(*)"
-    vuln_class: deserialization
-    argument_indices: []
-    description: Jackson ObjectMapper.enableDefaultTyping — opens polymorphic-deser gadget surface
-  - pattern: "*.activateDefaultTyping(*)"
-    vuln_class: deserialization
-    argument_indices: []
-    description: Jackson ObjectMapper.activateDefaultTyping (2.10+ replacement for enableDefaultTyping)
+  # ---------- enableDefaultTyping / activateDefaultTyping markers REMOVED ----------
+  # Wave 10: these entries were dropped. They are config-call markers, not
+  # real sinks — `enableDefaultTyping()` is typically invoked with no
+  # arguments at all, so listing it with `argument_indices: []` produced
+  # zero useful flows and only muddied the spec semantics. The
+  # documentation about "what makes Jackson exploitable" now lives in the
+  # YAML header instead, where rule-generation prompts and fp-filter
+  # prompts can pick it up.
 
 sanitizers:
   # Jackson's first-party defence against polymorphic-deser gadgets is the
