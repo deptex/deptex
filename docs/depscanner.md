@@ -630,6 +630,149 @@ push that to 40-60% but is not yet implemented.
 
 ---
 
+## 8b. AI provider routing (phase33)
+
+After `phase29_drop_byok.sql` retired BYOK, every AI call runs on a
+worker-environment platform key. This section documents where each AI
+call site lives, how org "user preferences" map to a provider/model,
+where token + cost telemetry lands, and how to debug "why did the
+scan call Qwen when I picked Sonnet".
+
+### 8b.1 Where AI calls happen
+
+| # | Site | Resolver | Pricing column |
+|---|---|---|---|
+| D1 | `rule-generator/generate.ts` → `callAnthropic` | `organization_reachability_settings.ai_provider/ai_model` | inline MODEL_PRICING table |
+| D2 | `rule-generator/generate.ts` → `callOpenAI` | same | same |
+| D3 | `rule-generator/generate.ts` → `callGoogle` | same | same |
+| D4 | `taint-engine/fp-filter.ts` → DeepInfra Qwen | `taint_engine_settings.ai_layer_enabled` + `monthly_ai_cost_cap_usd`; **provider/model hard-coded to DeepInfra `Qwen/Qwen3-235B-A22B-Instruct-2507`** | inline `PRICING` constant |
+| D5 | `epd.ts` → `verifyWithAnthropic` (gated fallback) | `taint_engine_settings.monthly_ai_cost_cap_usd`; **provider/model hard-coded to `process.env.ANTHROPIC_API_KEY` + `DEFAULT_ANTHROPIC_MODEL`** | inline rate calc |
+
+D1–D3 honour the org's chosen provider + model. D4 and D5 are
+intentional bypasses: the fp-filter prompt is calibrated for
+Qwen3-235B-Instruct's token shape and the EPD fallback exists
+specifically because Anthropic gives stronger semantic verdicts on
+sanitization than the deterministic engine. Both are documented as
+such; `organization_reachability_settings.ai_model` does NOT override
+them. See `docs/ai-provider-audit-2026-05-10.md` for the full matrix
+incl. backend / fix-worker sites.
+
+### 8b.2 Per-call telemetry — `ai_usage_logs`
+
+Every AI call from D1–D5 writes a single row to `ai_usage_logs` with
+`(organization_id, feature, tier, provider, model, input_tokens,
+output_tokens, estimated_cost, success, error_message, …)`. This is
+the per-call audit trail and feeds the per-org monthly cap calculation
+(`readRuleGenMonthlySpend` SUMs `estimated_cost` over the month).
+
+Feature tags:
+- `rule_generation` — D1–D3
+- `taint_engine_fp_filter` — D4
+- `taint_engine_anthropic_fallback` — D5
+
+### 8b.3 Per-scan telemetry — `scan_jobs.ai_*`
+
+phase33 added a per-scan rollup on `scan_jobs` so the org-admin UI can
+answer "how much did THIS scan burn":
+
+| Column | Type | What it holds |
+|---|---|---|
+| `ai_total_prompt_tokens` | BIGINT | Sum across D1–D5 for this scan |
+| `ai_total_completion_tokens` | BIGINT | Sum across D1–D5 |
+| `ai_total_cost_usd` | NUMERIC(10,4) | Sum across D1–D5 |
+| `ai_per_model` | JSONB | Array of `{provider, model, prompt_tokens, completion_tokens, cost_usd}` |
+| `ai_cost_cap_usd` | NUMERIC(10,4) NULL | Optional per-scan ceiling |
+
+The helper in `depscanner/src/ai-telemetry.ts` wraps two operations:
+- `recordScanJobAiUsage()` — atomic rollup via the
+  `add_scan_job_ai_usage(p_job_id, p_organization_id, p_provider,
+  p_model, p_prompt_tokens, p_completion_tokens, p_cost_usd)` SQL
+  function. Concurrent rule-gen + fp-filter + EPD-fallback calls
+  serialise on a `FOR UPDATE` lock so the JSONB array merge is race-free.
+- `checkScanJobCostCap()` — read-side gate. Returns `wouldExceed=true`
+  when `current_total + projected_next_cost > cap`. NULL cap means
+  "no per-scan cap" (org-month cap still applies).
+
+### 8b.4 Per-scan cost cap
+
+Two cost ceilings exist on every AI-using step:
+
+1. **Org-month cap** — `organization_reachability_settings.monthly_budget_usd`
+   (rule-gen) and `taint_engine_settings.monthly_ai_cost_cap_usd`
+   (fp-filter, EPD fallback). Enforced via a SUM of `ai_usage_logs`
+   per calendar month, or in the fp-filter's case a Redis token bucket
+   that's faster + race-safe.
+2. **Per-scan cap** — `scan_jobs.ai_cost_cap_usd`. Optional. Attached
+   when an operator triggers the scan with a body of
+   `{ "ai_cost_cap_usd": 0.50 }` to the manual-sync route, or via
+   `api.triggerProjectSync(orgId, projectId, { aiCostCapUsd: 0.50 })`
+   from the frontend.
+
+Precedence at each AI call site is `monthly > burn-breaker > per-scan
+> per-extraction`. When the per-scan cap trips, the step:
+
+- Emits a structured `ai_cost_cap_exceeded` `extraction_step_errors`
+  row (visible in `/admin/extraction-failures`).
+- Degrades gracefully — rule-gen + fp-filter both skip remaining
+  candidates; EPD switches to its heuristic classifier. The
+  extraction does NOT fail.
+- Records the trip in step logs with the current total + cap +
+  projected next-call cost so the operator can audit.
+
+### 8b.5 Setting a per-scan cap
+
+API:
+
+```
+POST /api/organizations/:orgId/projects/:projectId/sync
+Content-Type: application/json
+Authorization: Bearer <jwt>
+
+{ "ai_cost_cap_usd": 0.50 }
+```
+
+`ai_cost_cap_usd` is optional. Omit it for the legacy "no per-scan cap"
+behaviour (monthly cap only). Non-positive / non-finite values return
+400. Values above `$1000` are clamped to `$1000` server-side so an
+operator typo can't disable the cap entirely.
+
+Frontend:
+
+```ts
+api.triggerProjectSync(orgId, projectId, { aiCostCapUsd: 0.50 });
+```
+
+The wrapper sends the body only when `aiCostCapUsd` is set, so old
+call sites (no second arg) continue to behave as before.
+
+### 8b.6 Debugging "why did this AI call use Qwen / Sonnet / Gemini?"
+
+1. Read the success log line from `extraction_logs` for the relevant
+   step. Rule-gen emits a `rule_generation` line with
+   `metadata.provider` and `metadata.model`. Taint-engine emits
+   `taint_engine` lines with similar metadata. Both surface the
+   *effective* model — including any `fall_back_to_haiku` downgrade
+   the budget cap forced.
+2. Cross-reference against `ai_usage_logs` for that
+   `(organization_id, feature)` pair — the per-call rows show every
+   model the scan actually hit.
+3. For rule-gen (D1–D3), if the effective model isn't what
+   `organization_reachability_settings.ai_model` says, the most likely
+   cause is `applyBudgetCap()` downgrading to
+   `FALLBACK_MODELS[settings.ai_provider]` because the projected cost
+   blew the monthly budget. Search `extraction_logs` for "falling back
+   to" + the model name.
+4. For fp-filter / EPD fallback, the model IS hard-coded. Look at
+   `taint-engine/fp-filter.ts:DEFAULT_MODEL` and
+   `epd.ts:DEFAULT_ANTHROPIC_MODEL` — `organization_reachability_settings`
+   does not override these by design.
+5. The per-model breakdown on `scan_jobs.ai_per_model` is the single
+   place that shows ALL providers + models a scan touched (D1–D5
+   together). It is the canonical "this scan burned $X on Sonnet + $Y
+   on Qwen" answer.
+
+---
+
 ## 9. Cross-file taint engine (Phase 6)
 
 The taint engine is a deterministic, language-aware forward propagator. It
