@@ -100,6 +100,27 @@ const DEFAULT_IGNORE_FIELDS = new Set([
   'cvss_score',
   'cisa_kev',
   'published_at',
+  // Rule generation telemetry — drifts with AI provider pricing and model
+  // rotation. The load-bearing contract (vuln_class, osv_id, rule_yaml,
+  // validation_status, validation_breakdown, confidence, generation_source)
+  // stays pinned. See `docs/snapshot-coverage-audit-2026-05-10.md` §2.8 for
+  // the full audit.
+  'generation_cost_usd',
+  'generation_model_version',
+  'generated_at',
+  'rule_id',
+  // Tool version stamps — drift on Semgrep / TruffleHog / cdxgen upgrade
+  // without a semantic change. The finding's `rule_id`, file:line, severity
+  // and `code_snippet` are what we contract on; the embedded tool version
+  // is volatile.
+  'semgrep_version',
+  'trufflehog_version',
+  'cdxgen_version',
+  // Reachable-flow timestamps — added proactively so the first reachable-
+  // flow fixture (planned per `docs/contributor-test-infra-plan.md` §2)
+  // doesn't ship with re-strip churn.
+  'flow_extracted_at',
+  'confidence_calibrated_at',
 ]);
 
 /**
