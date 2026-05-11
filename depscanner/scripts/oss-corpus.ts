@@ -164,6 +164,13 @@ function execCapture(
      * directly (works for git, npm, etc.).
      */
      useBash?: boolean;
+    /**
+     * If set, append each stdout/stderr chunk to these files as it arrives.
+     * Without this, the in-memory buffers are lost when a timeout SIGKILLs
+     * the child mid-syscall and we lose all forensic evidence of which step
+     * was slow.
+     */
+    tee?: { stdoutPath: string; stderrPath: string };
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string; durationMs: number; timedOut: boolean }> {
   return new Promise((resolve) => {
@@ -171,6 +178,11 @@ function execCapture(
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    if (opts.tee) {
+      fs.mkdirSync(path.dirname(opts.tee.stdoutPath), { recursive: true });
+      fs.writeFileSync(opts.tee.stdoutPath, '');
+      fs.writeFileSync(opts.tee.stderrPath, '');
+    }
 
     let actualCmd = cmd;
     let actualArgs = args;
@@ -197,8 +209,16 @@ function execCapture(
       shell: false,
     });
 
-    proc.stdout.on('data', (b) => (stdout += b.toString()));
-    proc.stderr.on('data', (b) => (stderr += b.toString()));
+    proc.stdout.on('data', (b) => {
+      const s = b.toString();
+      stdout += s;
+      if (opts.tee) fs.appendFileSync(opts.tee.stdoutPath, s);
+    });
+    proc.stderr.on('data', (b) => {
+      const s = b.toString();
+      stderr += s;
+      if (opts.tee) fs.appendFileSync(opts.tee.stderrPath, s);
+    });
 
     let timer: NodeJS.Timeout | undefined;
     if (opts.timeoutMs) {
@@ -329,11 +349,17 @@ async function runDepscanner(
     '--format=json',
   ];
 
-  const res = await execCapture(scanBin, args, { env, timeoutMs, useBash: true });
-
-  // Mirror raw streams to disk for forensic review.
-  fs.writeFileSync(path.join(outputDir, 'stdout.json'), res.stdout);
-  fs.writeFileSync(path.join(outputDir, 'stderr.log'), res.stderr);
+  // Stream stdout/stderr to disk as they arrive — on SIGKILL timeout the
+  // in-memory buffers are otherwise lost and we have zero forensic evidence
+  // of which pipeline step was running when the kill fired.
+  const stdoutPath = path.join(outputDir, 'stdout.json');
+  const stderrPath = path.join(outputDir, 'stderr.log');
+  const res = await execCapture(scanBin, args, {
+    env,
+    timeoutMs,
+    useBash: true,
+    tee: { stdoutPath, stderrPath },
+  });
 
   if (res.timedOut) {
     return {
