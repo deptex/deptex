@@ -204,6 +204,33 @@ function execCapture(
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
         timedOut = true;
+        // Killing the bash wrapper alone doesn't propagate to the docker
+        // child — `docker run -i` survives parent-stdin EOF if the
+        // container process is mid-syscall (which cdxgen `--profile
+        // research --deep` always is, doing remote git ls-remote calls).
+        // Sweep all running deptex-cli:local containers as a hammer; this
+        // is acceptable for the corpus harness because we never run the
+        // harness alongside a "real" scan.
+        try {
+          require('node:child_process').execSync(
+            'docker ps -q --filter ancestor=deptex-cli:local',
+            { encoding: 'utf8' },
+          )
+            .split('\n')
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+            .forEach((id: string) => {
+              try {
+                require('node:child_process').execSync(`docker kill ${id}`, {
+                  stdio: 'ignore',
+                });
+              } catch {
+                /* container already gone */
+              }
+            });
+        } catch {
+          /* docker not reachable */
+        }
         try {
           proc.kill('SIGKILL');
         } catch {
