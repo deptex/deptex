@@ -49,6 +49,7 @@ import {
   DEFAULT_MONTHLY_AI_COST_CAP_USD,
 } from './cost-cap';
 import type { Storage } from '../storage';
+import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from '../ai-telemetry';
 
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
@@ -143,6 +144,14 @@ export interface FpFilterContext {
   apiKey?: string;
   /** Optional model override (defaults to Qwen/Qwen3-235B-A22B-Instruct-2507). */
   model?: string;
+  /**
+   * Phase 33: owning scan_jobs row id. When set, each fp-filter call
+   * rolls token + cost telemetry into scan_jobs.ai_total_* + ai_per_model
+   * and honours scan_jobs.ai_cost_cap_usd as a per-scan ceiling. Undefined
+   * in CLI mode (no scan_jobs row) — fp-filter runs without per-scan
+   * accounting in that case.
+   */
+  jobId?: string;
 }
 
 export interface AiFilterStats {
@@ -439,8 +448,9 @@ async function runFpFilterStage(
   const surviving: Flow[] = [...above];
   let capExhausted = false;
   let capInfraFailed = false;
+  let scanCapExhausted = false;
   for (const f of below) {
-    if (capExhausted || capInfraFailed) {
+    if (capExhausted || capInfraFailed || scanCapExhausted) {
       // Once we hit the cap (or Redis is down), the remaining flows pass
       // through unfiltered — same semantics as kept_on_error so they get
       // graded by the deterministic engine alone, not silently dropped.
@@ -449,6 +459,35 @@ async function runFpFilterStage(
     }
 
     const perFlowEstimate = estimatePerFlowCostUsd(f);
+
+    // Phase 33: per-scan cap check (scan_jobs.ai_cost_cap_usd). Sits BEFORE
+    // the org-month Redis bucket so the operator's per-extraction ceiling
+    // can clamp tighter than the monthly cap. The DB read is async but
+    // cheap (~5ms); we only do it when fp.jobId is set, so CLI mode is
+    // untouched.
+    if (fp.jobId) {
+      const capCheck = await checkScanJobCostCap(fp.storage, fp.jobId, perFlowEstimate);
+      if (capCheck.wouldExceed && capCheck.cap !== null) {
+        scanCapExhausted = true;
+        baseStats.skippedReason ??= 'scan_cost_cap_exceeded';
+        onWarn?.(
+          `fp-filter per-scan cap exhausted at flow ${f.id}: $${capCheck.currentTotal.toFixed(4)} ` +
+            `+ projected $${perFlowEstimate.toFixed(4)} > cap $${capCheck.cap.toFixed(4)}`,
+        );
+        await logScanJobCostCapExceeded(fp.storage, {
+          jobId: fp.jobId,
+          projectId: fp.projectId,
+          step: 'taint_engine_fp_filter',
+          cap: capCheck.cap,
+          currentTotal: capCheck.currentTotal,
+          projectedCost: perFlowEstimate,
+          provider: 'openai',
+          model: fp.model ?? 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        });
+        surviving.push(f);
+        continue;
+      }
+    }
 
     // Atomic reservation against the per-org Redis bucket. The cap is
     // re-read inside assertWithinCostCap, so settings changes propagate.
@@ -486,6 +525,24 @@ async function runFpFilterStage(
         extractionRunId: fp.extractionRunId,
       },
     );
+
+    // Phase 33: roll per-call telemetry into scan_jobs. No-op when fp.jobId
+    // is undefined (CLI mode). filterFlow returns costUsd on every verdict
+    // including ai_truncated / kept_on_error; we count the spend regardless.
+    // FilterErrorVerdict has cost but no tokens — record cost only in that
+    // case so the running total tracks reality.
+    if (fp.jobId && result.costUsd > 0) {
+      const hasTokens = result.verdict !== 'ai_truncated' && result.verdict !== 'kept_on_error';
+      await recordScanJobAiUsage(fp.storage, {
+        jobId: fp.jobId,
+        organizationId: fp.organizationId,
+        provider: 'openai',
+        model: fp.model ?? 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        promptTokens: hasTokens ? (result as { inputTokens: number }).inputTokens : 0,
+        completionTokens: hasTokens ? (result as { outputTokens: number }).outputTokens : 0,
+        costUsd: result.costUsd,
+      });
+    }
     baseStats.verdicts.set(f.id, result);
 
     // Refund the difference between projected and actual so the bucket

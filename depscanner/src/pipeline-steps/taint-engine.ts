@@ -261,6 +261,9 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
           userId: organizationId,
           projectId,
           extractionRunId: runId,
+          // Phase 33: thread scan_jobs id so per-call cost rolls up
+          // into the scan row + the per-scan cap is honoured.
+          jobId: job.jobId,
         },
       }),
       30 * 60_000,

@@ -113,7 +113,7 @@ export async function doReachabilityAndEpd(
   // project_entry_points.
   const epdStart = Date.now();
   try {
-    await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, fpFilterCostUsd);
+    await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, fpFilterCostUsd, job.jobId);
   } catch (epdErr: any) {
     // EpdBudgetExceededError must propagate WITHOUT persisting an
     // extraction_step_errors row — env / per-org `fail_job` is the only

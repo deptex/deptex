@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Storage } from './storage';
 import { MAX_VOTE_THRESHOLD, UNCERTAIN_UPPER } from './taint-engine/confidence-thresholds';
+import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from './ai-telemetry';
 
 export type ReachabilityStatus = 'reachable' | 'unreachable' | 'unknown';
 export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
@@ -785,6 +786,15 @@ export async function applyEpdScoringFallback(
    * 25%-of-monthly-cap per-extraction ceiling.
    */
   taintEngineFpFilterCostUsd = 0,
+  /**
+   * Phase 33: scan_jobs.id for the owning extraction. When set, the
+   * Anthropic fallback (D5) rolls each call's tokens + cost into
+   * scan_jobs.ai_total_* + ai_per_model and honours
+   * scan_jobs.ai_cost_cap_usd as a per-scan ceiling on top of the existing
+   * monthly cap. Undefined in CLI mode — fallback runs without per-scan
+   * accounting.
+   */
+  jobId?: string,
 ): Promise<void> {
   const { data: projectRow } = await supabase
     .from('projects')
@@ -1218,6 +1228,34 @@ ${sourceContext || 'none'}`;
           ...aggregated,
           epd_status: 'budget_exceeded',
         };
+      } else if (
+        // Phase 33: per-scan cap (scan_jobs.ai_cost_cap_usd). Sits AFTER
+        // the monthly cap + burn-breaker so a tight per-scan ceiling can
+        // halt the fallback once the operator's budget for THIS extraction
+        // is gone. Skipped in CLI mode (no jobId).
+        jobId
+        && (await (async () => {
+          const c = await checkScanJobCostCap(supabase, jobId, projectedCost);
+          if (c.wouldExceed && c.cap !== null) {
+            await logScanJobCostCapExceeded(supabase, {
+              jobId,
+              projectId,
+              step: 'epd',
+              cap: c.cap,
+              currentTotal: c.currentTotal,
+              projectedCost,
+              provider: 'anthropic',
+              model: anthropicModel,
+            });
+            return true;
+          }
+          return false;
+        })())
+      ) {
+        aggregated = {
+          ...aggregated,
+          epd_status: 'ai_verified_anthropic_fallback_skipped_cost_cap',
+        };
       } else {
         const callStart = Date.now();
         try {
@@ -1226,6 +1264,21 @@ ${sourceContext || 'none'}`;
           const callCost = estimateCostUsd(anthropicModel, ai.inputTokens, ai.outputTokens);
           runSpendUsd += callCost;
           extractionAnthropicCostUsd += callCost;
+
+          // Phase 33: roll the call into scan_jobs.ai_total_* + ai_per_model.
+          // Fire-and-forget; recordScanJobAiUsage swallows its own errors so
+          // a transient Supabase issue can't break depscore updates.
+          if (jobId) {
+            await recordScanJobAiUsage(supabase, {
+              jobId,
+              organizationId: organizationId!,
+              provider: 'anthropic',
+              model: anthropicModel,
+              promptTokens: ai.inputTokens,
+              completionTokens: ai.outputTokens,
+              costUsd: callCost,
+            });
+          }
 
           // Persist into ai_usage_logs so the cost-cap RPC's whitelist
           // (extended in phase28a to include taint_engine_anthropic_fallback)
