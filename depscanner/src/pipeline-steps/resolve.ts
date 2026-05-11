@@ -21,10 +21,25 @@ async function resolveDependencies(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   log: any,
 ): Promise<void> {
+  // For npm, choose the install command from the lockfile present. Hardcoding
+  // npm install fails on pnpm-workspace and yarn monorepos (e.g. next.js,
+  // react, vite, turborepo-shaped projects) because package.json uses
+  // workspace: references that npm rejects. The lockfile is the
+  // unambiguous signal of which manager to use; corepack (Node ≥ 16.9) shims
+  // pnpm and yarn so they're available without a separate install.
+  const npmCmd = (() => {
+    if (fs.existsSync(path.join(workspacePath, 'pnpm-lock.yaml'))) {
+      return 'corepack pnpm install --ignore-scripts 2>&1';
+    }
+    if (fs.existsSync(path.join(workspacePath, 'yarn.lock'))) {
+      return 'corepack yarn install --ignore-scripts --no-immutable 2>&1';
+    }
+    return 'npm install --ignore-scripts --no-audit --no-fund 2>&1';
+  })();
   const resolveCommands: Record<string, { check: string; cmd: string; timeout: number }> = {
     npm: {
       check: 'package.json',
-      cmd: 'npm install --ignore-scripts --no-audit --no-fund 2>&1',
+      cmd: npmCmd,
       timeout: 300_000,
     },
     maven: {
