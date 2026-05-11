@@ -35,6 +35,7 @@ function loadJavaSpecs(): FrameworkSpec[] {
   cachedSpecs = [
     loadSpec(path.join(SPECS_ROOT, 'spring-boot.yaml')),
     loadSpec(path.join(SPECS_ROOT, 'java-stdlib.yaml')),
+    loadSpec(path.join(SPECS_ROOT, 'jackson.yaml')),
   ];
   return cachedSpecs;
 }
@@ -48,6 +49,7 @@ const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'spring-sql-injection', expectVuln: 'sql_injection' },
   { name: 'spring-command-injection', expectVuln: 'command_injection' },
   { name: 'spring-path-traversal', expectVuln: 'path_traversal' },
+  { name: 'jackson-deserialization', expectVuln: 'deserialization' },
 ];
 
 async function runFixture(fixtureDir: string) {

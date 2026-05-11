@@ -1,0 +1,134 @@
+# Jackson (jackson-databind) framework spec — Deptex cross-file taint engine.
+#
+# Targets the polymorphic-deserialization gadget-chain CVE family that
+# dominates `com.fasterxml.jackson.core/jackson-databind` advisories. The
+# 88-CVE benchmark (docs/88-cve-benchmark-2026-05-10.md) attributed five
+# jackson-databind failures to `framework_spec_missing` — the AI rule
+# generator could not pick a Jackson sink that the engine recognises, so
+# every model-written vulnerable fixture round-tripped to zero findings.
+#
+# CVEs unlocked by this spec (all jackson-databind, all gadget-chain RCE
+# triggered by ObjectMapper.readValue / convertValue / treeToValue against
+# attacker-controlled JSON when polymorphic typing is enabled):
+#
+#   - CVE-2017-7525 — initial jackson-databind polymorphic deser RCE
+#   - CVE-2018-7489 — c3p0 gadget bypass of the 2017-7525 blacklist
+#   - CVE-2019-12384 — logback / jndi gadget chain
+#   - CVE-2019-14439 — logback-core via SubTypeValidator bypass
+#   - CVE-2020-9548  — br.com.anteros / Anteros-DBCP gadget
+#
+# Projected recall lift on the 88-CVE corpus: ~+5pp (5 CVEs / 88 = 5.7%).
+# Sister gadget classes in `YAMLMapper` / `XmlMapper` / `CBORMapper` come
+# along automatically — every Jackson `*Mapper` subclass exposes the same
+# `readValue` family on `ObjectMapper`.
+#
+# Generic Java stdlib already ships a coarse `*.readValue(*)` deser sink in
+# java-stdlib.yaml. This spec layers Jackson-specific shapes the generic
+# pattern misses (`readerFor(...).readValue`, `convertValue`, `treeToValue`,
+# `JsonDeserializer.deserialize`) and pins them to the Jackson namespace via
+# the description text so flows attribute correctly. Sources come from the
+# already-loaded Spring / JAX-RS / Quarkus / Micronaut framework specs —
+# Jackson sits behind their `@RequestBody` / `@FormParam` binding and only
+# fires when those frameworks introduce tainted strings into the program.
+#
+# Gate gap (documented FP risk): the real-world Jackson sinks are only
+# exploitable when `enableDefaultTyping(...)` / `activateDefaultTyping(...)`
+# has been called on the ObjectMapper. The FrameworkSpec schema
+# (spec.ts:97-103) has no `precondition` / `enabler` field, so this spec
+# cannot express the gate at the engine layer. Instead we accept the
+# baseline over-approximation (`mapper.readValue(userInput, T.class)` flows
+# regardless of typing config) and rely on the downstream AI FP filter
+# (`fp-filter.ts`) — which has full source-text context — to reject
+# Jackson flows where no default-typing call is reachable. Documented here
+# so any future "spec-format adds preconditions" work knows where to gate.
+
+framework: jackson
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- ObjectMapper.readValue family ----------
+  # Bare `*.readValue(*)` is already in java-stdlib.yaml; re-listing here is
+  # redundant but harmless (duplicate matches are deduped by Flow.id at
+  # storage time). We instead focus on the call shapes java-stdlib doesn't
+  # cover.
+
+  # ObjectMapper.readValue called via static-style receiver `ObjectMapper.`
+  # rather than instance receiver. Rare in app code but appears in unit-test
+  # helpers and is what some CVE PoCs paste verbatim.
+  - pattern: "ObjectMapper.readValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readValue (static-style receiver)
+
+  # ReaderFor chain: `mapper.readerFor(T.class).readValue(json)`. The chained
+  # form is the canonical "type-safe" Jackson usage but the same gadget
+  # chain triggers when defaultTyping is enabled. java-stdlib's bare
+  # `*.readValue(*)` catches the final call; this entry exists so the
+  # description attributes the flow to Jackson rather than the generic
+  # stdlib bucket and so the chained shape gets a dedicated audit line.
+  - pattern: "*.readerFor(*).readValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readerFor(...).readValue chain
+
+  # ObjectMapper.convertValue — converts a JsonNode / Map into a typed
+  # object. Same gadget surface when defaultTyping is on; the attacker
+  # supplies a Map<String,Object> that Jackson coerces into a polymorphic
+  # type. Appears in CVE-2019-12384 PoCs.
+  - pattern: "*.convertValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.convertValue — typed coercion of untrusted Map/JsonNode
+
+  # ObjectMapper.treeToValue — same as convertValue but the input is a
+  # JsonNode parsed earlier via readTree. Same gadget surface.
+  - pattern: "*.treeToValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.treeToValue — typed coercion of untrusted JsonNode
+
+  # Custom JsonDeserializer.deserialize(parser, ctx) — user-written
+  # deserializers that delegate back to the mapper inherit the same gadget
+  # surface. Argument index 0 is the JsonParser, which carries the bytes.
+  - pattern: "*.deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson JsonDeserializer.deserialize — custom deserializer hook
+
+  # ---------- enableDefaultTyping marker ----------
+  # The FrameworkSpec format has no `enabler` / `precondition` field; we
+  # cannot use this call to gate the readValue sinks above. We still list it
+  # as a deserialization sink so that:
+  #   (a) Semgrep-style rule.yml generators picking patterns from this spec
+  #       know enableDefaultTyping is the Jackson red flag, and
+  #   (b) the flow itself is surfaced — a project that calls
+  #       `mapper.enableDefaultTyping(...)` with any tainted operand (rare
+  #       but happens for "auto-detect" wrappers) gets flagged.
+  # argument_indices: [] means ANY tainted argument fires the sink; this
+  # matches the over-approximation choice for new ProcessBuilder + readObject
+  # in java-stdlib.yaml.
+  - pattern: "*.enableDefaultTyping(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Jackson ObjectMapper.enableDefaultTyping — opens polymorphic-deser gadget surface
+  - pattern: "*.activateDefaultTyping(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Jackson ObjectMapper.activateDefaultTyping (2.10+ replacement for enableDefaultTyping)
+
+sanitizers:
+  # Jackson's first-party defence against polymorphic-deser gadgets is the
+  # PolymorphicTypeValidator (PTV). Any call that registers a PTV on the
+  # mapper neutralizes the readValue/convertValue/treeToValue sinks above
+  # for the configured type, so we treat its return value as clean for
+  # `deserialization`. Apps that wire `BasicPolymorphicTypeValidator.builder()`
+  # into `setPolymorphicTypeValidator(...)` are the canonical safe pattern.
+  - pattern: "*.setPolymorphicTypeValidator(*)"
+    vuln_classes: [deserialization]
+    description: Jackson ObjectMapper.setPolymorphicTypeValidator — restricts polymorphic deser
+  - pattern: "BasicPolymorphicTypeValidator.builder(*)"
+    vuln_classes: [deserialization]
+    description: Jackson BasicPolymorphicTypeValidator.builder — allowlist construction
