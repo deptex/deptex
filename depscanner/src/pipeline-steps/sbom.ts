@@ -30,13 +30,24 @@ function runCdxgen(workspacePath: string, ecosystem?: string): string {
   const outPath = path.join(workspacePath, 'sbom.json');
   // Use relative -o and cwd so cdxgen always writes to workspacePath/sbom.json regardless of
   // how it resolves paths (some environments resolve -o relative to process cwd).
+  //
+  // `--deep` triggers cdxgen's evidence-gathering pass, which recursively git-clones every
+  // transitive dependency to scrape license / provenance metadata. On real OSS repos
+  // (express, fastify, next.js, ...) this blows past the 10-15min step budget. We default to
+  // shallow SBOM generation; production extraction-worker jobs can opt back into the deep
+  // pass by setting `CDXGEN_DEEP=1`. The CLI (DEPTEX_CLI_MODE=1) and OSS corpus harness
+  // never set it, so they get the fast path.
+  const deepEnabled = process.env.CDXGEN_DEEP === '1' || /^true$/i.test(process.env.CDXGEN_DEEP ?? '');
   const args = [
     '--yes', '@cyclonedx/cdxgen',
     '--path', '.',
     '-o', 'sbom.json',
-    '--profile', 'research',
-    '--deep',
   ];
+  if (deepEnabled) {
+    // `--profile research` is only useful in combination with `--deep` (it enables the
+    // extra evidence collectors). Keep them paired so the default path stays fully shallow.
+    args.push('--profile', 'research', '--deep');
+  }
   if (ecosystem) {
     args.push('-t', ecosystem);
   }

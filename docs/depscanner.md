@@ -83,7 +83,7 @@ to the per-step module to change a body.
 |---|-------------------|-------------------------------|----------|------------------------------------------------|
 | 1 | clone             | `clone.ts`                    | error    | Clones repo or accepts `localWorkspacePath`.   |
 | 2 | resolve           | `resolve.ts`                  | warn     | Ecosystem-specific install pre-SBOM (npm, pip, mvn). |
-| 3 | sbom              | `sbom.ts`                     | error    | cdxgen `--profile research --deep`. Hard-fails. |
+| 3 | sbom              | `sbom.ts`                     | error    | cdxgen shallow by default; set `CDXGEN_DEEP=1` for `--profile research --deep` (slow license enrichment via recursive transitive clones). Hard-fails. |
 | 4 | deps_sync         | `deps-sync.ts`                | error    | Upserts `project_dependencies` + `*_versions`. |
 | 5 | usage_extraction  | `usage-extraction.ts`         | warn     | tree-sitter parse + framework entry-point detection. |
 | 6 | (asset_tier hydrate) | `asset-tier.ts`            | n/a      | Loads `assetTier` + `tierMultiplier` into ctx. |
