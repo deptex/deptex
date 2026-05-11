@@ -154,9 +154,23 @@ async function batchUpsert(
   onConflict: string
 ): Promise<void> {
   if (rows.length === 0) return;
+  // Postgres rejects an upsert batch where two rows share the same conflict
+  // key with "ON CONFLICT DO UPDATE command cannot affect row a second time".
+  // The tree-sitter extractor can legitimately emit multiple usages per
+  // (project_id, file_path, line_number, target_name) — different usageLabel /
+  // targetType variants at the same call site — but the table's UNIQUE index
+  // doesn't include those discriminator fields. Dedupe last-write-wins to
+  // match Postgres ON CONFLICT DO UPDATE semantics.
+  const keyFields = onConflict.split(',').map((s) => s.trim());
+  const deduped = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const key = keyFields.map((f) => String(row[f] ?? '')).join('\x00');
+    deduped.set(key, row);
+  }
+  const finalRows = Array.from(deduped.values());
   const BATCH = 200;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const slice = rows.slice(i, i + BATCH);
+  for (let i = 0; i < finalRows.length; i += BATCH) {
+    const slice = finalRows.slice(i, i + BATCH);
     const { error } = await supabase.from(table).upsert(slice, { onConflict });
     if (error) console.error(`Failed upsert batch for ${table}:`, error.message);
   }
