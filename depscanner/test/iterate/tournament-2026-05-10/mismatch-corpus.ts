@@ -60,3 +60,37 @@ export function getMismatchCandidates(): Candidate[] {
   }
   return out;
 }
+
+/**
+ * Smaller 15-CVE subset used for the fast tournament pass. Picks one
+ * representative CVE per ecosystem-class so we still cover the full
+ * failure-mode distribution at half the runtime / cost.
+ *
+ *   npm 4  |  pypi 4  |  maven 3  |  golang 2  |  rubygems 2  =  15
+ */
+export const FAST_MISMATCH_CVE_IDS: string[] = [
+  'CVE-2025-62718',
+  'CVE-2017-16137',
+  'CVE-2022-25883',
+  'CVE-2024-21484',
+  'CVE-2018-18074',
+  'CVE-2023-32681',
+  'CVE-2024-26130',
+  'CVE-2024-22195',
+  'CVE-2017-7525',
+  'CVE-2022-42889',
+  'CVE-2021-44832',
+  'CVE-2022-32149',
+  'CVE-2024-28180',
+  'CVE-2022-23633',
+  'CVE-2024-32465',
+];
+
+export function getFastMismatchCandidates(): Candidate[] {
+  const byId = new Map(CANDIDATES.map((c) => [c.cveId, c]));
+  return FAST_MISMATCH_CVE_IDS.map((id) => {
+    const c = byId.get(id);
+    if (!c) throw new Error(`fast mismatch CVE ${id} not in CANDIDATES`);
+    return c;
+  });
+}

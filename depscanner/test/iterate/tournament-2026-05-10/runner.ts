@@ -18,7 +18,7 @@ import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { pathToFileURL } from 'url';
 import { runVariant, type VariantModule, type VariantRunReport } from '../runner';
-import { getMismatchCandidates } from './mismatch-corpus';
+import { getMismatchCandidates, getFastMismatchCandidates } from './mismatch-corpus';
 
 const VARIANT_NAMES = ['v_base', 'v_t_a', 'v_t_b', 'v_t_c', 'v_t_d', 'v_t_e'];
 
@@ -88,7 +88,9 @@ async function main(): Promise<void> {
   const apiKey = process.env.DEEPINFRA_API_KEY;
   if (!apiKey) throw new Error('DEEPINFRA_API_KEY not set (check backend/.env)');
 
-  const candidates = getMismatchCandidates();
+  const fastMode = process.argv.includes('--fast');
+  const candidates = fastMode ? getFastMismatchCandidates() : getMismatchCandidates();
+  if (fastMode) process.stderr.write(`(fast mode: 15-CVE subset)\n`);
   process.stderr.write(`Tournament: ${VARIANT_NAMES.length} variants × ${candidates.length} CVEs = ${VARIANT_NAMES.length * candidates.length} rule-gen calls.\n`);
 
   const outRoot = __dirname;
@@ -107,7 +109,7 @@ async function main(): Promise<void> {
       baseUrl: 'https://api.deepinfra.com/v1/openai',
       apiKey,
       candidates,
-      concurrency: 3,
+      concurrency: 5,
       outputDir: variantOutDir,
       perCveTimeoutMs: 240_000,
     });
