@@ -158,6 +158,78 @@ function renderVulnClassHint(klass: VulnClass): string {
   return VULN_CLASS_PLAYBOOK[klass].join('\n');
 }
 
+/**
+ * Gadget-shape primers for the three CVE families the 88-CVE benchmark
+ * (`docs/88-cve-benchmark-2026-05-10-wave8.md`) keeps missing: Jackson
+ * polymorphic deserialization, Log4Shell JNDI substitution, and Python
+ * requests/urllib3 SSRF on cross-origin redirect.
+ *
+ * These are emitted in ADDITION to the few-shot JSON examples — the few-shots
+ * show the model the OUTPUT shape; these primers explain the gadget so the
+ * model picks the right sink even when the JSON example is for a sibling CVE.
+ *
+ * Detection is pure regex over the package name + OSV text; no LLM call.
+ * A miss here just means the model gets less targeted help — never blocks
+ * generation. Multiple primers can fire on a single CVE (rare but harmless;
+ * each adds ~100 tokens).
+ */
+type GadgetShape = 'jackson-deser' | 'log4shell' | 'python-ssrf';
+
+function detectGadgetShapes(args: {
+  packageName: string;
+  osvSummary: string;
+  osvDetails: string;
+}): GadgetShape[] {
+  const pkg = args.packageName.toLowerCase();
+  const text = `${args.osvSummary}\n${args.osvDetails}`.toLowerCase();
+  const out: GadgetShape[] = [];
+
+  if (pkg.includes('jackson') || /\b(objectmapper|jackson-databind|polymorphic.*deserializ|defaulttyp|@jsontypeinfo)\b/.test(text)) {
+    out.push('jackson-deser');
+  }
+  if (pkg.includes('log4j') || /\b(log4shell|jndi.*lookup|jndi.*injection|\${jndi)\b/.test(text)) {
+    out.push('log4shell');
+  }
+  if ((pkg === 'requests' || pkg === 'urllib3') && /\b(redirect|ssrf|leak.*header|cross[-\s]*origin|proxy[-\s]*auth)\b/.test(text)) {
+    out.push('python-ssrf');
+  }
+  return out;
+}
+
+const GADGET_PRIMERS: Record<GadgetShape, string[]> = {
+  'jackson-deser': [
+    `# Gadget-shape primer: JACKSON POLYMORPHIC DESERIALIZATION.`,
+    `# The vulnerability is ObjectMapper.readValue / convertValue / treeToValue called on attacker JSON IFF default-typing is enabled (\`enableDefaultTyping()\` / \`activateDefaultTyping()\`) OR a target class carries \`@JsonTypeInfo\`. Pre-emptive blacklists (the patch typically adds another classname to \`SubTypeValidator\`) don't change the call shape — every Jackson deser-RCE CVE in this family (2017-7525, 2018-7489, 2019-12384, 2019-14439, 2020-9548) shares the SAME source→sink shape; only the bypass gadget changes.`,
+    `# REQUIRED sinks (emit BOTH so the downstream fp-filter has a config-gate signal):`,
+    `#   1) The deser sink: prefer a literal-receiver form like \`ObjectMapper.readValue(*)\` with vuln_class=deserialization and argument_indices=[0]. The fixture MUST call it using that exact receiver text so the engine's pattern matcher binds.`,
+    `#   2) The config-gate marker: \`ObjectMapper.enableDefaultTyping(*)\` (or \`activateDefaultTyping\`) with vuln_class=deserialization and argument_indices=[] (any tainted arg fires).`,
+    `# vulnerable_fixture: Spring controller with \`@RequestBody String body\` -> ObjectMapper.readValue(body, Object.class). Call enableDefaultTyping() somewhere in the controller body.`,
+    `# safe_fixture: same controller signature, but pass a hard-coded literal JSON string to readValue — \`body\` is unused, no taint reaches the sink.`,
+  ],
+  log4shell: [
+    `# Gadget-shape primer: LOG4SHELL / LOG4J 2.x JNDI SUBSTITUTION.`,
+    `# Log4j 2.x evaluates \`\${jndi:...}\` lookups on the message string at log time. The sink is ANY \`Logger.<level>(msg)\` call where tainted data reaches the message argument. The gate is NOT a literal \`\${jndi:\` substring in the source — the attacker supplies those bytes at runtime; the gate is "user-controlled data lands in the log message at all."`,
+    `# Same shape applies to CVE-2021-44228, CVE-2021-45046, CVE-2021-44832, CVE-2017-5645.`,
+    `# RECOMMENDED sink: \`Logger.info(*)\` with vuln_class=code_injection (the engine's closest enum value; see log4j.yaml header for the mapping rationale) and argument_indices=[0]. NOTE: the engine's bundled log4j.yaml spec already owns wildcard-receiver Log4j sinks, so your literal-receiver sink may be subsumed by the framework spec at flow-attribution time; emit it anyway so the row is catalogued correctly.`,
+    `# vulnerable_fixture: Spring controller with \`@RequestHeader("User-Agent") String ua\` -> Logger.info(ua) (call it directly via the imported Logger class — calleeText \`Logger.info\` is what the engine binds against).`,
+    `# safe_fixture: same controller signature, but pass a hard-coded literal string to Logger.info — \`ua\` is unused.`,
+  ],
+  'python-ssrf': [
+    `# Gadget-shape primer: PYTHON SSRF VIA requests / urllib3.`,
+    `# These CVEs leak Cookie / Authorization / Proxy-Authorization headers on cross-origin redirect when the request URL is attacker-controlled. Same shape: HTTP-input -> requests.get / urllib3.request.`,
+    `# Sinks (pick the one matching the patched API):`,
+    `#   - requests: \`requests.get(*)\`, \`requests.post(*)\`, \`requests.request(*)\` (argument index 0 = URL for get/post; index 1 = URL for request).`,
+    `#   - urllib3: \`urllib3.request(*)\` (argument index 1 = URL — method is index 0), \`PoolManager.urlopen(*)\` (index 1), \`PoolManager.request(*)\` (index 1).`,
+    `# vulnerable_fixture: Flask \`@app.route\` handler -> \`request.args.get('url')\` -> the URL sink call. Call the top-level form (\`urllib3.request('GET', target)\`, NOT \`http.request(...)\` with an instance receiver) so calleeText matches a literal-receiver pattern.`,
+    `# safe_fixture: hard-coded internal URL literal at the sink — no taint reaches.`,
+  ],
+};
+
+function renderGadgetPrimers(shapes: GadgetShape[]): string {
+  if (shapes.length === 0) return '';
+  return shapes.map((s) => GADGET_PRIMERS[s].join('\n')).join('\n\n');
+}
+
 const LANGUAGE_BY_ECOSYSTEM: Record<string, FrameworkSpecJson['language']> = {
   npm: 'js',
   pypi: 'python',
@@ -239,6 +311,11 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     osvDetails: args.osvDetails ?? '',
     patchDiff: args.patchDiff ?? '',
   }));
+  const gadgetPrimer = renderGadgetPrimers(detectGadgetShapes({
+    packageName: args.packageName ?? '',
+    osvSummary: args.osvSummary ?? '',
+    osvDetails: args.osvDetails ?? '',
+  }));
 
   const wrappedSummary = wrapBlob(`OSV summary for ${args.cveId}`, oneLine(args.osvSummary) || '(no summary)', nonce);
   const wrappedDetails = wrapBlob(`OSV details for ${args.cveId}`, truncate(oneLine(args.osvDetails), 1_500), nonce);
@@ -266,6 +343,7 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     filesSection || '(none included — diff above is the only source signal)',
     ``,
     ...(fewShotSection ? [fewShotSection, ``] : []),
+    ...(gadgetPrimer ? [gadgetPrimer, ``] : []),
     ...(vulnClassHint ? [vulnClassHint, ``] : []),
     `# Your task`,
     `Author a single FrameworkSpec describing the vulnerable function call pattern for this CVE. The cross-file Phase 6 taint engine loads it alongside the framework specs (Express, Flask, etc.) — the framework spec contributes sources (req.body, request.args), and YOUR spec contributes sinks. A sound spec produces ≥1 flow on the vulnerable_fixture and 0 flows on the safe_fixture.`,
@@ -380,6 +458,7 @@ function renderFewShotSection(examples: FrameworkSpecFewShot[], compact: boolean
   return [
     `# Reference FrameworkSpecs that previously round-tripped through the engine`,
     `Below are ${examples.length === 1 ? '1 hand-authored FrameworkSpec' : `${examples.length} hand-authored FrameworkSpecs`} that pass both Gate 1 (strict zod schema) and Gate 2 (fixture round-trip). Match this style: empty \`sources\` (the framework spec contributes them), narrow callee patterns, vulnerable_fixture exercises the sink with tainted data, safe_fixture uses a literal constant or sanitizer.`,
+    `Pay particular attention to the gadget-shape examples (Jackson polymorphic deserialization with the enableDefaultTyping marker sink; urllib3 SSRF with the URL at argument index 1 rather than 0). Mirror their sink-pattern + argument_indices choices when the CVE you're modelling shares the shape — these are the 88-CVE benchmark's most-missed classes.`,
     ``,
     blocks.join('\n\n'),
   ].join('\n');
