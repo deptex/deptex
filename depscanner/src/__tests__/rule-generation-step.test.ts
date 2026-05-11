@@ -543,6 +543,57 @@ describe('runRuleGenerationStep — telemetry persistence', () => {
     expect(fs.updates.filter((u) => u.table === 'scan_jobs')).toEqual([]);
   });
 
+  // Phase 33: per-scan cap halts further generation mid-batch and emits an
+  // ai_cost_cap_exceeded extraction_step_errors row.
+  it('halts mid-batch when the per-scan cost cap on scan_jobs.ai_cost_cap_usd is exceeded', async () => {
+    const fs = makeStorage({});
+    // Cap is tighter than the per-CVE pessimistic estimate ($0.10), so the
+    // first CVE through generateOneCveWithRetry should bail with
+    // scan_cost_cap_exceeded. The pre-existing $0.05 already on the row
+    // ensures projected (= 0.05 + 0.10) > cap (= 0.07).
+    fs.set('scan_jobs', [{ id: 'job-1', ai_total_cost_usd: 0.05, ai_cost_cap_usd: 0.07 }]);
+    const vulns: PipelineVulnRow[] = [
+      { ...sampleVuln, osv_id: 'CVE-CAP-A' },
+      { ...sampleVuln, osv_id: 'CVE-CAP-B', package_purl: 'pkg:npm/b@1', package_name: 'b' },
+    ];
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      vulns,
+    );
+    expect(result.generated).toBe(0);
+    // Both CVEs should be skipped with the new per-scan reason. We don't
+    // assert _exactly_ on count because the second skip might be tagged
+    // budget_exhausted_mid_batch if the FakeStorage's gte() path returns
+    // an empty SUM (the cap re-check sits before the per-scan one). Just
+    // make sure at least one CVE was halted for the per-scan reason.
+    expect(result.skipReasons.scan_cost_cap_exceeded ?? 0).toBeGreaterThanOrEqual(1);
+    const stepErrInserts = fs.inserts.filter((i) => i.table === 'extraction_step_errors');
+    expect(stepErrInserts.some((i) => i.row.code === 'ai_cost_cap_exceeded')).toBe(true);
+  });
+
+  it('does NOT halt when the per-scan cap is loose (current + per-CVE projection still under cap)', async () => {
+    const fs = makeStorage({});
+    // Cap = $5; current = $0; per-CVE projection = $0.10 — comfortably under.
+    fs.set('scan_jobs', [{ id: 'job-1', ai_total_cost_usd: 0, ai_cost_cap_usd: 5 }]);
+    const result = await runRuleGenerationStep(
+      {
+        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
+        supabase: fs as unknown as Storage, log,
+        platformRulesDir: '/nonexistent',
+        resolveApiKey: async () => 'fake-key',
+      },
+      [sampleVuln],
+    );
+    // The fetch path will fail because there's no global fetch mock, but
+    // the failure mode should NOT be scan_cost_cap_exceeded.
+    expect(result.skipReasons.scan_cost_cap_exceeded).toBeUndefined();
+  });
+
   it('emits a success log line whose four counters match the scan_jobs columns', async () => {
     const fs = makeStorage({});
     await runRuleGenerationStep(
