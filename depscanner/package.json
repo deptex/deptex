@@ -47,6 +47,7 @@
     "scan:oss-corpus": "tsx scripts/oss-corpus.ts",
     "test:fixtures": "tsx test/snapshot.ts",
     "test:fixtures:update": "tsx test/snapshot.ts --update",
+    "test:snapshot-runner": "tsx test/snapshot-runner.test.ts",
     "bench:rule-generation": "tsx test/rule-generation-bench.ts",
     "iterate": "tsx test/iterate/cli.ts",
     "iterate:tournament": "tsx test/iterate/tournament.ts"

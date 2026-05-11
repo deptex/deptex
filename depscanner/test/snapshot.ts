@@ -63,6 +63,21 @@ const FIXTURES: FixtureManifest[] = [
   { name: 'test-python', expectClean: true, expectedExitCode: 0, slow: true },
   { name: 'test-java', expectClean: true, expectedExitCode: 0, slow: true },
   { name: 'test-go', expectClean: true, expectedExitCode: 0, slow: true },
+  // Per-framework reachable+unreachable fixtures. Each is a minimal real-looking
+  // codebase with one reachable and one unreachable code path; bootstraps its
+  // own snapshots on first run (commit them in the same PR as the fixture).
+  // Slow flag is set wherever the ecosystem's manifest resolver pays a real
+  // cold-build cost (Maven / NuGet / cargo).
+  { name: 'test-flask-traversal-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-django-xss-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-fastapi-sqli-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-spring-petclinic-maven', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-gin-cmdi-go', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-sinatra-xss-gem', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-laravel-sqli-php', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-rust-axum-traversal', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-csharp-aspnet-sqli', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-nextjs-server-action-xss', expectClean: true, expectedExitCode: 0, slow: true },
 ];
 
 const DEFAULT_IGNORE_FIELDS = new Set([
