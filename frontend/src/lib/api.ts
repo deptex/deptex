@@ -3242,8 +3242,19 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/vulnerability-timeline${q}`);
   },
 
-  async triggerProjectSync(orgId: string, projectId: string): Promise<{ job_id: string; status: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, { method: 'POST' });
+  async triggerProjectSync(
+    orgId: string,
+    projectId: string,
+    opts?: { aiCostCapUsd?: number | null },
+  ): Promise<{ job_id: string; status: string }> {
+    const body =
+      opts?.aiCostCapUsd != null && Number.isFinite(opts.aiCostCapUsd) && opts.aiCostCapUsd > 0
+        ? { ai_cost_cap_usd: opts.aiCostCapUsd }
+        : undefined;
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, {
+      method: 'POST',
+      ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
   },
 
   async getOrgStats(orgId: string): Promise<OrgStats> {
