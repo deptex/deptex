@@ -229,6 +229,22 @@ if [ -n "${GITHUB_PAT:-}" ]; then
   ENV_FLAGS+=(-e GITHUB_PAT)
 fi
 
+# Forward git's GIT_CONFIG_COUNT/_KEY_n/_VALUE_n env vars so callers (e.g. the
+# OSS corpus harness) can inject `safe.directory=*` and bypass git's
+# CVE-2022-24765 dubious-ownership refusal when the in-container worker UID
+# doesn't match the host-owned bind mount. This is metadata-only — cdxgen
+# uses git for license/origin enrichment, not for repo mutation.
+if [ -n "${GIT_CONFIG_COUNT:-}" ]; then
+  ENV_FLAGS+=(-e "GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
+  gci=0
+  while [ $gci -lt "$GIT_CONFIG_COUNT" ]; do
+    gck="GIT_CONFIG_KEY_$gci"
+    gcv="GIT_CONFIG_VALUE_$gci"
+    ENV_FLAGS+=(-e "$gck=${!gck}" -e "$gcv=${!gcv}")
+    gci=$((gci + 1))
+  done
+fi
+
 exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \

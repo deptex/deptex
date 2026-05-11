@@ -154,7 +154,17 @@ function loadCorpus(file: string): Corpus {
 function execCapture(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  opts: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    /**
+     * If true and we're on Windows, invoke `cmd` through Git Bash so .sh
+     * scripts (deptex-scan) resolve. Falsey + on Windows uses the .exe
+     * directly (works for git, npm, etc.).
+     */
+     useBash?: boolean;
+  } = {},
 ): Promise<{ code: number; stdout: string; stderr: string; durationMs: number; timedOut: boolean }> {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -162,12 +172,29 @@ function execCapture(
     let stderr = '';
     let timedOut = false;
 
-    const proc = spawn(cmd, args, {
+    let actualCmd = cmd;
+    let actualArgs = args;
+    if (opts.useBash && process.platform === 'win32') {
+      // Forward to Git Bash. The bash binary is reachable via PATH on
+      // typical Git for Windows installs; falling back to the canonical
+      // install path keeps the script working under stock Windows shells.
+      const bashCandidate = process.env.SHELL && /bash/i.test(process.env.SHELL)
+        ? process.env.SHELL
+        : 'C:\\Program Files\\Git\\bin\\bash.exe';
+      // Convert `C:\path\to\deptex-scan` → `/c/path/to/deptex-scan` so
+      // MSYS resolves it as a POSIX path. The wrapper script sets
+      // MSYS_NO_PATHCONV internally.
+      const posixScript = cmd
+        .replace(/^([A-Z]):\\/i, (_, d) => `/${d.toLowerCase()}/`)
+        .replace(/\\/g, '/');
+      actualCmd = bashCandidate;
+      actualArgs = [posixScript, ...args];
+    }
+
+    const proc = spawn(actualCmd, actualArgs, {
       cwd: opts.cwd,
       env: { ...process.env, ...(opts.env ?? {}) },
-      // Use shell on Windows so `./bin/deptex-scan` (a bash script) resolves
-      // through Git Bash. Without shell, spawn looks for an .exe on PATH.
-      shell: process.platform === 'win32',
+      shell: false,
     });
 
     proc.stdout.on('data', (b) => (stdout += b.toString()));
@@ -275,7 +302,7 @@ async function runDepscanner(
     '--format=json',
   ];
 
-  const res = await execCapture(scanBin, args, { env, timeoutMs });
+  const res = await execCapture(scanBin, args, { env, timeoutMs, useBash: true });
 
   // Mirror raw streams to disk for forensic review.
   fs.writeFileSync(path.join(outputDir, 'stdout.json'), res.stdout);
@@ -596,9 +623,25 @@ async function main(): Promise<void> {
   const env = loadEnvFromBackend();
   // Rule generation: opt-out via --no-rule-gen. Default on if a DeepInfra
   // key is available (matches the marathon's existing rule-gen plumbing).
+  // Bypass git's CVE-2022-24765 dubious-ownership refusal inside the
+  // container. cdxgen calls `git` for license / origin enrichment on the
+  // mounted workspace; the host-owned bind mount has a UID the worker
+  // user doesn't match, so git refuses without this allowlist. The
+  // GIT_CONFIG_COUNT/_KEY/_VALUE trio is git's process-env config
+  // mechanism — it's equivalent to a one-shot `git -c safe.directory='*'`
+  // applied to every git invocation in the child process, and it's
+  // forwarded into the container by the deptex-scan wrapper.
+  env.GIT_CONFIG_COUNT = '1';
+  env.GIT_CONFIG_KEY_0 = 'safe.directory';
+  env.GIT_CONFIG_VALUE_0 = '*';
+
   if (!flags['no-rule-gen'] && env.DEEPINFRA_API_KEY) {
+    // DeepInfra is OpenAI-compatible — seed.ts marshals provider='openai' +
+    // a base_url into the openai-compat third-party path. The CHECK
+    // constraint on organization_reachability_settings.ai_provider only
+    // accepts ('anthropic', 'openai', 'google'), so use 'openai' here.
     env.DEPTEX_RULE_GENERATION_ENABLED = '1';
-    env.DEPTEX_RULE_PROVIDER = process.env.DEPTEX_RULE_PROVIDER ?? 'openai_compatible';
+    env.DEPTEX_RULE_PROVIDER = process.env.DEPTEX_RULE_PROVIDER ?? 'openai';
     env.DEPTEX_RULE_BASE_URL =
       process.env.DEPTEX_RULE_BASE_URL ?? 'https://api.deepinfra.com/v1/openai';
     env.DEPTEX_RULE_MODEL = process.env.DEPTEX_RULE_MODEL ?? 'Qwen/Qwen2.5-Coder-32B-Instruct';
