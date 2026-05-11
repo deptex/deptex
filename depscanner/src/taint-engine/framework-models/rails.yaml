@@ -115,6 +115,35 @@ sources:
     taint_kind: http_input
     description: request.headers.fetch()
 
+  # ---------- Rack middleware sources ----------
+  # Mirrors the Rack additions in sinatra.yaml. Rails mounts Rack
+  # middleware ahead of ActionDispatch (Rack::Request.new(env),
+  # Rack::Utils.parse_query). Sidekiq Web, ActionDispatch's executor
+  # tests, and rack-attack-style fixtures all enter taint via Rack rather
+  # than `params[...]`. Without these the engine misses any handler that
+  # reads the Rack env via the documented wrapper API.
+  - pattern: Rack.Request.new(*)
+    taint_kind: http_input
+    description: Rack::Request.new(env) — wraps tainted Rack environment
+  - pattern: Rack.Utils.parse_query(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_query — parses tainted query string
+  - pattern: Rack.Utils.parse_nested_query(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_nested_query
+  - pattern: Rack.Utils.parse_cookies(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_cookies
+  - pattern: Rack.MediaType.params(*)
+    taint_kind: http_input
+    description: Rack::MediaType.params — parses tainted Content-Type
+  - pattern: "*.get_header(*)"
+    taint_kind: http_input
+    description: Rack::Request#get_header (and ActionDispatch::Request#get_header)
+  - pattern: "*.fetch_header(*)"
+    taint_kind: http_input
+    description: Rack::Request#fetch_header
+
 sinks:
   # ---------- SQL injection ----------
   - pattern: "*.where(*)"
@@ -497,6 +526,14 @@ sinks:
     vuln_class: redos
     argument_indices: [0]
     description: Regexp.compile
+  - pattern: Rack.MediaType.type(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Rack::MediaType.type — CVE-2024-25126 catastrophic backtracking
+  - pattern: Rack.Utils.parse_query(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Rack::Utils.parse_query — historical ReDoS family
 
 sanitizers:
   # ---------- SQL ----------
