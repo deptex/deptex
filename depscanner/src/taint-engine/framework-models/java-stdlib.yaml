@@ -210,14 +210,11 @@ sinks:
     description: String.matches (re-compiles each call)
 
   # ---------- Log injection ----------
-  - pattern: "*.info(*)"
-    vuln_class: log_injection
-    argument_indices: [0]
-    description: SLF4J/Logback Logger.info
-  - pattern: "*.warn(*)"
-    vuln_class: log_injection
-    argument_indices: [0]
-    description: SLF4J/Logback Logger.warn
+  # Note: SLF4J / Log4j / Logback `Logger.<level>(...)` sinks live in
+  # log4j.yaml as `code_injection` (Log4Shell-shaped) so the per-level
+  # call patterns aren't duplicated here. The stdlib file intentionally
+  # ships no log_injection sink because the log call shape is framework-
+  # owned, not language-stdlib.
 
 sanitizers:
   # ---------- Path traversal ----------

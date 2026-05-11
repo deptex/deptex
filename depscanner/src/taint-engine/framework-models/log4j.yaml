@@ -1,0 +1,118 @@
+# Apache Log4j 2 framework spec — Deptex cross-file taint engine.
+#
+# Targets the Log4Shell CVE family (CVE-2021-44228, CVE-2021-45046,
+# CVE-2021-45105, CVE-2021-44832). The shared root cause is that Log4j 2.x
+# (< 2.17.1) evaluates `${jndi:...}` lookups in any logged message string,
+# so when attacker-controlled bytes (typically a request header — User-Agent,
+# X-Forwarded-For, Referer — or a request param) reach `Logger.<level>(msg)`,
+# Log4j performs an LDAP / RMI / DNS fetch and (pre-2.16) loads a remote
+# class. That's a remote code execution primitive, not a log-injection one.
+#
+# vuln_class mapping rationale.
+#   Closed enum lives at depscanner/src/taint-engine/spec.ts and is mirrored
+#   in backend/src/lib/taint-engine-defaults.ts + the frontend mirror; adding
+#   a `jndi_injection` value would touch a phase34 migration's
+#   vuln_classes_enabled CHECK list across three sites. We instead reuse the
+#   existing `code_injection` class — added in phase28b precisely for
+#   "tainted data interpreted as code by the runtime" (Spring SpEL eval,
+#   server-side template injection, etc.). JNDI-as-code-loader fits this
+#   bucket cleanly: the runtime resolves the LDAP URL and executes the
+#   returned bytecode. The benchmark report at
+#   docs/88-cve-benchmark-2026-05-10.md recommends the same mapping.
+#
+# Coexists with java-stdlib.yaml.
+#   java-stdlib previously owned `*.info(*)` / `*.warn(*)` as `log_injection`
+#   sinks. That mapping has been retired in this PR — the SLF4J / Log4j /
+#   Logback Logger surface is framework-owned, not language-stdlib, so its
+#   per-level call patterns now live exclusively here as `code_injection`
+#   sinks. The propagator's matchSinkPattern returns the first matching
+#   sink across all loaded specs in directory order; without the retired
+#   stdlib entries, log4j.yaml is the unambiguous owner of the Logger
+#   call shapes. Other log_injection coverage (django/flask/fastapi/rails
+#   /actix-web/etc.) is unaffected — those specs declare their own
+#   framework-specific logger entries.
+#
+# Spec-format gap accepted.
+#   The engine's pattern grammar matches by call-expression text, not by
+#   argument content. We cannot express "the message argument contains a
+#   `${jndi:` substring" as a precondition — every Logger.<level>(*) call
+#   that receives tainted data triggers the sink, even when the actual
+#   string is safe ("user=" + userId). The fp-filter LLM stage downstream
+#   prunes those false positives at scan time. This trade-off is documented
+#   in the framework-rule-pack-guide.md "precondition-free sinks" section
+#   and matches how java-stdlib models other "any tainted arg is unsafe"
+#   sinks (Runtime.exec, ObjectInputStream.readObject).
+#
+# Sources are NOT redeclared here — Spring's @RequestHeader / @RequestParam,
+# Quarkus's @HeaderParam, and HttpServletRequest.getHeader are all already
+# pre-tainted by the per-framework specs (spring-boot.yaml, quarkus.yaml,
+# micronaut.yaml). The cross-spec load order means a Log4Shell flow from a
+# Spring controller's `@RequestHeader("User-Agent")` parameter through into
+# `logger.info(ua)` resolves with no additional source wiring.
+
+framework: log4j
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # SLF4J / Log4j 2.x Logger API — every level. The receiver wildcard `*.`
+  # matches any logger reference shape (static field, injected, looked-up
+  # via LogManager.getLogger().<level>(...) — the call-expression text of
+  # the chained form still ends in `.info(...)` and the engine matches by
+  # the trailing call site).
+  - pattern: "*.info(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.info — JNDI lookup substitution (Log4Shell)
+  - pattern: "*.warn(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.warn — JNDI lookup substitution
+  - pattern: "*.error(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.error — JNDI lookup substitution
+  - pattern: "*.debug(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.debug — JNDI lookup substitution
+  - pattern: "*.trace(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.trace — JNDI lookup substitution
+  - pattern: "*.fatal(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Log4j 2 Logger.fatal — JNDI lookup substitution
+  # Generic Logger.log(Level, message[, throwable]) overloads. Both
+  # arguments can carry the JNDI payload — index 0 is `Level`, index 1
+  # is the message. The closed argument_indices list pins to message
+  # positions only; the engine's pattern matcher binds tainted args to
+  # `argument_indices`.
+  - pattern: "*.log(*)"
+    vuln_class: code_injection
+    argument_indices: [1]
+    description: Log4j 2 Logger.log(Level, message) — JNDI substitution
+  # ParameterizedMessage / printf-shaped helpers. Same JNDI-substitution
+  # path: Log4j formats the message AFTER lookup expansion.
+  - pattern: "*.printf(*)"
+    vuln_class: code_injection
+    argument_indices: [1]
+    description: Log4j 2 Logger.printf(level, format, args) — JNDI substitution
+  # Direct MessageFactory / ParameterizedMessage construction with tainted
+  # bytes also triggers the lookup once the message is rendered.
+  - pattern: "new ParameterizedMessage"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 ParameterizedMessage constructor — JNDI substitution
+
+sanitizers:
+  # The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
+  # or upgrade past 2.17.1 — both are config-level, not API-level, so the
+  # engine cannot model them as sanitizers. The only call-shaped sanitizer
+  # we can express is explicit lookup stripping prior to logging.
+  - pattern: "StringSubstitutor.replace(*)"
+    vuln_classes: [code_injection]
+    description: Apache Commons StringSubstitutor.replace — pre-resolves lookups (defangs ${jndi:})

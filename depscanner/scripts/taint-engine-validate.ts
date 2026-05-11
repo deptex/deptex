@@ -57,6 +57,7 @@ const VULN_CLASS_FROM_SLUG: Record<string, VulnClass> = {
   'file-upload': 'file_upload',
   'open-redirect': 'open_redirect',
   'log-injection': 'log_injection',
+  'code-injection': 'code_injection',
 };
 
 interface Expectation {
