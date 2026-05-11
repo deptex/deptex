@@ -501,7 +501,17 @@ Three spike memos with line-level grounding live in `.cursor/plans/depscanner-ha
 
 Run dir `depscanner/oss-corpus-runs/2026-05-11-fresh/`. cdxgen `--deep` was dropped by default in `2a193cb` after the OSS smoke that hit the 300s scan cap. Real 10-repo run is now mid-scan across express/fastify/flask/nextjs/... in parallel.
 
-**OSS-found P1 bug already fixed at `ae7637b`:** tree-sitter extractor's `batchUpsert` in `depscanner/src/tree-sitter-extractor/storage.ts` was silently dropping `project_usage_slices` rows when the AST emitted multiple `(file, line, target)` variants for the same call site. PGLite rejected the batch with `ON CONFLICT DO UPDATE command cannot affect row a second time`; error was console.error-swallowed; data was lost. Fix: dedupe by `onConflict` fields inside `batchUpsert`, last-write-wins, 16 LOC, protects all three batchUpsert call sites. Fixture tests didn't catch it because their row counts are too low for duplicates to land in the same 200-row slice — needed OSS-scale repos to surface. **This is the marathon scan→find→fix loop working as designed.**
+**OSS-found P1 bugs surfaced + fixed (5 total this wave, 4 fixed autonomously, 1 deferred for MCP sign-off):**
+
+| # | Bug | File | Commit |
+|---|-----|------|--------|
+| 1 | tree-sitter `batchUpsert` silently dropping `project_usage_slices` rows on duplicate conflict keys | `depscanner/src/tree-sitter-extractor/storage.ts` | ✅ `ae7637b` |
+| 2 | Semgrep cwe/owasp string-vs-array — SAST write step crashed silently | `depscanner/src/pipeline-steps/semgrep.ts` | ✅ `92fa546` |
+| 3 | Entry-points upsert dedup — same class as #1, different storage path | `depscanner/src/framework-rules/storage.ts` | ✅ `92fa546` |
+| 4 | npm install hardcoded — pnpm/yarn workspaces silently empty-SBOM | `depscanner/src/pipeline-steps/resolve.ts` | ✅ `63af767` |
+| 5 | `apply_malicious_allowlist` RPC alias scope bug — allowlists were no-op in production | `backend/database/malicious_packages_v2_rpcs.sql` | 📋 fix-memo in daily log |
+
+Every one of these was silently swallowed in production paths (`console.error` + continue, non-fatal warnings, or returned `success: false` that nobody acted on). Fixture tests never exercised any of them because they don't generate the rule-shape variance, the dup-emission patterns, the pnpm-workspace shape, or the scale needed to trip duplicate conflict keys in a 200-row slice. **This is the marathon scan→find→fix loop working as designed.**
 
 ### What's next (architectural, pending Henry sign-off)
 
