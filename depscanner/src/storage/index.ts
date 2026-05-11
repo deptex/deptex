@@ -32,6 +32,7 @@ type Thenable<T> = PromiseLike<T>;
 export interface FilterBuilder<T = any> extends Thenable<StorageResult<T[]>> {
   eq(column: string, value: unknown): FilterBuilder<T>;
   in(column: string, values: readonly unknown[]): FilterBuilder<T>;
+  gte(column: string, value: unknown): FilterBuilder<T>;
   limit(n: number): FilterBuilder<T>;
   select(columns?: string): FilterBuilder<T>;
   single(): Thenable<StorageResult<T>>;
