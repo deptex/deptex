@@ -1,0 +1,35 @@
+# jsonwebtoken (node) framework spec — Deptex cross-file taint engine.
+#
+# jsonwebtoken's primary vulnerability shape is sanitizer-absence: callers
+# invoke `jwt.verify(token, key)` without an explicit `algorithms` allowlist,
+# which allows attackers to downgrade to `alg: none` or HMAC-with-RSA-pubkey
+# attacks (CVE-2022-23539). Without `algorithms`, the library auto-derives
+# the algorithm from the JWT header — exactly the value the attacker
+# controls.
+#
+# This spec models the F4 non-taint detector regime: `required_arguments`
+# on `jwt.verify(*)` fires a finding when the third positional (options
+# object) is absent OR when its `algorithms` property is missing.
+#
+# We do NOT model jwt.verify as a taint sink (no positional argument
+# carries attacker data in a way classical taint flow needs to find).
+# `argument_indices: []` keeps the propagator quiet on this entry.
+
+framework: jsonwebtoken
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  # CVE-2022-23539 — jwt.verify without an explicit algorithms allowlist.
+  - pattern: jwt.verify(*)
+    vuln_class: auth_bypass
+    argument_indices: []
+    description: jwt.verify without an explicit algorithms allowlist (CVE-2022-23539 shape)
+    required_arguments:
+      - name: algorithms
+        position: 2
+        match_mode: required
+
+sanitizers: []

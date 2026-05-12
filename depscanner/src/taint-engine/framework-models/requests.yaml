@@ -25,14 +25,29 @@ sources: []
 
 sinks:
   # ---------- Session HTTP methods (SSRF surface) ----------
+  #
+  # The `verify=False` kwarg is checked on these sinks via the Phase F4
+  # non-taint detector regime (CVE-2024-35195 / weak-crypto). A call site
+  # like `session.get(url, verify=False)` fires a non-taint finding for
+  # disabled certificate verification regardless of whether `url` is
+  # tainted. The taint contract (argument_indices: [0]) still fires
+  # independently when an attacker-controlled URL flows in.
   - pattern: requests.Session.get(*)
     vuln_class: ssrf
     argument_indices: [0]
     description: requests.Session.get(url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
   - pattern: requests.Session.post(*)
     vuln_class: ssrf
     argument_indices: [0]
     description: requests.Session.post(url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
   - pattern: requests.Session.put(*)
     vuln_class: ssrf
     argument_indices: [0]
@@ -57,6 +72,10 @@ sinks:
     vuln_class: ssrf
     argument_indices: [1]
     description: requests.Session.request(method, url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
   - pattern: requests.Session.send(*)
     vuln_class: ssrf
     argument_indices: [0]
@@ -105,6 +124,10 @@ sinks:
     vuln_class: ssrf
     argument_indices: [1]
     description: requests.api.request(method, url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
   - pattern: requests.head(*)
     vuln_class: ssrf
     argument_indices: [0]
