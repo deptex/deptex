@@ -97,6 +97,35 @@ export interface FrameworkSource {
 }
 
 /**
+ * Phase F4 (non-taint regime). When attached to a sink, the non-taint
+ * detector inspects each call site whose callee matches the sink's pattern
+ * and asserts the named-argument contract. See
+ * `docs/non-taint-detector-regime.md` for the design + corpus mapping, and
+ * `taint-engine/non-taint-detector.ts` for the matcher.
+ *
+ * Detector modes:
+ *   - `required`   : finding fires when the argument is ABSENT
+ *                    (CVE-2022-23539 `jwt.verify` missing `algorithms`).
+ *   - `forbidden`  : finding fires when the argument is PRESENT with a
+ *                    value matching `unsafe_literals`
+ *                    (CVE-2024-35195 `requests.Session(verify=False)`).
+ *   - `must_equal` : finding fires when the argument is PRESENT but its
+ *                    literal text is NOT in `safe_literals`.
+ */
+export interface RequiredArgument {
+  /** Kwarg name (or object-property key for JS option-object calls). */
+  name: string;
+  /** Positional-index fallback (0-based). Optional. */
+  position?: number;
+  /** Default 'required'. */
+  match_mode?: 'required' | 'forbidden' | 'must_equal';
+  /** Whitelist for 'must_equal' mode. */
+  safe_literals?: string[];
+  /** Blacklist for 'forbidden' mode. */
+  unsafe_literals?: string[];
+}
+
+/**
  * A sink: a function that, when called with a tainted argument at any of the
  * argument_indices positions, indicates a vulnerability of vuln_class.
  *
@@ -109,6 +138,11 @@ export interface FrameworkSource {
  * leave it undefined — those flows are framework-generic, not CVE-attributed.
  * When set, the propagator stamps it onto `Flow.osv_id` at sink-match so
  * downstream classification + suppression can key on the CVE.
+ *
+ * `required_arguments` (Phase F4) opts the sink into the non-taint detector
+ * regime: a call-site walk that flags sanitizer-absence shapes (missing or
+ * forbidden options). A sink may participate in BOTH regimes — taint flow
+ * (via `argument_indices`) and non-taint (via `required_arguments`).
  */
 export interface FrameworkSink {
   pattern: string;
@@ -116,6 +150,7 @@ export interface FrameworkSink {
   argument_indices: number[];
   description: string;
   osv_id?: string;
+  required_arguments?: RequiredArgument[];
 }
 
 /**

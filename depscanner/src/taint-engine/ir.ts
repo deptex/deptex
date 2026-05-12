@@ -84,6 +84,15 @@ export type Step =
        * args were positional (or the lowerer doesn't model kwargs yet).
        */
       kwargIndices?: number[];
+      /**
+       * Parallel to `args` — when a position is a keyword argument, this
+       * carries the kwarg name; positional args carry null. Phase F4: the
+       * non-taint detector reads these to evaluate sanitizer-absence
+       * contracts (`requests.Session(verify=False)` → kwargNames[0] ===
+       * 'verify'). Only Python's IR lowerer populates this today; JS uses
+       * options-object property parsing in the non-taint detector directly.
+       */
+      kwargNames?: (string | null)[];
       loc: SourceLocation;
     }
   | { kind: 'return'; from: LocalVar | null; loc: SourceLocation };

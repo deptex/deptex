@@ -37,7 +37,9 @@
  * is a follow-up tracked in `docs/non-taint-detector-regime.md`.
  */
 
-import type { FrameworkSpec, FrameworkSink, VulnClass } from './spec';
+import type { FrameworkSpec, FrameworkSink, RequiredArgument, VulnClass } from './spec';
+import type { IrFunction, Step } from './ir';
+import { matchesCallPattern } from './propagate-core';
 
 /**
  * A single call site discovered during program walk. Mirrors a tiny subset
@@ -66,60 +68,17 @@ export interface CallSite {
 }
 
 /**
- * Proposed schema extension on `FrameworkSink` — declared here as a
- * structural interface that *augments* the existing sink shape with the
- * optional fields a non-taint detector needs. We do NOT modify `spec.ts`
- * in this prototype; the production rollout (see design doc §"Schema
- * extension") adds these fields directly to `FrameworkSink` so YAML authors
- * can express them naturally.
- *
- *   sinks:
- *     - pattern: jwt.verify(*)
- *       vuln_class: auth_bypass
- *       argument_indices: []      # taint-side empty → non-taint sink
- *       required_arguments:
- *         - name: algorithms       # kwarg form (Python/Node-options-object)
- *           position: 2            # OR positional index
- *           safe_literals: null    # any non-null value satisfies the check
- *       description: "jwt.verify without an explicit algorithm allowlist"
- *
- * `safe_literals` lets a single sink encode both "must pass argument" AND
- * "must pass argument with a value the rule considers safe". E.g. for
- * `requests.Session(verify=False)` the rule wants to fire when `verify` is
- * literally `False`; for `jwt.verify(*)` it wants to fire when `algorithms`
- * is *absent*. The same matcher handles both by reading `match_mode`.
+ * Re-export `RequiredArgument` for back-compat with the prototype unit test.
+ * The canonical declaration lives on `FrameworkSink` in `./spec.ts`; this
+ * alias keeps existing imports working.
  */
-export interface RequiredArgument {
-  /** Kwarg name to look for. */
-  name: string;
-  /** Positional index fallback (0-based). Optional; only used if `name` is unmatched. */
-  position?: number;
-  /**
-   * Detector mode:
-   *   - 'required'   : finding fires when the argument is ABSENT
-   *   - 'forbidden'  : finding fires when the argument is PRESENT with a
-   *                    value matching `unsafe_literals`
-   *   - 'must_equal' : finding fires when the argument is PRESENT but its
-   *                    literal text is NOT in `safe_literals`
-   * Default: 'required'.
-   */
-  match_mode?: 'required' | 'forbidden' | 'must_equal';
-  /** Whitelist of literal-text values that are considered "safe". */
-  safe_literals?: string[];
-  /** Blacklist for 'forbidden' mode. */
-  unsafe_literals?: string[];
-}
+export type { RequiredArgument };
 
-/** Structural augmentation of `FrameworkSink` for the prototype. */
-export interface NonTaintFrameworkSink extends FrameworkSink {
-  /**
-   * When present (and non-empty), this sink is matched by the non-taint
-   * detector regime instead of the taint propagator. `argument_indices`
-   * should be left empty (`[]`) — the new detector ignores positional
-   * taint flow.
-   */
-  required_arguments?: RequiredArgument[];
-}
+/**
+ * Back-compat alias — the canonical `FrameworkSink` now carries
+ * `required_arguments` directly.
+ */
+export type NonTaintFrameworkSink = FrameworkSink;
 
 /** Output of the non-taint detector — shape mirrors `Flow` (see flow.ts). */
 export interface NonTaintFinding {
@@ -163,11 +122,10 @@ export function detectSanitizerAbsence(
   callsites: CallSite[],
 ): NonTaintFinding[] {
   const findings: NonTaintFinding[] = [];
-  for (const sink of spec.sinks as NonTaintFrameworkSink[]) {
+  for (const sink of spec.sinks) {
     if (!sink.required_arguments || sink.required_arguments.length === 0) continue;
-    const cleanPattern = stripCallSuffix(sink.pattern);
     for (const cs of callsites) {
-      if (cs.calleeText !== cleanPattern) continue;
+      if (!matchesCallPattern(sink.pattern, cs.calleeText)) continue;
       for (const req of sink.required_arguments) {
         const mode: 'required' | 'forbidden' | 'must_equal' = req.match_mode ?? 'required';
         const trigger = evaluateRequirement(req, cs, mode);
@@ -225,8 +183,160 @@ function evaluateRequirement(
   return { observed };
 }
 
-function stripCallSuffix(pattern: string): string {
-  return pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
+/**
+ * Walk a list of lowered `IrFunction`s and emit one `CallSite` per `call`
+ * step. This is the runner-side adapter referenced in the design doc.
+ *
+ * Per-language behaviour:
+ *   - `python`: kwarg names come from `Step.kwargNames` (added in Phase F4).
+ *               The kwarg value text comes from the parallel `argTexts[i]`.
+ *   - `js`: the language doesn't have kwargs syntactically. When a sink
+ *           expects a named argument (e.g. `algorithms` on `jwt.verify`),
+ *           callers conventionally pass an options object as the last
+ *           positional. We parse that argText for top-level `key: value`
+ *           pairs using a cheap regex. Tolerates whitespace + line breaks;
+ *           does NOT handle nested object literals (the regex is anchored
+ *           on top-level commas, which is sufficient for the sanitizer-
+ *           absence corpus we ship).
+ *   - other languages: positional only — `kwargNames` empty, `kwargValues`
+ *           undefined.
+ *
+ * The detector is intentionally tolerant: false positives from a mis-parsed
+ * options object would still need to match the sink's `pattern` exactly, so
+ * spurious findings are rare in practice. Gate-2 fixture round-trip
+ * (validate.ts) catches anything that slips past.
+ */
+export function extractCallSitesFromIr(
+  irFunctions: IrFunction[],
+  language: 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp',
+): CallSite[] {
+  const sites: CallSite[] = [];
+  for (const fn of irFunctions) {
+    for (const step of fn.steps) {
+      if (step.kind !== 'call') continue;
+      const cs = callSiteFromCallStep(step, language);
+      if (cs) sites.push(cs);
+    }
+  }
+  return sites;
+}
+
+function callSiteFromCallStep(
+  step: Extract<Step, { kind: 'call' }>,
+  language: 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp',
+): CallSite | null {
+  const calleeText = step.callee.calleeText;
+  const argTexts = [...step.argTexts];
+  const kwargNames: string[] = [];
+  const kwargValues: Record<string, string> = {};
+
+  if (language === 'python' && step.kwargNames) {
+    for (let i = 0; i < step.kwargNames.length; i++) {
+      const name = step.kwargNames[i];
+      if (name === null || name === undefined) continue;
+      kwargNames.push(name);
+      const value = step.argTexts[i];
+      if (typeof value === 'string') kwargValues[name] = value;
+    }
+  } else if (language === 'js' && argTexts.length > 0) {
+    // Scan EVERY arg for an inline object literal — option-objects are most
+    // commonly the last positional, but jwt.verify(token, key, { algorithms })
+    // is also written with the options object inline anywhere. Mirror every
+    // top-level `key: value` pair onto kwargNames so the detector can match.
+    for (const text of argTexts) {
+      const props = parseObjectLiteralProps(text);
+      for (const [k, v] of Object.entries(props)) {
+        if (!kwargNames.includes(k)) {
+          kwargNames.push(k);
+          kwargValues[k] = v;
+        }
+      }
+    }
+  }
+
+  return {
+    calleeText,
+    argTexts,
+    kwargNames,
+    kwargValues,
+    filePath: step.loc.filePath,
+    line: step.loc.line,
+    column: step.loc.column,
+  };
+}
+
+/**
+ * Cheap parser for top-level `key: value` pairs inside a JS object literal
+ * source text like `{ algorithms: ['HS256'], maxAge: '1h' }`. Returns the
+ * pairs found at depth-0; nested braces / brackets / parens are tracked so
+ * we don't split inside them, but the returned `value` text is verbatim
+ * source. Not a full JS parser — this matches the conservative regime
+ * documented above.
+ */
+function parseObjectLiteralProps(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const t = text.trim();
+  if (!t.startsWith('{') || !t.endsWith('}')) return out;
+  const body = t.slice(1, -1);
+
+  // Walk body, splitting at top-level commas.
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '{' || ch === '[' || ch === '(') depth++;
+    else if (ch === '}' || ch === ']' || ch === ')') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+    // Skip string literals (greedy).
+    else if (ch === '"' || ch === "'" || ch === '`') {
+      const close = ch;
+      let j = i + 1;
+      while (j < body.length) {
+        if (body[j] === '\\') { j += 2; continue; }
+        if (body[j] === close) break;
+        j++;
+      }
+      i = j;
+    }
+  }
+  if (start < body.length) parts.push(body.slice(start));
+
+  for (const part of parts) {
+    const colonIdx = findTopLevelColon(part);
+    if (colonIdx < 0) continue;
+    const rawKey = part.slice(0, colonIdx).trim();
+    const value = part.slice(colonIdx + 1).trim();
+    // Strip quotes from quoted keys; reject shorthand-only entries (which have no colon, already skipped).
+    const key = rawKey.replace(/^['"]|['"]$/g, '');
+    if (!/^[A-Za-z_$][\w$]*$/.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function findTopLevelColon(s: string): number {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '{' || ch === '[' || ch === '(') depth++;
+    else if (ch === '}' || ch === ']' || ch === ')') depth--;
+    else if (ch === ':' && depth === 0) return i;
+    else if (ch === '"' || ch === "'" || ch === '`') {
+      const close = ch;
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === '\\') { j += 2; continue; }
+        if (s[j] === close) break;
+        j++;
+      }
+      i = j;
+    }
+  }
+  return -1;
 }
 
 function hashId(filePath: string, line: number, column: number, pattern: string): string {

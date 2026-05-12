@@ -15,6 +15,7 @@ import {
   type FrameworkSink,
   type FrameworkSource,
   type FrameworkSpec,
+  type RequiredArgument,
   type TaintKind,
   type VulnClass,
 } from './spec';
@@ -150,7 +151,75 @@ function validateSink(input: unknown, fieldPath: string, source?: string): Frame
     }
     osv_id = osvIdRaw;
   }
-  return { pattern, vuln_class: vuln_class as VulnClass, argument_indices, description, osv_id };
+  // Phase F4 — non-taint detector. Optional list of named-argument contracts.
+  const reqArgsRaw = (input as Record<string, unknown>).required_arguments;
+  let required_arguments: RequiredArgument[] | undefined;
+  if (reqArgsRaw !== undefined) {
+    if (!Array.isArray(reqArgsRaw)) {
+      throw new SpecValidationError(
+        'required_arguments must be an array',
+        `${fieldPath}.required_arguments`,
+        source,
+      );
+    }
+    required_arguments = reqArgsRaw.map((r, i) =>
+      validateRequiredArgument(r, `${fieldPath}.required_arguments[${i}]`, source),
+    );
+  }
+  return { pattern, vuln_class: vuln_class as VulnClass, argument_indices, description, osv_id, required_arguments };
+}
+
+function validateRequiredArgument(input: unknown, fieldPath: string, source?: string): RequiredArgument {
+  if (!isObject(input)) {
+    throw new SpecValidationError('required_argument must be an object', fieldPath, source);
+  }
+  const name = expectString(input, 'name', `${fieldPath}.name`, source);
+  const out: RequiredArgument = { name };
+  const positionRaw = input.position;
+  if (positionRaw !== undefined) {
+    if (typeof positionRaw !== 'number' || !Number.isInteger(positionRaw) || positionRaw < 0) {
+      throw new SpecValidationError(
+        `position must be a non-negative integer, got ${JSON.stringify(positionRaw)}`,
+        `${fieldPath}.position`,
+        source,
+      );
+    }
+    out.position = positionRaw;
+  }
+  const modeRaw = input.match_mode;
+  if (modeRaw !== undefined) {
+    if (typeof modeRaw !== 'string' || !['required', 'forbidden', 'must_equal'].includes(modeRaw)) {
+      throw new SpecValidationError(
+        `match_mode must be one of required|forbidden|must_equal, got ${JSON.stringify(modeRaw)}`,
+        `${fieldPath}.match_mode`,
+        source,
+      );
+    }
+    out.match_mode = modeRaw as RequiredArgument['match_mode'];
+  }
+  const safeRaw = input.safe_literals;
+  if (safeRaw !== undefined) {
+    if (!Array.isArray(safeRaw) || safeRaw.some((v) => typeof v !== 'string')) {
+      throw new SpecValidationError(
+        'safe_literals must be an array of strings',
+        `${fieldPath}.safe_literals`,
+        source,
+      );
+    }
+    out.safe_literals = safeRaw as string[];
+  }
+  const unsafeRaw = input.unsafe_literals;
+  if (unsafeRaw !== undefined) {
+    if (!Array.isArray(unsafeRaw) || unsafeRaw.some((v) => typeof v !== 'string')) {
+      throw new SpecValidationError(
+        'unsafe_literals must be an array of strings',
+        `${fieldPath}.unsafe_literals`,
+        source,
+      );
+    }
+    out.unsafe_literals = unsafeRaw as string[];
+  }
+  return out;
 }
 
 function validateSanitizer(input: unknown, fieldPath: string, source?: string): FrameworkSanitizer {

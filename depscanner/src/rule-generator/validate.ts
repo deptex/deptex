@@ -46,6 +46,10 @@ import { loadSpec } from '../taint-engine/spec-loader';
 import type { FrameworkSpec, FrameworkLanguage, VulnClass } from '../taint-engine/spec';
 import type { PropagateResult } from '../taint-engine/propagator';
 import { validatePatternSyntax } from '../taint-engine/pattern-syntax';
+import {
+  detectSanitizerAbsence,
+  extractCallSitesFromIr,
+} from '../taint-engine/non-taint-detector';
 import { canonicalVulnClass } from './vuln-class-alias';
 
 export interface ValidateRuleArgs {
@@ -388,6 +392,30 @@ async function runEngineAndCount(args: RunEngineArgs): Promise<number> {
   for (const flow of result.flows) {
     if (args.cveSinkPatterns.has(flow.sink_pattern)) count++;
   }
+
+  // --- Phase F4 non-taint detector ---
+  // After the taint engine runs, also walk the lowered IR for sanitizer-
+  // absence findings. A sink that participates in BOTH regimes (rare today;
+  // most F4 sinks set `argument_indices: []`) won't double-count because
+  // the taint flow and non-taint finding are emitted by different
+  // mechanisms — flows from sinkHits in the propagator, findings from
+  // direct AST inspection here. We add non-taint findings to the same
+  // count so Gate 2's `fixturePre > 0 && fixturePost === 0` assertion
+  // works without any caller-side branching.
+  if (result.irFunctions && result.irFunctions.length > 0) {
+    const callsites = extractCallSitesFromIr(result.irFunctions, args.language);
+    for (const spec of args.specs) {
+      const hasReqArgs = spec.sinks.some(
+        (s) => s.required_arguments && s.required_arguments.length > 0,
+      );
+      if (!hasReqArgs) continue;
+      const findings = detectSanitizerAbsence(spec, callsites);
+      for (const f of findings) {
+        if (args.cveSinkPatterns.has(f.sink_pattern)) count++;
+      }
+    }
+  }
+
   return count;
 }
 

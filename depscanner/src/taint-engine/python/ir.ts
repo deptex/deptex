@@ -387,6 +387,8 @@ function walkExpressionAsAssign(
       const args: (LocalVar | null)[] = [];
       const argTexts: string[] = [];
       const kwargIndices: number[] = [];
+      const kwargNames: (string | null)[] = [];
+      let anyKwargName = false;
       if (argList) {
         for (let i = 0; i < argList.namedChildCount; i++) {
           const a = argList.namedChild(i);
@@ -398,12 +400,17 @@ function walkExpressionAsAssign(
           // a kwarg-bearing call.
           let valueNode: Node = a;
           const isKwarg = a.type === 'keyword_argument';
+          let kwName: string | null = null;
           if (isKwarg) {
+            const nameNode = a.childForFieldName('name');
+            if (nameNode) kwName = textOf(nameNode, ctx.opts.fileContext.source);
             const v = a.childForFieldName('value');
             if (v) valueNode = v;
           }
           const argPos = args.length;
           if (isKwarg) kwargIndices.push(argPos);
+          kwargNames.push(kwName);
+          if (kwName !== null) anyKwargName = true;
           argTexts.push(textOf(valueNode, ctx.opts.fileContext.source));
           const direct = extractVarFromArg(valueNode, ctx.opts.fileContext.source);
           if (direct) {
@@ -422,6 +429,7 @@ function walkExpressionAsAssign(
         args,
         argTexts,
         kwargIndices: kwargIndices.length > 0 ? kwargIndices : undefined,
+        kwargNames: anyKwargName ? kwargNames : undefined,
         loc: locOf(expr, ctx),
       });
       return;

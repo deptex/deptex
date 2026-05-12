@@ -43,6 +43,24 @@ export const FrameworkSourceSchema = z.object({
 }).strict();
 
 /**
+ * Phase F4 — non-taint detector regime. A sink may declare one or more named
+ * arguments (kwarg or option-object property) whose presence/absence/value
+ * indicates a sanitizer-absence vulnerability shape. See
+ * `depscanner/docs/non-taint-detector-regime.md`.
+ *
+ * Server-side validation only at present — the AI rule generator's
+ * prompt-builder is not yet extended to emit this field; hand-authored
+ * YAML specs in `taint-engine/framework-models/` populate it directly.
+ */
+export const RequiredArgumentSchema = z.object({
+  name: z.string().min(1),
+  position: z.number().int().nonnegative().optional(),
+  match_mode: z.enum(['required', 'forbidden', 'must_equal']).optional(),
+  safe_literals: z.array(z.string()).optional(),
+  unsafe_literals: z.array(z.string()).optional(),
+}).strict();
+
+/**
  * Reject sink patterns that are SO broad they would match nearly every call
  * site in the codebase (e.g. `*`, `*.*(*)`, `*.execute(*)`). A prompt-
  * injection-influenced model could emit such a pattern to make the spec fire
@@ -99,6 +117,7 @@ export const FrameworkSinkSchema = z.object({
   vuln_class: z.enum(VULN_CLASSES),
   argument_indices: z.array(z.number().int().nonnegative()),
   description: z.string().min(1),
+  required_arguments: z.array(RequiredArgumentSchema).optional(),
 }).strict();
 
 export const FrameworkSanitizerSchema = z.object({

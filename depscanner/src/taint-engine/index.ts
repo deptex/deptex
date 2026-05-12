@@ -29,10 +29,20 @@ export type {
   FrameworkSource,
   FrameworkSink,
   FrameworkSanitizer,
+  RequiredArgument,
   TaintKind,
   VulnClass,
 } from './spec';
 export { ALL_VULN_CLASSES } from './spec';
+
+export {
+  detectSanitizerAbsence,
+  extractCallSitesFromIr,
+} from './non-taint-detector';
+export type {
+  CallSite,
+  NonTaintFinding,
+} from './non-taint-detector';
 
 export { loadCveSpecsForExtraction } from './cve-specs';
 export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';

@@ -24,6 +24,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadSpec, propagate, type FrameworkSpec, type VulnClass } from '../src/taint-engine';
+import {
+  detectSanitizerAbsence,
+  extractCallSitesFromIr,
+} from '../src/taint-engine/non-taint-detector';
 
 interface ParsedArgs {
   frameworks: string[];
@@ -92,7 +96,19 @@ async function runFixture(specs: FrameworkSpec[], expectation: Expectation): Pro
     rootDir: expectation.fixtureDir,
     specs,
   });
-  const flowsOfClass = result.flows.filter((f) => f.vuln_class === expectation.vulnClass).length;
+  let flowsOfClass = result.flows.filter((f) => f.vuln_class === expectation.vulnClass).length;
+  // Phase F4 — also count non-taint detector findings for this class.
+  if (result.irFunctions && result.irFunctions.length > 0) {
+    const callsites = extractCallSitesFromIr(result.irFunctions, 'js');
+    for (const spec of specs) {
+      const hasReqArgs = spec.sinks.some(
+        (s) => s.required_arguments && s.required_arguments.length > 0,
+      );
+      if (!hasReqArgs) continue;
+      const findings = detectSanitizerAbsence(spec, callsites);
+      flowsOfClass += findings.filter((f) => f.vuln_class === expectation.vulnClass).length;
+    }
+  }
   const pass = expectation.expectFlow ? flowsOfClass >= 1 : flowsOfClass === 0;
   return { expectation, flowsOfClass, flowsTotal: result.flows.length, pass, totalMs: result.stats.totalMs };
 }
