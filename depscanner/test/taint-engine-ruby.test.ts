@@ -88,6 +88,18 @@ const CASES: FixtureCase[] = [
     specs: ['rails'],
     expectedVulnClass: 'xss',
   },
+  {
+    // Guards the bracket-vs-dot accessor parity in the Ruby IR lowerer
+    // (handleCall emits a weak `source` step for 0-arg method calls so
+    // `params.x` flows like `params[:x]`). Vuln fixture uses BOTH forms;
+    // safe fixture exercises the sanitizer interaction so the weak source
+    // step doesn't bypass `Integer(...)` / `*.to_i`.
+    name: 'Rails accessor parity (params[:x] vs params.x)',
+    vulnDir: 'accessor-parity-vuln',
+    safeDir: 'accessor-parity-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'sql_injection',
+  },
 ];
 
 function summarize(flows: Flow[]): string {

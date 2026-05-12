@@ -688,6 +688,51 @@ function handleCall(
       args.push(tmp);
     }
   }
+  // Bracket-vs-dot accessor parity. Ruby has no syntactic distinction
+  // between attribute access (`params.id`) and a no-arg method call
+  // (`params.id()`). The other-language lowerers see `obj.x` as a
+  // property access and emit a `source` step whose text matches the
+  // property-style framework specs (`params.*`, `request.headers.*`,
+  // etc.). The Ruby tree-sitter grammar parses `params.id` as a `call`
+  // node, so without this parity emission the property-style specs only
+  // ever fire on the bracket form (`params[:id]` -> element_reference ->
+  // source step) and the dot form is silently dropped.
+  //
+  // Emit a *weak* source step BEFORE the call step, with sourceText set
+  // to the RECEIVER (not the full call text), so that:
+  //   - `params.id`:    sourceText=`params`         matches `params` exact / `params.*`
+  //   - `request.headers.x`: sourceText=`request.headers` matches `request.headers.*`
+  //   - `q.to_i`:       sourceText=`q`              no match -> weak source is a no-op,
+  //                     and the call step's sanitizer match clears target as before.
+  //   - `request.headers.port.to_i`: sourceText=`request.headers.port` does match
+  //                     `request.headers.*` (taints target), but then the call step's
+  //                     sanitizer match (`*.to_i`) clears target — sanitizer wins
+  //                     because it comes AFTER the weak source step.
+  // The matching 0-arg unresolved-call external fallback in propagate-core
+  // (`step.args.length === 0 && local.has(step.target)`) preserves target's
+  // weak-source-set taint when no sanitizer / sink / known callee match.
+  //
+  // Gate this on the shape that maps cleanly to "attribute read": there
+  // must be a receiver, the call must take no args (no block either —
+  // blocks indicate `each`/`map`/etc., not accessor reads), and there
+  // must be a target to taint.
+  if (
+    target &&
+    recvNode &&
+    !blockNode &&
+    args.length === 0 &&
+    looksLikeAccessorReceiver(recvNode)
+  ) {
+    const recvText = textOf(recvNode, ctx.opts.fileContext.source).replace(/::/g, '.');
+    steps.push({
+      kind: 'source',
+      target,
+      sourceText: recvText,
+      loc: locOf(expr, ctx),
+      weak: true,
+    });
+  }
+
   steps.push({
     kind: 'call',
     target,
@@ -700,6 +745,47 @@ function handleCall(
   // Walk the trailing block (do...end / { ... }) for side effects only.
   if (blockNode) {
     walkStatement(blockNode, steps, ctx);
+  }
+}
+
+/**
+ * Return true if `recvNode` looks like a Ruby attribute-access receiver —
+ * i.e. an identifier-ish base or a chain of identifier-ish bases joined by
+ * `.` / `::` / `[…]`. This excludes receivers that are themselves calls
+ * with args, complex expressions, string interpolations, etc., where the
+ * "no-arg method call = attribute read" parity doesn't hold.
+ */
+function looksLikeAccessorReceiver(recvNode: Node): boolean {
+  switch (recvNode.type) {
+    case 'identifier':
+    case 'instance_variable':
+    case 'class_variable':
+    case 'global_variable':
+    case 'constant':
+    case 'scope_resolution':
+    case 'self':
+      return true;
+    case 'call':
+    case 'method_call': {
+      // Nested no-arg call with an accessor-shaped receiver — `request.headers`
+      // is a `call`, and we want `request.headers.host` to count too. Treat as
+      // accessor only if its own args list is empty / absent AND its receiver
+      // (if any) is itself accessor-shaped.
+      const argList = recvNode.childForFieldName('arguments');
+      if (argList && argList.namedChildCount > 0) return false;
+      const inner = recvNode.childForFieldName('receiver');
+      if (!inner) return true;
+      return looksLikeAccessorReceiver(inner);
+    }
+    case 'element_reference': {
+      // `cookies[:auth].secure?` — accessor over an element_reference is
+      // still an accessor read.
+      const inner = recvNode.childForFieldName('object') ?? recvNode.namedChild(0);
+      if (!inner) return true;
+      return looksLikeAccessorReceiver(inner);
+    }
+    default:
+      return false;
   }
 }
 

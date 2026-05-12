@@ -45,7 +45,25 @@ export type CalleeRef =
  * list reflects syntactic order, and branches join trivially.
  */
 export type Step =
-  | { kind: 'source'; target: LocalVar; sourceText: string; loc: SourceLocation }
+  | {
+      kind: 'source';
+      target: LocalVar;
+      sourceText: string;
+      loc: SourceLocation;
+      /**
+       * `weak: true` — only set target taint when a FrameworkSource pattern
+       * matches the sourceText exactly; skip the receiver-root fallback and
+       * do NOT delete target on no-match. Used by the Ruby lowerer to emit
+       * a *parity* source step alongside a `call` step for 0-arg method
+       * invocations (`params.x`, where syntactically the call shape hides
+       * what is semantically an accessor read). Without this, the call
+       * step's external-fallback would clobber any target taint a non-weak
+       * source step had just set, AND a non-weak source step on a sanitizer
+       * call like `q.to_i` would re-taint via the receiver-root fallback
+       * after the sanitizer had cleared it.
+       */
+      weak?: boolean;
+    }
   | { kind: 'assign'; target: LocalVar; from: LocalVar | null; loc: SourceLocation }
   | {
       kind: 'call';

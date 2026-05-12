@@ -171,6 +171,12 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         if (matched) {
           local.set(step.target, makeTrace(matched, step));
           sourcesAddedThisPass++;
+        } else if (step.weak) {
+          // Weak source step (Ruby accessor-parity emission): only fire on
+          // exact pattern match. Skip receiver-root fallback AND skip the
+          // delete-on-no-match so the preceding `call` step's resolution
+          // (sanitizer / sink / external fallback) is preserved. See the
+          // `weak` field doc in ir.ts.
         } else {
           // No framework source matched. If the source text reads like a
           // field/index access on a known-tainted local (e.g. `q.name`,
@@ -293,6 +299,15 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               step.target,
               extendPath(firstTainted, hopFromStep(step, 'call'), maxPathLength),
             );
+          } else if (step.args.length === 0 && local.has(step.target)) {
+            // 0-arg unresolved method call (e.g. Ruby `params.id` parsed as
+            // a call, no args, sanitizer/sink didn't match). The Ruby
+            // lowerer emits a *weak* source step right before this call
+            // step to encode the accessor-read semantics — if that already
+            // set target's taint, don't clobber it here. For non-Ruby
+            // lowerers (which don't emit weak source steps), this branch is
+            // unreachable because they don't seed target before the call.
+            // Leave target's existing trace in place.
           } else {
             local.delete(step.target);
           }
