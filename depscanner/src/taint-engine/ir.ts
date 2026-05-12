@@ -214,7 +214,19 @@ function walkExpressionAsAssign(
   // Handle assignment expressions like `x = foo()` — treat as if the lhs
   // were a variable declaration's initializer.
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-    const lhsName = ts.isIdentifier(expr.left) ? expr.left.text : null;
+    const lhs = expr.left;
+    // Computed-key assignment: `obj[req.query.x] = rhs` should taint `obj`
+    // from BOTH the key and the rhs. Without this, the source pattern inside
+    // the key (`req.query.x`) is never read and the object never gains taint
+    // from the AI-rule shape `obj[req.query.x] = ...`. Unlocks code-injection
+    // flows where the object is later consumed by a template/eval sink.
+    if (ts.isElementAccessExpression(lhs) && ts.isIdentifier(lhs.expression)) {
+      const objName = lhs.expression.text;
+      walkExpressionAsAssign(lhs.argumentExpression, objName, steps, opts);
+      walkExpressionAsAssign(expr.right, objName, steps, opts);
+      return;
+    }
+    const lhsName = ts.isIdentifier(lhs) ? lhs.text : null;
     walkExpressionAsAssign(expr.right, lhsName, steps, opts);
     return;
   }
@@ -236,6 +248,28 @@ function walkExpressionAsAssign(
 
   // Call expression (or `new Foo(args)`).
   if (ts.isCallExpression(expr) || ts.isNewExpression(expr)) {
+    // Method-chain support: if the callee is a member access on an inner
+    // call (`a.b(x).c()`), lower the inner call as its own Step first so
+    // its sink-matching fires. Without this, `res.location(q).end()` would
+    // only fire `<chain>.end` as the outer callee and silently drop the
+    // `res.location(*)` sink. Recurses through deeper chains (`a().b().c()`)
+    // by calling walkExpressionAsAssign on the inner call, which re-enters
+    // this branch.
+    if (ts.isCallExpression(expr)) {
+      const calleeExpr = expr.expression;
+      if (
+        (ts.isPropertyAccessExpression(calleeExpr) || ts.isElementAccessExpression(calleeExpr)) &&
+        (ts.isCallExpression(calleeExpr.expression) || ts.isNewExpression(calleeExpr.expression))
+      ) {
+        const innerTmp = `<chain@${steps.length}>`;
+        walkExpressionAsAssign(calleeExpr.expression, innerTmp, steps, opts);
+        // Note: we don't try to propagate the inner call's return taint into
+        // the outer call's args or target — that's a separate alias-tracking
+        // concern handled imprecisely by the existing inner-as-temp logic
+        // for direct args. The point of the pre-walk here is only to give
+        // the worklist a chance to fire the inner-call sink.
+      }
+    }
     const callee = resolveCallee(expr, opts);
     const args: (LocalVar | null)[] = [];
     const argTexts: string[] = [];

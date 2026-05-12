@@ -62,6 +62,8 @@ const EXPRESS_LIKE_SPEC: FrameworkSpec = {
   sinks: [
     { pattern: 'child_process.exec(*)', vuln_class: 'command_injection', argument_indices: [0], description: 'shell exec' },
     { pattern: 'db.query(*)', vuln_class: 'sql_injection', argument_indices: [0], description: 'sql query' },
+    { pattern: 'res.location(*)', vuln_class: 'open_redirect', argument_indices: [0], description: 'Express res.location' },
+    { pattern: '_.template(*)', vuln_class: 'code_injection', argument_indices: [0], description: 'lodash template' },
   ],
   sanitizers: [
     { pattern: 'validator.escape(*)', vuln_classes: ['xss', 'command_injection'], description: 'escape' },
@@ -256,6 +258,87 @@ async function testSpecLoader() {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+async function testMethodChainSink() {
+  console.log('\n[test] (f) method-chained inner-call sink fires');
+  // `res.location(q).end()` — the inner call is the sink-bearing position
+  // and was previously invisible because the engine only traced sinks at
+  // the terminal call. IR lowerer now pre-walks the inner call.
+  const root = makeWorkspace('method-chain', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const res: any;
+      function handler(req: any) {
+        const q = req.query.next;
+        res.location(q).end();
+      }
+      handler({ query: { next: 'x' } });
+    `,
+  });
+  const result = await propagate({ rootDir: root, specs: [EXPRESS_LIKE_SPEC] });
+  assert(result.flows.length >= 1, `method-chain sink flow emitted (got ${result.flows.length})`);
+  const f = result.flows.find((x) => x.vuln_class === 'open_redirect');
+  assert(f != null, 'flow vuln_class = open_redirect');
+  assert(f?.sink_pattern === 'res.location(*)', 'sink pattern = res.location(*)');
+
+  // Safe variant: constant key, no taint reaches inner call.
+  const safeRoot = makeWorkspace('method-chain-safe', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const res: any;
+      function handler(_req: any) {
+        res.location('/login').end();
+      }
+      handler({});
+    `,
+  });
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  assert(safeResult.flows.length === 0, `safe method-chain emits no flow (got ${safeResult.flows.length})`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(safeRoot, { recursive: true, force: true });
+}
+
+async function testComputedKeySource() {
+  console.log('\n[test] (g) computed-key assignment taints the object');
+  // `obj[req.query.x] = ...` should taint `obj` from the key expression,
+  // so a downstream `_.template(obj)` sink fires. AI-fixture shape for
+  // CVE-2026-4800 (lodash template injection).
+  const root = makeWorkspace('computed-key', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const _: any;
+      function handler(req: any) {
+        const obj: any = {};
+        obj[req.query.x] = 'y';
+        _.template(obj);
+      }
+      handler({ query: { x: 'k' } });
+    `,
+  });
+  const result = await propagate({ rootDir: root, specs: [EXPRESS_LIKE_SPEC] });
+  assert(result.flows.length >= 1, `computed-key flow emitted (got ${result.flows.length})`);
+  const f = result.flows.find((x) => x.vuln_class === 'code_injection');
+  assert(f != null, 'flow vuln_class = code_injection');
+  assert(f?.sink_pattern === '_.template(*)', 'sink pattern = _.template(*)');
+
+  // Safe variant: hard-coded key, obj never tainted.
+  const safeRoot = makeWorkspace('computed-key-safe', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const _: any;
+      function handler(_req: any) {
+        const obj: any = {};
+        obj['hardcoded'] = 'y';
+        _.template(obj);
+      }
+      handler({});
+    `,
+  });
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  assert(safeResult.flows.length === 0, `safe computed-key emits no flow (got ${safeResult.flows.length})`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(safeRoot, { recursive: true, force: true });
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -263,6 +346,8 @@ async function main() {
   await testSanitizerSuppresses();
   await testAwaitPromise();
   await testDeepChain();
+  await testMethodChainSink();
+  await testComputedKeySource();
   await testSpecLoader();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
