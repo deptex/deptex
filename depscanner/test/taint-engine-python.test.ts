@@ -167,6 +167,12 @@ const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
     vulnRoot: 'python-vulns/urllib3-kwarg-vuln',
     safeRoot: 'python-vulns/urllib3-kwarg-safe',
   },
+  {
+    name: 'Flask -> setuptools PackageIndex.download (CVE-2024-6345 shape)',
+    rootDir: 'python-setuptools',
+    specs: ['flask', 'setuptools'],
+    expectedVulnClass: 'code_injection',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
