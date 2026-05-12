@@ -145,6 +145,12 @@ const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
     specs: ['flask', 'jinja2'],
     expectedVulnClass: 'code_injection',
   },
+  {
+    name: 'Flask -> pillow ImageMath.eval (CVE-2022-22817 shape)',
+    rootDir: 'python-pillow',
+    specs: ['flask', 'pillow'],
+    expectedVulnClass: 'code_injection',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
