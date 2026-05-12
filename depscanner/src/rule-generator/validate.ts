@@ -46,6 +46,7 @@ import { loadSpec } from '../taint-engine/spec-loader';
 import type { FrameworkSpec, FrameworkLanguage, VulnClass } from '../taint-engine/spec';
 import type { PropagateResult } from '../taint-engine/propagator';
 import { validatePatternSyntax } from '../taint-engine/pattern-syntax';
+import { canonicalVulnClass } from './vuln-class-alias';
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
@@ -238,11 +239,18 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   // `pre>0 ∧ post=0` asymmetry that proves the rule discriminates is
   // preserved. Gate 3 (patch round-trip) remains the harder check that
   // the rule fires on real upstream-pre-patch code.
-  const aiVulnClasses = new Set(engineSpec.sinks.map((s) => s.vuln_class));
+  //
+  // Vuln-class normalization (canonicalVulnClass) bridges alternate-
+  // vocabulary labels — log_injection / log4shell / ssti / template_injection /
+  // dos — onto the canonical class the bundled framework_models actually
+  // emit (typically code_injection or redos). Without this, an AI rule
+  // labelling a Logger.info(*) sink as `log_injection` fails to widen onto
+  // log4j.yaml's `code_injection` sinks of the same pattern.
+  const aiVulnClasses = new Set(engineSpec.sinks.map((s) => canonicalVulnClass(s.vuln_class)));
   const cveSinkPatterns = new Set<string>(engineSpec.sinks.map((s) => s.pattern));
   for (const spec of frameworkSpecs) {
     for (const sink of spec.sinks) {
-      if (aiVulnClasses.has(sink.vuln_class)) cveSinkPatterns.add(sink.pattern);
+      if (aiVulnClasses.has(canonicalVulnClass(sink.vuln_class))) cveSinkPatterns.add(sink.pattern);
     }
   }
 
