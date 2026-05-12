@@ -38,6 +38,7 @@ function loadJavaSpecs(): FrameworkSpec[] {
     loadSpec(path.join(SPECS_ROOT, 'jackson.yaml')),
     loadSpec(path.join(SPECS_ROOT, 'log4j.yaml')),
     loadSpec(path.join(SPECS_ROOT, 'commons-text.yaml')),
+    loadSpec(path.join(SPECS_ROOT, 'xmlsec.yaml')),
   ];
   return cachedSpecs;
 }
@@ -54,6 +55,7 @@ const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'jackson-deserialization', expectVuln: 'deserialization' },
   { name: 'log4j-code-injection', expectVuln: 'code_injection' },
   { name: 'commons-text-code-injection', expectVuln: 'code_injection' },
+  { name: 'xmlsec-deserialization', expectVuln: 'deserialization' },
 ];
 
 async function runFixture(fixtureDir: string) {
