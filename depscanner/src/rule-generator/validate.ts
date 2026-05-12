@@ -480,6 +480,57 @@ async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
   }
 }
 
+/**
+ * File path patterns that look like test / spec / fixture code. When a CVE's
+ * fix commit touches both library source AND its own tests (very common —
+ * axios test/specs/, debug test/index.js, Pillow Tests/test_pickle.py), the
+ * AI rule legitimately fires on the test file because the test reproduces
+ * the bug. Gate 3 (patch round-trip) then sees post_matches > 0 from those
+ * test reproductions and hard-fails the rule, even though the spec is
+ * correct against real library source.
+ *
+ * Excluding these paths before the engine sees them is sound: a rule that
+ * fires on real-world consumer code at extraction time will still fire;
+ * it just no longer fails Gate 3 on upstream's own regression tests.
+ *
+ * Patterns are anchored at segment boundaries (`/` or string start/end) so
+ * `tests/` inside any directory layer matches, but `latest/` (which contains
+ * the substring `test`) does not.
+ */
+const TEST_PATH_PATTERNS: RegExp[] = [
+  // Top-level or nested test/spec directories.
+  /(?:^|\/)tests?\//i,
+  /(?:^|\/)__tests?__\//i,
+  /(?:^|\/)spec\//i,
+  /(?:^|\/)specs\//i,
+  /(?:^|\/)testing\//i,
+  /(?:^|\/)test_suite\//i,
+  // Fixture / mock dirs that legitimately reproduce attacker-controlled inputs.
+  /(?:^|\/)fixtures?\//i,
+  /(?:^|\/)mocks?\//i,
+  /(?:^|\/)__mocks__\//i,
+  /(?:^|\/)__fixtures__\//i,
+  // Per-file test naming conventions.
+  /(?:^|\/)test_[^/]+\.[^./]+$/i,           // python: test_foo.py
+  /(?:^|\/)[^/]+_test\.(?:py|go|rb|java|cs|rs)$/i, // *_test.py / *_test.go / *_test.rb
+  /(?:^|\/)[^/]+\.(?:spec|test)\.(?:js|jsx|mjs|cjs|ts|tsx)$/i, // *.spec.ts / *.test.js
+  /(?:^|\/)[^/]+Test\.java$/,               // FooTest.java
+  /(?:^|\/)[^/]+Tests\.cs$/,                // FooTests.cs
+  /(?:^|\/)[^/]+Spec\.scala$/,
+];
+
+/**
+ * Returns true if `filePath` looks like a test/spec/fixture file the patch
+ * touched as part of regression coverage rather than library source.
+ */
+export function isTestPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  for (const re of TEST_PATH_PATTERNS) {
+    if (re.test(normalized)) return true;
+  }
+  return false;
+}
+
 export function filterApplicableChangedFiles(
   files: ChangedFileBlob[],
   language: FrameworkLanguage,
@@ -488,7 +539,11 @@ export function filterApplicableChangedFiles(
   return files.filter((f) => {
     if (f.before === null || f.after === null) return false;
     const ext = path.extname(f.path).toLowerCase().replace(/^\./, '');
-    return accepted.has(ext);
+    if (!accepted.has(ext)) return false;
+    // Drop test-shaped paths so the AI rule's fire on test reproductions
+    // doesn't fail Gate 3 (patch round-trip). See TEST_PATH_PATTERNS above.
+    if (isTestPath(f.path)) return false;
+    return true;
   });
 }
 
