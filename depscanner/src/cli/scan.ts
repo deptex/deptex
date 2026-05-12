@@ -103,8 +103,20 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
     const logger = new ExtractionLogger(storage, projectId, runId, {
       cliMode: true,
       sink: (message, level, step) => {
+        // stdout is reserved for human-readable progress (gated by --quiet)
+        // and the final --format=json or table dump.
         const line = formatLogLine(message, level, step, { verbose, quiet });
         if (line) console.log(line);
+        // stderr always gets a minimal machine-readable step marker so that
+        // harnesses that capture stderr incrementally (e.g. the OSS corpus
+        // tee, container log forwarders) can diagnose hangs and OOMs even
+        // when --quiet --format=json suppresses all stdout progress. The
+        // final JSON only flushes on successful exit; without these markers
+        // there's no forensic trail when the scan is SIGKILLed mid-pipeline.
+        if (level !== 'info' || verbose) {
+          const tag = level === 'success' ? 'ok' : level;
+          process.stderr.write(`[scan] ${tag} ${step} ${message}\n`);
+        }
       },
     });
 

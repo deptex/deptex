@@ -123,7 +123,7 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     }
   }
 
-  const { dependencies, relationships } = parseSbom(sbom);
+  const { dependencies, relationships, rawComponentCount, droppedVersionlessCount } = parseSbom(sbom);
   const bomRefMap = getBomRefToNameVersion(sbom);
 
   // Patch devDependency detection by cross-referencing with manifest files
@@ -133,16 +133,37 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     await log.warn('sbom', `devDependency detection failed (non-fatal): ${e.message}`);
   }
 
+  if (droppedVersionlessCount > 0) {
+    await log.warn(
+      'sbom',
+      `${droppedVersionlessCount} SBOM component(s) dropped with no resolvable version — upstream package manager likely failed to resolve (see resolve step warnings)`,
+    );
+  }
+
   if (dependencies.length === 0) {
-    const msg = "No dependencies found — the package manifest may be empty or in an unsupported format";
-    await log.error('sbom', msg);
-    await setError(supabase, projectId, msg);
-    throw new Error(msg);
+    // Two cases collapse into one symptom here:
+    //   1. SBOM was truly empty (rawComponentCount == 0) — manifest unsupported
+    //      or genuinely zero-dep project (e.g. a small CLI tool, a library).
+    //   2. SBOM had components but they all had no version (rawComponentCount > 0,
+    //      all dropped above) — upstream resolver failed (e.g. bundler not in
+    //      image, npm install broke on workspace refs).
+    // Both are recoverable: semgrep + trufflehog + framework-entry-point
+    // detection still produce value on a zero-dep scan. Warn and continue.
+    const reason =
+      rawComponentCount > 0
+        ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version`
+        : 'SBOM is empty';
+    await log.warn(
+      'sbom',
+      `No dependencies parsed (${reason}) — continuing without dependency analysis; SAST and secret scans will still run`,
+    );
   }
 
   await log.success('sbom', 'SBOM generated', Date.now() - sbomStart, {
     components: dependencies.length,
     relationships: relationships.length,
+    raw_component_count: rawComponentCount,
+    dropped_versionless_count: droppedVersionlessCount,
   });
 
   return { dependencies, relationships, bomRefMap };

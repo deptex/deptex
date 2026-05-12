@@ -171,7 +171,7 @@ describe('runPipeline', () => {
     await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/SBOM/);
   }, 25000);
 
-  it('clone + SBOM succeed but SBOM has 0 deps -> pipeline throws, "No dependencies found"', async () => {
+  it('clone + SBOM succeed but SBOM has 0 deps -> pipeline warns and continues (semgrep/trufflehog still produce value)', async () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockReturnValue(undefined);
@@ -188,7 +188,14 @@ describe('runPipeline', () => {
     };
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
-    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/No dependencies found/);
+    const result = await runPipeline(baseJob, mockLog);
+    expect(result.finalizeSummary).toBeDefined();
+    // The sbom step should have warned about 0 deps; previously this case
+    // hard-failed (false-positive on legitimate zero-dep libraries).
+    const sbomWarns = mockLog.warn.mock.calls.filter(
+      (c) => c[0] === 'sbom' && /No dependencies parsed/.test(c[1] ?? ''),
+    );
+    expect(sbomWarns.length).toBeGreaterThan(0);
   });
 
   it('dep-scan not installed (ENOENT) -> pipeline does NOT throw, logs warning', async () => {
