@@ -55,6 +55,17 @@ export type Step =
       args: (LocalVar | null)[];
       /** The full text of each argument expression (used for sink/sanitizer pattern matching). */
       argTexts: string[];
+      /**
+       * Positions in `args` that came from keyword arguments (Python kwargs,
+       * other languages may extend later). When present and non-empty, a
+       * sink matcher with positional `argument_indices` should ALSO consider
+       * these positions tainted — because the language's positional indexing
+       * is not stable when the caller binds args by name. Over-approximation
+       * is intentional: any false-positive here is caught by Gate 3 fixture
+       * round-trip in rule-generator validation. Empty / undefined means all
+       * args were positional (or the lowerer doesn't model kwargs yet).
+       */
+      kwargIndices?: number[];
       loc: SourceLocation;
     }
   | { kind: 'return'; from: LocalVar | null; loc: SourceLocation };

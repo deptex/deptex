@@ -386,24 +386,31 @@ function walkExpressionAsAssign(
       const callee = resolveCallee(calleeText, ctx);
       const args: (LocalVar | null)[] = [];
       const argTexts: string[] = [];
+      const kwargIndices: number[] = [];
       if (argList) {
         for (let i = 0; i < argList.namedChildCount; i++) {
           const a = argList.namedChild(i);
           if (!a) continue;
           if (a.type === 'comment') continue;
-          // keyword_argument: name=value — track value's taint via temp.
+          // keyword_argument: name=value — track value's taint via temp,
+          // and record the position so the sink matcher can over-approximate
+          // when a spec's positional argument_indices wouldn't line up with
+          // a kwarg-bearing call.
           let valueNode: Node = a;
-          if (a.type === 'keyword_argument') {
+          const isKwarg = a.type === 'keyword_argument';
+          if (isKwarg) {
             const v = a.childForFieldName('value');
             if (v) valueNode = v;
           }
+          const argPos = args.length;
+          if (isKwarg) kwargIndices.push(argPos);
           argTexts.push(textOf(valueNode, ctx.opts.fileContext.source));
           const direct = extractVarFromArg(valueNode, ctx.opts.fileContext.source);
           if (direct) {
             args.push(direct);
             continue;
           }
-          const tmp = `<arg${args.length}@${steps.length}>`;
+          const tmp = `<arg${argPos}@${steps.length}>`;
           walkExpressionAsAssign(valueNode, tmp, steps, ctx);
           args.push(tmp);
         }
@@ -414,6 +421,7 @@ function walkExpressionAsAssign(
         callee,
         args,
         argTexts,
+        kwargIndices: kwargIndices.length > 0 ? kwargIndices : undefined,
         loc: locOf(expr, ctx),
       });
       return;

@@ -65,6 +65,14 @@ interface SinkOnlyFixtureCase {
   rootDir: string;
   specs: string[];
   expectedVulnClass: VulnClass;
+  /**
+   * Override the conventional `${rootDir}/vulnerable` and `${rootDir}/safe`
+   * subdir names. Used when a fixture pair sits next to other named
+   * fixtures (e.g. under `python-vulns/`) and can't claim a whole rootDir.
+   * Paths are still resolved relative to FIXTURES_TOOLKIT_ROOT.
+   */
+  vulnRoot?: string;
+  safeRoot?: string;
 }
 
 const CASES: FixtureCase[] = [
@@ -151,6 +159,14 @@ const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
     specs: ['flask', 'pillow'],
     expectedVulnClass: 'code_injection',
   },
+  {
+    name: 'Flask -> urllib3 SSRF via keyword args (engine kwarg widening)',
+    rootDir: 'python-vulns/urllib3-kwarg',
+    specs: ['flask', 'urllib3'],
+    expectedVulnClass: 'ssrf',
+    vulnRoot: 'python-vulns/urllib3-kwarg-vuln',
+    safeRoot: 'python-vulns/urllib3-kwarg-safe',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
@@ -194,7 +210,9 @@ async function runSinkOnlyFixture(c: SinkOnlyFixtureCase): Promise<void> {
   console.log(`\n[fixture] ${c.name}`);
   const specs = await loadSpecsByName(c.specs);
 
-  const vulnRoot = path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'vulnerable');
+  const vulnRoot = c.vulnRoot
+    ? path.join(FIXTURES_TOOLKIT_ROOT, c.vulnRoot)
+    : path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'vulnerable');
   const vulnResult = await propagatePython({ rootDir: vulnRoot, specs });
   const vulnFlowsOfClass = vulnResult.flows.filter((f) => f.vuln_class === c.expectedVulnClass);
   assert(
@@ -206,7 +224,9 @@ async function runSinkOnlyFixture(c: SinkOnlyFixtureCase): Promise<void> {
     console.error(`      stats: ${JSON.stringify(vulnResult.stats)}`);
   }
 
-  const safeRoot = path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'safe');
+  const safeRoot = c.safeRoot
+    ? path.join(FIXTURES_TOOLKIT_ROOT, c.safeRoot)
+    : path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'safe');
   const safeResult = await propagatePython({ rootDir: safeRoot, specs });
   const safeFlowsOfClass = safeResult.flows.filter((f) => f.vuln_class === c.expectedVulnClass);
   assert(

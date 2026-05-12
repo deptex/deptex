@@ -213,14 +213,35 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
 
         const sinkMatch = matchSinkPattern(step.callee.calleeText, specs);
         if (sinkMatch) {
-          const idxs = sinkMatch.argument_indices.length > 0
-            ? sinkMatch.argument_indices
-            : step.args.map((_, i) => i);
+          // Indices to check for taint at this call site.
+          // - empty spec argument_indices → check every position (existing behaviour)
+          // - non-empty + no kwargs → check the spec-declared positions only
+          // - non-empty + kwargs present → ALSO check every kwarg position.
+          //   This over-approximates when a Python (or other kwarg-supporting
+          //   language) caller binds args by name, where the spec's positional
+          //   indexing wouldn't otherwise line up. False positives here are
+          //   caught by Gate 3 fixture round-trip in rule-generator validation;
+          //   the engine prefers extra recall over missed flows.
+          let idxs: number[];
+          if (sinkMatch.argument_indices.length === 0) {
+            idxs = step.args.map((_, i) => i);
+          } else if (step.kwargIndices && step.kwargIndices.length > 0) {
+            const widened = new Set<number>(sinkMatch.argument_indices);
+            for (const k of step.kwargIndices) widened.add(k);
+            idxs = Array.from(widened);
+          } else {
+            idxs = sinkMatch.argument_indices;
+          }
+          const seenArgs = new Set<string>();
           for (const i of idxs) {
             const argName = step.args[i];
             if (!argName) continue;
+            // Dedup: with kwarg widening, a positional index and a kwarg index
+            // could point at the same local var; emit one hit, not two.
+            if (seenArgs.has(argName)) continue;
             const trace = local.get(argName);
             if (!trace) continue;
+            seenArgs.add(argName);
             const hit: SinkHit = {
               sink: sinkMatch,
               trace: extendPath(trace, hopFromStep(step, 'sink'), maxPathLength),
