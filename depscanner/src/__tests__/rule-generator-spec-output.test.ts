@@ -143,6 +143,27 @@ describe('rule-generator FrameworkSpec output — schema gate (Gate 1)', () => {
     expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('code_injection');
   });
 
+  test('parseAndValidate accepts the new weak_crypto vuln_class', () => {
+    // phase28c adds weak_crypto to the engine taxonomy. Confirm the zod
+    // schema now accepts it so CVE-2022-23541 (jsonwebtoken kid → weak key)
+    // and similar crypto-misuse CVEs round-trip cleanly.
+    const ok = JSON.parse(JSON.stringify(validPayload));
+    ok.framework_spec.sinks[0].vuln_class = 'weak_crypto';
+    const r = parseAndValidate(JSON.stringify(ok));
+    expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('weak_crypto');
+  });
+
+  test('parseAndValidate accepts the new auth_bypass vuln_class', () => {
+    // phase28c adds auth_bypass to the engine taxonomy. Confirm the zod
+    // schema now accepts it so CVE-2022-22978 (Spring Security regex
+    // newline bypass) and similar auth-decision-routing CVEs round-trip
+    // cleanly.
+    const ok = JSON.parse(JSON.stringify(validPayload));
+    ok.framework_spec.sinks[0].vuln_class = 'auth_bypass';
+    const r = parseAndValidate(JSON.stringify(ok));
+    expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('auth_bypass');
+  });
+
   test('parseAndValidate parses well-shaped payload with promptInjectionSuspect=false', () => {
     const r = parseAndValidate(JSON.stringify(validPayload));
     expect(r.payload.framework_spec.framework).toBe('pkg');

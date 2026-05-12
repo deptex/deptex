@@ -360,7 +360,7 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `    "sinks": [`,
     `      {`,
     `        "pattern": "<callee text matching the engine's matcher grammar — see below>",`,
-    `        "vuln_class": "<one of: sql_injection|ssrf|xss|path_traversal|command_injection|prototype_pollution|deserialization|redos|file_upload|open_redirect|log_injection>",`,
+    `        "vuln_class": "<one of: sql_injection|ssrf|xss|path_traversal|command_injection|prototype_pollution|deserialization|redos|file_upload|open_redirect|log_injection|code_injection|weak_crypto|auth_bypass>",`,
     `        "argument_indices": [0],`,
     `        "description": "<one-sentence why this call is the sink>"`,
     `      }`,

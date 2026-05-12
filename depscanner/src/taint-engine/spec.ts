@@ -17,17 +17,29 @@
 /**
  * Closed taxonomy of vulnerability classes the engine can detect. Matches
  * the taint_engine_settings.vuln_classes_enabled DEFAULT list (phase26
- * migration; extended in phase28b to add `code_injection`).
+ * migration; extended in phase28b to add `code_injection`, and phase28c to
+ * add `weak_crypto` + `auth_bypass`).
  *
  * `code_injection` covers expression / template / eval-style sinks where
  * tainted data is interpreted as code by the runtime — Spring SpEL eval,
  * `eval(*)`, `Function(*)`, server-side template injection, etc. Added
  * because Qwen routinely emits this label for SpEL CVEs (e.g.
  * CVE-2023-34053) and the previous closed enum silently rejected the
- * generated spec under `invalid_schema`. Vuln classes that genuinely fall
- * outside taint flow (DoS, XML expansion, HTTP/2 reset attacks) are
- * surfaced via the `vuln_class_out_of_scope` generator failure code
- * instead of being modelled here.
+ * generated spec under `invalid_schema`.
+ *
+ * `weak_crypto` covers sinks where tainted data influences a cryptographic
+ * primitive in a way that breaks its security guarantees — e.g. CVE-2022-
+ * 23541 (jsonwebtoken `kid` claim resolves an attacker-controlled key into
+ * a verifier), HMAC keys built from untrusted input, predictable IVs, etc.
+ *
+ * `auth_bypass` covers sinks where tainted data routes around an
+ * authentication / authorization decision — e.g. CVE-2022-22978 (Spring
+ * Security RegexRequestMatcher newline bypass), URL-normalisation gaps in
+ * auth filters, etc.
+ *
+ * Vuln classes that genuinely fall outside taint flow (DoS, XML expansion,
+ * HTTP/2 reset attacks) are surfaced via the `vuln_class_out_of_scope`
+ * generator failure code instead of being modelled here.
  */
 export type VulnClass =
   | 'sql_injection'
@@ -41,7 +53,9 @@ export type VulnClass =
   | 'file_upload'
   | 'open_redirect'
   | 'log_injection'
-  | 'code_injection';
+  | 'code_injection'
+  | 'weak_crypto'
+  | 'auth_bypass';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -56,6 +70,8 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'open_redirect',
   'log_injection',
   'code_injection',
+  'weak_crypto',
+  'auth_bypass',
 ];
 
 /** Kind label attached to a tainted value as it flows through the program. */
