@@ -1982,43 +1982,37 @@ DECLARE
   v_suppressed integer := 0;
   v_dep_ids uuid[];
 BEGIN
-  WITH allowlisted AS (
-    UPDATE public.project_malicious_findings pmf
-    SET
-      suppressed = true,
-      suppressed_at = now(),
-      suppressed_reason = 'allowlist:' || (
-        SELECT oma.id::text
-        FROM public.organization_malicious_allowlist oma
-        INNER JOIN public.project_dependencies pd2 ON pd2.id = pmf.project_dependency_id
-        INNER JOIN public.dependencies d2 ON d2.id = pd2.dependency_id
-        WHERE oma.organization_id = p_org_id
-          AND oma.revoked_at IS NULL
-          AND oma.package_name = d2.name
-          AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d2.ecosystem)
-          AND (oma.version IS NULL OR oma.version = pd2.version)
-        ORDER BY (oma.version IS NULL) ASC, oma.added_at DESC
-        LIMIT 1
-      )
-    FROM public.organization_malicious_allowlist oma
+  WITH pmf_candidates AS (
+    SELECT DISTINCT ON (pmf.id)
+      pmf.id AS pmf_id,
+      oma.id AS allowlist_id,
+      pmf.dependency_id
+    FROM public.project_malicious_findings pmf
     INNER JOIN public.project_dependencies pd ON pd.id = pmf.project_dependency_id
     INNER JOIN public.dependencies d ON d.id = pd.dependency_id
-    WHERE pmf.organization_id = p_org_id
-      AND pmf.extraction_run_id = p_extraction_run_id
-      AND pmf.suppressed = false
-      AND oma.organization_id = p_org_id
+    INNER JOIN public.organization_malicious_allowlist oma
+      ON oma.organization_id = p_org_id
       AND oma.revoked_at IS NULL
       AND oma.package_name = d.name
       AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d.ecosystem)
       AND (oma.version IS NULL OR oma.version = pd.version)
-    RETURNING pmf.id, pmf.dependency_id
+    WHERE pmf.organization_id = p_org_id
+      AND pmf.extraction_run_id = p_extraction_run_id
+      AND pmf.suppressed = false
+    ORDER BY pmf.id, (oma.version IS NULL) ASC, oma.added_at DESC
   ),
-  suppressed_count AS (
-    SELECT count(*)::integer AS n,
-           array_agg(DISTINCT dependency_id) AS dep_ids
-    FROM allowlisted
+  applied AS (
+    UPDATE public.project_malicious_findings pmf
+    SET suppressed = true,
+        suppressed_at = now(),
+        suppressed_reason = 'allowlist:' || c.allowlist_id::text
+    FROM pmf_candidates c
+    WHERE pmf.id = c.pmf_id
+    RETURNING pmf.id, pmf.dependency_id
   )
-  SELECT n, dep_ids INTO v_suppressed, v_dep_ids FROM suppressed_count;
+  SELECT count(*)::integer, array_agg(DISTINCT dependency_id)
+  INTO v_suppressed, v_dep_ids
+  FROM applied;
 
   IF v_dep_ids IS NOT NULL AND array_length(v_dep_ids, 1) > 0 THEN
     PERFORM public.recompute_dependency_is_malicious(v_dep_ids);
@@ -4926,8 +4920,6 @@ DECLARE
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
-  v_iac_deleted INTEGER := 0;
-  v_container_deleted INTEGER := 0;
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -4997,20 +4989,6 @@ BEGIN
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_entry_points_deleted = ROW_COUNT;
 
-  DELETE FROM project_iac_findings
-  WHERE project_id = p_project_id
-    AND extraction_run_id IS NOT NULL
-    AND extraction_run_id <> v_active
-    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
-  GET DIAGNOSTICS v_iac_deleted = ROW_COUNT;
-
-  DELETE FROM project_container_findings
-  WHERE project_id = p_project_id
-    AND extraction_run_id IS NOT NULL
-    AND extraction_run_id <> v_active
-    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
-  GET DIAGNOSTICS v_container_deleted = ROW_COUNT;
-
   RETURN jsonb_build_object(
     'project_id', p_project_id,
     'active', v_active,
@@ -5022,9 +5000,7 @@ BEGIN
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
     'dep_functions_deleted', v_fns_deleted,
-    'entry_points_deleted', v_entry_points_deleted,
-    'iac_deleted', v_iac_deleted,
-    'container_deleted', v_container_deleted
+    'entry_points_deleted', v_entry_points_deleted
   );
 END;
 $function$
@@ -5048,8 +5024,6 @@ DECLARE
   v_fns_deleted INTEGER := 0;
   v_events_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
-  v_iac_deleted INTEGER := 0;
-  v_container_deleted INTEGER := 0;
   v_temp INTEGER;
   v_orphan_runs JSONB := '[]'::JSONB;
 BEGIN
@@ -5114,16 +5088,6 @@ BEGIN
     GET DIAGNOSTICS v_temp = ROW_COUNT;
     v_entry_points_deleted := v_entry_points_deleted + v_temp;
 
-    DELETE FROM project_iac_findings
-    WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT;
-    v_iac_deleted := v_iac_deleted + v_temp;
-
-    DELETE FROM project_container_findings
-    WHERE extraction_run_id = v_orphan.run_id;
-    GET DIAGNOSTICS v_temp = ROW_COUNT;
-    v_container_deleted := v_container_deleted + v_temp;
-
     DELETE FROM project_dependencies
     WHERE project_id = v_orphan.project_id
       AND last_seen_extraction_run_id = v_orphan.run_id;
@@ -5150,8 +5114,6 @@ BEGIN
     'fns_deleted', v_fns_deleted,
     'events_deleted', v_events_deleted,
     'entry_points_deleted', v_entry_points_deleted,
-    'iac_deleted', v_iac_deleted,
-    'container_deleted', v_container_deleted,
     'orphan_runs', v_orphan_runs
   );
 END;
@@ -5216,6 +5178,7 @@ AS $function$
       heartbeat_at = NULL,
       run_id      = gen_random_uuid()
   WHERE status = 'processing'
+    AND type = 'extraction'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
     AND attempts < max_attempts
   RETURNING *;
