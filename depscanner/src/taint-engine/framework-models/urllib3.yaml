@@ -1,0 +1,141 @@
+# urllib3 framework spec — Deptex cross-file taint engine.
+#
+# urllib3 is a sink-only library: HTTP requests flow attacker-controlled
+# URLs / headers / method names into PoolManager / HTTPConnectionPool /
+# HTTPSConnectionPool. Combined with flask/django/fastapi sources via the
+# engine's cross-spec stitching, this lights up:
+#
+#   - CVE-2020-26137  CRLF injection via attacker-controlled HTTP method
+#   - CVE-2023-43804  Cookie header leaked on cross-origin redirect
+#
+# All sinks are vuln_class=ssrf because that's the closest existing class
+# in `ALL_VULN_CLASSES` covering attacker-controlled outbound HTTP.
+
+framework: urllib3
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- PoolManager / HTTPSConnectionPool top-level entries ----------
+  - pattern: urllib3.PoolManager.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.PoolManager.request(method, url, ...)
+  - pattern: urllib3.PoolManager.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.PoolManager.urlopen(method, url, ...)
+  - pattern: urllib3.HTTPConnectionPool.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.HTTPConnectionPool.request
+  - pattern: urllib3.HTTPConnectionPool.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.HTTPConnectionPool.urlopen
+  - pattern: urllib3.HTTPSConnectionPool.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.HTTPSConnectionPool.request
+  - pattern: urllib3.HTTPSConnectionPool.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: urllib3.HTTPSConnectionPool.urlopen
+  - pattern: urllib3.connection_from_url(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.connection_from_url(url)
+  - pattern: urllib3.connection_from_host(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.connection_from_host(host, ...)
+  - pattern: urllib3.connection_from_context(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.connection_from_context
+
+  # ---------- Bare HTTPConnection / HTTPSConnection (CVE-2020-26137) ----------
+  - pattern: urllib3.HTTPConnection(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.HTTPConnection(host, ...) — host arg goes into the wire
+  - pattern: urllib3.HTTPSConnection(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.HTTPSConnection(host, ...)
+  - pattern: urllib3.connection.HTTPConnection(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.connection.HTTPConnection (qualified)
+  - pattern: urllib3.connection.HTTPSConnection(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.connection.HTTPSConnection (qualified)
+  - pattern: HTTPConnection.putrequest(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HTTPConnection.putrequest(method, url, ...) — CVE-2020-26137 CRLF in method
+  - pattern: HTTPConnection.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: HTTPConnection.request(method, url, ...)
+  - pattern: HTTPSConnection.putrequest(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HTTPSConnection.putrequest(method, url, ...)
+  - pattern: HTTPSConnection.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: HTTPSConnection.request(method, url, ...)
+
+  # ---------- Wildcard-receiver fallbacks for instance calls ----------
+  # urllib3 callers conventionally assign a PoolManager / HTTPConnection
+  # to a local variable (`http = urllib3.PoolManager()`, `conn = urllib3.
+  # HTTPConnection(...)`) and call methods on that variable. The engine's
+  # pattern matcher compares the textual callee, so these wildcard-receiver
+  # shapes are needed to fire on `http.request(...)` / `conn.putrequest(...)`.
+  # Method names below are sufficiently urllib3-specific (putrequest, urlopen,
+  # connection_from_url) that the noise risk is bounded; `*.request(*)` is
+  # the only generic name and overlaps with the existing flask.yaml SSRF
+  # surface, which is intentional cross-spec stitching.
+  - pattern: "*.request(*)"
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: <pool>.request(method, url, ...) — urllib3 PoolManager / HTTPConnectionPool
+  - pattern: "*.putrequest(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <conn>.putrequest(method, url, ...) — CVE-2020-26137 CRLF in method
+  - pattern: "*.urlopen(*)"
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: <pool>.urlopen(method, url, ...)
+  - pattern: "*.connection_from_url(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <pool>.connection_from_url(url)
+
+  # ---------- Retry config (CVE-2023-43804 — Retry.from_int strips
+  # nothing on redirect, so attacker-controlled redirect URL exfiltrates
+  # the Cookie header). The fix wires `remove_headers_on_redirect`; pre-fix
+  # the sink IS the request() call with attacker URL above, but we also
+  # accept urllib3.Retry constructor with attacker config as a sink so
+  # tainted Retry params surface too.
+  - pattern: urllib3.Retry(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.Retry(...) — redirect / header policy
+  - pattern: urllib3.util.Retry(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib3.util.Retry (qualified)
+
+sanitizers:
+  - pattern: urllib3.util.parse_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: urllib3.util.parse_url — yields a structured Url; not raw text
+  - pattern: parse_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: parse_url (bare import)

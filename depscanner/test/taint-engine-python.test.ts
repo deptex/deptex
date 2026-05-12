@@ -31,6 +31,7 @@ function assert(cond: unknown, msg: string): void {
 }
 
 const FIXTURES_ROOT = path.resolve(__dirname, 'taint-engine/fixtures/python-vulns');
+const FIXTURES_TOOLKIT_ROOT = path.resolve(__dirname, 'taint-engine/fixtures');
 const SPECS_ROOT = path.resolve(__dirname, '../src/taint-engine/framework-models');
 
 async function loadSpecsForFramework(framework: 'django' | 'flask' | 'fastapi'): Promise<FrameworkSpec[]> {
@@ -38,11 +39,31 @@ async function loadSpecsForFramework(framework: 'django' | 'flask' | 'fastapi'):
   return [loadSpec(specPath)];
 }
 
+async function loadSpecsByName(specs: string[]): Promise<FrameworkSpec[]> {
+  return specs.map((s) => loadSpec(path.join(SPECS_ROOT, `${s}.yaml`)));
+}
+
 interface FixtureCase {
   name: string;
   vulnDir: string;
   safeDir: string;
   framework: 'django' | 'flask' | 'fastapi';
+  expectedVulnClass: VulnClass;
+}
+
+/**
+ * Sink-only library fixture cases — the vuln+safe pair lives under
+ * `test/taint-engine/fixtures/python-<lib>/{vulnerable,safe}/` and exercises
+ * a flask source flowing into a sink declared by the library's own spec
+ * (urllib3.yaml, requests.yaml, jinja2.yaml, pillow.yaml). We load BOTH
+ * flask.yaml (for the source) and the library spec (for the sink) per
+ * case so cross-spec stitching wires them together — same shape the
+ * production runner uses at extraction time.
+ */
+interface SinkOnlyFixtureCase {
+  name: string;
+  rootDir: string;
+  specs: string[];
   expectedVulnClass: VulnClass;
 }
 
@@ -105,6 +126,15 @@ const CASES: FixtureCase[] = [
   },
 ];
 
+const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
+  {
+    name: 'Flask -> urllib3 SSRF (CVE-2020-26137 / CVE-2023-43804 shape)',
+    rootDir: 'python-urllib3',
+    specs: ['flask', 'urllib3'],
+    expectedVulnClass: 'ssrf',
+  },
+];
+
 function summarizeFlows(flows: Flow[]): string {
   if (flows.length === 0) return '(none)';
   return flows
@@ -142,10 +172,41 @@ async function runFixture(c: FixtureCase): Promise<void> {
   }
 }
 
+async function runSinkOnlyFixture(c: SinkOnlyFixtureCase): Promise<void> {
+  console.log(`\n[fixture] ${c.name}`);
+  const specs = await loadSpecsByName(c.specs);
+
+  const vulnRoot = path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'vulnerable');
+  const vulnResult = await propagatePython({ rootDir: vulnRoot, specs });
+  const vulnFlowsOfClass = vulnResult.flows.filter((f) => f.vuln_class === c.expectedVulnClass);
+  assert(
+    vulnFlowsOfClass.length >= 1,
+    `${c.rootDir}/vulnerable: at least one ${c.expectedVulnClass} flow (got ${vulnFlowsOfClass.length}; total ${vulnResult.flows.length})`,
+  );
+  if (vulnFlowsOfClass.length === 0) {
+    console.error(`      flows seen: ${summarizeFlows(vulnResult.flows)}`);
+    console.error(`      stats: ${JSON.stringify(vulnResult.stats)}`);
+  }
+
+  const safeRoot = path.join(FIXTURES_TOOLKIT_ROOT, c.rootDir, 'safe');
+  const safeResult = await propagatePython({ rootDir: safeRoot, specs });
+  const safeFlowsOfClass = safeResult.flows.filter((f) => f.vuln_class === c.expectedVulnClass);
+  assert(
+    safeFlowsOfClass.length === 0,
+    `${c.rootDir}/safe: zero ${c.expectedVulnClass} flows (got ${safeFlowsOfClass.length})`,
+  );
+  if (safeFlowsOfClass.length > 0) {
+    console.error(`      flows seen: ${summarizeFlows(safeFlowsOfClass)}`);
+  }
+}
+
 async function main(): Promise<void> {
   console.log('=== taint-engine python tests ===');
   for (const c of CASES) {
     await runFixture(c);
+  }
+  for (const c of SINK_ONLY_CASES) {
+    await runSinkOnlyFixture(c);
   }
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
