@@ -128,3 +128,24 @@ as Phase E / Phase F work.
 - `depscanner/test/taint-engine-java.test.ts` (one entry appended)
 - `depscanner/scripts/probe-java-fixtures.ts` (new diagnostic tool)
 - `depscanner/scripts/probe-xmlsec-ir.ts` (new diagnostic tool)
+
+## Wave F triage addendum (2026-05-12)
+
+**CVE-2022-22965 (Spring4Shell)** — diagnosis confirmed via direct probe.
+The v_base AI fixture is `BeanWrapperImpl.setPropertyValue("password",
+password)` with **string-literal property-name arguments** (no path attack
+content). Even modeling `*.setPropertyValue(*)` as a sink with property-path
+matching (the right architecture per a synthetic probe) would not flip the
+existing fixture, because its literal arg-0 strings (`"name"`, `"password"`)
+never match the `class.classLoader.*` prefix that defines the real
+vulnerability. See `engine-property-path-matching.md` for the engine-extension
+design (Option C, ~175 LOC, gated on FP audit) and the prompt-side fixture
+re-roll needed to materialise a flippable fixture.
+
+**CVE-2017-12626 (apache-poi)** — diagnosis confirmed. The v_base AI fixture
+is `new HWPFDocument(stream) → while(true) { mapper.nextUnclaimed(); }` — an
+infinite-loop / allocation DoS, not a taint flow. The earlier
+`out_of_memory` label slightly under-describes it (the AI generated a
+literal infinite loop rather than the original CVE's quadratic allocation),
+but the conclusion is identical: this is intentionally OOS for the taint
+engine. No spec change unblocks it.
