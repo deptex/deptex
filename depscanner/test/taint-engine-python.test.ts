@@ -139,6 +139,12 @@ const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
     specs: ['flask', 'requests'],
     expectedVulnClass: 'ssrf',
   },
+  {
+    name: 'Flask -> jinja2 SSTI (CVE-2019-10906 / CVE-2024-22195 shape)',
+    rootDir: 'python-jinja2',
+    specs: ['flask', 'jinja2'],
+    expectedVulnClass: 'code_injection',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
