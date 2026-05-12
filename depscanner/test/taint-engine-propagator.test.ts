@@ -389,6 +389,28 @@ async function testJsonwebtokenSanitizerAbsence() {
   assert(safeFindings.length === 0, `safe fixture surfaces 0 auth_bypass sanitizer-absence findings (got ${safeFindings.length})`);
 }
 
+async function testFollowRedirectsSanitizerAbsence() {
+  console.log('\n[test] (j) Phase F4 sanitizer-absence — follow-redirects http.request without beforeRedirect (CVE-2024-28849 shape)');
+  const { detectSanitizerAbsence: detect, extractCallSitesFromIr: extract } = await import('../src/taint-engine/non-taint-detector');
+  const { loadSpec } = await import('../src/taint-engine');
+  const specPath = path.join(__dirname, '..', 'src', 'taint-engine', 'framework-models', 'follow-redirects.yaml');
+  const spec = loadSpec(specPath);
+
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'follow-redirects-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'ssrf-vuln');
+  const safeRoot = path.join(fixturesRoot, 'ssrf-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [spec] });
+  const vulnCallsites = vulnResult.irFunctions ? extract(vulnResult.irFunctions, 'js') : [];
+  const vulnFindings = detect(spec, vulnCallsites).filter((f) => f.vuln_class === 'ssrf');
+  assert(vulnFindings.length >= 1, `vuln fixture surfaces ≥1 ssrf sanitizer-absence finding (got ${vulnFindings.length})`);
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [spec] });
+  const safeCallsites = safeResult.irFunctions ? extract(safeResult.irFunctions, 'js') : [];
+  const safeFindings = detect(spec, safeCallsites).filter((f) => f.vuln_class === 'ssrf');
+  assert(safeFindings.length === 0, `safe fixture surfaces 0 ssrf sanitizer-absence findings (got ${safeFindings.length})`);
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -400,6 +422,7 @@ async function main() {
   await testComputedKeySource();
   await testReceiverTaintPassThrough();
   await testJsonwebtokenSanitizerAbsence();
+  await testFollowRedirectsSanitizerAbsence();
   await testSpecLoader();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
