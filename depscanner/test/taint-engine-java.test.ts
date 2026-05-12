@@ -37,6 +37,7 @@ function loadJavaSpecs(): FrameworkSpec[] {
     loadSpec(path.join(SPECS_ROOT, 'java-stdlib.yaml')),
     loadSpec(path.join(SPECS_ROOT, 'jackson.yaml')),
     loadSpec(path.join(SPECS_ROOT, 'log4j.yaml')),
+    loadSpec(path.join(SPECS_ROOT, 'commons-text.yaml')),
   ];
   return cachedSpecs;
 }
@@ -52,6 +53,7 @@ const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'spring-path-traversal', expectVuln: 'path_traversal' },
   { name: 'jackson-deserialization', expectVuln: 'deserialization' },
   { name: 'log4j-code-injection', expectVuln: 'code_injection' },
+  { name: 'commons-text-code-injection', expectVuln: 'code_injection' },
 ];
 
 async function runFixture(fixtureDir: string) {

@@ -138,11 +138,20 @@ sinks:
     argument_indices: []
     description: Log4j 2 ParameterizedMessage constructor — any tainted argument treated as JNDI substitution
 
-sanitizers:
-  # The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
-  # or upgrade past 2.17.1 — both are config-level, not API-level, so the
-  # engine cannot model them as sanitizers. The only call-shaped sanitizer
-  # we can express is explicit lookup stripping prior to logging.
-  - pattern: "StringSubstitutor.replace(*)"
-    vuln_classes: [code_injection]
-    description: Apache Commons StringSubstitutor.replace — pre-resolves lookups (defangs ${jndi:})
+# The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
+# or upgrade past 2.17.1 — both are config-level, not API-level, so the
+# engine cannot model them as sanitizers.
+#
+# NOTE: an earlier wave modelled `StringSubstitutor.replace(*)` as a log4j
+# sanitizer on the theory that pre-resolving lookups defangs `${jndi:...}`
+# before the logger sees it. That entry was removed when commons-text.yaml
+# landed because (a) the same call is itself the Text4Shell
+# (CVE-2022-42889) sink on commons-text 1.5–1.9, where the default lookup
+# set re-introduces a code-injection primitive via
+# `${script:javascript:...}`, and (b) the matchSanitizerPattern check in
+# propagate-core runs before matchSinkPattern, so the sanitizer entry was
+# suppressing the Text4Shell sink. Treating `StringSubstitutor.replace` as
+# a sanitizer for log4j only would require per-spec gating the engine
+# doesn't model today; the safer default is to drop the log4j entry and
+# let commons-text.yaml own the call shape.
+sanitizers: []

@@ -1,0 +1,122 @@
+# Apache Commons Text framework spec — Deptex cross-file taint engine.
+#
+# Targets "Text4Shell" (CVE-2022-42889): commons-text 1.5–1.9 evaluates
+# `${script:javascript:...}`, `${dns:...}`, and `${url:...}` lookup
+# expansions inside `StringSubstitutor.replace(...)` (and the indirect
+# variants resolved via `StringLookupFactory`). The default lookup set in
+# those versions includes a Nashorn `script` lookup that executes
+# attacker-controlled JavaScript — so any tainted bytes flowing into a
+# `StringSubstitutor.replace(...)` argument are a remote-code-execution
+# primitive, regardless of whether the surrounding string literal itself
+# contains the `${script:...}` marker.
+#
+# vuln_class mapping rationale.
+#   `code_injection` — the runtime interprets the substituted bytes as a
+#   Nashorn script expression. This mirrors the Log4Shell mapping in
+#   `log4j.yaml`: same "tainted-data-as-code" semantics, different
+#   substitution engine. Adding a dedicated `text4shell` class would
+#   require touching the closed enum in spec.ts, the backend mirror, and
+#   the frontend mirror; the `code_injection` bucket already exists for
+#   exactly this shape.
+#
+# --------------------------------------------------------------------------
+# "Any tainted argument is a sink" stance.
+# --------------------------------------------------------------------------
+# `StringSubstitutor.replace(...)` has multiple overloads:
+#
+#   - replace(String source)
+#   - replace(Object source)
+#   - replace(char[] source, int offset, int length)
+#   - replace(CharSequence source, int offset, int length)
+#   - replace(String source, String variableName, Object variableValue)
+#
+# The Qwen-generated CVE-2022-42889 fixture (see
+# `bench-iterate/v_base/2026-05-12T14-23-03/report.json`) uses the
+# 3-arg variant with the tainted user bytes at index 2. Hard-coding
+# `argument_indices: [0]` would miss that shape. Following the Wave 10
+# precedent set by log4j.yaml, we declare `argument_indices: []` —
+# ANY tainted argument fires the sink. The fp-filter LLM stage gates
+# false positives at scan time (looks for `${script:`, `${dns:`,
+# `${url:`, or absence of `setEnableSubstitutionInVariables(false)`).
+#
+# Static-style + instance-style coverage.
+#   - `StringSubstitutor.replace(*)` is the canonical static-style call
+#     site (e.g. `StringSubstitutor.replace(input)`). The propagator's
+#     matchesCallPattern (propagate-core.ts) also matches by last
+#     call-segment, so a chained instance form like
+#     `new StringSubstitutor(...).replace(input)` whose callee text ends
+#     in `.replace` resolves to this entry as well. Documented FP risk
+#     vs `String.replace(...)` accepted — fp-filter gates at scan time.
+#   - The `StringLookupFactory.*StringLookup(*)` family covers PoCs that
+#     pull a lookup helper directly and call it on tainted bytes.
+#
+# Sources are NOT redeclared here — Spring's `@RequestBody` /
+# `@RequestParam`, JAX-RS / Quarkus / Micronaut parameter annotations,
+# and `HttpServletRequest.getParameter*` are all pre-tainted by the
+# per-framework specs. The cross-spec load order means a Text4Shell flow
+# from `@RequestBody String input` into `StringSubstitutor.replace(...)`
+# resolves with no additional source wiring.
+#
+# Sanitizers.
+#   commons-text 1.10+ disables the dangerous lookups by default. The
+#   API-level equivalent is `StringSubstitutor.setEnableSubstitutionInVariables(false)`
+#   plus a constructor that takes only a curated `StringLookup` map. We
+#   model the explicit defang call as a sanitizer entry; the config-level
+#   "upgraded to 1.10" fix is version-gated, not API-gated, so the engine
+#   cannot express it as a sanitizer (same caveat as log4j 2.16+).
+
+framework: commons-text
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # Direct `StringSubstitutor.replace(...)` — static-style receiver. ANY
+  # tainted argument fires (covers all overloads, including the 3-arg
+  # `replace(source, variableName, variableValue)` shape the Qwen
+  # CVE-2022-42889 fixture emits).
+  - pattern: "StringSubstitutor.replace(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringSubstitutor.replace — any tainted argument treated as a ${script:...} substitution sink (Text4Shell, CVE-2022-42889; FP risk accepted, fp-filter gates)
+
+  # `StringSubstitutor.replaceIn(...)` — in-place mutation variant. Same
+  # Nashorn lookup surface as `replace`.
+  - pattern: "StringSubstitutor.replaceIn(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringSubstitutor.replaceIn — in-place variant of replace; same Text4Shell surface
+
+  # `StringLookupFactory.*StringLookup(*)` family. Methods like
+  # `scriptStringLookup()` are no-arg factories that return a StringLookup
+  # the PoC then calls. But the `interpolatorStringLookup(map)` overload
+  # accepts a map of names→lookups and so does take a tainted-shaped
+  # argument. Listing the common factory accessors keeps the spec
+  # explicit; ANY tainted arg fires (mostly relevant for the
+  # `interpolatorStringLookup` overload).
+  - pattern: "StringLookupFactory.scriptStringLookup(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringLookupFactory.scriptStringLookup — exposes the Nashorn script lookup directly
+  - pattern: "StringLookupFactory.urlStringLookup(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringLookupFactory.urlStringLookup — exposes the URL fetch lookup directly
+  - pattern: "StringLookupFactory.dnsStringLookup(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringLookupFactory.dnsStringLookup — exposes the DNS lookup directly
+  - pattern: "StringLookupFactory.interpolatorStringLookup(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Apache Commons Text StringLookupFactory.interpolatorStringLookup — composite lookup including script/dns/url
+
+sanitizers:
+  # Explicit defang: `setEnableSubstitutionInVariables(false)` disables
+  # the recursive `${...}` expansion entirely. commons-text 1.10+ ships
+  # this as the default but pre-1.10 apps that explicitly call it are
+  # safe.
+  - pattern: "*.setEnableSubstitutionInVariables(*)"
+    vuln_classes: [code_injection]
+    description: Apache Commons Text StringSubstitutor.setEnableSubstitutionInVariables(false) — disables ${...} expansion
