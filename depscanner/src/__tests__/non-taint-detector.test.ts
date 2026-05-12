@@ -111,6 +111,32 @@ describe('detectSanitizerAbsence', () => {
     expect(findings[0].trigger.observed_literal).toBe('False');
   });
 
+  it('extracts kwargNames from a JS object-literal argText (jwt.verify options)', () => {
+    // Integration shape — the JS IR doesn't model kwargs natively; the
+    // detector parses inline option-object props from argTexts via
+    // extractCallSitesFromIr's argText scanner. Synthesizing the Step
+    // shape here keeps the assertion self-contained.
+    const { extractCallSitesFromIr } = jest.requireActual('../taint-engine/non-taint-detector') as typeof import('../taint-engine/non-taint-detector');
+    const ir: import('../taint-engine/ir').IrFunction = {
+      id: 'fn1' as never,
+      params: [],
+      steps: [
+        {
+          kind: 'call',
+          target: null,
+          callee: { kind: 'external', calleeText: 'jwt.verify' },
+          args: [null, null, null],
+          argTexts: ['token', 'key', "{ algorithms: ['HS256'] }"],
+          loc: { filePath: 'src/server.ts', line: 5, column: 2 },
+        },
+      ],
+    };
+    const sites = extractCallSitesFromIr([ir], 'js');
+    expect(sites).toHaveLength(1);
+    expect(sites[0].calleeText).toBe('jwt.verify');
+    expect(sites[0].kwargNames).toContain('algorithms');
+  });
+
   it('suppresses the finding when the required kwarg is present', () => {
     const spec = makeSpec([
       {

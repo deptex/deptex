@@ -16,6 +16,10 @@ import * as path from 'path';
 import { loadSpec } from '../src/taint-engine';
 import type { FrameworkSpec, VulnClass, Flow } from '../src/taint-engine';
 import { propagatePython } from '../src/taint-engine/python/propagate';
+import {
+  detectSanitizerAbsence,
+  extractCallSitesFromIr,
+} from '../src/taint-engine/non-taint-detector';
 
 let failures = 0;
 let passes = 0;
@@ -244,6 +248,75 @@ async function runSinkOnlyFixture(c: SinkOnlyFixtureCase): Promise<void> {
   }
 }
 
+/**
+ * Phase F4 non-taint detector — sanitizer-absence fixture cases.
+ *
+ * These cases exercise the `required_arguments` contracts on sinks declared
+ * in flask.yaml / requests.yaml. Unlike the taint cases above, the
+ * assertion is on `detectSanitizerAbsence` findings, NOT on `result.flows`.
+ * The vuln fixture must surface ≥ 1 finding for the expected vuln_class;
+ * the safe fixture must surface 0.
+ */
+interface NonTaintFixtureCase {
+  name: string;
+  vulnDir: string;
+  safeDir: string;
+  specs: string[];
+  expectedVulnClass: VulnClass;
+}
+
+const NON_TAINT_CASES: NonTaintFixtureCase[] = [
+  {
+    name: 'Sanitizer-absence — requests.get(verify=False) (CVE-2024-35195 shape)',
+    vulnDir: 'sanitizer-absence-requests-verify-vuln',
+    safeDir: 'sanitizer-absence-requests-verify-safe',
+    specs: ['flask', 'requests'],
+    expectedVulnClass: 'ssrf',
+  },
+  {
+    name: 'Sanitizer-absence — Flask response.set_cookie without secure/httponly (CVE-2023-30861 shape)',
+    vulnDir: 'sanitizer-absence-flask-cookie-vuln',
+    safeDir: 'sanitizer-absence-flask-cookie-safe',
+    specs: ['flask'],
+    expectedVulnClass: 'weak_crypto',
+  },
+];
+
+async function runNonTaintFixture(c: NonTaintFixtureCase): Promise<void> {
+  console.log(`\n[fixture] ${c.name}`);
+  const specs = await loadSpecsByName(c.specs);
+
+  const vulnRoot = path.join(FIXTURES_ROOT, c.vulnDir);
+  const vulnResult = await propagatePython({ rootDir: vulnRoot, specs });
+  const vulnCallsites = vulnResult.irFunctions
+    ? extractCallSitesFromIr(vulnResult.irFunctions, 'python')
+    : [];
+  let vulnFindings = 0;
+  for (const spec of specs) {
+    const findings = detectSanitizerAbsence(spec, vulnCallsites);
+    vulnFindings += findings.filter((f) => f.vuln_class === c.expectedVulnClass).length;
+  }
+  assert(
+    vulnFindings >= 1,
+    `${c.vulnDir}: at least one ${c.expectedVulnClass} sanitizer-absence finding (got ${vulnFindings})`,
+  );
+
+  const safeRoot = path.join(FIXTURES_ROOT, c.safeDir);
+  const safeResult = await propagatePython({ rootDir: safeRoot, specs });
+  const safeCallsites = safeResult.irFunctions
+    ? extractCallSitesFromIr(safeResult.irFunctions, 'python')
+    : [];
+  let safeFindings = 0;
+  for (const spec of specs) {
+    const findings = detectSanitizerAbsence(spec, safeCallsites);
+    safeFindings += findings.filter((f) => f.vuln_class === c.expectedVulnClass).length;
+  }
+  assert(
+    safeFindings === 0,
+    `${c.safeDir}: zero ${c.expectedVulnClass} sanitizer-absence findings (got ${safeFindings})`,
+  );
+}
+
 async function main(): Promise<void> {
   console.log('=== taint-engine python tests ===');
   for (const c of CASES) {
@@ -251,6 +324,9 @@ async function main(): Promise<void> {
   }
   for (const c of SINK_ONLY_CASES) {
     await runSinkOnlyFixture(c);
+  }
+  for (const c of NON_TAINT_CASES) {
+    await runNonTaintFixture(c);
   }
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);

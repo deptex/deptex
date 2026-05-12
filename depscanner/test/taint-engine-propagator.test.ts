@@ -363,6 +363,32 @@ async function testReceiverTaintPassThrough() {
   assert(safeMatching.length === 0, `safe fixture emits zero command_injection flows (got ${safeMatching.length})`);
 }
 
+async function testJsonwebtokenSanitizerAbsence() {
+  console.log('\n[test] (i) Phase F4 sanitizer-absence — jsonwebtoken jwt.verify without algorithms (CVE-2022-23539 shape)');
+  // Loads jsonwebtoken.yaml (which carries the required_arguments contract)
+  // and runs propagate() on the disk fixture. Asserts via the non-taint
+  // detector on irFunctions, not via flows — `jwt.verify` is a non-taint
+  // sink (argument_indices: []).
+  const { detectSanitizerAbsence: detect, extractCallSitesFromIr: extract } = await import('../src/taint-engine/non-taint-detector');
+  const { loadSpec } = await import('../src/taint-engine');
+  const specPath = path.join(__dirname, '..', 'src', 'taint-engine', 'framework-models', 'jsonwebtoken.yaml');
+  const spec = loadSpec(specPath);
+
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'jsonwebtoken-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'auth-bypass-vuln');
+  const safeRoot = path.join(fixturesRoot, 'auth-bypass-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [spec] });
+  const vulnCallsites = vulnResult.irFunctions ? extract(vulnResult.irFunctions, 'js') : [];
+  const vulnFindings = detect(spec, vulnCallsites).filter((f) => f.vuln_class === 'auth_bypass');
+  assert(vulnFindings.length >= 1, `vuln fixture surfaces ≥1 auth_bypass sanitizer-absence finding (got ${vulnFindings.length})`);
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [spec] });
+  const safeCallsites = safeResult.irFunctions ? extract(safeResult.irFunctions, 'js') : [];
+  const safeFindings = detect(spec, safeCallsites).filter((f) => f.vuln_class === 'auth_bypass');
+  assert(safeFindings.length === 0, `safe fixture surfaces 0 auth_bypass sanitizer-absence findings (got ${safeFindings.length})`);
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -373,6 +399,7 @@ async function main() {
   await testMethodChainSink();
   await testComputedKeySource();
   await testReceiverTaintPassThrough();
+  await testJsonwebtokenSanitizerAbsence();
   await testSpecLoader();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);

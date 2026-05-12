@@ -23,9 +23,18 @@ sources: []
 
 sinks:
   # CVE-2022-23539 — jwt.verify without an explicit algorithms allowlist.
+  #
+  # argument_indices: [99] is a sentinel out-of-bounds index — the propagator
+  # interprets [] as "any tainted arg fires", which would spuriously emit a
+  # flow on `jwt.verify(req.headers.token, secret)` even when the call is
+  # hardened with an algorithms allowlist. The non-taint detector regime
+  # (via `required_arguments`) is the only consumer here, so the taint
+  # contract should never fire. A future engine change can recognise
+  # "non-taint-only" sinks structurally; until then the sentinel keeps the
+  # two regimes from cross-talking.
   - pattern: jwt.verify(*)
     vuln_class: auth_bypass
-    argument_indices: []
+    argument_indices: [99]
     description: jwt.verify without an explicit algorithms allowlist (CVE-2022-23539 shape)
     required_arguments:
       - name: algorithms
