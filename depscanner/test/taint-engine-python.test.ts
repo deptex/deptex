@@ -133,6 +133,12 @@ const SINK_ONLY_CASES: SinkOnlyFixtureCase[] = [
     specs: ['flask', 'urllib3'],
     expectedVulnClass: 'ssrf',
   },
+  {
+    name: 'Flask -> requests SSRF (CVE-2023-32681 / CVE-2024-35195 shape)',
+    rootDir: 'python-requests',
+    specs: ['flask', 'requests'],
+    expectedVulnClass: 'ssrf',
+  },
 ];
 
 function summarizeFlows(flows: Flow[]): string {
