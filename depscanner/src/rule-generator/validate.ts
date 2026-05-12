@@ -228,7 +228,23 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   // language so cross-language patterns don't leak.
   const frameworkSpecs = loadFrameworkSpecsForLanguage(args.frameworkModelsDir ?? DEFAULT_FRAMEWORK_MODELS_DIR, language);
   const allSpecs: FrameworkSpec[] = [...frameworkSpecs, engineSpec];
-  const cveSinkPatterns = new Set(engineSpec.sinks.map((s) => s.pattern));
+  // Accepted sink patterns for Gate 2 = the AI rule's own sinks UNION the
+  // bundled framework_model sinks whose vuln_class matches one the AI
+  // declared. Rationale: a CVE for a library that the bundled framework
+  // models already cover (Log4j, Jackson, etc.) doesn't require the AI to
+  // re-name the sink — its contribution is the OSV→sink-shape mapping,
+  // and confirming on a bundled sink of the SAME vuln_class is correct
+  // semantics. The safe-fixture pass uses the same widened set, so the
+  // `pre>0 ∧ post=0` asymmetry that proves the rule discriminates is
+  // preserved. Gate 3 (patch round-trip) remains the harder check that
+  // the rule fires on real upstream-pre-patch code.
+  const aiVulnClasses = new Set(engineSpec.sinks.map((s) => s.vuln_class));
+  const cveSinkPatterns = new Set<string>(engineSpec.sinks.map((s) => s.pattern));
+  for (const spec of frameworkSpecs) {
+    for (const sink of spec.sinks) {
+      if (aiVulnClasses.has(sink.vuln_class)) cveSinkPatterns.add(sink.pattern);
+    }
+  }
 
   // --- Gate 2: fixture round-trip ---
   const ext = sourceExtensionForLanguage(language);
