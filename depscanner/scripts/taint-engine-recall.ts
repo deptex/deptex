@@ -85,6 +85,8 @@ const VULN_CLASS_FROM_SLUG: Record<string, VulnClass> = {
   'open-redirect': 'open_redirect',
   'log-injection': 'log_injection',
   'code-injection': 'code_injection',
+  'weak-crypto': 'weak_crypto',
+  'auth-bypass': 'auth_bypass',
 };
 
 interface ParsedArgs {
