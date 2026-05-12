@@ -309,7 +309,33 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             // unreachable because they don't seed target before the call.
             // Leave target's existing trace in place.
           } else {
-            local.delete(step.target);
+            // Receiver-taint pass-through: when an unresolved/external call
+            // takes the shape `recv.method(...)` (or `recv::method`, etc.)
+            // and the receiver is a currently-tainted local, propagate that
+            // taint to the call's return. Covers common pass-through chains
+            // like `keyData.getBytes()`, `body.toString()`, `req.getReader()`
+            // — none of which match a positional arg but all of which carry
+            // the receiver's taint through to the result.
+            //
+            // Scoping (per the maven-recall-diagnosis 2026-05-12 design):
+            //   - Only reached AFTER sink/sanitizer/source matches above
+            //     have returned/break'd, so we never re-taint past a
+            //     sanitizer or shadow a sink hit.
+            //   - receiverRoot() returns null for literals / non-identifier
+            //     receivers (`"foo".toString()` won't propagate; nothing to
+            //     propagate from).
+            //   - Receiver must be an existing tainted local — `String.valueOf(x)`
+            //     where `String` is a class name is a no-op.
+            const recv = receiverRoot(step.callee.calleeText);
+            const recvTrace = recv ? local.get(recv) : undefined;
+            if (recvTrace) {
+              local.set(
+                step.target,
+                extendPath(recvTrace, hopFromStep(step, 'call'), maxPathLength),
+              );
+            } else {
+              local.delete(step.target);
+            }
           }
         }
         break;

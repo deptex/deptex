@@ -56,6 +56,12 @@ const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'log4j-code-injection', expectVuln: 'code_injection' },
   { name: 'commons-text-code-injection', expectVuln: 'code_injection' },
   { name: 'xmlsec-deserialization', expectVuln: 'deserialization' },
+  // Exercises propagate-core.ts receiver-taint pass-through rule (2026-05-12):
+  // `@RequestBody String keyData` → `keyData.toString().getBytes()` → `signature.sign(bytes)`.
+  // Before the rule, the 0-arg `.toString()` / `.getBytes()` hops dropped taint
+  // because the propagator only considered positional args. With the rule the
+  // chain carries the receiver's taint through to the xmlsec sink.
+  { name: 'receiver-taint-propagation', expectVuln: 'deserialization' },
 ];
 
 async function runFixture(fixtureDir: string) {

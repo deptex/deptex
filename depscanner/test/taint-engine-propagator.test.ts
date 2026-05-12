@@ -339,6 +339,30 @@ async function testComputedKeySource() {
   fs.rmSync(safeRoot, { recursive: true, force: true });
 }
 
+async function testReceiverTaintPassThrough() {
+  console.log('\n[test] (h) receiver-taint propagation through 0-arg pass-through calls');
+  // Exercises propagate-core.ts receiver-taint pass-through rule:
+  // `req.body.cmd.toString().trim()` — both `.toString()` and `.trim()`
+  // have zero positional args. Before the rule the temps lost taint; with
+  // it the receiver's taint flows through each hop to fire the sink.
+  // Fixture lives on disk at js-vulns/receiver-taint-{vuln,safe}/ so it's
+  // independently runnable and visible to future validate-script extensions.
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'js-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'receiver-taint-vuln');
+  const safeRoot = path.join(fixturesRoot, 'receiver-taint-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [EXPRESS_LIKE_SPEC] });
+  const matching = vulnResult.flows.filter((f) => f.vuln_class === 'command_injection');
+  assert(matching.length >= 1, `vuln fixture emits at least one command_injection flow (got ${matching.length}; total flows=${vulnResult.flows.length})`);
+  const f = matching[0];
+  assert(f?.entry_point_pattern === 'req.body.*', 'vuln flow source pattern = req.body.*');
+  assert(f?.sink_pattern.startsWith('child_process.exec'), 'vuln flow sink pattern = child_process.exec');
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  const safeMatching = safeResult.flows.filter((f) => f.vuln_class === 'command_injection');
+  assert(safeMatching.length === 0, `safe fixture emits zero command_injection flows (got ${safeMatching.length})`);
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -348,6 +372,7 @@ async function main() {
   await testDeepChain();
   await testMethodChainSink();
   await testComputedKeySource();
+  await testReceiverTaintPassThrough();
   await testSpecLoader();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
