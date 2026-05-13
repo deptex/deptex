@@ -13,7 +13,8 @@ Updated after each commit.
 |---|---|---|
 | Plan prep | `bf4066a` | Plan + review + path-to-90 docs |
 | 1.2 diag surface | `625fad4` | TaintTrace serialiser + DropReason vocabulary + diagSink hook + NDJSON writer + 6 drop sites instrumented + preflight stage 12 |
-| **2a JS const resolver** | `34359bf` | localOrigins map on IrFunction (populated by JS lowerer for object/array literal inits) + extractCallSitesFromIr resolves bare-identifier argTexts through it. 20-case test (lowerer capture + extractor resolution + end-to-end F4 jwt.verify match/no-match on hoisted shape). Preflight grows to 17 stages. |
+| **2a JS const resolver** | `34359bf` | localOrigins map on IrFunction + extractCallSitesFromIr resolves bare-identifier argTexts. 20-case test (lowerer capture + extractor resolution + end-to-end F4 jwt.verify match/no-match on hoisted shape). |
+| **1.3a customer-app fixtures** | `305f659` | 5 multi-file vendored fixtures (npm/pypi/maven/golang/gem) with vuln/safe sides exercising bundled framework_models. Runner asserts vuln ≥1 flow + safe 0 flows. 5/5 pass on tip 7beab0e in 1.9s. baseline-7beab0e.json committed. Preflight grows to 18 stages. |
 
 Pushed branch `feat/reachability-90-percent` to origin.
 
@@ -21,8 +22,8 @@ Pushed branch `feat/reachability-90-percent` to origin.
 
 | Phase | Status | Notes |
 |---|---|---|
-| 1.0 variance probe | running (bg task `boadfd32b`) | 3 sequential 88-CVE iterates on tip `bf4066a` (engine code unchanged from `413ef48`). Started 2026-05-13T14:49Z. ETA 90-120 min. Trial 1 ~14/88 CVEs in at last check. Output at `depscanner/bench-iterate/variance-probe/trial-{1,2,3}/`. |
-| 1.3 customer-app fixtures | running (subagent `a9f7cb2d917fde2e7`) | Authoring 5 fixtures (one per eco) + runner + preflight wire-in + baseline. Will commit independently. |
+| 1.0 variance probe | running (bg task `boadfd32b`) | 3 sequential 88-CVE iterates on tip `bf4066a` (engine code unchanged from `413ef48`). Trial 1 past CVE 30/88 at last check. ETA ~2-3 hours from launch. Output at `depscanner/bench-iterate/variance-probe/trial-{1,2,3}/report.json`. |
+| 1.3 customer-app fixtures | **DONE** (commit `305f659`) | 5/5 fixtures pass. Subagent reported all 18 preflight stages green. |
 
 ## Up next (autonomous sequence, post-resume)
 
