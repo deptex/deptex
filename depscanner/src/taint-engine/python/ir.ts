@@ -533,8 +533,19 @@ function walkExpressionAsAssign(
         const pair = expr.namedChild(i);
         if (!pair) continue;
         if (pair.type === 'pair') {
+          // Walk BOTH key and value into target — keys can carry taint
+          // through f-string interpolation, e.g.
+          //   data = {f'p{request.args.get("x")}': 'baz'}
+          // which then flows into kwarg sinks like `template.render(data=data)`.
+          // Matches the jinja2-22195 / jinja2-34064 shape in the pypi corpus.
+          const key = pair.childForFieldName('key');
+          if (key) walkExpressionAsAssign(key, target, steps, ctx);
           const value = pair.childForFieldName('value');
           if (value) walkExpressionAsAssign(value, target, steps, ctx);
+        } else if (pair.type === 'dictionary_splat') {
+          // `{**other}` — propagate taint from the splatted dict.
+          const inner = pair.namedChild(0);
+          if (inner) walkExpressionAsAssign(inner, target, steps, ctx);
         }
       }
       return;

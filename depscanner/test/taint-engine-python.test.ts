@@ -109,6 +109,19 @@ const CASES: FixtureCase[] = [
     expectedVulnClass: 'path_traversal',
   },
   {
+    // Phase 2b — Python dict-literal-key taint propagation. Models jinja2
+    // CVE-2024-22195 / CVE-2024-34064 shape: a tainted source flows into a
+    // dict literal as the KEY, not the value. Before the python/ir.ts
+    // dict-key walk fix, only pair.value was inspected so `data` remained
+    // untainted despite the tainted key. The safe variant verifies that a
+    // constant-key dict still emits zero flows.
+    name: 'Flask dict-key taint propagation',
+    vulnDir: 'flask-dict-key-taint-vuln',
+    safeDir: 'flask-dict-key-taint-safe',
+    framework: 'flask',
+    expectedVulnClass: 'xss',
+  },
+  {
     name: 'Django XSS',
     vulnDir: 'django-xss-vuln',
     safeDir: 'django-xss-safe',
