@@ -1,228 +1,162 @@
-# Path to 90% Recall — 88-CVE Iterate Corpus
+# Path to ~90% Recall — 88-CVE Iterate Corpus
 
-Re-triage of the 38 non-validated CVEs in the latest `v_base` iterate run
-(`depscanner/bench-iterate/v_base/2026-05-12T17-41-24/report.json`,
-50/88 = 56.8%). Companion data: `.cursor/plans/triage-2026-05-12-post-abcd.json`.
+Re-classification of the 36 non-validated CVEs in the clean run
+`bench-iterate/v_base/2026-05-12T20-00-19/` (52/88 = 59.1%, $0.22, 33min).
+Companion: `.cursor/plans/triage-2026-05-12-post-abcd.json` (now stale — only
+matches the 17:41 pre-E/F1 snapshot; this doc supersedes it).
 
-This writeup classifies each non-validated CVE after assuming sibling Phase E
-agents land (E1: vuln_class normalization, E2: engine method-chain +
-computed-key, E3: weak_crypto / auth_bypass enum extension, E4: maven
-commons-text + xmlsec framework_models). It then enumerates the Phase F
-sub-phases needed to push recall further.
+This doc is the post-mortem of the 26.1% → 59.1% session arc and the
+honest forward plan.
 
 ---
 
-## State snapshot (after ABCD merge, before E1–E4)
+## Baseline funnel (clean run, tip `413ef48`)
 
-- 50/88 validated = **56.8%** baseline.
-- 38 non-validated: 30 `failed_validation` + 8 `vuln_class_out_of_scope`.
-- Per-ecosystem non-validated count:
+```
+schema_pass:      82/88
+fixture_pre:      52/88   <-- dominant failure point
+fixture_safe:     82/88
+patch_post_clean: 55/88
+validated:        52/88
 
-  | Ecosystem | Non-validated | Validated (out of corpus share) |
-  |-----------|---------------|---------------------------------|
-  | npm       | 9             | strong, ~14/23 working           |
-  | pypi      | 11            | mid                              |
-  | maven     | 6             | mid, anchored on jackson/log4j   |
-  | golang    | 8             | weakest, almost no F1 yet        |
-  | gem       | 4             | weakest density                  |
+Status breakdown:
+  validated:               52
+  failed_validation:       30   (all are: pre=0 post=0)
+  vuln_class_out_of_scope:  6
+```
 
-- Funnel weak point: `fixture_pre: 51/88`. The Gate-2 fixture round-trip is
-  the dominant failure mode. Patch round-trip and schema gates are healthy.
+**Every single failed_validation entry has `pre=0 post=0`.** The engine
+finds zero taint flows in the AI's own vulnerable fixture, despite the
+Gate 2 widening (`61def8e`) retrying with bundled-spec sinks of matching
+`vuln_class`. So the gap is at one of four levers:
 
----
+1. Engine cannot see the taint shape the AI emitted.
+2. Bundled spec library has no sinks for that library/vuln_class.
+3. AI prompt does not teach Qwen the canonical shapes our engine matches.
+4. `vuln_class` enum rejects the AI's chosen string.
 
-## Expected impact of sibling Phase E agents (already in flight)
+## Per-CVE classification
 
-| Phase | CVEs unlocked (per re-triage)                                 | Δpp |
-|-------|--------------------------------------------------------------|----|
-| E1 vuln_class normalization | CVE-2019-10906 (jinja2 sandbox_escape), CVE-2020-28493 (jinja2 urlize redos) | +2.3 |
-| E2 method-chain + computed-key | CVE-2026-4800 (lodash _.template imports key)               | +1.1 |
-| E3 weak_crypto / auth_bypass enum | CVE-2022-23539 (jsonwebtoken alg confusion), CVE-2022-22978 (spring-security regex bypass) | +2.3 |
-| E4 maven commons-text + xmlsec | CVE-2023-44483 (xmlsec)                                     | +1.1 |
-| **E-total**                       | **6 CVEs**                                                  | **+6.8 pp → 64% recall** |
+| Bucket | CVEs | Fix lever | Estimated work |
+|---|---|---|---|
+| **A. F4 hoisted-const blocker** (`const opts = {...}; f(x, opts)`) | jsonwebtoken 22-23539, follow-redirects 24-28849, requests 24-35195, urllib3 20-26137, flask 23-30861 | Engine | ~50–100 LOC |
+| **B. Java property-path matching** | spring-beans 22-22965 (Spring4Shell) | Engine | ~175 LOC, design at `docs/engine-property-path-matching.md` |
+| **C. Go struct-field-init sink** (`&ssh.ServerConfig{PublicKeyCallback: f}`) | golang/x/crypto 24-45337 | Engine + spec.ts | ~80 LOC |
+| **D. Python kwarg-aware sink matching (audit)** | urllib3 20-26137, requests 23-32681 | Engine | ~30 LOC (extends F3b) |
+| **E. Computed-key full taint** (`obj[src] = v` taints `obj`) | lodash 26-4800 | Engine | ~40 LOC (extends E2) |
+| **F. Method-chain on awaited results** (`(await axios.get(u)).data.x`) | axios 26-40175, 26-34043 | Engine | ~60 LOC |
+| **G. Bundled-spec library gap** | snyk-go 24-21484/21503, pillow 24-26130, debug 17-16137 | New YAMLs | 1 file each |
+| **H. vuln_class enum gap** (`dos`, `cardinality_dos`, `multipart_dos`) | 23-34053, 17-12626, 22-32149, 22-27664, 22-21698, 22-23837 | Enum + non-taint regime + version-only tier | ~3 day arc |
+| **I. AI shape-mismatch** (spec exists, AI emits non-matching sink) | actionpack 22-23633, ruby-git 24-32465, sinatra 23-28120, spring-security 22-22978, log4j-1.x 23-26464, xmlsec 23-44483, x/net 23-3978 | AI prompt + few-shots | ~2 day arc |
+| **J. Memory-safety / non-modelable but coverable via lints** | cryptography 23-49083, jinja2 sandbox 19-10906, jinja2 redos 20-28493, setuptools 24-6345 | F4 ReDoS + memory-safety regime | ~2 days |
+| **K. Genuinely uncoverable** (3 CVEs, **3.4% floor**) | certifi 23-37920, HTTP/2 rapid-reset 23-44487, runc 24-21626, pillow 21-25287 | Package-version-only tier | accept |
 
-Note these are upper bounds; some E-flips also need a Phase F follow-up to
-land the corresponding bundled spec (E3 → F1 jsonwebtoken / spring-security
-specs).
+## Ceiling analysis
 
----
+- **K** is unfixable inside any reachability regime (3-4 CVEs, ~3-4% floor).
+- **J** is partially fixable (+2–3 realistic CVEs via ReDoS / insecure-default lints).
+- **Hard ceiling on this corpus: ~88–91%**.
+- Realistic landing zone after all phases below: **82–86%**.
 
-## Phase F sub-phases
+## Five-phase plan
 
-### F1 — Framework_model coverage gap (13 CVEs)
+### Phase 1 — Methodology (½ day, prereq)
 
-Add one bundled `.yaml` spec per missing library. Each CVE is unlocked by a
-1-file add of 5-15 sinks. Top 5 by leverage:
+- **1a** 3-trial averaging in `iterate.ts`. Seed each run; report majority validated + stddev.
+- **1b** Per-CVE diagnostic dump on failure to `bench-iterate/<ts>/diag/<cve>.json`
+  (sinks loaded, steps fired, steps dropped, sanitizer matches). Removes the need to
+  re-Read engine source during triage.
 
-1. **`spring-beans.yaml`** — `*.setPropertyValue*(*)`, `BeanWrapperImpl(*)`
-   sinks (code_injection). Unlocks CVE-2022-22965 Spring4Shell.
-2. **`spring-security.yaml`** — `new RegexRequestMatcher(*)`,
-   `*.regexMatchers(*)` sinks (auth_bypass; needs E3). Unlocks
-   CVE-2022-22978.
-3. **`apache-poi.yaml`** — `new HWPFDocument(*)`, `WorkbookFactory.create(*)`
-   sinks (dos; needs E3). Unlocks CVE-2017-12626 plus likely more
-   document-parser CVEs not in corpus.
-4. **`log4j.yaml` extension** — add log4j-1.x `SocketAppender` / `startServer`
-   deserialization sinks. Unlocks CVE-2023-26464.
-5. **`semver.yaml`** — `new semver.Range(*)`, `semver.validRange(*)`,
-   `semver.satisfies(*, *)` redos sinks. Unlocks CVE-2022-25883. Trivial.
+Without this we can't tell engine wins from Qwen variance (currently ±3 CVEs run-to-run).
 
-Other F1 adds (CVE → spec): CVE-2026-25639 (`axios.yaml`
-`axios.mergeConfig`), CVE-2024-6345 (`setuptools.yaml` `PackageIndex.download`),
-CVE-2022-32149 (`x-text.yaml` `ParseAcceptLanguage`), CVE-2023-3978
-(`x-net-html.yaml` `html.Parse`), CVE-2024-45337 (`x-crypto-ssh.yaml`
-`PublicKeyCallback`), CVE-2022-23633 (`actionpack.yaml` `Executor.wrap`),
-CVE-2024-32465 (`ruby-git.yaml` `Git.open`/`Git.clone`), CVE-2022-23837
-(`rack.yaml` multipart parser).
+### Phase 2 — Engine features (3–4 days, 10 CVEs)
 
-**F1 estimated lift: +13 pp → 77.8% cumulative with E.** Each spec adds 1-2
-pp. Diminishing returns kick in as the long tail thins out, but the next 13
-CVEs are genuinely a "one spec each" workload.
+Ordered ascending LOC.
 
-### F2 — Source coverage gap (0 CVEs, deferred)
+| Step | File(s) | LOC | CVEs unlocked |
+|---|---|---|---|
+| 2a — JS single-assignment const resolver for F4 inline-literal kwargs | `taint-engine/non-taint-detector.ts` + `propagate-core.ts` | ~50 | jsonwebtoken 22-23539, follow-redirects 24-28849 |
+| 2b — Python kwarg-aware sink matching audit | `taint-engine/python/propagate.ts`, `python/ir.ts` | ~30 | urllib3 20-26137 |
+| 2c — Computed-key full taint write (extends E2) | `taint-engine/ir.ts` | ~40 | lodash 26-4800 |
+| 2d — Method-chain on awaited results | `taint-engine/ir.ts` | ~60 | axios 26-40175, 26-34043 |
+| 2e — Go struct-field-init sink kind | `taint-engine/go/ir.ts` + `spec.ts` | ~80 | golang/x/crypto 24-45337 |
+| 2f — Java property-path matching (Spring4Shell) | `taint-engine/java/*` per design doc | ~175 | spring-beans 22-22965 |
 
-No CVE in the corpus is currently blocked solely on a missing source pattern.
-Bundled framework_models cover the dominant http source surfaces
-(express/flask/fastify/spring/gin/rails) and stdlib file/env sources are
-present. F2 would matter if we added CLI / argv / websocket / message-queue
-source patterns, but no CVE in this corpus requires that — every fixture
-either has an http source already covered or has a synthesised source the
-fixture author baked in (which is the right shape for engine taint anyway).
+**Each step:**
+1. Extend `cve-targeted-fixtures` runner with the exact AI-generated fixture
+   that failed in the iterate run.
+2. Land green.
+3. Re-run 88-CVE iterate at 3 trials.
+4. Commit. Don't bundle steps — each must show its own delta.
 
-**F2 deferred. Revisit if a future corpus pulls in CLI tools or worker-queue
-libraries.**
+### Phase 3 — Non-taint regime + vuln_class enum (2–3 days, ~5 CVEs)
 
-### F3 — Engine feature gaps (5 CVEs)
+- **3a** Add `dos`, `cardinality_dos`, `multipart_dos`, `memory_safety`,
+  `protocol_dos` to `ALL_VULN_CLASSES` across all 3 mirrors (spec.ts, zod, AI
+  prompt) and write Supabase migration `phase28d_extend_vuln_class_enum`.
+- **3b** Wire **ReDoS detector** as F4 sibling: match catastrophic regex literals
+  in `RegExp` / `re.compile` / `.match()`. Unlocks debug 17-16137, jinja2 urlize
+  20-28493.
+- **3c** Wire **insecure-default detector**: `requests.Session(verify=False)`,
+  `ssl.PROTOCOL_*` weak, `Math.random()` in security context.
+- **3d** **Version-only credit tier.** Promote bucket K (and any H-class CVE that
+  remains taint-unmatchable) to a "version-vulnerable, no reachability claim"
+  result tier. Surfaces in the same UI as `module`-level reachability but with a
+  distinct badge. Pending Henry sign-off — this changes the score's meaning.
 
-Each row is a discrete engine capability the propagator currently lacks.
+### Phase 4 — Spec library + AI prompt tuning (2 days, ~6 CVEs)
 
-| Feature | CVEs unlocked | Δpp |
-|---------|---------------|----|
-| **Keyword-arg-aware sink matching** (today engine matches positional `f(*)` only; AI rules and many sinks specify `f(method=*)`) | CVE-2020-26137 (urllib3 putrequest), CVE-2024-34064 (jinja2 xmlattr) | +2.3 |
-| **Patch-round-trip file-glob exclude** (post-patch counts include `test/`, `tests/` paths the upstream patch didn't touch) | CVE-2025-62718 (axios 11 test-file matches), CVE-2017-16137 (debug), CVE-2022-22817 (pillow) | +3.4 |
-| **Computed-key / dynamic-property-write taint** (`obj[req.query.k] = v` should taint `obj` when key is attacker-controlled) | CVE-2026-4800 (E2 overlap) | (counted in E2) |
-| **Struct-field-init sink (go)** (`&ssh.ServerConfig{PublicKeyCallback: f}` is a sink, not a call) | CVE-2024-45337 | +1.1 |
-| **Ruby bracket-vs-dot accessor parity** (`params[:x]` vs `params.x` both yield http_input) | CVE-2023-28120 | +1.1 |
+- **4a** New bundled YAMLs: `actionpack.yaml`, `ruby-git.yaml`,
+  `pillow.yaml` extension, `cryptography.yaml`, `x-net-html.yaml`,
+  `spring-security.yaml`.
+- **4b** Extend the rule-generator system prompt with a "shapes the engine
+  matches" sidebar: 4-5 canonical examples per language showing positional vs
+  kwarg, struct-init vs call, method-chain. Goal: shrink bucket I.
+- **4c** Few-shot one good fixture pair per ecosystem alongside the existing
+  prompt examples. Lock these as `prompt/few-shots/*.json`.
 
-Top 3 highest-leverage engine features in priority order:
+### Phase 5 — Push to ceiling and lock (1 day)
 
-1. **Patch-round-trip file-glob exclude** — 3 CVE direct wins, also lifts
-   several already-validated CVEs out of noisy logs. Smallest LOC change
-   (one filter in `validate.ts` `runDiffTargetedValidation`).
-2. **Keyword-arg-aware sink matching** — 2 CVE wins, plus likely several
-   pypi CVEs not yet in corpus. Touches `matchesCallPattern` /
-   `pattern-syntax.ts`.
-3. **Ruby bracket accessor parity** — single CVE win but Ruby is the most
-   under-validated ecosystem (4 of 4 ruby non-validated entries). Small fix
-   in `ruby/propagate.ts` source-binding resolution.
+- Rerun 88-CVE iterate at 3 trials.
+- Snapshot per-eco baseline to `bench-iterate/baselines/2026-XX-XX.json`.
+- Update this doc with actual numbers.
+- Open PR for the whole arc.
 
-**F3 estimated lift: +5.6 pp → 83.4% cumulative.**
+## Cumulative projection
 
-### F4 — Non-taint vulns (8 CVEs)
+| Stage | Δ | Cumulative |
+|---|---|---|
+| Today | — | 59.1% |
+| Phase 2 engine (10 CVE TAM, ~9 land after AI-shape miss) | +9 | 69.3% |
+| Phase 3 enum + non-taint + version-only tier | +5 | 75.0% |
+| Phase 4 spec library + prompt | +6 | 81.8% |
+| Phase 5 variance averaging settles | +3 | 85.2% |
+| Stretch — every bucket-I CVE lands | +3 | 88.6% |
 
-These are vulnerabilities whose detection requires a regime other than data-
-flow taint:
+**Realistic 82–86%. Stretch 88–90%. Hard ceiling ~91%.**
 
-- **Memory-safety / parser-internal**: CVE-2023-49083 (cryptography PKCS7
-  null deref), CVE-2017-16137 (debug %o ReDoS — F3 covers patch round-trip
-  but real fix is regex change).
-- **Config / insecure-default**: CVE-2024-35195 (requests
-  Session.verify=False persisting), CVE-2024-28849 (follow-redirects
-  Authorization header leak), CVE-2023-30861 (flask cookie-cache header
-  alignment).
-- **Cardinality / resource exhaustion as semantic property**:
-  CVE-2022-21698 (prometheus label cardinality), CVE-2026-40175 (axios
-  prototype-pollution-as-header-injection).
-- **Library-internal**: CVE-2022-29153 (consul http check follows
-  redirects).
+## Risks
 
-F4 path is to spin up a **config-rule / AST-pattern regime** (separate from
-taint) that fires on presence of a vulnerable call shape without requiring a
-source. Existing reachability levels (`module` / `function`) are already the
-right output channel — the rules just need a non-taint matcher.
-
-Top 3 highest-leverage F4 actions:
-
-1. **Insecure-default detector** for `requests.Session(verify=False)`,
-   `ssl.PROTOCOL_*` weak versions, etc. Single CVE direct (CVE-2024-35195)
-   but extensible across pypi.
-2. **Header-config rule** for cross-redirect Authorization leak
-   (CVE-2024-28849) and flask cookie+Vary mismatch (CVE-2023-30861).
-3. **Prometheus cardinality lint** — flag http-input flowing into
-   `WithLabelValues(*)`. Hybrid taint/config; can ride on the same engine.
-
-**F4 estimated lift: +5–8 pp** (best case all 8 land; realistic +5 pp →
-88.4% cumulative).
-
-### Uncoverable — 6 CVEs
-
-Genuinely outside any reasonable static-analysis regime on caller source:
-
-| CVE | Why uncoverable |
-|-----|----------------|
-| CVE-2021-25287 (pillow oob_read) | Memory-safety in C decoder; caller pattern is `Image.open` which fires on every call. |
-| CVE-2023-37920 (certifi root CA) | Vulnerability is the bundled CA list; every caller of `certifi.where()` equally affected. Package-version only. |
-| CVE-2023-34053 (spring-boot Observation DoS) | Tag-cardinality reasoning; no localisable call pattern with acceptable FP rate. |
-| CVE-2022-27664 (golang http2 GOAWAY DoS) | HTTP/2 protocol-level; every HTTP/2 server affected. |
-| CVE-2023-44487 (HTTP/2 Rapid Reset) | Same — protocol-level, server-internal. |
-| CVE-2024-21626 (runc /proc/self/fd) | Container runtime escape; no application-source pattern. |
-
-These contribute **0 pp lift under any static regime**. They are the floor
-of "honest uncoverable" — detection here means depending on
-package-version-only signal, which is what the existing dep-scan/OSV path
-already provides outside the reachability engine.
-
----
-
-## Cumulative recall projection
-
-| Stage | New validated | Cumulative | Cumulative pct |
-|-------|---------------|------------|----------------|
-| Today (post-ABCD)                      | 50  | 50 | 56.8% |
-| + Phase E (E1+E2+E3+E4)                | +6  | 56 | 63.6% |
-| + Phase F1 (13 spec adds)              | +13 | 69 | 78.4% |
-| + Phase F3 (5 engine features)         | +5  | 74 | 84.1% |
-| + Phase F4 (5–8 non-taint rules)       | +5  | 79 | 89.8% |
-| + Phase F4 stretch (all 8)             | +3  | 82 | 93.2% |
-| Uncoverable floor                      | —   | —  | 6 CVEs (6.8%) |
-
-**Realistic ceiling on this 88-CVE corpus: ~88–90%.** The original
-"~90%" claim survives, but with the caveat that the last 5 pp is non-taint
-F4 work — not engine improvements — and that there is a hard 6-CVE
-uncoverable floor (6.8%) below which static reachability analysis on caller
-source cannot go without becoming package-version-only.
-
-The 80% milestone is achievable with F1+F3 alone, which is the cleanest
-short-term path (no new regime, just spec adds + engine polish).
-
----
-
-## Suggested ordering
-
-1. **Land Phase E** (already in flight) — confirms +6 CVE baseline.
-2. **F3 patch-round-trip file-glob exclude** — single PR, lifts 3 CVE + is
-   prereq for F1 spec adds (whose validation Gate-3 will otherwise blow up
-   on test-file matches).
-3. **F1 wave A (npm/pypi/maven specs)** — `axios.yaml` extension,
-   `setuptools.yaml`, `semver.yaml`, `spring-beans.yaml`,
-   `log4j.yaml` 1.x extension. 5 specs, +5 CVE.
-4. **F3 keyword-arg matching** — engine PR; lifts urllib3 + jinja2 +
-   any future kwarg-heavy pypi CVE.
-5. **F1 wave B (golang/gem specs)** — `x-text.yaml`, `x-net-html.yaml`,
-   `apache-poi.yaml`, `ruby-git.yaml`, `actionpack.yaml`, `rack.yaml`. 8
-   CVE, biggest impact on the weakest ecosystems.
-6. **F4 regime** — separate workstream. Define config-rule schema, port
-   `requests.Session(verify=False)` and `follow-redirects Authorization`
-   detectors as proof-of-concept. Hold until F1+F3 land so engine wins are
-   not muddled with regime-change wins.
-
----
+1. **Round-trip benchmark optimizes the wrong thing.** It measures Qwen-fixture
+   self-validation, not customer-code recall. Customer recall depends on
+   bundled spec coverage + engine on real code. Recommend a *second* benchmark
+   of hand-curated real-CVE fixtures alongside the iterate harness.
+2. **Bucket I is prompt-fragile.** Model rev can shift it ±3 CVE. Phase 4b needs
+   a regression test that exercises the prompt against fixed sample CVEs.
+3. **Phase 2f (Spring4Shell, 175 LOC, 1 CVE)** is the worst LOC/CVE ratio.
+   Justified by Spring4Shell being the flagship corpus CVE, but defer if budget
+   tightens.
+4. **Version-only credit tier changes the score's meaning.** Henry must sign off
+   before we count K-bucket CVEs as covered.
 
 ## Cross-references
 
-- Per-CVE data: `.cursor/plans/triage-2026-05-12-post-abcd.json`
-- Previous-run triage (pre-ABCD, stale): `.cursor/plans/triage-2026-05-12.json`
+- Latest clean run: `depscanner/bench-iterate/v_base/2026-05-12T20-00-19/`
+- Engine cores: `depscanner/src/taint-engine/{propagator,python,java,go,ruby,php,csharp,rust}*`
 - Bundled specs: `depscanner/src/taint-engine/framework-models/`
-- Validation runner: `depscanner/src/rule-generator/validate.ts`
-- Engine cores: `depscanner/src/taint-engine/{propagator,python,java,go,ruby,php}*`
-- Latest run: `depscanner/bench-iterate/v_base/2026-05-12T17-41-24/`
+- Validator: `depscanner/src/rule-generator/validate.ts`
+- Spring4Shell design: `depscanner/docs/engine-property-path-matching.md`
+- F4 design: `depscanner/docs/non-taint-detector-regime.md`
+- Maven diagnosis: `depscanner/docs/maven-recall-diagnosis.md`
+- Golang diagnosis: `depscanner/docs/golang-recall-diagnosis.md`
+- F4 hoisted-const blocker memory: `feedback_js_kwarg_inferencer_blocker.md`
