@@ -104,6 +104,23 @@ export interface IrFunction {
   params: LocalVar[];
   /** Steps in syntactic order. */
   steps: Step[];
+  /**
+   * Map of single-assignment local names to the verbatim source text of their
+   * inline-literal initializer (Phase 2a of the reachability-90-percent plan).
+   * Populated by lowerers that see a `const foo = { ... }` / `const bar = [ ... ]`
+   * pattern; informs F4 non-taint-detector's option-bag matcher so that
+   * hoisted `const options = { algorithms: ['HS256'] }; jwt.verify(t, k, options)`
+   * resolves `options` back to its literal shape for kwarg parsing.
+   *
+   * Scope today: object-literal + array-literal initializers only, AND only
+   * when the target appears exactly once on a LHS in the function (no
+   * subsequent re-assignments). The JS lowerer populates this; other-language
+   * lowerers leave it unset until their kwarg story warrants it.
+   *
+   * Consumers MUST treat undefined as "no resolution available, fall back to
+   * the existing arg-text interpretation" so existing callers stay correct.
+   */
+  localOrigins?: Map<string, string>;
 }
 
 export interface LowerOptions {
@@ -117,6 +134,22 @@ export interface LowerOptions {
   declarationToNodeId: Map<ts.Node, string>;
   /** Pick a function declaration from a symbol; returns the AST node we registered. */
   pickFunctionDecl: (symbol: ts.Symbol) => ts.Node | undefined;
+  /**
+   * Accumulator for Phase 2a's hoisted-const resolution. Per-function fresh
+   * map; `lowerFunction` populates this from `const x = { ... }` /
+   * `const x = [ ... ]` declarations, then filters by step-target write
+   * counts before assigning the survivors to `IrFunction.localOrigins`.
+   * Internal to the lowerer; callers should not pass their own.
+   */
+  literalInitsAccumulator?: Map<string, string>;
+  /**
+   * Companion counter for `literalInitsAccumulator`. Records how many times
+   * any literal-init capture site mentioned a given target — separate from
+   * the step-target write count so that `const opts = {...}` followed by
+   * `opts = something` correctly disqualifies opts from resolver use even
+   * though the literal-init itself emits zero step writes.
+   */
+  literalInitsWrites?: Map<string, number>;
 }
 
 /**
@@ -154,10 +187,49 @@ export function lowerFunction(
   }
 
   const steps: Step[] = [];
+  const literalInits = new Map<string, string>();
+  const literalInitsWrites = new Map<string, number>();
   if (body) {
-    walkBody(body, steps, opts);
+    walkBody(body, steps, {
+      ...opts,
+      literalInitsAccumulator: literalInits,
+      literalInitsWrites,
+    });
   }
-  return { id: funcId, params, steps };
+
+  // Phase 2a: filter candidate literal initializers to single-assignment locals.
+  // Count writes from BOTH the emitted step list (assigns/sources/calls with a
+  // target) AND the literalInits capture-site counter (object/array literal
+  // inits emit 0 step writes on their own but still count as "this local was
+  // written here"). A target with >1 total write is dropped from the resolver
+  // map so re-declarations / reassignments correctly disqualify it.
+  const localOrigins = filterLocalOrigins(literalInits, literalInitsWrites, steps);
+
+  const ir: IrFunction = { id: funcId, params, steps };
+  if (localOrigins.size > 0) ir.localOrigins = localOrigins;
+  return ir;
+}
+
+function filterLocalOrigins(
+  candidates: Map<string, string>,
+  literalWrites: Map<string, number>,
+  steps: Step[],
+): Map<string, string> {
+  if (candidates.size === 0) return new Map();
+  const writeCounts = new Map<string, number>(literalWrites);
+  for (const step of steps) {
+    let target: string | undefined;
+    if (step.kind === 'assign') target = step.target;
+    else if (step.kind === 'source') target = step.target;
+    else if (step.kind === 'call' && step.target) target = step.target;
+    if (!target) continue;
+    writeCounts.set(target, (writeCounts.get(target) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const [name, init] of candidates) {
+    if ((writeCounts.get(name) ?? 0) <= 1) out.set(name, init);
+  }
+  return out;
 }
 
 /** Walk the body of a function (or module) and emit Steps in syntactic order. */
@@ -221,6 +293,31 @@ function walkStatement(stmt: ts.Node, steps: Step[], opts: LowerOptions): void {
     for (const decl of stmt.declarationList.declarations) {
       if (!decl.initializer) continue;
       const target = ts.isIdentifier(decl.name) ? decl.name.text : null;
+      // Phase 2a: capture inline-literal initializers (`const x = { ... }`,
+      // `const x = [ ... ]`) so F4 sanitizer-absence can resolve a hoisted
+      // identifier back to the option-bag literal at the call site. First-
+      // writer-wins, and we push a synthetic write into the literal counter
+      // so subsequent re-declarations or `opts = ...` reassignments cause
+      // the post-walk write-count filter to discard this entry — preventing
+      // a stale `const opts = X` from over-resolving an `opts = Y` later.
+      if (
+        target &&
+        opts.literalInitsAccumulator &&
+        (ts.isObjectLiteralExpression(decl.initializer) ||
+          ts.isArrayLiteralExpression(decl.initializer))
+      ) {
+        if (!opts.literalInitsAccumulator.has(target)) {
+          opts.literalInitsAccumulator.set(target, decl.initializer.getText(opts.sourceFile));
+        }
+        // Count this capture toward `target`'s eventual write count so the
+        // post-walk filter discards captured-then-reassigned locals. Object /
+        // array literal init emits 0 step writes on its own (properties
+        // dissolve into recursive walks against `target`), so without this
+        // bookkeeping the filter would treat them as single-writers.
+        if (opts.literalInitsWrites) {
+          opts.literalInitsWrites.set(target, (opts.literalInitsWrites.get(target) ?? 0) + 1);
+        }
+      }
       walkExpressionAsAssign(decl.initializer, target, steps, opts);
     }
     return;

@@ -214,7 +214,7 @@ export function extractCallSitesFromIr(
   for (const fn of irFunctions) {
     for (const step of fn.steps) {
       if (step.kind !== 'call') continue;
-      const cs = callSiteFromCallStep(step, language);
+      const cs = callSiteFromCallStep(step, language, fn.localOrigins);
       if (cs) sites.push(cs);
     }
   }
@@ -224,6 +224,7 @@ export function extractCallSitesFromIr(
 function callSiteFromCallStep(
   step: Extract<Step, { kind: 'call' }>,
   language: 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp',
+  localOrigins?: Map<string, string>,
 ): CallSite | null {
   const calleeText = step.callee.calleeText;
   const argTexts = [...step.argTexts];
@@ -243,8 +244,16 @@ function callSiteFromCallStep(
     // commonly the last positional, but jwt.verify(token, key, { algorithms })
     // is also written with the options object inline anywhere. Mirror every
     // top-level `key: value` pair onto kwargNames so the detector can match.
+    //
+    // Phase 2a: hoisted-const resolution. When argText is a bare identifier
+    // (`f(opts)`), look it up in the function's localOrigins map (built by
+    // the lowerer from `const opts = { ... }` declarations) and parse THAT
+    // literal text instead. Falls back silently if the identifier wasn't a
+    // single-assignment literal-init, preserving the existing inline-literal
+    // behaviour as the default.
     for (const text of argTexts) {
-      const props = parseObjectLiteralProps(text);
+      const resolved = resolveJsArgText(text, localOrigins);
+      const props = parseObjectLiteralProps(resolved);
       for (const [k, v] of Object.entries(props)) {
         if (!kwargNames.includes(k)) {
           kwargNames.push(k);
@@ -263,6 +272,22 @@ function callSiteFromCallStep(
     line: step.loc.line,
     column: step.loc.column,
   };
+}
+
+/**
+ * Resolve a JS argText through the IR's `localOrigins` map (Phase 2a). When
+ * the arg text is a bare identifier AND that identifier was bound by a
+ * single-assignment `const x = { ... }` / `const x = [ ... ]` declaration in
+ * the same function, return the literal initializer text. Otherwise return
+ * the input unchanged so the inline-literal parser can still try.
+ */
+function resolveJsArgText(text: string, localOrigins?: Map<string, string>): string {
+  if (!localOrigins || localOrigins.size === 0) return text;
+  const trimmed = text.trim();
+  // Bare identifier — JS naming rules.
+  if (!/^[A-Za-z_$][\w$]*$/.test(trimmed)) return text;
+  const init = localOrigins.get(trimmed);
+  return init ?? text;
 }
 
 /**
