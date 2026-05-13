@@ -1,0 +1,10 @@
+{
+  "language": "go",
+  "framework": "gin",
+  "expected_osv_id": "GHSA-f4w6-3rh6-mrwm",
+  "expected_vuln_class": "path_traversal",
+  "expected_vuln_flows_min": 1,
+  "expected_safe_flows_max": 0,
+  "package": "archive/tar",
+  "description": "Customer-shaped Gin app: /download endpoint pulls a name from c.Query, the handler passes it to an internal files package which calls os.ReadFile — classic path-traversal sink (GHSA-f4w6-3rh6-mrwm family). Safe side accepts a numeric id from c.Query and reads only from a server-side allow-list."
+}

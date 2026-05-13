@@ -23,7 +23,8 @@
  *  14. validate            — all framework specs against fixture matrix
  *  15. sanitizer-audit     — every -safe fixture exercises its sanitizer
  *  16. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
- *  17. recall              — global recall % across all -vulns/ fixture pairs
+ *  17. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
+ *  18. recall              — global recall % across all -vulns/ fixture pairs
  *
  * Run: npm run test:taint-engine-all
  *
@@ -56,6 +57,7 @@ const STAGES: Stage[] = [
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },
   { name: 'sanitizer-audit',  cmd: 'npm', args: ['run', '--silent', 'taint-engine:sanitizer-audit'] },
   { name: 'cve-targeted',     cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-cve-targeted-fixtures'] },
+  { name: 'customer-app',     cmd: 'npm', args: ['run', '--silent', 'test:customer-app'] },
   { name: 'recall',           cmd: 'npm', args: ['run', '--silent', 'taint-engine:recall'] },
 ];
 
