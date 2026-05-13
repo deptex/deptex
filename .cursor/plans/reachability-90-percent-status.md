@@ -15,7 +15,8 @@ Updated after each commit.
 | 1.2 diag surface | `625fad4` | TaintTrace serialiser + DropReason vocabulary + diagSink hook + NDJSON writer + 6 drop sites instrumented + preflight stage 12 |
 | **2a JS const resolver** | `34359bf` | localOrigins map on IrFunction + extractCallSitesFromIr resolves bare-identifier argTexts. 20-case test (lowerer capture + extractor resolution + end-to-end F4 jwt.verify match/no-match on hoisted shape). |
 | **1.3a customer-app fixtures** | `305f659` | 5 multi-file vendored fixtures (npm/pypi/maven/golang/gem) with vuln/safe sides exercising bundled framework_models. Runner asserts vuln ≥1 flow + safe 0 flows. 5/5 pass on tip 7beab0e in 1.9s. baseline-7beab0e.json committed. Preflight grows to 18 stages. |
-| **1.0 variance baseline** | _(pending commit)_ | 3-trial probe on tip `bf4066a` engine code unchanged from `413ef48`. Mean 56.06%, stddev 2.98pp. Decision rule: 3-trial avg for <6pp claims; single-trial only for ≥6pp moves. Baseline committed at `depscanner/bench-iterate/variance-probe/baseline.json`. |
+| **1.0 variance baseline** | `4907a30` | 3-trial probe on tip `bf4066a` engine code unchanged from `413ef48`. Mean 56.06%, stddev 2.98pp. Decision rule: 3-trial avg for <6pp claims; single-trial only for ≥6pp moves. Baseline committed at `depscanner/bench-iterate/variance-probe/baseline.json`. |
+| **2b dict-key taint** | `bdf0549` | Python IR lowerer walks `pair.key` + `dictionary_splat` in dict literals, not just `pair.value`. Closes the lowerer-side gap on jinja2-22195 / jinja2-34064 shape. Note: those CVEs ALSO need a receiver-pattern fix (`tmpl.render` vs `jinja2.Template.render(*)`) before they fully validate in iterate — tracked as Phase 2b-followup. New flask-dict-key-taint-{vuln,safe} fixture in python-vulns/. |
 
 Pushed branch `feat/reachability-90-percent` to origin.
 
@@ -30,7 +31,7 @@ Pushed branch `feat/reachability-90-percent` to origin.
 
 Phase 1 closed 2026-05-13. Remaining queue:
 
-1. **Phase 2b** — Python kwarg-aware sink matching audit (~30-60 LOC in `taint-engine/python/{propagate,ir}.ts`). Targets urllib3-20-26137.
+1. **Phase 2b-followup** — receiver-pattern audit for Python framework specs (jinja2.yaml, pillow.yaml, etc.). Add `*.method`-style alt-patterns where bundled spec uses `Class.method` but real code uses `instance.method`. Without this, dict-key fix is a no-op on jinja2-22195 / jinja2-34064 because the engine never matches the sink. Cheap (YAML edits + matchesCallPattern unit test). Probable lift: 2-4 pypi CVEs.
 2. **Phase 1.1** — 3-trial averaging in runner.ts (~150-200 LOC). Outer trial loop + seed plumbing. Decision rule from 1.0: prefer 3-trial averaging for any change claiming <6pp lift; single-trial OK only for ≥6pp moves.
 3. **Phase 2c** — computed-key full taint write.
 4. **Phase 2d** — method-chain on awaited results.
@@ -49,6 +50,7 @@ Phase 1 closed 2026-05-13. Remaining queue:
 - NDJSON path canonicalised to `bench-iterate/<variant>/<timestamp>/diag/<cve>.ndjson` (mirrors existing `report.json` namespace).
 - Variance probe deferred Phase 1.1; running on `bf4066a` (plan doc commit) — engine code unchanged from `413ef48`, so the measurement is equivalent.
 - Phase 1.2's `emitDrop` calls compile to no-ops when `diagSink` is undefined, so production scan pipelines pay zero cost from this commit.
+- **Phase 2b pivot 2026-05-13:** plan's named target (urllib3-20-26137 kwarg audit) was based on stale failure data. Variance-probe Trial 3 showed urllib3-20-26137 isn't in the failure corpus at all. Actual pypi miss distribution: 2 dict-key (jinja2 ×2), 4 missing-sink specs (pillow / setuptools / requests / pkcs7), 1 jinja2 kwarg (template.render kwarg), 3 non-taint vuln-class (flask session / certifi / pkcs12 builder). Phase 2b reframed to the dict-key engine fix; spec-coverage work moved to Phase 4.1 as planned, vuln-class rejection to Phase 3.4.
 
 ## Open items / risks surfaced mid-stream
 
@@ -59,6 +61,7 @@ Phase 1 closed 2026-05-13. Remaining queue:
 | Item | Cost |
 |---|---|
 | Variance probe (3 × $0.25) | $0.75 (done) |
+| Phase 2b code work | $0 (no AI calls) |
 | **Total to date** | **$0.75** |
 
 Budget cap: $10.
