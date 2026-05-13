@@ -87,3 +87,115 @@ export interface SinkHit {
   trace: TaintTrace;
   hit_node: FlowNode;
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostic serialisation (Phase 1.2 of the reachability-90-percent plan).
+//
+// The engine doesn't carry a canonical serialiser for TaintTrace today —
+// `JSON.stringify(trace)` works incidentally because the interface is
+// data-only, but there is no schema and no DropReason vocabulary for the
+// "why didn't this taint propagate?" question. These exports give the iterate
+// harness + per-language tests a stable diag surface to consume when
+// `RunWorklistOptions.diagSink` is wired in. Zero overhead when diagSink is
+// undefined — propagate-core only constructs DropRecords inside an
+// `if (diagSink)` guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialised form of TaintTrace for the diagnostic dump. Path nodes are
+ * emitted verbatim; source.pattern + source.description carry enough to
+ * identify which spec the trace originated from without serialising the full
+ * FrameworkSource (which would bloat the NDJSON for no consumer benefit).
+ */
+export interface TraceJson {
+  taint_kind: TaintKind;
+  source_pattern: string;
+  source_description: string;
+  path: FlowNode[];
+}
+
+export function serializeTrace(trace: TaintTrace): TraceJson {
+  return {
+    taint_kind: trace.taint_kind,
+    source_pattern: trace.source.pattern,
+    source_description: trace.source.description,
+    path: trace.path,
+  };
+}
+
+/**
+ * Short, kebab-case description of why a taint local was dropped or why a
+ * loaded sink didn't fire. Free-text by design (per the plan's "promote to
+ * enum once natural categories emerge" decision) — but `serializeTrace.test.ts`
+ * walks `propagate-core.ts` for `reason:` literals and asserts the membership
+ * list below stays stable. To add a new reason, edit BOTH this list AND the
+ * propagator emission site in the same commit; the jest test will fail
+ * otherwise.
+ *
+ * Established reasons:
+ *   - 'source-no-match-no-receiver': source step text didn't match any spec
+ *     pattern AND `receiverRoot()` returned no tainted local to fall back to.
+ *   - 'assign-from-untainted': assign step's `from` was not in the local map.
+ *   - 'call-internal-no-return-taint': internal callee resolved but did not
+ *     publish a tainted return.
+ *   - 'call-internal-callee-missing': callee referenced by ID was not in
+ *     stateById (cross-language link drop).
+ *   - 'call-external-no-arg-no-receiver': external/unresolved call with no
+ *     tainted arg and no tainted receiver to pass through.
+ *   - 'sink-loaded-no-tainted-arg': a spec sink matched the callee but none
+ *     of the spec-required arg positions held tainted locals at this call.
+ */
+export type DropReason = string;
+
+/** Stable membership list for `DropReason`. Read by the jest exhaustiveness test. */
+export const KNOWN_DROP_REASONS = [
+  'source-no-match-no-receiver',
+  'assign-from-untainted',
+  'call-internal-no-return-taint',
+  'call-internal-callee-missing',
+  'call-external-no-arg-no-receiver',
+  'sink-loaded-no-tainted-arg',
+] as const;
+
+/** One emitted record per drop or sink-loaded-no-hit event. */
+export interface DropRecord {
+  reason: DropReason;
+  step_kind: 'source' | 'assign' | 'call' | 'return';
+  step_loc: { filePath: string; line: number; column: number };
+  step_text: string;
+  function_id: string;
+  function_name: string;
+  /** Trace of the local at the moment of drop, if any. */
+  trace_at_drop?: TraceJson | null;
+  /** For sink-miss records, which sink matched. */
+  sink_pattern?: string;
+}
+
+/** Per-engine-run aggregate of diagnostic state, suitable for NDJSON or JSON dump. */
+export interface DiagnosticRecord {
+  /** Run-correlation string supplied by the caller (e.g. cveId). */
+  correlation_id?: string;
+  function_count: number;
+  drops: DropRecord[];
+  sinks_loaded: number;
+  sinks_hit: number;
+}
+
+export function serializeDiagnosticRecord(opts: {
+  correlationId?: string;
+  functionCount: number;
+  drops: DropRecord[];
+  sinksLoaded: number;
+  sinksHit: number;
+}): DiagnosticRecord {
+  return {
+    correlation_id: opts.correlationId,
+    function_count: opts.functionCount,
+    drops: opts.drops,
+    sinks_loaded: opts.sinksLoaded,
+    sinks_hit: opts.sinksHit,
+  };
+}
+
+/** Callback the propagator calls once per drop when `diagSink` is wired. */
+export type DiagSink = (record: DropRecord) => void;

@@ -22,7 +22,8 @@ import type {
   FrameworkSource,
   FrameworkSpec,
 } from './spec';
-import type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
+import type { DiagSink, DropRecord, Flow, FlowNode, SinkHit, TaintTrace } from './flow';
+import { serializeTrace } from './flow';
 import type { IrFunction, Step } from './ir';
 import type { FunctionId, FunctionNode } from './types';
 
@@ -57,6 +58,16 @@ export interface RunWorklistOptions {
    * caller can decide whether to surface them or discard.
    */
   signal?: AbortSignal;
+  /**
+   * Optional drop/sink-miss diagnostic emitter (Phase 1.2 of the
+   * reachability-90-percent plan). When defined, the propagator emits one
+   * `DropRecord` per (a) local-taint deletion and (b) spec-loaded sink that
+   * matched the callee but found no tainted arg. Use the NDJSON writer in
+   * `diag-writer.ts` to flush to disk, or pass an in-memory collector from
+   * tests. Zero overhead when undefined — every emission site is guarded
+   * by `if (diagSink)`.
+   */
+  diagSink?: DiagSink;
 }
 
 export interface RunWorklistResult {
@@ -108,6 +119,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       specs: opts.specs,
       worklist,
       maxPathLength,
+      diagSink: opts.diagSink,
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -139,6 +151,44 @@ interface AnalyzeArgs {
   specs: FrameworkSpec[];
   worklist: Set<FunctionId>;
   maxPathLength: number;
+  diagSink?: DiagSink;
+}
+
+function emitDrop(
+  diagSink: DiagSink | undefined,
+  state: FunctionState,
+  step: Step,
+  reason: string,
+  traceAtDrop: TaintTrace | null,
+  sinkPattern?: string,
+): void {
+  if (!diagSink) return;
+  let stepText: string;
+  switch (step.kind) {
+    case 'source':
+      stepText = step.sourceText;
+      break;
+    case 'assign':
+      stepText = `${step.target} = ${step.from ?? '?'}`;
+      break;
+    case 'call':
+      stepText = step.callee.calleeText;
+      break;
+    case 'return':
+      stepText = `return ${step.from ?? ''}`.trim();
+      break;
+  }
+  const record: DropRecord = {
+    reason,
+    step_kind: step.kind,
+    step_loc: { filePath: step.loc.filePath, line: step.loc.line, column: step.loc.column },
+    step_text: stepText,
+    function_id: String(state.funcNode.id),
+    function_name: state.funcNode.name,
+    trace_at_drop: traceAtDrop ? serializeTrace(traceAtDrop) : null,
+    ...(sinkPattern ? { sink_pattern: sinkPattern } : {}),
+  };
+  diagSink(record);
 }
 
 interface AnalyzeOutcome {
@@ -147,7 +197,7 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
@@ -189,6 +239,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           if (trace) {
             local.set(step.target, extendPath(trace, hopFromStep(step, 'source'), maxPathLength));
           } else {
+            emitDrop(diagSink, state, step, 'source-no-match-no-receiver', local.get(step.target) ?? null);
             local.delete(step.target);
           }
         }
@@ -199,6 +250,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           const t = local.get(step.from)!;
           local.set(step.target, extendPath(t, hopFromStep(step, 'assign'), maxPathLength));
         } else {
+          emitDrop(diagSink, state, step, 'assign-from-untainted', local.get(step.target) ?? null);
           local.delete(step.target);
         }
         break;
@@ -239,6 +291,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             idxs = sinkMatch.argument_indices;
           }
           const seenArgs = new Set<string>();
+          let anyHit = false;
           for (const i of idxs) {
             const argName = step.args[i];
             if (!argName) continue;
@@ -248,12 +301,20 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             const trace = local.get(argName);
             if (!trace) continue;
             seenArgs.add(argName);
+            anyHit = true;
             const hit: SinkHit = {
               sink: sinkMatch,
               trace: extendPath(trace, hopFromStep(step, 'sink'), maxPathLength),
               hit_node: hopFromStep(step, 'sink'),
             };
             state.sinkHits.push(hit);
+          }
+          if (!anyHit) {
+            // Spec sink matched the callee but none of the checked arg
+            // positions held tainted locals. This is the dominant "engine
+            // saw the sink but taint didn't reach it" diagnostic — emit one
+            // record so the diag dump explains why the CVE didn't validate.
+            emitDrop(diagSink, state, step, 'sink-loaded-no-tainted-arg', null, sinkMatch.pattern);
           }
         }
 
@@ -275,9 +336,11 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
                 extendPath(callee.returnTaint, hopFromStep(step, 'return'), maxPathLength),
               );
             } else if (step.target) {
+              emitDrop(diagSink, state, step, 'call-internal-no-return-taint', null);
               local.delete(step.target);
             }
           } else if (step.target) {
+            emitDrop(diagSink, state, step, 'call-internal-callee-missing', null);
             local.delete(step.target);
           }
           break;
@@ -334,6 +397,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
                 extendPath(recvTrace, hopFromStep(step, 'call'), maxPathLength),
               );
             } else {
+              emitDrop(diagSink, state, step, 'call-external-no-arg-no-receiver', null);
               local.delete(step.target);
             }
           }

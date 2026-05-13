@@ -18,10 +18,11 @@
  *   9. php                 — PHP substrate
  *  10. rust                — Rust substrate
  *  11. csharp              — C# substrate
- *  12. validate            — all framework specs against fixture matrix
- *  13. sanitizer-audit     — every -safe fixture exercises its sanitizer
- *  14. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
- *  15. recall              — global recall % across all -vulns/ fixture pairs
+ *  12. diag-emission       — DropReason exhaustiveness + NDJSON writer
+ *  13. validate            — all framework specs against fixture matrix
+ *  14. sanitizer-audit     — every -safe fixture exercises its sanitizer
+ *  15. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
+ *  16. recall              — global recall % across all -vulns/ fixture pairs
  *
  * Run: npm run test:taint-engine-all
  *
@@ -49,6 +50,7 @@ const STAGES: Stage[] = [
   { name: 'php',              cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-php'] },
   { name: 'rust',             cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-rust'] },
   { name: 'csharp',           cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-csharp'] },
+  { name: 'diag-emission',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-diag'] },
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },
   { name: 'sanitizer-audit',  cmd: 'npm', args: ['run', '--silent', 'taint-engine:sanitizer-audit'] },
   { name: 'cve-targeted',     cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-cve-targeted-fixtures'] },

@@ -30,6 +30,7 @@
     "test:taint-engine-php": "tsx test/taint-engine-php.test.ts",
     "test:taint-engine-rust": "tsx test/taint-engine-rust.test.ts",
     "test:taint-engine-csharp": "tsx test/taint-engine-csharp.test.ts",
+    "test:taint-engine-diag": "tsx test/taint-engine-diag.test.ts",
     "test:taint-engine-cve-targeted-fixtures": "tsx scripts/taint-engine-cve-targeted-fixtures.ts",
     "test:taint-engine-integration": "tsx test/taint-engine-integration.test.ts",
     "test:taint-engine-fp-filter": "tsx test/taint-engine-fp-filter.test.ts",
