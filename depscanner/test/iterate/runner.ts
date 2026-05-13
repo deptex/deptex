@@ -84,6 +84,12 @@ export interface PerCveResult {
   inputTokens: number;
   outputTokens: number;
   ruleYaml?: string;
+  /** AI-generated framework_spec for the CVE. Persisted into report.json so
+   *  post-hoc analysis can see exactly what sink/source/vuln_class the
+   *  model picked — critical for debugging fixture_pre_miss cases where
+   *  the engine SHOULD fire but doesn't (often a vuln_class or pattern-
+   *  shape mismatch the bundled-spec union doesn't bridge). */
+  frameworkSpec?: unknown;
   vulnerableFixture?: string;
   safeFixture?: string;
   validationLog?: ValidationLog;
@@ -267,6 +273,7 @@ async function runOne(args: {
         inputTokens: cumulativeInputTokens,
         outputTokens: cumulativeOutputTokens,
         ruleYaml: payload.rule_yaml,
+        frameworkSpec: payload.framework_spec,
         vulnerableFixture: payload.vulnerable_fixture,
         safeFixture: payload.safe_fixture,
         durationMs: Date.now() - start,
@@ -285,6 +292,7 @@ async function runOne(args: {
         inputTokens: cumulativeInputTokens,
         outputTokens: cumulativeOutputTokens,
         ruleYaml: payload.rule_yaml,
+        frameworkSpec: payload.framework_spec,
         vulnerableFixture: payload.vulnerable_fixture,
         safeFixture: payload.safe_fixture,
         validationLog: validation.log,

@@ -1,0 +1,67 @@
+# loader-utils framework spec — Deptex cross-file taint engine.
+#
+# Webpack's loader-utils ships `parseQuery(s)` which converts a `?key=val`
+# string into an options object. Versions <= 2.0.4 / <= 3.2.0 didn't sanitize
+# keys, so attacker-controlled `?__proto__[polluted]=true` polluted
+# Object.prototype across the entire process (CVE-2022-37601 family +
+# follow-ons CVE-2022-37599, CVE-2022-37603 in `interpolateName` /
+# `getOptions`).
+#
+# vuln_class mapping rationale.
+#   `prototype_pollution` — taint flows into the returned object's prototype
+#   chain. Mirrors node-stdlib.yaml's `_.merge` / `_.set` / `Object.assign`
+#   cluster.
+#
+# Static-style and wildcard-receiver coverage.
+#   `loaderUtils.parseQuery(*)` and `parseQuery(*)` cover the canonical
+#   call shapes (qualified import + destructured import). `*.parseQuery(*)`
+#   then catches instance forms (`utils.parseQuery(...)`). Method name is
+#   loader-utils-distinctive enough that wildcard cross-contamination is
+#   bounded — `String.prototype.parseQuery` doesn't exist in node stdlib.
+
+framework: loader-utils
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- CVE-2022-37601 — parseQuery proto-pollution ----------
+  - pattern: loaderUtils.parseQuery(*)
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: loader-utils parseQuery(s) — attacker-controlled query string keys pollute Object.prototype (CVE-2022-37601)
+  - pattern: parseQuery(*)
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: parseQuery destructured-import shape
+  - pattern: "*.parseQuery(*)"
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: <utils>.parseQuery(s) — instance-receiver shape
+
+  # ---------- CVE-2022-37603 — interpolateName ReDoS / proto-pollution ----------
+  - pattern: loaderUtils.interpolateName(*)
+    vuln_class: redos
+    argument_indices: [1]
+    description: loader-utils interpolateName(loader, name) — attacker-controlled name string ReDoS (CVE-2022-37603)
+  - pattern: interpolateName(*)
+    vuln_class: redos
+    argument_indices: [1]
+    description: interpolateName destructured-import shape
+  - pattern: "*.interpolateName(*)"
+    vuln_class: redos
+    argument_indices: [1]
+    description: <utils>.interpolateName(loader, name) — instance-receiver shape
+
+  # ---------- CVE-2022-37599 — getOptions proto-pollution ----------
+  - pattern: loaderUtils.getOptions(*)
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: loader-utils getOptions(loader) — proto-pollution via query parsing (CVE-2022-37599)
+  - pattern: getOptions(*)
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: getOptions destructured-import shape
+
+sanitizers: []
