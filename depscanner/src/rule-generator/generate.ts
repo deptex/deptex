@@ -60,6 +60,14 @@ export interface CallProviderArgs {
    *  point at DeepInfra / OpenRouter / Alibaba / any drop-in OpenAI-compat
    *  host without per-provider SDK work. Ignored for anthropic/google. */
   baseUrl?: string;
+  /** Provider-side sampling seed. OpenAI-compatible hosts (DeepInfra,
+   *  vLLM, Anthropic via `metadata.user_id` hack, etc.) accept a `seed`
+   *  field that makes sampling reproducible at temperature > 0 — used by
+   *  the iterate harness so per-CVE generations don't shift between
+   *  engine-change measurements. Anthropic + Google don't expose a seed
+   *  knob, so this is OpenAI-only today; the field is silently dropped
+   *  by Google/Anthropic. */
+  seed?: number;
 }
 
 export interface CallProviderResult {
@@ -474,6 +482,7 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
         temperature: 0.1,
         max_tokens: args.maxOutputTokens ?? 2_500,
         response_format: { type: 'json_object' },
+        ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),
         messages: [
           { role: 'system', content: SECURITY_DIRECTIVE },
           { role: 'user', content: args.prompt },

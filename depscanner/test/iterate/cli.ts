@@ -31,6 +31,12 @@ interface CliFlags {
   dryRun: boolean;
   limit?: number;
   outputRoot: string;
+  /** Provider-side sampling seed for reproducible iterate measurements.
+   *  Plumbed through to OpenAI-compatible `seed` body field. Anthropic /
+   *  Google ignore it (they don't expose a seed knob). Setting this lets
+   *  engine-change recall lifts emerge from AI-variance noise that
+   *  otherwise masks <6pp signal at temperature 0.1. */
+  seed?: number;
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -44,6 +50,11 @@ function parseFlags(argv: string[]): CliFlags {
     else if (arg === '--dry-run') flags.dryRun = true;
     else if (arg.startsWith('--limit=')) flags.limit = parseInt(arg.slice('--limit='.length), 10);
     else if (arg.startsWith('--output-root=')) flags.outputRoot = arg.slice('--output-root='.length);
+    else if (arg.startsWith('--seed=')) {
+      const n = parseInt(arg.slice('--seed='.length), 10);
+      if (!Number.isFinite(n)) throw new Error(`--seed must be an integer, got "${arg.slice('--seed='.length)}"`);
+      flags.seed = n;
+    }
   }
   if (!flags.variant) throw new Error('missing --variant=<name>');
   if (!flags.provider) flags.provider = 'openai';
@@ -126,6 +137,7 @@ async function main(): Promise<void> {
     concurrency: flags.concurrency,
     outputDir,
     dryRun: flags.dryRun,
+    seed: flags.seed,
   });
 
   process.stdout.write(formatSummary(report));

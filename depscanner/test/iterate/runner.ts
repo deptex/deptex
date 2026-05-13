@@ -56,6 +56,12 @@ export interface RunVariantOptions {
   githubToken?: string;
   /** Optional max output tokens passed to the provider call. */
   maxOutputTokens?: number;
+  /** Optional provider-side sampling seed. When set, OpenAI-compatible
+   *  providers produce reproducible generations across runs — the iterate
+   *  measurement floor (currently ~3pp stddev across trials) drops to
+   *  near-zero AI variance, so engine-change recall lifts become visible
+   *  even at small magnitudes. Silently ignored by Anthropic/Google. */
+  seed?: number;
 }
 
 export interface PerCveResult {
@@ -130,8 +136,9 @@ async function runOne(args: {
   fewShotExamples: FrameworkSpecFewShot[];
   perCveTimeoutMs: number;
   maxOutputTokens?: number;
+  seed?: number;
 }): Promise<PerCveResult> {
-  const { variant, cached, candidate, provider, model, apiKey, baseUrl, fewShotExamples, perCveTimeoutMs, maxOutputTokens } = args;
+  const { variant, cached, candidate, provider, model, apiKey, baseUrl, fewShotExamples, perCveTimeoutMs, maxOutputTokens, seed } = args;
   const start = Date.now();
   const base: PerCveResult = {
     cveId: candidate.cveId,
@@ -184,6 +191,7 @@ async function runOne(args: {
           apiKey,
           baseUrl,
           maxOutputTokens,
+          seed,
         }),
         perCveTimeoutMs,
         'provider_call',
@@ -382,6 +390,7 @@ export async function runVariant(opts: RunVariantOptions): Promise<VariantRunRep
           fewShotExamples: fewShots,
           perCveTimeoutMs: opts.perCveTimeoutMs ?? 360_000,
           maxOutputTokens: opts.maxOutputTokens,
+          seed: opts.seed,
         });
         const tag = result.status === 'validated' ? 'PASS' : 'fail';
         process.stderr.write(`[${opts.variant.NAME}] ${candidate.cveId} ${tag} (${result.status}) ${result.durationMs}ms $${result.costUsd.toFixed(4)}\n`);
