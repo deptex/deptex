@@ -535,6 +535,31 @@ sinks:
     argument_indices: [0]
     description: Rack::Utils.parse_query — historical ReDoS family
 
+  # ---------- ActiveSupport SafeBuffer mutation (CVE-2023-28120) ----------
+  # The activesupport bytesplice CVE: SafeBuffer#bytesplice mutates the
+  # underlying string past the html_safe flag check, so tainted bytes land
+  # inside an otherwise-safe HTML string. AI rule generation routinely emits
+  # patterns shaped `*.bytesplice(*)` which the schema accepts because
+  # `bytesplice` is a rare method name (low FP risk).
+  - pattern: "*.bytesplice(*)"
+    vuln_class: xss
+    argument_indices: [1]
+    description: ActiveSupport::SafeBuffer#bytesplice — mutates buffer past the safe-flag check (CVE-2023-28120)
+  - pattern: "*.replace(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: SafeBuffer#replace — mutation that drops the html_safe flag
+
+  # ---------- git gem command injection (CVE-2024-32465) ----------
+  - pattern: Git.clone(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: ruby-git Git.clone — repo URL routed into argv-less git clone (CVE-2024-32465)
+  - pattern: Git.ls_remote(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: ruby-git Git.ls_remote — URL routed into git ls-remote
+
 sanitizers:
   # ---------- SQL ----------
   - pattern: ActiveRecord.Base.sanitize_sql(*)
