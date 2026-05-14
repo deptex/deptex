@@ -19,7 +19,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import * as dotenv from 'dotenv';
 import type { VariantModule } from './runner';
-import { runVariant, formatSummary } from './runner';
+import { runVariant, runMultiTrial, formatSummary, formatMultiTrialSummary } from './runner';
 import type { AiProviderName } from '../../src/rule-generator/generate';
 
 interface CliFlags {
@@ -40,10 +40,15 @@ interface CliFlags {
   /** Sampling temperature override. Default 0.1; use 0 for greedy decoding
    *  (closest to deterministic per-CVE with seed). */
   temperature?: number;
+  /** Number of independent trials per CVE. When N>1, dispatch all (CVE × trial)
+   *  pairs through one pLimit gate and aggregate to union / majority /
+   *  intersection. Per-trial seed = `seed + trialIndex` so trial 0 reproduces
+   *  the single-trial baseline. Default 1 (preserves prior behaviour). */
+  trials: number;
 }
 
 function parseFlags(argv: string[]): CliFlags {
-  const flags: Partial<CliFlags> = { concurrency: 2, dryRun: false };
+  const flags: Partial<CliFlags> = { concurrency: 2, dryRun: false, trials: 1 };
   for (const arg of argv) {
     if (arg.startsWith('--variant=')) flags.variant = arg.slice('--variant='.length);
     else if (arg.startsWith('--provider=')) flags.provider = arg.slice('--provider='.length) as AiProviderName;
@@ -62,6 +67,11 @@ function parseFlags(argv: string[]): CliFlags {
       const t = parseFloat(arg.slice('--temperature='.length));
       if (!Number.isFinite(t) || t < 0 || t > 2) throw new Error(`--temperature must be in [0, 2], got "${arg.slice('--temperature='.length)}"`);
       flags.temperature = t;
+    }
+    else if (arg.startsWith('--trials=')) {
+      const n = parseInt(arg.slice('--trials='.length), 10);
+      if (!Number.isFinite(n) || n < 1) throw new Error(`--trials must be a positive integer, got "${arg.slice('--trials='.length)}"`);
+      flags.trials = n;
     }
   }
   if (!flags.variant) throw new Error('missing --variant=<name>');
@@ -134,6 +144,25 @@ async function main(): Promise<void> {
 
   const { CANDIDATES } = await import('./candidates');
   const candidates = flags.limit ? CANDIDATES.slice(0, flags.limit) : CANDIDATES;
+
+  if (flags.trials > 1) {
+    if (flags.dryRun) throw new Error('--dry-run is incompatible with --trials > 1 (no AI calls to repeat).');
+    const report = await runMultiTrial({
+      variant,
+      provider: flags.provider,
+      model: flags.model,
+      apiKey,
+      baseUrl: flags.baseUrl,
+      candidates,
+      concurrency: flags.concurrency,
+      outputDir,
+      seed: flags.seed,
+      temperature: flags.temperature,
+      trials: flags.trials,
+    });
+    process.stdout.write(formatMultiTrialSummary(report));
+    return;
+  }
 
   const report = await runVariant({
     variant,
