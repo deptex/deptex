@@ -52,6 +52,18 @@ const RAW_ALIASES: Record<string, string> = {
   // AI occasionally emits the broader `dos` label. Engine has `redos`,
   // not `dos`, so alias inbound `dos` onto `redos`.
   dos: 'redos',
+  // CVE-2022-23837 (rack multipart parser) — Qwen labels DoS-class CVEs as
+  // resource_exhaustion. Same canonicalisation target as `dos`: the engine
+  // models this as a ReDoS-style sink shape (regex/parser fed untrusted
+  // bytes) and treats both alias chains as redos.
+  resource_exhaustion: 'redos',
+
+  // CVE-2024-35195 family — TLS verification disabled. The model labels
+  // these `improper_cert_validation`; bundled `requests` / `urllib3` /
+  // `httpx` specs emit `weak_crypto` for `verify=False` insecure-default
+  // shapes. Both refer to the same primitive (broken TLS guarantee).
+  improper_cert_validation: 'weak_crypto',
+  tls_validation_bypass: 'weak_crypto',
 };
 
 /**

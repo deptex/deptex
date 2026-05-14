@@ -17,6 +17,7 @@ import {
   findRogueOsvIdInSinks,
   type GeneratedFrameworkSpecPayload,
 } from './framework-spec-schema';
+import { canonicalVulnClass } from './vuln-class-alias';
 
 const REQUEST_TIMEOUT_MS = Number(process.env.DEPTEX_RULE_PROVIDER_TIMEOUT_MS) || 180_000;
 
@@ -225,6 +226,15 @@ export function parseAndValidate(raw: string): ParseResult {
       `Model emitted osv_id on framework_spec.sinks[${rogueIdx}]. osv_id is server-generated; emitting it is a prompt-injection signal.`,
     );
   }
+
+  // Pre-canonicalize vuln_class strings before zod parses against the closed
+  // enum. The model routinely emits adjacent labels — `dos`, `log4shell`,
+  // `ssti`, `resource_exhaustion` — that are semantically equivalent to a
+  // bundled engine class. Canonicalising in-place lets the spec validate and
+  // proceed through Gate 2 instead of being terminally rejected as
+  // `vuln_class_out_of_scope`. Mutates the parsed JSON pre-schema; if a label
+  // has no alias the value is unchanged and zod's enum check fires normally.
+  applyVulnClassCanonicalization(parsed);
 
   const result = GeneratedFrameworkSpecPayloadSchema.safeParse(parsed);
   if (!result.success) {
@@ -585,5 +595,55 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
     throw new GenerationError('provider_error', `Google call failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clear();
+  }
+}
+
+/**
+ * Walk the parsed JSON and apply `canonicalVulnClass` in-place to every
+ * `vuln_class` (sink) and `vuln_classes[*]` (sanitizer + insecure_default)
+ * string. Catches AI emissions of adjacent labels (`dos`, `resource_exhaustion`,
+ * `ssti`, `log4shell`, `improper_cert_validation`) before zod's closed enum
+ * rejects them as `vuln_class_out_of_scope`. The alias map is intentionally
+ * conservative — labels with no alias pass through unchanged so zod still
+ * fires on genuinely off-enum values.
+ *
+ * Tolerant of ill-shaped input: bails silently if framework_spec isn't an
+ * object or if sinks isn't an array. The downstream zod parse will catch the
+ * structural problem with the proper error code.
+ */
+function applyVulnClassCanonicalization(parsed: unknown): void {
+  if (!parsed || typeof parsed !== 'object') return;
+  const root = parsed as Record<string, unknown>;
+  const spec = root.framework_spec;
+  if (!spec || typeof spec !== 'object') return;
+  const s = spec as Record<string, unknown>;
+
+  if (Array.isArray(s.sinks)) {
+    for (const sink of s.sinks) {
+      if (sink && typeof sink === 'object') {
+        const sk = sink as Record<string, unknown>;
+        if (typeof sk.vuln_class === 'string') sk.vuln_class = canonicalVulnClass(sk.vuln_class);
+      }
+    }
+  }
+  if (Array.isArray(s.sanitizers)) {
+    for (const san of s.sanitizers) {
+      if (san && typeof san === 'object') {
+        const sa = san as Record<string, unknown>;
+        if (Array.isArray(sa.vuln_classes)) {
+          sa.vuln_classes = sa.vuln_classes.map((v: unknown) =>
+            typeof v === 'string' ? canonicalVulnClass(v) : v,
+          );
+        }
+      }
+    }
+  }
+  if (Array.isArray(s.insecure_defaults)) {
+    for (const entry of s.insecure_defaults) {
+      if (entry && typeof entry === 'object') {
+        const e = entry as Record<string, unknown>;
+        if (typeof e.vuln_class === 'string') e.vuln_class = canonicalVulnClass(e.vuln_class);
+      }
+    }
   }
 }
