@@ -41,4 +41,21 @@ sinks:
         position: 2
         match_mode: required
 
+  # CVE-2022-23539 / CVE-2022-23540 — taint-flow shape: when the
+  # secret/options arg of jwt.sign or jwt.verify is itself attacker-
+  # influenced (e.g. signed with a key derived from request data, or
+  # verified against a header-supplied algorithm list), the resulting
+  # token can be forged or downgrade-attacked. The AI rule generator
+  # consistently emits both jwt.sign + jwt.verify as auth_bypass sinks
+  # with argi=[1,2] in passing trials; mirror that here so the engine
+  # fires deterministically on the same fixture shape.
+  - pattern: jwt.sign(*)
+    vuln_class: auth_bypass
+    argument_indices: [1, 2]
+    description: jwt.sign with attacker-influenced secret/options — forgery surface (CVE-2022-23539 family)
+  - pattern: jwt.verify(*)
+    vuln_class: auth_bypass
+    argument_indices: [1, 2]
+    description: jwt.verify with attacker-influenced secret/options — algorithm-confusion / weak-key forgery (CVE-2022-23540)
+
 sanitizers: []

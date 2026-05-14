@@ -47,4 +47,21 @@ sinks:
     argument_indices: [1]
     description: bare mergeConfig — destructured-import shape of axios.mergeConfig
 
+  # ---------- Proxy SSRF (CVE-2025-62718) ----------
+  # axios's internal `setProxy(req, proxy, location)` routes the outbound
+  # request through an attacker-controllable proxy. The `proxy` arg (index 1)
+  # and `location` arg (index 2) both become part of the connect URL; if
+  # either is attacker-controlled the request exfiltrates to the proxy.
+  # The AI fixture in the 2026-05-14 multi-trial passes shape:
+  # `setProxy(req, userProxy, userLoc)` — the bare-function shape covers
+  # destructured / re-exported imports.
+  - pattern: setProxy(*)
+    vuln_class: ssrf
+    argument_indices: [1, 2]
+    description: axios internal setProxy — proxy/location args route outbound request through attacker-supplied host (CVE-2025-62718)
+  - pattern: axios.setProxy(*)
+    vuln_class: ssrf
+    argument_indices: [1, 2]
+    description: axios.setProxy (qualified) — same SSRF surface
+
 sanitizers: []
