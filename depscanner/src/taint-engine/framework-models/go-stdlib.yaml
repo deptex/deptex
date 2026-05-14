@@ -243,6 +243,18 @@ sinks:
     argument_indices: [1]
     description: golang.org/x/net/html Render — emits tree without attr re-escape (CVE-2023-3978)
 
+  # ---------- golang.org/x/text ReDoS (CVE-2022-32149) ----------
+  # `language.ParseAcceptLanguage(header)` exhibits super-linear backtracking
+  # on crafted Accept-Language header values. Modeled as redos.
+  - pattern: language.ParseAcceptLanguage(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: golang.org/x/text/language ParseAcceptLanguage — ReDoS on crafted header (CVE-2022-32149)
+  - pattern: "*.ParseAcceptLanguage(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: instance-form ParseAcceptLanguage
+
   # ---------- Open redirect ----------
   - pattern: http.Redirect(*)
     vuln_class: open_redirect

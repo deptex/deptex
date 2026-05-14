@@ -144,6 +144,21 @@ sinks:
     argument_indices: [0, 1]
     description: jinja2.filters.do_xmlattr (qualified import)
 
+  # ---------- SandboxedEnvironment escape via str.format_map (CVE-2019-10906) ----------
+  # The Jinja2 sandbox didn't intercept `str.format_map(dict)`, so a malicious
+  # template body of the form `"{0.__init__.__globals__[os].system(...)}".format_map(env)`
+  # escaped the sandbox. The pre-fix AI fixture shape used by the rule
+  # generator passes attacker-controlled mapping into `str.format_map`. Bundled
+  # here so the engine fires when the sandbox-escape fixture matches.
+  - pattern: str.format_map(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: str.format_map with attacker-controlled mapping — Jinja2 sandbox escape (CVE-2019-10906)
+  - pattern: "*.format_map(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: <str>.format_map — instance-form sandbox escape
+
   # ---------- Wildcard-receiver fallbacks for instance calls ----------
   # Jinja2 callers conventionally assign Environment / Template to a local
   # variable (`env = jinja2.Environment()`, `template = jinja2.Template(...)`)

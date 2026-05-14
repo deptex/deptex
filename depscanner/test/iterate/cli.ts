@@ -45,6 +45,12 @@ interface CliFlags {
    *  intersection. Per-trial seed = `seed + trialIndex` so trial 0 reproduces
    *  the single-trial baseline. Default 1 (preserves prior behaviour). */
   trials: number;
+  /** Comma-separated CVE id allowlist. When set, only the listed CVE ids from
+   *  the CANDIDATES corpus are exercised — useful for cheap targeted re-runs
+   *  after a YAML / engine change (e.g. validating ~10 bucket-G targets for
+   *  ~$0.10 instead of the full 88-CVE run for ~$0.25). Matches case-
+   *  insensitively against `Candidate.cveId`. Unknown ids throw at startup. */
+  cves?: string[];
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -72,6 +78,11 @@ function parseFlags(argv: string[]): CliFlags {
       const n = parseInt(arg.slice('--trials='.length), 10);
       if (!Number.isFinite(n) || n < 1) throw new Error(`--trials must be a positive integer, got "${arg.slice('--trials='.length)}"`);
       flags.trials = n;
+    }
+    else if (arg.startsWith('--cves=')) {
+      const raw = arg.slice('--cves='.length);
+      flags.cves = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+      if (flags.cves.length === 0) throw new Error('--cves requires at least one comma-separated CVE id');
     }
   }
   if (!flags.variant) throw new Error('missing --variant=<name>');
@@ -143,7 +154,14 @@ async function main(): Promise<void> {
   process.stderr.write(`[${variant.NAME}] starting variant=${variant.NAME}@${variant.VERSION} provider=${flags.provider} model=${flags.model} baseUrl=${flags.baseUrl ?? '(default)'} → ${outputDir}\n`);
 
   const { CANDIDATES } = await import('./candidates');
-  const candidates = flags.limit ? CANDIDATES.slice(0, flags.limit) : CANDIDATES;
+  let candidates = flags.limit ? CANDIDATES.slice(0, flags.limit) : CANDIDATES;
+  if (flags.cves) {
+    const allowed = new Set(flags.cves.map((c) => c.toLowerCase()));
+    const known = new Set(CANDIDATES.map((c) => c.cveId.toLowerCase()));
+    const unknown = flags.cves.filter((c) => !known.has(c.toLowerCase()));
+    if (unknown.length) throw new Error(`--cves contains unknown CVE id(s): ${unknown.join(', ')}`);
+    candidates = candidates.filter((c) => allowed.has(c.cveId.toLowerCase()));
+  }
 
   if (flags.trials > 1) {
     if (flags.dryRun) throw new Error('--dry-run is incompatible with --trials > 1 (no AI calls to repeat).');

@@ -138,6 +138,29 @@ sinks:
     argument_indices: []
     description: Log4j 2 ParameterizedMessage constructor — any tainted argument treated as JNDI substitution
 
+  # ---------- log4j 1.x SocketAppender / Chainsaw deserialization (CVE-2023-26464) ----------
+  # Log4j 1.x SocketServer / SocketAppender / Chainsaw deserialise
+  # LoggingEvent objects from attacker-controlled sockets. The AI rule
+  # generator emits these as deserialization sinks with empty argi (any
+  # tainted construction or method call counts). Bundled here so the
+  # CVE-2023-26464 fixture round-trips deterministically.
+  - pattern: "SocketAppender.*"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x SocketAppender — deserialises LoggingEvent from socket (CVE-2023-26464)
+  - pattern: "Chainsaw.*"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x Chainsaw — deserialises LoggingEvent from socket (CVE-2023-26464)
+  - pattern: "new SocketAppender"
+    vuln_class: deserialization
+    argument_indices: []
+    description: SocketAppender constructor with attacker-controlled host
+  - pattern: "new SocketServer"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x SocketServer — deserialises LoggingEvent
+
 # The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
 # or upgrade past 2.17.1 — both are config-level, not API-level, so the
 # engine cannot model them as sanitizers.
