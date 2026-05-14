@@ -62,6 +62,10 @@ export interface RunVariantOptions {
    *  near-zero AI variance, so engine-change recall lifts become visible
    *  even at small magnitudes. Silently ignored by Anthropic/Google. */
   seed?: number;
+  /** Optional sampling temperature override (default 0.1). 0 = greedy
+   *  decoding; combined with `seed`, gives the closest approximation of
+   *  deterministic per-CVE generation that DeepInfra Qwen3-235B offers. */
+  temperature?: number;
 }
 
 export interface PerCveResult {
@@ -143,8 +147,9 @@ async function runOne(args: {
   perCveTimeoutMs: number;
   maxOutputTokens?: number;
   seed?: number;
+  temperature?: number;
 }): Promise<PerCveResult> {
-  const { variant, cached, candidate, provider, model, apiKey, baseUrl, fewShotExamples, perCveTimeoutMs, maxOutputTokens, seed } = args;
+  const { variant, cached, candidate, provider, model, apiKey, baseUrl, fewShotExamples, perCveTimeoutMs, maxOutputTokens, seed, temperature } = args;
   const start = Date.now();
   const base: PerCveResult = {
     cveId: candidate.cveId,
@@ -198,6 +203,7 @@ async function runOne(args: {
           baseUrl,
           maxOutputTokens,
           seed,
+          temperature,
         }),
         perCveTimeoutMs,
         'provider_call',
@@ -400,6 +406,7 @@ export async function runVariant(opts: RunVariantOptions): Promise<VariantRunRep
           perCveTimeoutMs: opts.perCveTimeoutMs ?? 360_000,
           maxOutputTokens: opts.maxOutputTokens,
           seed: opts.seed,
+          temperature: opts.temperature,
         });
         const tag = result.status === 'validated' ? 'PASS' : 'fail';
         process.stderr.write(`[${opts.variant.NAME}] ${candidate.cveId} ${tag} (${result.status}) ${result.durationMs}ms $${result.costUsd.toFixed(4)}\n`);

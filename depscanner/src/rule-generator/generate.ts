@@ -68,6 +68,12 @@ export interface CallProviderArgs {
    *  knob, so this is OpenAI-only today; the field is silently dropped
    *  by Google/Anthropic. */
   seed?: number;
+  /** Sampling temperature override. Default 0.1 (balanced for structured
+   *  JSON output). Lower values (0.0) push toward greedy decoding, which
+   *  combined with `seed` gives the closest thing to per-CVE determinism
+   *  DeepInfra Qwen3-235B offers. Used by iterate runs that need stable
+   *  measurement of engine/spec/prompt changes. */
+  temperature?: number;
 }
 
 export interface CallProviderResult {
@@ -479,7 +485,7 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
       signal: controller.signal,
       body: JSON.stringify({
         model: args.model,
-        temperature: 0.1,
+        temperature: typeof args.temperature === 'number' ? args.temperature : 0.1,
         max_tokens: args.maxOutputTokens ?? 2_500,
         response_format: { type: 'json_object' },
         ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),

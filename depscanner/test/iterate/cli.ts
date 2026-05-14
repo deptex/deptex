@@ -37,6 +37,9 @@ interface CliFlags {
    *  engine-change recall lifts emerge from AI-variance noise that
    *  otherwise masks <6pp signal at temperature 0.1. */
   seed?: number;
+  /** Sampling temperature override. Default 0.1; use 0 for greedy decoding
+   *  (closest to deterministic per-CVE with seed). */
+  temperature?: number;
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -54,6 +57,11 @@ function parseFlags(argv: string[]): CliFlags {
       const n = parseInt(arg.slice('--seed='.length), 10);
       if (!Number.isFinite(n)) throw new Error(`--seed must be an integer, got "${arg.slice('--seed='.length)}"`);
       flags.seed = n;
+    }
+    else if (arg.startsWith('--temperature=')) {
+      const t = parseFloat(arg.slice('--temperature='.length));
+      if (!Number.isFinite(t) || t < 0 || t > 2) throw new Error(`--temperature must be in [0, 2], got "${arg.slice('--temperature='.length)}"`);
+      flags.temperature = t;
     }
   }
   if (!flags.variant) throw new Error('missing --variant=<name>');
@@ -138,6 +146,7 @@ async function main(): Promise<void> {
     outputDir,
     dryRun: flags.dryRun,
     seed: flags.seed,
+    temperature: flags.temperature,
   });
 
   process.stdout.write(formatSummary(report));
