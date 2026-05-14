@@ -58,8 +58,8 @@ export interface Candidate {
 // (test/iterate/cache/CVE-*.json) populated during 5e/5f/5g remain valid and
 // the prior baseline can still be reproduced via --limit=18.
 const ORIGINAL_NPM_CORPUS: Candidate[] = [
-  { cveId: 'CVE-2025-62718', packageName: 'axios', packagePurl: 'pkg:npm/axios@0.21.1', ecosystem: 'npm' },
-  { cveId: 'CVE-2026-40175', packageName: 'axios', packagePurl: 'pkg:npm/axios@0.21.1', ecosystem: 'npm' },
+  { cveId: 'CVE-2025-62718', packageName: 'axios', packagePurl: 'pkg:npm/axios@0.21.1', ecosystem: 'npm', nonModelable: { reason: 'NO_PROXY bypass via internal setProxy function never invoked by user code; AI hallucinates a hand-shaped sink that has no callable surface' } },
+  { cveId: 'CVE-2026-40175', packageName: 'axios', packagePurl: 'pkg:npm/axios@0.21.1', ecosystem: 'npm', nonModelable: { reason: 'prototype-pollution via internal sanitizeHeaderValue helper that user code never calls directly' } },
   { cveId: 'CVE-2026-4800', packageName: 'lodash', packagePurl: 'pkg:npm/lodash@4.17.20', ecosystem: 'npm' },
   { cveId: 'CVE-2020-28500', packageName: 'lodash', packagePurl: 'pkg:npm/lodash@4.17.20', ecosystem: 'npm' },
   { cveId: 'CVE-2022-23539', packageName: 'jsonwebtoken', packagePurl: 'pkg:npm/jsonwebtoken@8.5.1', ecosystem: 'npm' },
@@ -117,14 +117,14 @@ const PYPI_CORPUS: Candidate[] = [
   { cveId: 'CVE-2024-22195', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@3.1.2', ecosystem: 'pypi' },
   { cveId: 'CVE-2024-34064', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@3.1.3', ecosystem: 'pypi' },
   { cveId: 'CVE-2019-10906', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@2.10', ecosystem: 'pypi' },
-  { cveId: 'CVE-2020-28493', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@2.11.2', ecosystem: 'pypi' },
+  { cveId: 'CVE-2020-28493', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@2.11.2', ecosystem: 'pypi', nonModelable: { reason: 'urlize filter ReDoS invoked via {{ text|urlize }} template syntax — taint engine does not parse Jinja templates, no Python callsite' } },
   { cveId: 'CVE-2022-22817', packageName: 'pillow', packagePurl: 'pkg:pypi/pillow@9.0.0', ecosystem: 'pypi' },
   { cveId: 'CVE-2021-25287', packageName: 'pillow', packagePurl: 'pkg:pypi/pillow@8.1.2', ecosystem: 'pypi' },
   { cveId: 'CVE-2023-30861', packageName: 'flask', packagePurl: 'pkg:pypi/flask@2.2.4', ecosystem: 'pypi', nonModelable: { reason: 'bug is inside flask save_session itself — no user-code source→sink edge to model' } },
   { cveId: 'CVE-2024-3651', packageName: 'idna', packagePurl: 'pkg:pypi/idna@3.6', ecosystem: 'pypi' },
   { cveId: 'CVE-2022-29217', packageName: 'pyjwt', packagePurl: 'pkg:pypi/pyjwt@2.3.0', ecosystem: 'pypi' },
   { cveId: 'CVE-2024-21503', packageName: 'black', packagePurl: 'pkg:pypi/black@23.12.1', ecosystem: 'pypi' },
-  { cveId: 'CVE-2023-37920', packageName: 'certifi', packagePurl: 'pkg:pypi/certifi@2023.7.22', ecosystem: 'pypi' },
+  { cveId: 'CVE-2023-37920', packageName: 'certifi', packagePurl: 'pkg:pypi/certifi@2023.7.22', ecosystem: 'pypi', nonModelable: { reason: 'bundled CA root removal — no source→sink edge, the bug is in shipped data not in a function' } },
   { cveId: 'CVE-2024-6345', packageName: 'setuptools', packagePurl: 'pkg:pypi/setuptools@69.5.1', ecosystem: 'pypi' },
 ];
 
@@ -144,10 +144,10 @@ const MAVEN_CORPUS: Candidate[] = [
   { cveId: 'CVE-2022-42889', packageName: 'org.apache.commons:commons-text', packagePurl: 'pkg:maven/org.apache.commons/commons-text@1.9', ecosystem: 'maven' },
   { cveId: 'CVE-2022-22965', packageName: 'org.springframework:spring-beans', packagePurl: 'pkg:maven/org.springframework/spring-beans@5.3.17', ecosystem: 'maven' },
   { cveId: 'CVE-2022-22978', packageName: 'org.springframework.security:spring-security-web', packagePurl: 'pkg:maven/org.springframework.security/spring-security-web@5.6.3', ecosystem: 'maven' },
-  { cveId: 'CVE-2023-34053', packageName: 'org.springframework.boot:spring-boot', packagePurl: 'pkg:maven/org.springframework.boot/spring-boot@3.1.6', ecosystem: 'maven' },
-  { cveId: 'CVE-2023-44483', packageName: 'org.apache.santuario:xmlsec', packagePurl: 'pkg:maven/org.apache.santuario/xmlsec@3.0.2', ecosystem: 'maven' },
+  { cveId: 'CVE-2023-34053', packageName: 'org.springframework.boot:spring-boot', packagePurl: 'pkg:maven/org.springframework.boot/spring-boot@3.1.6', ecosystem: 'maven', nonModelable: { reason: 'ObservationRegistry resource-exhaustion via unbounded label cardinality — not a taint data-flow shape' } },
+  { cveId: 'CVE-2023-44483', packageName: 'org.apache.santuario:xmlsec', packagePurl: 'pkg:maven/org.apache.santuario/xmlsec@3.0.2', ecosystem: 'maven', nonModelable: { reason: 'private key material logged when debug logging enabled — depends on log4j config not callsite shape' } },
   { cveId: 'CVE-2023-26464', packageName: 'log4j:log4j', packagePurl: 'pkg:maven/log4j/log4j@1.2.17', ecosystem: 'maven' },
-  { cveId: 'CVE-2017-12626', packageName: 'org.apache.poi:poi', packagePurl: 'pkg:maven/org.apache.poi/poi@3.15', ecosystem: 'maven' },
+  { cveId: 'CVE-2017-12626', packageName: 'org.apache.poi:poi', packagePurl: 'pkg:maven/org.apache.poi/poi@3.15', ecosystem: 'maven', nonModelable: { reason: 'XML entity-expansion DoS via internal POI helper PictureRunMapper — not callable by user code, also resource-exhaustion class not taint' } },
 ];
 
 // Go corpus — limited to packages whose module path resolves to a public
@@ -156,13 +156,13 @@ const MAVEN_CORPUS: Candidate[] = [
 // thins out fast outside the standard library mirrors.
 const GO_CORPUS: Candidate[] = [
   { cveId: 'CVE-2022-32149', packageName: 'golang.org/x/text', packagePurl: 'pkg:golang/golang.org/x/text@0.3.7', ecosystem: 'golang' },
-  { cveId: 'CVE-2022-27664', packageName: 'golang.org/x/net', packagePurl: 'pkg:golang/golang.org/x/net@0.0.0-20220906165146-f3363e06e74c', ecosystem: 'golang' },
+  { cveId: 'CVE-2022-27664', packageName: 'golang.org/x/net', packagePurl: 'pkg:golang/golang.org/x/net@0.0.0-20220906165146-f3363e06e74c', ecosystem: 'golang', nonModelable: { reason: 'HTTP/2 RST_STREAM flood — pure DoS, no data-flow shape' } },
   { cveId: 'CVE-2023-3978', packageName: 'golang.org/x/net', packagePurl: 'pkg:golang/golang.org/x/net@0.10.0', ecosystem: 'golang' },
-  { cveId: 'CVE-2023-44487', packageName: 'golang.org/x/net', packagePurl: 'pkg:golang/golang.org/x/net@0.16.0', ecosystem: 'golang' },
+  { cveId: 'CVE-2023-44487', packageName: 'golang.org/x/net', packagePurl: 'pkg:golang/golang.org/x/net@0.16.0', ecosystem: 'golang', nonModelable: { reason: 'HTTP/2 Rapid Reset — DoS class, not modellable as taint flow' } },
   { cveId: 'CVE-2024-45337', packageName: 'golang.org/x/crypto', packagePurl: 'pkg:golang/golang.org/x/crypto@0.30.0', ecosystem: 'golang' },
-  { cveId: 'CVE-2024-21626', packageName: 'github.com/opencontainers/runc', packagePurl: 'pkg:golang/github.com/opencontainers/runc@1.1.11', ecosystem: 'golang' },
+  { cveId: 'CVE-2024-21626', packageName: 'github.com/opencontainers/runc', packagePurl: 'pkg:golang/github.com/opencontainers/runc@1.1.11', ecosystem: 'golang', nonModelable: { reason: 'fd-leak via internal finalizeNamespace — no callable user-facing surface, the vuln is in libcontainer internals' } },
   { cveId: 'CVE-2024-28180', packageName: 'github.com/go-jose/go-jose/v4', packagePurl: 'pkg:golang/github.com/go-jose/go-jose/v4@4.0.0', ecosystem: 'golang' },
-  { cveId: 'CVE-2022-21698', packageName: 'github.com/prometheus/client_golang', packagePurl: 'pkg:golang/github.com/prometheus/client_golang@1.11.0', ecosystem: 'golang' },
+  { cveId: 'CVE-2022-21698', packageName: 'github.com/prometheus/client_golang', packagePurl: 'pkg:golang/github.com/prometheus/client_golang@1.11.0', ecosystem: 'golang', nonModelable: { reason: 'label-cardinality DoS — resource exhaustion class, not taint shape' } },
   { cveId: 'CVE-2022-29153', packageName: 'github.com/hashicorp/consul', packagePurl: 'pkg:golang/github.com/hashicorp/consul@1.11.4', ecosystem: 'golang' },
 ];
 
@@ -174,7 +174,7 @@ const RUBYGEMS_CORPUS: Candidate[] = [
   { cveId: 'CVE-2024-26143', packageName: 'actionpack', packagePurl: 'pkg:gem/actionpack@7.1.3', ecosystem: 'rubygems' },
   { cveId: 'CVE-2024-25126', packageName: 'sinatra', packagePurl: 'pkg:gem/sinatra@3.1.0', ecosystem: 'rubygems' },
   { cveId: 'CVE-2024-32465', packageName: 'git', packagePurl: 'pkg:gem/git@1.19.1', ecosystem: 'rubygems' },
-  { cveId: 'CVE-2022-23837', packageName: 'rack', packagePurl: 'pkg:gem/rack@2.2.3', ecosystem: 'rubygems' },
+  { cveId: 'CVE-2022-23837', packageName: 'rack', packagePurl: 'pkg:gem/rack@2.2.3', ecosystem: 'rubygems', nonModelable: { reason: 'multipart parser ReDoS — pure DoS class. Also AI consistently mis-attributes the spec to Sidekiq::Stats::History (wrong package), making it un-recoverable in the harness even after engine fixes' } },
 ];
 
 export const CANDIDATES: Candidate[] = [
