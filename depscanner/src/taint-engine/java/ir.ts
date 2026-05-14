@@ -458,9 +458,34 @@ function extractVarFromArg(arg: Node, source: string): LocalVar | null {
 function makeCalleeRef(node: Node, wc: WalkCtx): CalleeRef {
   const objectField = node.childForFieldName('object');
   const nameField = node.childForFieldName('name');
-  const fullText = node.childForFieldName('object')
-    ? `${textOf(objectField, wc.fileIndex.source)}.${textOf(nameField, wc.fileIndex.source)}`
-    : textOf(nameField, wc.fileIndex.source);
+  const methodName = nameField ? textOf(nameField, wc.fileIndex.source) : '<unknown>';
+
+  // Receiver-type resolution: when the receiver is a bare identifier whose
+  // declared type is known (from collected parameter / local / field types),
+  // rewrite the calleeText to use the type name. So `wrapper.setPropertyValue`
+  // becomes `BeanWrapper.setPropertyValue`, matching `BeanWrapper.setPropertyValue(*)`
+  // sink patterns AI rule-generation emits for Spring + Jackson + others.
+  //
+  // Mirrors the JS lowerer's localOrigins (ir.ts:284-291) but binds on
+  // DECLARED type rather than initializer literal. Java doesn't infer types
+  // from inits in our lowerer, but Java declarations carry the type
+  // explicitly (`BeanWrapper wrapper = ...`), so this is cheap to plumb.
+  //
+  // Only rewrites when the receiver is a single identifier — `this.field`,
+  // chains, casts, and complex expressions keep their verbatim text so
+  // chain pre-walk / `*.method(*)` wildcards still work as before.
+  let receiverText: string | null = null;
+  if (objectField) {
+    const objText = textOf(objectField, wc.fileIndex.source);
+    if (objectField.type === 'identifier' || /^[A-Za-z_][A-Za-z0-9_]*$/.test(objText)) {
+      const resolvedType = wc.localTypes.get(objText) ?? wc.fieldTypes.get(objText);
+      receiverText = resolvedType ?? objText;
+    } else {
+      receiverText = objText;
+    }
+  }
+
+  const fullText = receiverText ? `${receiverText}.${methodName}` : methodName;
 
   // Resolve through the same logic as callgraph pass-2.
   const resolved = resolveStaticInvocationToFunctionId(node, wc);
