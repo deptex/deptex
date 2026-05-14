@@ -281,8 +281,15 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         errorCode: 'no_specs_loaded',
       });
     } else {
-      const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter } = engineResult;
-      const survivors = flowsAfterFilter ?? propagation.flows;
+      const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter, detectorFlows } = engineResult;
+      const taintSurvivors = flowsAfterFilter ?? propagation.flows;
+      // Detector flows (Phase F4 sanitizer-absence + Phase 3.3 insecure-default)
+      // bypass the FP filter at engine_confidence=0.95 and ride alongside
+      // taint flows into project_reachable_flows. Empty for projects whose
+      // specs don't carry required_arguments / insecure_defaults entries.
+      const survivors = detectorFlows.length > 0
+        ? [...taintSurvivors, ...detectorFlows]
+        : taintSurvivors;
       const writeResult = await writeTaintEngineFlows(supabase, {
         projectId,
         extractionRunId: runId,
@@ -311,17 +318,19 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         isTypedJsProject: propagation.callgraph.isTypedJsProject,
         typedFilesPct: propagation.callgraph.typedFilesPct,
       });
+      const detectorSuffix =
+        detectorFlows.length > 0 ? ` + ${detectorFlows.length} detector finding(s)` : '';
       if (aiFilter?.invoked) {
         await log.success(
           'taint_engine',
-          `Emitted ${propagation.flows.length} flows; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
+          `Emitted ${propagation.flows.length} flows${detectorSuffix}; AI filter checked ${aiFilter.flowsChecked}, rejected ${aiFilter.flowsRejected} (kept ${survivors.length}). Cost $${aiFilter.costUsd.toFixed(4)}. ${propagation.stats.totalMs}ms total.`,
           Date.now() - stepStart,
         );
       } else {
         const reason = aiFilter?.skippedReason ? ` (filter skipped: ${aiFilter.skippedReason})` : '';
         await log.success(
           'taint_engine',
-          `Emitted ${propagation.flows.length} flows from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
+          `Emitted ${propagation.flows.length} flows${detectorSuffix} from ${frameworksLoaded.length} framework spec(s) in ${propagation.stats.totalMs}ms${reason}`,
           Date.now() - stepStart,
         );
       }

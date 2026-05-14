@@ -35,6 +35,9 @@ import { propagateCSharp } from './csharp/propagate';
 import { loadSpec } from './spec-loader';
 import type { FrameworkSpec, FrameworkLanguage } from './spec';
 import type { Flow } from './flow';
+import { detectSanitizerAbsence, extractCallSitesFromIr } from './non-taint-detector';
+import { detectInsecureDefaults } from './insecure-default-detector';
+import { sanitizerAbsenceToFlow, insecureDefaultToFlow } from './detector-flows';
 import {
   filterFlow,
   estimatePerFlowCostUsd,
@@ -193,6 +196,17 @@ export interface RunEngineResult {
   flowsAfterFilter: Flow[] | null;
   /** AI filter telemetry; null when ran=false or filter not configured. */
   aiFilter: AiFilterStats | null;
+  /**
+   * Non-taint detector findings coerced to `Flow` shape:
+   *   - Phase F4 sanitizer-absence (`required_arguments` on sinks).
+   *   - Phase 3.3 insecure-default (`insecure_defaults` on the spec).
+   *
+   * Engine_confidence is 0.95 so these bypass the FP filter — they are
+   * deterministic AST matches and don't need an LLM re-check. The
+   * pipeline caller merges these into the write set alongside
+   * `flowsAfterFilter`.
+   */
+  detectorFlows: Flow[];
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -236,6 +250,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       propagation: null,
       flowsAfterFilter: null,
       aiFilter: null,
+      detectorFlows: [],
     };
   }
 
@@ -333,6 +348,13 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     flowsAfterFilter = result.flowsAfterFilter;
   }
 
+  // Phase F4 + 3.3 — non-taint detector regimes. Walk IR callsites once and
+  // dispatch every loaded spec at the same set. Each finding is coerced to
+  // a single-hop Flow (engine_confidence=0.95) and returned separately so
+  // the pipeline writes them through the same project_reachable_flows path
+  // without the FP filter mistakenly second-guessing them.
+  const detectorFlows: Flow[] = runDetectors(specs, propagation, language, onWarn);
+
   return {
     ran: true,
     skippedReason: null,
@@ -340,7 +362,55 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     propagation,
     flowsAfterFilter,
     aiFilter,
+    detectorFlows,
   };
+}
+
+function runDetectors(
+  specs: FrameworkSpec[],
+  propagation: PropagateResult,
+  language: FrameworkLanguage,
+  onWarn?: (msg: string) => void,
+): Flow[] {
+  const irFunctions = propagation.irFunctions;
+  if (!irFunctions || irFunctions.length === 0) return [];
+
+  let callsites;
+  try {
+    callsites = extractCallSitesFromIr(irFunctions, language);
+  } catch (err) {
+    onWarn?.(`detector regime: extractCallSitesFromIr failed: ${(err as Error).message}`);
+    return [];
+  }
+  if (callsites.length === 0) return [];
+
+  const out: Flow[] = [];
+  for (const spec of specs) {
+    // Use the first osv_id we find across the spec's sinks as the CVE
+    // attribution for non-taint findings from THIS spec. CVE-targeted specs
+    // (cve-specs from organization_generated_rules) ship one CVE per spec,
+    // so this is a stable choice. Bundled framework specs leave it undefined.
+    const specOsvId = spec.sinks.find((s) => s.osv_id !== undefined)?.osv_id;
+
+    try {
+      const sanitizerFindings = detectSanitizerAbsence(spec, callsites);
+      for (const f of sanitizerFindings) {
+        out.push(sanitizerAbsenceToFlow(f, spec.framework, specOsvId));
+      }
+    } catch (err) {
+      onWarn?.(`detector regime: detectSanitizerAbsence(${spec.framework}) failed: ${(err as Error).message}`);
+    }
+
+    try {
+      const insecureDefaultFindings = detectInsecureDefaults({ specs: [spec], callsites });
+      for (const f of insecureDefaultFindings) {
+        out.push(insecureDefaultToFlow(f, specOsvId));
+      }
+    } catch (err) {
+      onWarn?.(`detector regime: detectInsecureDefaults(${spec.framework}) failed: ${(err as Error).message}`);
+    }
+  }
+  return out;
 }
 
 interface FpFilterStageOutput {
