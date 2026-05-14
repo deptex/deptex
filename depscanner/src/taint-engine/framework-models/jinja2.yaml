@@ -128,6 +128,22 @@ sinks:
     argument_indices: [0]
     description: jinja2.filters.do_mark_safe
 
+  # ---------- xmlattr filter (CVE-2024-22195, CVE-2024-34064) ----------
+  # When the AI rule generator writes a fixture that calls the filter
+  # function directly (`do_xmlattr(data)` after `from jinja2.filters
+  # import do_xmlattr`) the sink is the filter call itself rather than
+  # the render() call. Cover both the bare and qualified shapes; the
+  # `*.render(*)` wildcard below already covers the more common template-
+  # render flow.
+  - pattern: do_xmlattr(*)
+    vuln_class: xss
+    argument_indices: [0, 1]
+    description: jinja2.filters.do_xmlattr — xmlattr filter attribute-injection (CVE-2024-22195 / 34064)
+  - pattern: jinja2.filters.do_xmlattr(*)
+    vuln_class: xss
+    argument_indices: [0, 1]
+    description: jinja2.filters.do_xmlattr (qualified import)
+
   # ---------- Wildcard-receiver fallbacks for instance calls ----------
   # Jinja2 callers conventionally assign Environment / Template to a local
   # variable (`env = jinja2.Environment()`, `template = jinja2.Template(...)`)
