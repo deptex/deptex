@@ -33,7 +33,13 @@ Updated after each commit.
 | **Phase 1.1 — multi-trial averaging** | `d04bece` | `--trials=N` flag in iterate harness. Dispatches all (CVE × trial) tuples through one shared `pLimit` gate, aggregates per-CVE to union / majority / intersection, writes `multi-trial.json` + per-trial `report.json`. Per-trial seed = `seed + trialIndex` so trial 0 reproduces single-trial baseline. Trials=1 routes through unchanged `runVariant`. ~316 LOC across `runner.ts` + `cli.ts`. tsc clean. NOT YET validated on a real triple-trial run — that costs ~$0.66 at 88 CVEs × 3 trials × ~$0.0025. |
 | **Phase 2b-followup — requests.yaml wildcards** | `d304eb6` | Added `*.rebuild_proxies(*)`, `*.resolve_redirects(*)`, `*.prepare_request(*)` to requests.yaml. `matchesCallPattern` only matches `instance.method` callee text via `*.method` wildcard patterns; `Session.method` bare-receiver patterns do NOT match because last-segment fallback compares to bare callee text (just `rebuild_proxies`, not `session.rebuild_proxies`). Targets CVE-2023-32681 pre-fix shape. Corrected the misleading spec comment. Preflight 18/18 green. |
 | **Multi-trial validation run (Phase 1.1 + 2b-followup)** | `(measured)` | 88 CVE × 3 trials @ seed=42/43/44, temp=0, prompt-v2. **Per-trial: [51, 51, 54] / 88. Single-trial mean 59.1%, stddev 1.41pp** (vs 2.98pp at the unseeded variance baseline — tighter by half). **Union 60/88 = 68.2% (new ceiling). Majority 51/88 = 58.0% (stable signal). Intersection 45/88 = 51.1% (floor).** Funnel: schema 81/82/83 → pre 53/53/57 → safe 79/80/80 → post 54/55/55 → final 51/51/54. Cost $0.6838. Runtime 3.1 hr at concurrency 2. requests.yaml win materialized: CVE-2023-32681 hit 3/3 deterministically. Output at `bench-iterate/v_base/2026-05-14T06-49-39/{multi-trial.json,trial-0/,trial-1/,trial-2/}`. |
-| **Bucket-G specs for flippy CVE shapes** | `b56e5d8` | Reading the AI's working `framework_spec` from passing trials in the multi-trial output revealed 4 spec gaps. Closed three with bundled YAMLs: NEW `cryptography.yaml` (pkcs7 load_der/load_pem + pkcs12 serialize/load — CVE-2023-49083, CVE-2024-26130); added `html.Render(*)` to `go-stdlib.yaml` (CVE-2023-3978 golang.org/x/net/html); added `do_xmlattr(*)` to `jinja2.yaml` (CVE-2024-22195/34064 alternate AI shape). Lodash `_.template` + commons-text `StringSubstitutor.replace` patterns already in their YAMLs — variance there is AI fixture quality, not spec gap. Preflight 18/18 green. Validation pending: next iterate run should show these 3-5 CVEs flip from flippy (1-2/3) to deterministic (3/3). |
+| **Bucket-G specs for flippy CVE shapes** | `b56e5d8` | Reading the AI's working `framework_spec` from passing trials in the multi-trial output revealed 4 spec gaps. Closed three with bundled YAMLs: NEW `cryptography.yaml` (pkcs7 load_der/load_pem + pkcs12 serialize/load — CVE-2023-49083, CVE-2024-26130); added `html.Render(*)` to `go-stdlib.yaml` (CVE-2023-3978 golang.org/x/net/html); added `do_xmlattr(*)` to `jinja2.yaml` (CVE-2024-22195/34064 alternate AI shape). Lodash `_.template` + commons-text `StringSubstitutor.replace` patterns already in their YAMLs — variance there is AI fixture quality, not spec gap. Preflight 18/18 green. |
+| **Bucket-G batch 2 — JS ecosystem flippies** | `6fb765e` | Second mining pass on the 2026-05-14 multi-trial flippy set. Four additional patches: `axios.yaml` setProxy(*) + axios.setProxy(*) ssrf (CVE-2025-62718); `jsonwebtoken.yaml` jwt.sign(*) + taint-flow jwt.verify(*) with argi=[1,2] (CVE-2022-23539 / 23540); NEW `serialize-javascript.yaml` serialize(*) xss+redos (CVE-2024-11831 / 26-34043) with *.serialize wildcards; NEW `nanoid.yaml` nanoid(*) + customAlphabet(*) weak_crypto (CVE-2024-55565). Preflight 18/18 green. |
+| **Validation run 2 — DeepInfra balance hit zero** | `(measured, partial)` | Second 3-trial validation kicked off but DeepInfra hit HTTP 402 mid-run. Trial 0: 53/88 = **60.2%** (clean, vs prior trial-0 51/88 = 58%). Trial 1: 17/88 partial. Trial 2: 0/88 (all provider_error). Per-trial single-N can't claim variance band. Of 11 bucket-G targets, 4 validated in trial 0 (pkcs7, pkcs12, jwt.verify-as-taint, serialize-javascript xss). CVE-2023-32681 (requests.yaml from Phase 2b-followup) deterministic across two sessions. Re-run blocked on **Henry topping up DeepInfra balance**. Cost $0.26. |
+
+## Blocker (2026-05-14)
+
+DeepInfra account balance hit zero mid-validation run. Re-validation of the seven post-2b YAML commits is paused until top-up. Once funded, a `--trials=3 --seed=42 --temperature=0` rerun will give the clean 3-trial number; bucket-G targets that locked deterministically can be claimed, the rest classified as AI-variance vs spec-gap.
 
 ## Up next (decision pending)
 
@@ -97,9 +103,10 @@ Phase 1 closed 2026-05-13. Remaining queue:
 | r1 through r6 single-trial iterates (~$0.25 each) | ~$1.50 |
 | Variance + post-2b + seeded baselines | ~$1.15 |
 | Multi-trial validation (88 × 3 @ seed=42/43/44 temp=0) | $0.6838 |
-| **Total to date** | **~$4.08** |
+| Validation run 2 (partial — DeepInfra 402 at ~33%) | $0.2623 |
+| **Total to date** | **~$4.34** |
 
-Budget cap: $10. Remaining: ~$5.92.
+Budget cap: $10. Remaining: ~$5.66. Re-validation after top-up: another ~$0.66.
 
 Pending iterate spend per phase:
 - Multi-trial validation run (88 × 3 trials @ $0.0025): ~$0.66
