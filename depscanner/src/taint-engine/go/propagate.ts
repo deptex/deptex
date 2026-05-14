@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
+import type { IrFunction } from '../ir';
 import type { Node } from 'web-tree-sitter';
 import {
   buildCallersByCallee,
@@ -47,6 +48,8 @@ export interface PropagateGoResult {
     propagationMs: number;
     totalMs: number;
   };
+  /** See PropagateResult.irFunctions. */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagateGo(options: PropagateGoOptions): Promise<PropagateGoResult> {
@@ -113,6 +116,7 @@ export async function propagateGo(options: PropagateGoOptions): Promise<Propagat
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }
 

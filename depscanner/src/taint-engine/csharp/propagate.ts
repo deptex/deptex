@@ -10,6 +10,7 @@ import { lowerCSharpMethod } from './ir';
 import { buildCSharpCallgraphContext, type CSharpCallgraphContext } from './callgraph';
 import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
+import type { IrFunction } from '../ir';
 import type { Callgraph, FunctionId } from '../types';
 import {
   buildCallersByCallee,
@@ -43,6 +44,8 @@ export interface PropagateCSharpResult {
   flows: Flow[];
   callgraph: Callgraph;
   stats: PropagateCSharpStats;
+  /** See PropagateResult.irFunctions. */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagateCSharp(options: PropagateCSharpOptions): Promise<PropagateCSharpResult> {
@@ -135,5 +138,6 @@ export async function propagateCSharp(options: PropagateCSharpOptions): Promise<
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }

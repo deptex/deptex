@@ -7,6 +7,7 @@
 
 import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
+import type { IrFunction } from '../ir';
 import type { Callgraph, FunctionId } from '../types';
 import { buildPhpCallgraphContext, type PhpFileContext } from './callgraph';
 import { lowerPhpFunction } from './ir';
@@ -42,6 +43,8 @@ export interface PropagatePhpResult {
     propagationMs: number;
     totalMs: number;
   };
+  /** See PropagateResult.irFunctions. */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagatePhp(
@@ -109,5 +112,6 @@ export async function propagatePhp(
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }

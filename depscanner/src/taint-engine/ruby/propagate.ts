@@ -7,6 +7,7 @@
 
 import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
+import type { IrFunction } from '../ir';
 import type { Callgraph, FunctionId } from '../types';
 import { buildRubyCallgraphContext, type RubyFileContext } from './callgraph';
 import { lowerRubyMethod } from './ir';
@@ -42,6 +43,8 @@ export interface PropagateRubyResult {
     propagationMs: number;
     totalMs: number;
   };
+  /** See PropagateResult.irFunctions. */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagateRuby(
@@ -107,5 +110,6 @@ export async function propagateRuby(
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }
