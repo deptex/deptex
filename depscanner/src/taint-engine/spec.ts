@@ -165,6 +165,55 @@ export interface FrameworkSanitizer {
   description: string;
 }
 
+/**
+ * Phase 3.2 — regex-literal detector. The framework spec declares regex
+ * literals known to exhibit catastrophic backtracking on attacker-influenced
+ * input. The detector walks the codebase for matching regex literals (JS
+ * `/pat/` and `new RegExp("pat")`, Python `re.compile("pat")`, etc.) and
+ * emits a `redos` finding for each match without requiring a taint flow.
+ *
+ * Distinct from the taint-flow regime: this fires on the PRESENCE of the
+ * unsafe regex literal in the codebase, not on a source→sink edge. The
+ * underlying CVE is typically baked into a dependency's regex constant,
+ * so the bundled or AI-generated spec encodes which literals are known
+ * bad (e.g. debug-17-16137, jinja2-20-28493).
+ */
+export interface UnsafeRegexPattern {
+  /** Exact regex literal source (without surrounding `/.../` delimiters
+   *  for JS or quotes for Python). Matched as a substring against the
+   *  literal source text emitted by the AST. */
+  regex: string;
+  description: string;
+}
+
+/**
+ * Phase 3.3 — insecure-default detector. The framework spec declares call
+ * patterns where a named or positional argument's omission, or its value
+ * matching one of `forbidden_value_shapes`, indicates a sanitizer-absence
+ * vulnerability shape independent of taint flow.
+ *
+ * Overlaps semantically with FrameworkSink.required_arguments (Phase F4),
+ * but lives at the top-level spec rather than per-sink so detectors can
+ * be authored without needing a paired taint sink. Used for CVEs whose
+ * vuln_class is `weak_crypto` / `weak_default` (e.g. requests-24-35195's
+ * `verify=False` shape, flask-23-30861 session-without-secure-cookie).
+ */
+export interface InsecureDefault {
+  pattern: string;
+  description: string;
+  /** Kwarg name to check. */
+  argument_name?: string;
+  /** Or positional-index fallback. */
+  argument_position?: number;
+  /** When set, finding fires if the argument is absent OR its literal text
+   *  matches one of these shapes. When omitted (and argument_name/position
+   *  set), finding fires only on absence. */
+  forbidden_value_shapes?: string[];
+  /** vuln_class emitted by the detector. Defaults to `weak_default` if the
+   *  enum is extended; until then specs use `weak_crypto`. */
+  vuln_class?: VulnClass;
+}
+
 /** Language a framework spec applies to. Drives runner dispatch — Python
  * specs only apply to PyPI projects, etc. Defaults to 'js' when unset, for
  * backward compatibility with the original Express/Fastify/NestJS/Next/Hono
@@ -188,6 +237,14 @@ export interface FrameworkSpec {
   sources: FrameworkSource[];
   sinks: FrameworkSink[];
   sanitizers: FrameworkSanitizer[];
+  /** Phase 3.2 — regex literals the CVE patch identifies as ReDoS-prone.
+   *  Consumed by `regex-literal-detector.ts`. Optional; specs that don't
+   *  participate in the regex-literal regime leave it absent. */
+  unsafe_regex_patterns?: UnsafeRegexPattern[];
+  /** Phase 3.3 — call patterns where a missing kwarg or a forbidden literal
+   *  value indicates a sanitizer-absence shape. Consumed by
+   *  `insecure-default-detector.ts`. Optional. */
+  insecure_defaults?: InsecureDefault[];
 }
 
 /**

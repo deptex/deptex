@@ -20,11 +20,12 @@
  *  11. csharp              — C# substrate
  *  12. diag-emission       — DropReason exhaustiveness + NDJSON writer
  *  13. const-resolver      — Phase 2a JS single-assignment const resolver
- *  14. validate            — all framework specs against fixture matrix
- *  15. sanitizer-audit     — every -safe fixture exercises its sanitizer
- *  16. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
- *  17. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
- *  18. recall              — global recall % across all -vulns/ fixture pairs
+ *  14. regex-literal       — Phase 3.2 regex-literal detector (substring + dedup)
+ *  15. validate            — all framework specs against fixture matrix
+ *  16. sanitizer-audit     — every -safe fixture exercises its sanitizer
+ *  17. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
+ *  18. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
+ *  19. recall              — global recall % across all -vulns/ fixture pairs
  *
  * Run: npm run test:taint-engine-all
  *
@@ -54,6 +55,7 @@ const STAGES: Stage[] = [
   { name: 'csharp',           cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-csharp'] },
   { name: 'diag-emission',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-diag'] },
   { name: 'const-resolver',   cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-const-resolver'] },
+  { name: 'regex-literal',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-regex-literal'] },
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },
   { name: 'sanitizer-audit',  cmd: 'npm', args: ['run', '--silent', 'taint-engine:sanitizer-audit'] },
   { name: 'cve-targeted',     cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-cve-targeted-fixtures'] },

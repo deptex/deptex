@@ -365,7 +365,9 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `        "description": "<one-sentence why this call is the sink>"`,
     `      }`,
     `    ],`,
-    `    "sanitizers": []`,
+    `    "sanitizers": [],`,
+    `    "unsafe_regex_patterns": [],`,
+    `    "insecure_defaults": []`,
     `  },`,
     `  "vulnerable_fixture": "<minimal repro that triggers the engine — full source bytes, not pseudocode>",`,
     `  "safe_fixture": "<minimal repro that does NOT trigger — same callsite but with literal/safe input or sanitizer applied>",`,
@@ -397,6 +399,12 @@ export function buildGenerationPrompt(args: BuildPromptArgs): string {
     `- safe_fixture authoring: the simplest correct safe form is to pass a STATIC LITERAL (string, hard-coded constant) at the sink — no taint flow reaches the sink at all. Use this whenever the CVE allows. If the patch added a sanitizer function, you may declare it under \`sanitizers\` and call it in the safe fixture; only do this when the CVE genuinely requires it.`,
     `- pick \`reachability_level: "confirmed"\` when the spec uses a real source→sink flow (the typical case). Pick \`"function"\` only when the bug is a pure callsite shape with no dataflow (rare; usually means the CVE is in the options-bag-shape coverage gap).`,
     `- pick \`entry_point_class: "PUBLIC_UNAUTH"\` when the source is HTTP body / query / headers, \`"OFFLINE_WORKER"\` for queue/cron payloads, \`"AUTH_INTERNAL"\` otherwise.`,
+    ``,
+    `# Detector primitives (Phase 3 — optional; usually empty)`,
+    `Two optional top-level arrays unlock non-taint detector regimes for CVEs that don't fit the classical source→sink flow model. LEAVE BOTH EMPTY unless the CVE specifically calls for one of them.`,
+    `- \`unsafe_regex_patterns\`: list of \`{ "regex": "<literal pattern source>", "description": "..." }\`. Use ONLY when the CVE patch identifies a specific regex literal as ReDoS-prone (e.g. CVE-2017-16137 debug's coloring regex, CVE-2020-28493 jinja2's urlize regex). The detector fires on any source file containing the regex literal as a substring. Do NOT emit speculative ReDoS-shaped regexes — only literal sources verbatim from the patch.`,
+    `- \`insecure_defaults\`: list of \`{ "pattern": "<callee>", "argument_name": "<kwarg>", "forbidden_value_shapes": ["False", "false"], "description": "..." }\`. Use ONLY when the CVE patch is a kwarg-validation fix (e.g. requests.get(verify=False), Flask response.set_cookie(secure=False)). The detector fires on call sites that omit the kwarg OR pass one of \`forbidden_value_shapes\` as its literal value.`,
+    `If your CVE is a classical taint flow (XSS/SSRF/SQL injection/path traversal/etc.) leave both arrays \`[]\` — the sinks array is the right home.`,
   ].join('\n');
 }
 

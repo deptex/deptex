@@ -15,8 +15,10 @@ import {
   type FrameworkSink,
   type FrameworkSource,
   type FrameworkSpec,
+  type InsecureDefault,
   type RequiredArgument,
   type TaintKind,
+  type UnsafeRegexPattern,
   type VulnClass,
 } from './spec';
 
@@ -89,7 +91,70 @@ export function validateSpec(input: unknown, source?: string): FrameworkSpec {
   const sanitizers = expectArray(input, 'sanitizers', '$.sanitizers', source).map((s, i) =>
     validateSanitizer(s, `$.sanitizers[${i}]`, source),
   );
-  return { framework, version, language, sources, sinks, sanitizers };
+
+  // Phase 3.0 — optional regex-literal + insecure-default detector primitives.
+  // Absent in pre-Phase-3 specs; validated only when present so existing
+  // YAMLs/JSON specs roundtrip unchanged.
+  let unsafe_regex_patterns: UnsafeRegexPattern[] | undefined;
+  const regexRaw = (input as Record<string, unknown>).unsafe_regex_patterns;
+  if (regexRaw !== undefined) {
+    if (!Array.isArray(regexRaw)) {
+      throw new SpecValidationError('unsafe_regex_patterns must be an array', '$.unsafe_regex_patterns', source);
+    }
+    unsafe_regex_patterns = regexRaw.map((r, i) => validateUnsafeRegex(r, `$.unsafe_regex_patterns[${i}]`, source));
+  }
+  let insecure_defaults: InsecureDefault[] | undefined;
+  const defaultsRaw = (input as Record<string, unknown>).insecure_defaults;
+  if (defaultsRaw !== undefined) {
+    if (!Array.isArray(defaultsRaw)) {
+      throw new SpecValidationError('insecure_defaults must be an array', '$.insecure_defaults', source);
+    }
+    insecure_defaults = defaultsRaw.map((d, i) => validateInsecureDefault(d, `$.insecure_defaults[${i}]`, source));
+  }
+  return { framework, version, language, sources, sinks, sanitizers, unsafe_regex_patterns, insecure_defaults };
+}
+
+function validateUnsafeRegex(input: unknown, fieldPath: string, source?: string): UnsafeRegexPattern {
+  if (!isObject(input)) throw new SpecValidationError('unsafe_regex entry must be an object', fieldPath, source);
+  const regex = expectString(input, 'regex', `${fieldPath}.regex`, source);
+  const description = expectString(input, 'description', `${fieldPath}.description`, source);
+  return { regex, description };
+}
+
+function validateInsecureDefault(input: unknown, fieldPath: string, source?: string): InsecureDefault {
+  if (!isObject(input)) throw new SpecValidationError('insecure_default entry must be an object', fieldPath, source);
+  const pattern = expectString(input, 'pattern', `${fieldPath}.pattern`, source);
+  const description = expectString(input, 'description', `${fieldPath}.description`, source);
+  const out: InsecureDefault = { pattern, description };
+  const nameRaw = (input as Record<string, unknown>).argument_name;
+  if (nameRaw !== undefined) {
+    if (typeof nameRaw !== 'string' || nameRaw.length === 0) {
+      throw new SpecValidationError('argument_name must be a non-empty string when present', `${fieldPath}.argument_name`, source);
+    }
+    out.argument_name = nameRaw;
+  }
+  const posRaw = (input as Record<string, unknown>).argument_position;
+  if (posRaw !== undefined) {
+    if (typeof posRaw !== 'number' || !Number.isInteger(posRaw) || posRaw < 0) {
+      throw new SpecValidationError(`argument_position must be a non-negative integer, got ${JSON.stringify(posRaw)}`, `${fieldPath}.argument_position`, source);
+    }
+    out.argument_position = posRaw;
+  }
+  const shapesRaw = (input as Record<string, unknown>).forbidden_value_shapes;
+  if (shapesRaw !== undefined) {
+    if (!Array.isArray(shapesRaw) || shapesRaw.some((v) => typeof v !== 'string')) {
+      throw new SpecValidationError('forbidden_value_shapes must be an array of strings', `${fieldPath}.forbidden_value_shapes`, source);
+    }
+    out.forbidden_value_shapes = shapesRaw as string[];
+  }
+  const vcRaw = (input as Record<string, unknown>).vuln_class;
+  if (vcRaw !== undefined) {
+    if (typeof vcRaw !== 'string' || !VULN_CLASS_SET.has(vcRaw)) {
+      throw new SpecValidationError(`vuln_class must be one of ${ALL_VULN_CLASSES.join('|')}, got ${JSON.stringify(vcRaw)}`, `${fieldPath}.vuln_class`, source);
+    }
+    out.vuln_class = vcRaw as VulnClass;
+  }
+  return out;
 }
 
 function validateSource(input: unknown, fieldPath: string, source?: string): FrameworkSource {

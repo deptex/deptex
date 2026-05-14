@@ -32,6 +32,7 @@
     "test:taint-engine-csharp": "tsx test/taint-engine-csharp.test.ts",
     "test:taint-engine-diag": "tsx test/taint-engine-diag.test.ts",
     "test:taint-engine-const-resolver": "tsx test/taint-engine-const-resolver.test.ts",
+    "test:taint-engine-regex-literal": "tsx test/taint-engine-regex-literal.test.ts",
     "test:taint-engine-cve-targeted-fixtures": "tsx scripts/taint-engine-cve-targeted-fixtures.ts",
     "test:customer-app": "tsx scripts/taint-engine-customer-app-fixtures.ts",
     "test:taint-engine-integration": "tsx test/taint-engine-integration.test.ts",

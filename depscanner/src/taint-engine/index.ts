@@ -44,6 +44,14 @@ export type {
   NonTaintFinding,
 } from './non-taint-detector';
 
+export {
+  detectUnsafeRegexLiterals,
+} from './regex-literal-detector';
+export type {
+  RegexLiteralFinding,
+  DetectRegexLiteralsOptions,
+} from './regex-literal-detector';
+
 export { loadCveSpecsForExtraction } from './cve-specs';
 export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';
 

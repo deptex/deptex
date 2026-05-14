@@ -127,6 +127,30 @@ export const FrameworkSanitizerSchema = z.object({
 }).strict();
 
 /**
+ * Phase 3.2 — regex literals the CVE patch flags as ReDoS-prone. Consumed
+ * by regex-literal-detector.ts in the engine. Optional; specs that don't
+ * participate in the regime omit the field entirely.
+ */
+export const UnsafeRegexPatternSchema = z.object({
+  regex: z.string().min(1),
+  description: z.string().min(1),
+}).strict();
+
+/**
+ * Phase 3.3 — call sites where a missing or forbidden-value kwarg/arg
+ * indicates a sanitizer-absence shape independent of taint. Consumed by
+ * insecure-default-detector.ts.
+ */
+export const InsecureDefaultSchema = z.object({
+  pattern: z.string().min(1),
+  description: z.string().min(1),
+  argument_name: z.string().min(1).optional(),
+  argument_position: z.number().int().nonnegative().optional(),
+  forbidden_value_shapes: z.array(z.string()).optional(),
+  vuln_class: z.enum(VULN_CLASSES).optional(),
+}).strict();
+
+/**
  * The model-emitted FrameworkSpec. Sinks are osv_id-LESS at this layer; the
  * persistence step (`rule-generation-step.ts`) walks `sinks[]` and injects
  * `osv_id = cve_id` before writing to the DB.
@@ -138,6 +162,11 @@ export const FrameworkSpecJsonSchema = z.object({
   sources: z.array(FrameworkSourceSchema),
   sinks: z.array(FrameworkSinkSchema).min(1, 'framework_spec.sinks must have at least one entry — a CVE-targeted spec with no sinks emits no flows'),
   sanitizers: z.array(FrameworkSanitizerSchema),
+  // Phase 3.0 — optional detector primitives. .strict() rejects unknown
+  // keys at the spec level; declaring these explicitly keeps the schema
+  // shape pinned while allowing AI specs to omit them entirely.
+  unsafe_regex_patterns: z.array(UnsafeRegexPatternSchema).optional(),
+  insecure_defaults: z.array(InsecureDefaultSchema).optional(),
 }).strict();
 
 export type FrameworkSpecJson = z.infer<typeof FrameworkSpecJsonSchema>;
@@ -216,5 +245,7 @@ export function withOsvIdsSubstituted(spec: FrameworkSpecJson, cveId: string): P
   };
 }
 
-/** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5). */
-export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v2-rule-fixture-coherence';
+/** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5)
+ *  → `framework-spec-v2-rule-fixture-coherence` (2026-05-13)
+ *  → `framework-spec-v3-detector-primitives` (2026-05-14, Phase 3.0). */
+export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v3-detector-primitives';
