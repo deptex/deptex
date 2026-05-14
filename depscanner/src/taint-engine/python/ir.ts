@@ -383,6 +383,17 @@ function walkExpressionAsAssign(
       const fn = expr.childForFieldName('function');
       const argList = expr.childForFieldName('arguments');
       const calleeText = textOf(fn, ctx.opts.fileContext.source);
+      // Method-chain pre-walk: when the callee receiver is itself a call
+      // (`get_user(id).is_admin()`, `Session().get(url)`), lower the inner
+      // call as its own Step first so its sink/source/sanitizer matching
+      // fires. Mirrors the JS lowerer at ir.ts:393-407 + Java method-chain.
+      if (fn && fn.type === 'attribute') {
+        const recv = fn.childForFieldName('object') ?? fn.namedChild(0);
+        if (recv && recv.type === 'call') {
+          const innerTmp = `<chain@${steps.length}>`;
+          walkExpressionAsAssign(recv, innerTmp, steps, ctx);
+        }
+      }
       const callee = resolveCallee(calleeText, ctx);
       const args: (LocalVar | null)[] = [];
       const argTexts: string[] = [];

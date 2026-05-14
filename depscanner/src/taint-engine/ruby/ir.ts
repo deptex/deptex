@@ -649,6 +649,20 @@ function handleCall(
   const argList = expr.childForFieldName('arguments');
   const blockNode = expr.childForFieldName('block');
 
+  // Method-chain pre-walk: when the receiver is itself a call (chain like
+  // `User.find(id).admin?`), lower the inner call as its own Step first so
+  // its sink/source/sanitizer matching fires. Mirrors JS ir.ts:393-407 and
+  // Java java/ir.ts:292-299.
+  if (recvNode && (recvNode.type === 'call' || recvNode.type === 'method_call')) {
+    const innerArgs = recvNode.childForFieldName('arguments');
+    // Only pre-walk chains with actual call sites (skip accessor-style
+    // chains where `request.headers` is just a no-arg property read).
+    if (innerArgs && innerArgs.namedChildCount > 0) {
+      const innerTmp = `<chain@${steps.length}>`;
+      walkExpressionAsAssign(recvNode, innerTmp, steps, ctx);
+    }
+  }
+
   let calleeText: string;
   if (recvNode) {
     const recvText = textOf(recvNode, ctx.opts.fileContext.source);
