@@ -50,6 +50,7 @@ import {
   detectSanitizerAbsence,
   extractCallSitesFromIr,
 } from '../taint-engine/non-taint-detector';
+import { detectInsecureDefaults } from '../taint-engine/insecure-default-detector';
 import { canonicalVulnClass } from './vuln-class-alias';
 
 export interface ValidateRuleArgs {
@@ -252,9 +253,26 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   // log4j.yaml's `code_injection` sinks of the same pattern.
   const aiVulnClasses = new Set(engineSpec.sinks.map((s) => canonicalVulnClass(s.vuln_class)));
   const cveSinkPatterns = new Set<string>(engineSpec.sinks.map((s) => s.pattern));
+  // Phase 3.3 — also seed cveSinkPatterns with any insecure_defaults patterns
+  // the AI-generated spec declared. Detector findings use `sink_pattern =
+  // entry.pattern`, so without this the count loop in runEngineAndCount
+  // can't credit a fired insecure-default finding against the CVE.
+  if (engineSpec.insecure_defaults) {
+    for (const entry of engineSpec.insecure_defaults) {
+      cveSinkPatterns.add(entry.pattern);
+    }
+  }
   for (const spec of frameworkSpecs) {
     for (const sink of spec.sinks) {
       if (aiVulnClasses.has(canonicalVulnClass(sink.vuln_class))) cveSinkPatterns.add(sink.pattern);
+    }
+    if (spec.insecure_defaults) {
+      for (const entry of spec.insecure_defaults) {
+        const entryClass = entry.vuln_class
+          ? canonicalVulnClass(entry.vuln_class)
+          : 'weak_crypto';
+        if (aiVulnClasses.has(entryClass)) cveSinkPatterns.add(entry.pattern);
+      }
     }
   }
 
@@ -408,9 +426,28 @@ async function runEngineAndCount(args: RunEngineArgs): Promise<number> {
       const hasReqArgs = spec.sinks.some(
         (s) => s.required_arguments && s.required_arguments.length > 0,
       );
-      if (!hasReqArgs) continue;
-      const findings = detectSanitizerAbsence(spec, callsites);
-      for (const f of findings) {
+      if (hasReqArgs) {
+        const findings = detectSanitizerAbsence(spec, callsites);
+        for (const f of findings) {
+          if (args.cveSinkPatterns.has(f.sink_pattern)) count++;
+        }
+      }
+    }
+
+    // --- Phase 3.3 insecure-default detector ---
+    // Same wiring as F4 above but operates on the spec's top-level
+    // `insecure_defaults` (kwarg absence + forbidden value shapes), not
+    // sink.required_arguments. Each detector's `sink_pattern` is the entry's
+    // `pattern` field, so the cveSinkPatterns membership check still works.
+    const specsWithInsecureDefaults = args.specs.filter(
+      (s) => s.insecure_defaults && s.insecure_defaults.length > 0,
+    );
+    if (specsWithInsecureDefaults.length > 0) {
+      const idFindings = detectInsecureDefaults({
+        specs: specsWithInsecureDefaults,
+        callsites,
+      });
+      for (const f of idFindings) {
         if (args.cveSinkPatterns.has(f.sink_pattern)) count++;
       }
     }
