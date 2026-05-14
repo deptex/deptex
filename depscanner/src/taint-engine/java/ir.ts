@@ -277,6 +277,26 @@ function walkExpressionAsAssign(
   }
   // Method invocation
   if (t === 'method_invocation') {
+    // Method-chain support: when the receiver (`object`) is itself a method
+    // invocation or constructor call (e.g. `req.getQueryString().toLowerCase()`,
+    // `new Foo().bar()`), lower the inner call as its own Step first so its
+    // sink/source/sanitizer matching fires. Without this, the outer
+    // makeCalleeRef builds a calleeText like `req.getQueryString().toLowerCase`
+    // that matches no spec pattern, and the inner source call disappears.
+    // Mirrors the JS lowerer at ir.ts:393-407.
+    //
+    // The chain pre-walk depends on `Paths.get(*)` NOT being a path_traversal
+    // sink — otherwise `Paths.get(name).getFileName()` over-fires before the
+    // downstream `*.getFileName(*)` sanitizer can clean the receiver. Both
+    // changes ship in the same commit.
+    const objectField = expr.childForFieldName('object');
+    if (
+      objectField &&
+      (objectField.type === 'method_invocation' || objectField.type === 'object_creation_expression')
+    ) {
+      const innerTmp = `<chain@${steps.length}>`;
+      walkExpressionAsAssign(objectField, innerTmp, steps, wc);
+    }
     const argsNode = expr.childForFieldName('arguments');
     const argList: Node[] = [];
     if (argsNode) {
