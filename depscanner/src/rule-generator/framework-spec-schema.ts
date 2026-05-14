@@ -247,5 +247,7 @@ export function withOsvIdsSubstituted(spec: FrameworkSpecJson, cveId: string): P
 
 /** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5)
  *  → `framework-spec-v2-rule-fixture-coherence` (2026-05-13)
- *  → `framework-spec-v3-detector-primitives` (2026-05-14, Phase 3.0). */
-export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v3-detector-primitives';
+ *  → `framework-spec-v3-detector-primitives` (2026-05-14, Phase 3.0)
+ *  → `framework-spec-v3-ruby-instance-hint` (2026-05-14 PM, Ruby instance-
+ *    method guidance for CVE-2023-28120 family). */
+export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v3-ruby-instance-hint';

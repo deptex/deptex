@@ -51,6 +51,7 @@ interface CliFlags {
    *  ~$0.10 instead of the full 88-CVE run for ~$0.25). Matches case-
    *  insensitively against `Candidate.cveId`. Unknown ids throw at startup. */
   cves?: string[];
+  includeNonModelable?: boolean;
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -78,6 +79,9 @@ function parseFlags(argv: string[]): CliFlags {
       const n = parseInt(arg.slice('--trials='.length), 10);
       if (!Number.isFinite(n) || n < 1) throw new Error(`--trials must be a positive integer, got "${arg.slice('--trials='.length)}"`);
       flags.trials = n;
+    }
+    else if (arg === '--include-non-modelable') {
+      flags.includeNonModelable = true;
     }
     else if (arg.startsWith('--cves=')) {
       const raw = arg.slice('--cves='.length);
@@ -161,6 +165,22 @@ async function main(): Promise<void> {
     const unknown = flags.cves.filter((c) => !known.has(c.toLowerCase()));
     if (unknown.length) throw new Error(`--cves contains unknown CVE id(s): ${unknown.join(', ')}`);
     candidates = candidates.filter((c) => allowed.has(c.cveId.toLowerCase()));
+  }
+
+  // Drop CVEs forensically confirmed to not fit the taint data-flow model.
+  // They inflate the denominator without representing real engine gaps.
+  // `--include-non-modelable` re-includes them for re-confirmation runs.
+  if (!flags.includeNonModelable) {
+    const excluded = candidates.filter((c) => c.nonModelable);
+    if (excluded.length > 0) {
+      candidates = candidates.filter((c) => !c.nonModelable);
+      const reasons = excluded
+        .map((c) => `  - ${c.cveId} (${c.packageName}): ${c.nonModelable!.reason}`)
+        .join('\n');
+      process.stderr.write(
+        `[iterate] excluding ${excluded.length} non-modelable CVE(s); pass --include-non-modelable to keep them:\n${reasons}\n`,
+      );
+    }
   }
 
   if (flags.trials > 1) {

@@ -39,6 +39,19 @@ export interface Candidate {
   packageName: string;
   packagePurl: string;
   ecosystem: string;
+  /**
+   * Tag for CVEs that have been forensically confirmed NOT to fit the taint
+   * data-flow model. Examples: thread-local leakage across requests (no
+   * source→sink edge), bugs that live entirely inside the dependency's own
+   * code (the user's call shape is correct), session-state coordination
+   * issues. These inflate the denominator of recall metrics without
+   * representing real engine gaps.
+   *
+   * The iterate harness drops candidates with this field set unless
+   * `--include-non-modelable` is passed at the CLI. The reason string is
+   * surfaced in the run header so the exclusion is auditable.
+   */
+  nonModelable?: { reason: string };
 }
 
 // Original 18-CVE npm corpus from Phase 5d. Kept at top so cache files
@@ -107,7 +120,7 @@ const PYPI_CORPUS: Candidate[] = [
   { cveId: 'CVE-2020-28493', packageName: 'jinja2', packagePurl: 'pkg:pypi/jinja2@2.11.2', ecosystem: 'pypi' },
   { cveId: 'CVE-2022-22817', packageName: 'pillow', packagePurl: 'pkg:pypi/pillow@9.0.0', ecosystem: 'pypi' },
   { cveId: 'CVE-2021-25287', packageName: 'pillow', packagePurl: 'pkg:pypi/pillow@8.1.2', ecosystem: 'pypi' },
-  { cveId: 'CVE-2023-30861', packageName: 'flask', packagePurl: 'pkg:pypi/flask@2.2.4', ecosystem: 'pypi' },
+  { cveId: 'CVE-2023-30861', packageName: 'flask', packagePurl: 'pkg:pypi/flask@2.2.4', ecosystem: 'pypi', nonModelable: { reason: 'bug is inside flask save_session itself — no user-code source→sink edge to model' } },
   { cveId: 'CVE-2024-3651', packageName: 'idna', packagePurl: 'pkg:pypi/idna@3.6', ecosystem: 'pypi' },
   { cveId: 'CVE-2022-29217', packageName: 'pyjwt', packagePurl: 'pkg:pypi/pyjwt@2.3.0', ecosystem: 'pypi' },
   { cveId: 'CVE-2024-21503', packageName: 'black', packagePurl: 'pkg:pypi/black@23.12.1', ecosystem: 'pypi' },
@@ -156,7 +169,7 @@ const GO_CORPUS: Candidate[] = [
 // RubyGems corpus — Rails CVEs dominate (most public ruby vuln traffic). OSV
 // metadata is reliable here since rails/rails fix commits are well-cited.
 const RUBYGEMS_CORPUS: Candidate[] = [
-  { cveId: 'CVE-2022-23633', packageName: 'actionpack', packagePurl: 'pkg:gem/actionpack@7.0.0', ecosystem: 'rubygems' },
+  { cveId: 'CVE-2022-23633', packageName: 'actionpack', packagePurl: 'pkg:gem/actionpack@7.0.0', ecosystem: 'rubygems', nonModelable: { reason: 'thread-local state leakage across requests — not a data-flow shape' } },
   { cveId: 'CVE-2023-28120', packageName: 'activesupport', packagePurl: 'pkg:gem/activesupport@7.0.4.1', ecosystem: 'rubygems' },
   { cveId: 'CVE-2024-26143', packageName: 'actionpack', packagePurl: 'pkg:gem/actionpack@7.1.3', ecosystem: 'rubygems' },
   { cveId: 'CVE-2024-25126', packageName: 'sinatra', packagePurl: 'pkg:gem/sinatra@3.1.0', ecosystem: 'rubygems' },
