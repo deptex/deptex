@@ -13,9 +13,14 @@
 #                     URL into `session.get(url, verify=False)`.
 #
 # Both fixtures call methods on a `requests.Session` instance, so callee
-# text resolves to `session.<method>`. We therefore include both qualified
-# `requests.Session.method` sinks (matched via the engine's last-segment
-# fallback) and short-form `Session.method` sinks for clarity.
+# text resolves to `session.<method>`. The engine's `matchesCallPattern`
+# treats `*.method(*)` as a wildcard-receiver pattern that matches any
+# `<receiver>.method` callee text via `endsWith(.method)`. We therefore
+# include `*.method(*)` aliases for the requests-specific method names
+# (rebuild_proxies / resolve_redirects / prepare_request) where over-match
+# risk is bounded — generic names like `*.get(*)`, `*.post(*)`, `*.send(*)`
+# are deliberately NOT wildcard-aliased because they collide with the
+# entire `.get()`/`.send()` surface of other libraries.
 
 framework: requests
 language: python
@@ -158,6 +163,26 @@ sinks:
     vuln_class: ssrf
     argument_indices: [0]
     description: session.mount (bare receiver)
+
+  # ---------- Wildcard-receiver fallbacks for instance calls ----------
+  # The `Session.method` bare-receiver shapes above do NOT match real call
+  # sites like `session.rebuild_proxies(...)` — the engine matches by exact
+  # callee text or last-segment, and `session.rebuild_proxies` is neither
+  # equal to `Session.rebuild_proxies` nor to bare `rebuild_proxies`. The
+  # wildcards below close that gap. Method names are requests-specific
+  # enough that cross-library collision is bounded.
+  - pattern: "*.rebuild_proxies(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <session>.rebuild_proxies — leaked Proxy-Authorization on redirect (CVE-2023-32681)
+  - pattern: "*.resolve_redirects(*)"
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: <session>.resolve_redirects(resp, req, ...) — redirect handler with attacker URL
+  - pattern: "*.prepare_request(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <session>.prepare_request — pre-flight PreparedRequest build
 
 # `requests.utils.requote_uri` does NOT validate URLs, only requotes.
 # `requests.utils.urldefragauth` strips fragments. Neither is a security
