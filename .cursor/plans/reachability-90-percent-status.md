@@ -1,6 +1,6 @@
 # Reachability 90% — Implementation Status
 
-**Branch:** `worktree-depscanner-hardening` (consolidated 2026-05-13 — see [[feedback_one_branch_no_new_branches]]). Tip at start: `413ef48`; current: `3e319b5` + baseline commit.
+**Branch:** `worktree-depscanner-hardening` (consolidated 2026-05-13 — see [[feedback_one_branch_no_new_branches]]). Tip at start: `413ef48`; current: **`d304eb6`** (Phase 1.1 + 2b-followup landed).
 **Plan:** `.cursor/plans/reachability-90-percent.plan.md`
 **Started:** 2026-05-13
 
@@ -30,6 +30,21 @@ Updated after each commit.
 | **r5 (seed=42 temp=0)** | _(measured)_ | **55/88 = 62.50%** — NEW HIGH WATER MARK. +3 vs r4, +6 vs variance baseline mean (56.06%). Funnel: schema 82, fixturePre 57, final 55. 9 gained / 6 lost vs r4. Big eco wins: golang +3 (x/text-32149, x/net-3978, consul-29153), maven +2 (spring-security-22978, log4j-26464), pypi +2 (jinja2-22195, cryptography-26130). Cost $0.22. Conclusion: temp=0 + prompt-v2 is the new deterministic-ish baseline. |
 | **r6 confirmation** | _(measured)_ | **52/88 = 59.09%** — same config as r5 (55) yet 9 CVEs flipped (3 gained, 6 lost). Temp=0 is NOT fully deterministic on DeepInfra Qwen3-235B; the r5 +6pp was a lucky roll. Cost $0.26. |
 | **Honest recall picture across r4+r5+r6 (temp=0+prompt-v2)** | `(memo)` | Single-trial mean **~53/88 = 60.2%**, range 52-55. Union r5+r6 = **58/88 = 65.91%** (ceiling). Intersection = **49/88 = 55.68%** (stable floor). Funnel consistently shows +4 fixturePre vs r3 baseline — prompt-v2 IS real engine-side lift, but AI variance swallows ~half on patch_post_clean. Pushing further toward 100% needs multi-trial averaging infra OR a model swap — both bigger than autopilot scale. Cumulative session lift: variance baseline mean 56.06% → current mean ~60% = +4pp deterministic. |
+| **Phase 1.1 — multi-trial averaging** | `d04bece` | `--trials=N` flag in iterate harness. Dispatches all (CVE × trial) tuples through one shared `pLimit` gate, aggregates per-CVE to union / majority / intersection, writes `multi-trial.json` + per-trial `report.json`. Per-trial seed = `seed + trialIndex` so trial 0 reproduces single-trial baseline. Trials=1 routes through unchanged `runVariant`. ~316 LOC across `runner.ts` + `cli.ts`. tsc clean. NOT YET validated on a real triple-trial run — that costs ~$0.66 at 88 CVEs × 3 trials × ~$0.0025. |
+| **Phase 2b-followup — requests.yaml wildcards** | `d304eb6` | Added `*.rebuild_proxies(*)`, `*.resolve_redirects(*)`, `*.prepare_request(*)` to requests.yaml. `matchesCallPattern` only matches `instance.method` callee text via `*.method` wildcard patterns; `Session.method` bare-receiver patterns do NOT match because last-segment fallback compares to bare callee text (just `rebuild_proxies`, not `session.rebuild_proxies`). Targets CVE-2023-32681 pre-fix shape. Corrected the misleading spec comment. Preflight 18/18 green. |
+
+## Up next (decision pending)
+
+Phase 3 in the plan is substantially larger than Phases 1/2 — it introduces two new detector regimes with FP-corpus precision gates:
+
+- **3.0 schema-mirror prereq** — ~30-50 LOC across `spec.ts` + `spec-loader.ts` + `framework-spec-schema.ts` + `prompt-builder.ts` to declare `unsafe_regex_patterns` + `insecure_defaults` fields. INFRASTRUCTURE ONLY — no recall lift until 3.2/3.3 ship.
+- **3.1 migration `phase28d`** — `weak_default` enum + DEFAULT extension. Via Supabase MCP.
+- **3.2 `regex-literal-detector.ts`** — NEW detector file + ≥10 pos / ≥10 neg shape fixtures + pinned 500-file FP corpus (snapshot of `malicious-v2`) + 90% precision gate + Gate-0 AI dry-run. Targets debug-17-16137, jinja2-20-28493.
+- **3.3 `insecure-default-detector.ts`** — same scope as 3.2. Targets requests-24-35195, flask-23-30861.
+
+Per the plan's bottom-up projection (page 167-191), 3.2 + 3.3 together project +1.6 CVEs (TAM=4 × credit factor 0.4). That's ~2pp — below single-trial noise. The lift is real but ONLY visible through Phase 1.1's multi-trial averaging gate.
+
+Realistic ask: Phase 3 is 1.5-2.5 days of new code per the plan. Not autopilot-shaped without a checkpoint.
 
 Pushed branch `feat/reachability-90-percent` to origin.
 
@@ -75,6 +90,15 @@ Phase 1 closed 2026-05-13. Remaining queue:
 |---|---|
 | Variance probe (3 × $0.25) | $0.75 (done) |
 | Phase 2b code work | $0 (no AI calls) |
-| **Total to date** | **$0.75** |
+| Multi-trial harness work (Phase 1.1) | $0 (code only, no AI calls) |
+| requests.yaml wildcards (Phase 2b-followup) | $0 (YAML edit, no AI calls) |
+| r1 through r6 single-trial iterates (~$0.25 each) | ~$1.50 |
+| Variance + post-2b + seeded baselines | ~$1.15 |
+| **Total to date** | **~$3.40** |
 
-Budget cap: $10.
+Budget cap: $10. Remaining: ~$6.60.
+
+Pending iterate spend per phase:
+- Multi-trial validation run (88 × 3 trials @ $0.0025): ~$0.66
+- Phase 4.2-style per-eco regression rerun (88 × 1 trial): ~$0.25
+- Phase 5 final 3-trial lock: ~$0.66
