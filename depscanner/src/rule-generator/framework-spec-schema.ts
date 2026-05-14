@@ -217,4 +217,4 @@ export function withOsvIdsSubstituted(spec: FrameworkSpecJson, cveId: string): P
 }
 
 /** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5). */
-export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v1';
+export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v2-rule-fixture-coherence';
