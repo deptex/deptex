@@ -52,6 +52,14 @@ export type {
   DetectRegexLiteralsOptions,
 } from './regex-literal-detector';
 
+export {
+  detectInsecureDefaults,
+} from './insecure-default-detector';
+export type {
+  InsecureDefaultFinding,
+  DetectInsecureDefaultsOptions,
+} from './insecure-default-detector';
+
 export { loadCveSpecsForExtraction } from './cve-specs';
 export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';
 

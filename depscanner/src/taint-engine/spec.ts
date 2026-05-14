@@ -205,9 +205,12 @@ export interface InsecureDefault {
   argument_name?: string;
   /** Or positional-index fallback. */
   argument_position?: number;
-  /** When set, finding fires if the argument is absent OR its literal text
-   *  matches one of these shapes. When omitted (and argument_name/position
-   *  set), finding fires only on absence. */
+  /** When SET, finding fires only when the argument is PRESENT and its
+   *  literal text matches one of these shapes (e.g. `verify=False` on
+   *  `requests.Session`). Absence is treated as the safe default and
+   *  ignored. When OMITTED (and argument_name/position set), finding fires
+   *  only on ABSENCE — used for "kwarg defaults to insecure" shapes like
+   *  flask's `session_cookie_secure`. */
   forbidden_value_shapes?: string[];
   /** vuln_class emitted by the detector. Defaults to `weak_default` if the
    *  enum is extended; until then specs use `weak_crypto`. */
