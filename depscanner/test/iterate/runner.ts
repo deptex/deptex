@@ -319,6 +319,7 @@ async function runOne(args: {
       inputTokens: cumulativeInputTokens,
       outputTokens: cumulativeOutputTokens,
       ruleYaml: payload.rule_yaml,
+      frameworkSpec: payload.framework_spec,
       vulnerableFixture: payload.vulnerable_fixture,
       safeFixture: payload.safe_fixture,
       validationLog: validation.log,
