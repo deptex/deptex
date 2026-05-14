@@ -492,17 +492,24 @@ function hopFromStep(step: Step, kind: FlowNode['kind']): FlowNode {
 }
 
 /**
- * Given a source-step text like `q.name`, `q[idx]`, `obj->prop`, or
- * `Class::field`, return the leading identifier (the "receiver") so
- * propagate-core can fall back to receiver-taint when no framework
- * source pattern matches.
+ * Given a source-step text like `q.name`, `q[idx]`, `obj->prop`,
+ * `Class::field`, or `@params[:id]`, return the leading identifier (the
+ * "receiver") so propagate-core can fall back to receiver-taint when no
+ * framework source pattern matches.
  *
  * Returns null when the text is a single identifier (no field/index/scope
  * access) — in that case a source-step with no match means "this is just a
  * read of an untainted local", not "field access on tainted local".
+ *
+ * Ruby sigils — `@instance_var`, `@@class_var` — are part of the local
+ * binding name in the Ruby lowerer (ruby/ir.ts uses verbatim `textOf` for
+ * `instance_variable` / `class_variable` nodes), so the receiver must keep
+ * the sigil so the `local.get` lookup matches. PHP `$` is stripped
+ * upstream in `php/ir.ts:stripLeadingDollar` so it never reaches this
+ * function — keeping `$` rejected here surfaces upstream-strip regressions.
  */
 export function receiverRoot(text: string): string | null {
-  const m = text.match(/^([A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
+  const m = text.match(/^(@{0,2}[A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
   return m ? m[1] : null;
 }
 

@@ -167,6 +167,16 @@ function sectionA_receiverRoot() {
   // leading `$`. If it ever does, it should not match (no inheritance) —
   // which is the safe behavior.
   assertEqual(receiverRoot('$q->name'), null, 'PHP raw text with $ → null (must be stripped upstream)');
+
+  // Ruby instance / class variables — the lowerer keeps the sigil in the
+  // local binding name (ruby/ir.ts emits `textOf` verbatim for the
+  // instance_variable / class_variable cases), so receiverRoot must return
+  // it intact so the `local.get` lookup matches. Without this the
+  // `@params[:id]` source-step text on a tainted `@params` local drops as
+  // `source-no-match-no-receiver` even though `@params` IS in the map.
+  assertEqual(receiverRoot('@params[:id]'), '@params', 'Ruby instance var index: @params[:id] → @params');
+  assertEqual(receiverRoot('@params.name'), '@params', 'Ruby instance var field: @params.name → @params');
+  assertEqual(receiverRoot('@@class_var.foo'), '@@class_var', 'Ruby class var: @@class_var.foo → @@class_var');
 }
 
 // ---------------------------------------------------------------------------
