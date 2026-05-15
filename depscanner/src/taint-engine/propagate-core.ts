@@ -120,6 +120,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       worklist,
       maxPathLength,
       diagSink: opts.diagSink,
+      language: (opts.specs[0]?.language as MatcherLanguage | undefined),
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -152,6 +153,13 @@ interface AnalyzeArgs {
   worklist: Set<FunctionId>;
   maxPathLength: number;
   diagSink?: DiagSink;
+  /**
+   * Project language. Threaded into `matchesCallPattern` so dynamic-receiver
+   * languages (Python/Ruby/PHP) accept `Class.method` patterns matching
+   * `var.method` callee text. Derived from `specs[0].language` at the
+   * runWorklistAndAggregate entry point; null when specs are empty.
+   */
+  language?: MatcherLanguage;
 }
 
 function emitDrop(
@@ -197,7 +205,7 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength, diagSink } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, language } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
@@ -256,20 +264,20 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         break;
       }
       case 'call': {
-        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs);
+        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs, language);
         if (callSourceMatch && step.target) {
           local.set(step.target, makeTraceFromCall(callSourceMatch, step));
           sourcesAddedThisPass++;
           break;
         }
 
-        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs);
+        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs, language);
         if (sanMatch) {
           if (step.target) local.delete(step.target);
           break;
         }
 
-        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs);
+        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
         if (sinkMatch) {
           // Indices to check for taint at this call site.
           // - empty spec argument_indices → check every position (existing behaviour)
@@ -530,35 +538,63 @@ function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSour
   return null;
 }
 
-function matchCallSourcePattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSource | null {
+function matchCallSourcePattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSource | null {
   for (const spec of specs) {
     for (const src of spec.sources) {
       if (!src.pattern.endsWith('(*)')) continue;
-      if (matchesCallPattern(src.pattern, calleeText)) return src;
+      if (matchesCallPattern(src.pattern, calleeText, language)) return src;
     }
   }
   return null;
 }
 
-function matchSinkPattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSink | null {
+function matchSinkPattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSink | null {
   for (const spec of specs) {
     for (const sink of spec.sinks) {
-      if (matchesCallPattern(sink.pattern, calleeText)) return sink;
+      if (matchesCallPattern(sink.pattern, calleeText, language)) return sink;
     }
   }
   return null;
 }
 
-function matchSanitizerPattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSanitizer | null {
+function matchSanitizerPattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSanitizer | null {
   for (const spec of specs) {
     for (const san of spec.sanitizers) {
-      if (matchesCallPattern(san.pattern, calleeText)) return san;
+      if (matchesCallPattern(san.pattern, calleeText, language)) return san;
     }
   }
   return null;
 }
 
-export function matchesCallPattern(pattern: string, calleeText: string): boolean {
+type MatcherLanguage = 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp';
+
+export function matchesCallPattern(
+  pattern: string,
+  calleeText: string,
+  // Reserved for future per-language matcher tweaks. The 2026-05-15 dynamic-
+  // receiver loosening (`Class.method` → `var.method` for Ruby/Python/PHP)
+  // was reverted because generic-method patterns like `File.new(*)`,
+  // `Kernel.system(*)`, `IO.popen(*)` over-matched against unrelated
+  // receivers in the same language (e.g. `Regexp.new(...)` matching
+  // `File.new(*)`). Future loosening must be either per-method opt-in
+  // (allowlist) or driven by snake_case-of-class-name similarity, not a
+  // blanket bare-identifier acceptance. Param kept so call sites already
+  // thread `language` and a follow-up doesn't need to re-touch them.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _language?: MatcherLanguage,
+): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
   // Wildcard receiver: `*.method`, `*->method`, `*::method` — match any receiver
   // calling `method` via the spec-declared separator. Languages emit calleeText

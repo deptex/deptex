@@ -270,7 +270,26 @@ export function buildAttemptFailureFeedback(args: {
     lines.push(`Diagnosis: validation failed — errors=${(log.errors ?? []).join(' | ').slice(0, 240)}`);
   }
 
+  appendObservedCallsitesHint(lines, log);
+
   return lines.join('\n');
+}
+
+/**
+ * Append the engine-observed callsite list to feedback when Gate 2 failed.
+ * The model gets concrete callee texts from the vulnerable_fixture it
+ * authored — usually that's enough to flip its sink pattern from a guess
+ * (`Class.method`) to the actual emitted text (`instance.method`).
+ */
+function appendObservedCallsitesHint(lines: string[], log: ValidationLog): void {
+  const sites = log.engine_observed_callsites;
+  if (!sites || sites.length === 0) return;
+  lines.push('');
+  lines.push('-- Call sites the engine observed in your vulnerable_fixture --');
+  lines.push('Each line shows the verbatim callee text + args the engine matched against. Your sink pattern must match one of these exactly (or use a wildcard `*.method` for the same method name when receivers are bare instance vars). Lines whose method name overlaps with your declared sinks are listed first.');
+  for (const cs of sites) {
+    lines.push(`  ${cs.calleeText}(${cs.args})  @ ${cs.loc}`);
+  }
 }
 
 function appendPatchSymbolsHint(lines: string[], patchDiff: string | undefined): void {

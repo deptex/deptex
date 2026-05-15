@@ -51,7 +51,7 @@ import {
   extractCallSitesFromIr,
 } from '../taint-engine/non-taint-detector';
 import { detectInsecureDefaults } from '../taint-engine/insecure-default-detector';
-import { canonicalVulnClass } from './vuln-class-alias';
+import { canonicalVulnClass, vulnClassesAreEquivalent } from './vuln-class-alias';
 
 export interface ValidateRuleArgs {
   payload: GeneratedPayload;
@@ -124,6 +124,33 @@ export interface ValidationLog {
    *  string so the org-settings UI can render "we tried this CVE; uncoverable
    *  because: <reason>". Absent on validated rows. */
   terminal_reason?: string;
+  /** Up to ~20 candidate callsites the engine observed in the vulnerable
+   *  fixture when Gate 2 failed (fixturePre === 0 OR fixturePost > 0). The
+   *  retry-loop feedback prompt formats these so the model can see the
+   *  concrete callee texts + argument shapes it should be targeting. Empty /
+   *  absent on validated rows or when Gate 1 (schema) failed before Gate 2
+   *  ran. Best-effort: capture failure is silently swallowed (`engine_diag`
+   *  in errors[]). */
+  engine_observed_callsites?: ObservedCallsite[];
+}
+
+/**
+ * A concrete call site the engine observed in the AI's vulnerable_fixture.
+ * Used in retry feedback to show the model "the engine saw these — your sink
+ * pattern didn't match any of them. Pick one and update your pattern."
+ */
+export interface ObservedCallsite {
+  /** Verbatim callee text from the lowered IR (e.g. `safe_buffer.bytesplice`,
+   *  `wrapper.setPropertyValues`, `http.request`). The string is exactly what
+   *  the engine matched against; aligning the AI's `sink.pattern` to one of
+   *  these flips the spec from `fixture_pre_matches: 0` to `>0`. */
+  calleeText: string;
+  /** Source location (`file:line`). Helps the AI cross-reference the call to
+   *  the fixture body. */
+  loc: string;
+  /** Comma-joined argument texts, truncated. Lets the AI see whether its
+   *  `argument_indices` lines up with where the taint actually is. */
+  args: string;
 }
 
 export interface ValidationResult {
@@ -262,16 +289,29 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       cveSinkPatterns.add(entry.pattern);
     }
   }
+  // Equivalence groups (vulnClassesAreEquivalent) bridge cases where the
+  // AI's vuln_class label and the bundled spec's label are both correct
+  // framings of the same primitive. Example: Spring4Shell's
+  // BeanWrapperImpl.setPropertyValues is `code_injection` in spring-boot.yaml
+  // (bytes-to-class-loading) and `deserialization` in Qwen's emitted spec
+  // (attacker property paths deserialised into runtime classes). Without
+  // equivalence, the bundled sink doesn't widen onto the AI's CVE.
+  const sinkClassMatches = (bundledClass: string): boolean => {
+    const canonical = canonicalVulnClass(bundledClass);
+    if (aiVulnClasses.has(canonical)) return true;
+    for (const ai of aiVulnClasses) {
+      if (vulnClassesAreEquivalent(ai, canonical)) return true;
+    }
+    return false;
+  };
   for (const spec of frameworkSpecs) {
     for (const sink of spec.sinks) {
-      if (aiVulnClasses.has(canonicalVulnClass(sink.vuln_class))) cveSinkPatterns.add(sink.pattern);
+      if (sinkClassMatches(sink.vuln_class)) cveSinkPatterns.add(sink.pattern);
     }
     if (spec.insecure_defaults) {
       for (const entry of spec.insecure_defaults) {
-        const entryClass = entry.vuln_class
-          ? canonicalVulnClass(entry.vuln_class)
-          : 'weak_crypto';
-        if (aiVulnClasses.has(entryClass)) cveSinkPatterns.add(entry.pattern);
+        const entryClass = entry.vuln_class ?? 'weak_crypto';
+        if (sinkClassMatches(entryClass)) cveSinkPatterns.add(entry.pattern);
       }
     }
   }
@@ -280,6 +320,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
   const ext = sourceExtensionForLanguage(language);
   let fixturePre = 0;
   let fixturePost = 0;
+  let vulnIrFunctions: PropagateResult['irFunctions'] | undefined;
   const fixtureRoot = fs.mkdtempSync(path.join(args.workDir, 'rulegen-fix-'));
   try {
     const vulnDir = path.join(fixtureRoot, 'vulnerable');
@@ -289,24 +330,43 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
     fs.writeFileSync(path.join(vulnDir, `index.${ext}`), args.payload.vulnerable_fixture, 'utf8');
     fs.writeFileSync(path.join(safeDir, `index.${ext}`), args.payload.safe_fixture, 'utf8');
 
-    fixturePre = await runEngineAndCount({
+    const preResult = await runEngineAndCount({
       rootDir: vulnDir,
       specs: allSpecs,
       language,
       cveSinkPatterns,
       signal: args.signal,
     });
-    fixturePost = await runEngineAndCount({
+    fixturePre = preResult.count;
+    vulnIrFunctions = preResult.irFunctions;
+
+    const postResult = await runEngineAndCount({
       rootDir: safeDir,
       specs: allSpecs,
       language,
       cveSinkPatterns,
       signal: args.signal,
     });
+    fixturePost = postResult.count;
   } catch (err) {
     errors.push(`fixture_run: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     safeRm(fixtureRoot);
+  }
+
+  // --- Retry-loop telemetry: when Gate 2 fails, capture concrete callsites the
+  // engine saw in the vulnerable fixture. The buildAttemptFailureFeedback
+  // renderer surfaces these to the model so the next attempt can target a
+  // real callee text instead of guessing. Best-effort: silently skip on
+  // missing IR (engine threw, or language without IR exposure).
+  let observedCallsites: ObservedCallsite[] | undefined;
+  if (vulnIrFunctions && vulnIrFunctions.length > 0 && (fixturePre === 0 || fixturePost > 0)) {
+    try {
+      observedCallsites = collectObservedCallsites(vulnIrFunctions, language, engineSpec.sinks);
+    } catch (err) {
+      // Best-effort — diagnostic capture must never fail validation.
+      errors.push(`engine_diag: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // --- Gate 3: diff-targeted patch round-trip (optional) ---
@@ -377,6 +437,7 @@ export async function validateRule(args: ValidateRuleArgs): Promise<ValidationRe
       took_ms: Date.now() - start,
       patch_validation_skipped_reason: patchSkipReason,
       patch_per_file: patchPerFile,
+      engine_observed_callsites: observedCallsites,
       validation_breakdown: {
         schema_pass: true,
         pattern_compile_pass: true,
@@ -402,7 +463,14 @@ interface RunEngineArgs {
   signal?: AbortSignal;
 }
 
-async function runEngineAndCount(args: RunEngineArgs): Promise<number> {
+interface RunEngineResult {
+  count: number;
+  /** Reference to the lowered IR — exposed so the caller can extract
+   *  observed callsites for retry-loop feedback when Gate 2 fails. */
+  irFunctions: PropagateResult['irFunctions'];
+}
+
+async function runEngineAndCount(args: RunEngineArgs): Promise<RunEngineResult> {
   const result = await dispatchPropagate(args.rootDir, args.specs, args.language, args.signal);
   // Count flows whose sink_pattern was contributed by the CVE-targeted spec
   // (vs the bundled framework specs' sinks, which are noise here).
@@ -453,7 +521,81 @@ async function runEngineAndCount(args: RunEngineArgs): Promise<number> {
     }
   }
 
-  return count;
+  return { count, irFunctions: result.irFunctions };
+}
+
+/**
+ * Extract candidate callsites the engine observed in the AI's vulnerable
+ * fixture, ranked by likelihood of being the intended sink. Used in retry-
+ * loop feedback (rule-generator/index.ts buildAttemptFailureFeedback) to
+ * show the model concrete callee texts when its sink pattern missed.
+ *
+ * Ranking heuristic:
+ *   1. Method-name match: callee's last `.method` segment == any AI sink's
+ *      last segment. These are the highest-signal sites — the AI named the
+ *      right method but wrong receiver / qualifier.
+ *   2. Other call sites in the fixture, up to a small cap.
+ *
+ * Returns at most 12 entries to keep the retry prompt compact.
+ */
+function collectObservedCallsites(
+  irFunctions: NonNullable<PropagateResult['irFunctions']>,
+  language: FrameworkLanguage,
+  aiSinks: ReadonlyArray<{ pattern: string }>,
+): ObservedCallsite[] {
+  if (language === 'js' || language === 'python' || language === 'java' ||
+      language === 'go' || language === 'ruby' || language === 'php' ||
+      language === 'rust' || language === 'csharp') {
+    const sites = extractCallSitesFromIr(irFunctions, language);
+    if (sites.length === 0) return [];
+
+    // Collect the AI's sink method names (last `.` / `->` / `::` segment of
+    // each pattern, minus the trailing `(*)`). Used to bubble matches to the
+    // top of the candidate list.
+    const aiMethodNames = new Set<string>();
+    for (const s of aiSinks) {
+      const stripped = s.pattern.endsWith('(*)') ? s.pattern.slice(0, -3) : s.pattern;
+      const last = stripped.split(/[.:>-]+/).pop();
+      if (last) aiMethodNames.add(last);
+    }
+
+    const matchedByMethod: ObservedCallsite[] = [];
+    const other: ObservedCallsite[] = [];
+    const seen = new Set<string>();
+    for (const cs of sites) {
+      // Light de-dup: same callee + same line counts as one.
+      const key = `${cs.calleeText}@${cs.line ?? -1}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const argsJoined = cs.argTexts
+        .map((a: string) => (a.length > 40 ? a.slice(0, 37) + '...' : a))
+        .join(', ');
+      const args = argsJoined.length > 120 ? argsJoined.slice(0, 117) + '...' : argsJoined;
+      const entry: ObservedCallsite = {
+        calleeText: cs.calleeText,
+        loc: `${path.basename(cs.filePath ?? '?')}:${cs.line ?? '?'}`,
+        args,
+      };
+      const lastSeg = cs.calleeText.split(/[.:>-]+/).pop() ?? '';
+      if (aiMethodNames.has(lastSeg)) {
+        matchedByMethod.push(entry);
+      } else {
+        other.push(entry);
+      }
+    }
+    // Cap output: prefer method-matched first, then fill with up to 12 total.
+    const out: ObservedCallsite[] = [];
+    for (const e of matchedByMethod) {
+      if (out.length >= 12) break;
+      out.push(e);
+    }
+    for (const e of other) {
+      if (out.length >= 12) break;
+      out.push(e);
+    }
+    return out;
+  }
+  return [];
 }
 
 async function dispatchPropagate(
@@ -519,14 +661,14 @@ async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
       fs.writeFileSync(path.join(beforeDir, `${baseName}.${ext}`), before, 'utf8');
       fs.writeFileSync(path.join(afterDir, `${baseName}.${ext}`), after, 'utf8');
 
-      const pre = await runEngineAndCount({
+      const preResult = await runEngineAndCount({
         rootDir: beforeDir,
         specs: args.allSpecs,
         language: args.language,
         cveSinkPatterns: args.cveSinkPatterns,
         signal: args.signal,
       });
-      const post = await runEngineAndCount({
+      const postResult = await runEngineAndCount({
         rootDir: afterDir,
         specs: args.allSpecs,
         language: args.language,
@@ -534,6 +676,8 @@ async function runDiffTargetedValidation(args: DiffTargetedArgs): Promise<{
         signal: args.signal,
       });
 
+      const pre = preResult.count;
+      const post = postResult.count;
       preTotal += pre;
       postTotal += post;
       perFile.push({ path: file.path, pre, post });

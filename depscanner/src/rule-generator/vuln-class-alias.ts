@@ -105,3 +105,70 @@ export function canonicalVulnClass(c: string): string {
 export function getVulnClassAliases(): Readonly<Record<string, string>> {
   return ALIASES;
 }
+
+/**
+ * Equivalence groups for Gate 2 widening (validate.ts cveSinkPatterns).
+ *
+ * Unlike `RAW_ALIASES` (one-way many-to-one canonicalisation), an
+ * equivalence group declares that members are interchangeable for the
+ * purpose of "does this bundled sink count toward the AI's CVE?". The
+ * engine's emitted Flow still carries the original vuln_class — equivalence
+ * affects ONLY counting at validate.ts:265-275.
+ *
+ * Triaged shapes from 2026-05-15:
+ *   - Spring4Shell (CVE-2022-22965): AI emits `deserialization` on
+ *     `BeanWrapperImpl.setPropertyValues(*)`, bundled spring-boot.yaml
+ *     uses `code_injection` for the same pattern. Both are correct
+ *     framings — Spring4Shell's primitive IS deserialisation of attacker
+ *     property paths into runtime classes (deserialization), AND it's a
+ *     bytes-to-class-loading-as-code path (code_injection).
+ *   - Log4j 1.x SocketAppender (CVE-2023-26464): AI emits `deserialization`
+ *     on `Logger.{info,debug,warn,error}(*)`, bundled log4j.yaml uses
+ *     `code_injection` for the same call. The SocketServer downstream
+ *     deserialises the log event bytes — same dual framing.
+ *
+ * Risk: an AI-emitted `deserialization` CVE will additionally count any
+ * bundled `code_injection` sinks that fire (e.g. commons-text
+ * `StringSubstitutor.replace`, log4j JNDI lookup, spring-boot SpEL).
+ * Mitigation: the engine is already filtered by language, and the safe-
+ * fixture round-trip (`fixturePost === 0` requirement) catches over-firing
+ * — if the widened sink also fires on the safe fixture, validation fails.
+ */
+const EQUIVALENCE_GROUPS: readonly (readonly string[])[] = [
+  ['deserialization', 'code_injection'],
+];
+
+const EQUIVALENCE_INDEX: Map<string, Set<string>> = (() => {
+  const idx = new Map<string, Set<string>>();
+  const enumSet = new Set<string>(ALL_VULN_CLASSES as readonly string[]);
+  for (const group of EQUIVALENCE_GROUPS) {
+    // Drop any group with a member not in the engine enum so accidental
+    // drift fails silently rather than poisoning the match set.
+    if (!group.every((c) => enumSet.has(c))) continue;
+    const set = new Set(group);
+    for (const c of group) idx.set(c, set);
+  }
+  return idx;
+})();
+
+/**
+ * Returns true when two vuln_class labels should be treated as equivalent
+ * for Gate 2 widening. Symmetric: `vulnClassesAreEquivalent(a, b) ===
+ * vulnClassesAreEquivalent(b, a)`. Inputs are canonicalised first so this
+ * handles alias chains too (e.g. `log4shell` → `code_injection` ≡
+ * `deserialization`).
+ */
+export function vulnClassesAreEquivalent(a: string, b: string): boolean {
+  const ca = canonicalVulnClass(a);
+  const cb = canonicalVulnClass(b);
+  if (ca === cb) return true;
+  return EQUIVALENCE_INDEX.get(ca)?.has(cb) ?? false;
+}
+
+/**
+ * Exposed for tests / introspection. Frozen snapshot of the equivalence-
+ * group index keyed by canonical class.
+ */
+export function getVulnClassEquivalenceGroups(): readonly (readonly string[])[] {
+  return EQUIVALENCE_GROUPS;
+}
