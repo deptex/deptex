@@ -434,13 +434,31 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
             promptInjectionSuspect,
           };
         }
-        const retryable = status === 'parse_failed' || status === 'invalid_schema';
+        // `provider_error` is the catch-all for transient infrastructure
+        // failures (DeepInfra 502s, network blips, request timeouts that
+        // bubbled past the rate-limit-retry loop) — distinct from the model
+        // misbehaving. Retry within the same attempt budget with the SAME
+        // prompt and no feedback (the next call is just a fresh API attempt;
+        // feeding back "your provider failed" tells the model nothing useful).
+        // The 2026-05-15 13:18 bench showed trial 0 lost 8 CVEs to
+        // provider_error from a brief DeepInfra outage; each likely
+        // succeeds on a clean retry. Backoff for the retry happens inside
+        // callProviderAndParse's rate-limit loop (4-60s exponential).
+        const retryable = status === 'parse_failed' || status === 'invalid_schema' || status === 'provider_error';
         if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
-          revisionFeedback = buildAttemptFailureFeedback({
-            payload: null,
-            errorMessage: msg,
-            validation: null,
-          });
+          // For provider_error, skip the revision-feedback prompt and re-send
+          // the original prompt verbatim — the model didn't misbehave, the
+          // infrastructure did. Telling the model "you got a 502" pollutes
+          // the prompt and may push it to emit a defensive (wrong) spec.
+          if (status === 'provider_error') {
+            revisionFeedback = null;
+          } else {
+            revisionFeedback = buildAttemptFailureFeedback({
+              payload: null,
+              errorMessage: msg,
+              validation: null,
+            });
+          }
           continue;
         }
         return {
