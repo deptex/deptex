@@ -580,18 +580,51 @@ function matchSanitizerPattern(
 
 type MatcherLanguage = 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp';
 
+/**
+ * Allowlist of method names where `Class.method` patterns may also match
+ * `var.method` callee text — opt-in dynamic-receiver loosening.
+ *
+ * Membership rule: the method name must be specific enough that false
+ * positives from an unrelated receiver are bounded. Concrete criteria:
+ *   1. Length ≥ 7 characters (filters generic 3-4 char names like `new`,
+ *      `open`, `read`, `get`, `set`).
+ *   2. Not a method on any stdlib base type (no `Object.toString`,
+ *      `String.split`, `Array.from` — those would match any local).
+ *   3. Tied to a known CVE shape OR a published library API surface where
+ *      the method is the load-bearing primitive.
+ *
+ * Adding a name here is equivalent to adding `*.method(*)` to every spec
+ * that mentions `Class.method(*)` for the same vuln_class. Same FP risk
+ * profile as the existing wildcard-receiver YAMLs (`*.bytesplice(*)` in
+ * rails.yaml, `*.setPropertyValues(*)` in spring-boot.yaml). The blanket
+ * dynamic-language loosening attempted 2026-05-15 was reverted because it
+ * accepted ALL bare-identifier receivers, which over-matched generic
+ * patterns like `File.new(*)` against `Regexp.new(...)`. This allowlist
+ * is the narrower, principled version of that same idea.
+ */
+const PERMISSIVE_INSTANCE_METHODS: ReadonlySet<string> = new Set([
+  // Ruby ActiveSupport SafeBuffer (CVE-2023-28120). `*.bytesplice(*)`
+  // already shipped in rails.yaml; this entry lets AI-emitted
+  // `SafeBuffer.bytesplice(*)` match `safe_buffer.bytesplice(...)` callees
+  // without the bundled wildcard.
+  'bytesplice',
+  // Spring4Shell (CVE-2022-22965) — DataBinder property paths and
+  // BeanWrapperImpl setters. AI patterns are class-qualified; the engine
+  // sees `wrapper.setPropertyValue(...)` callees in user fixtures.
+  'setPropertyValue',
+  'setPropertyValues',
+  // SpEL parsing (Spring4Shell + CVE-2023-34053 family). Method name is
+  // specific to SpelExpressionParser.
+  'parseExpression',
+  // Python str.format_map untrusted-format-string CVEs. `format_map` is
+  // python-stdlib-only on str; bare-identifier callees `template.format_map(d)`
+  // map cleanly to the AI's `String.format_map(*)` pattern.
+  'format_map',
+]);
+
 export function matchesCallPattern(
   pattern: string,
   calleeText: string,
-  // Reserved for future per-language matcher tweaks. The 2026-05-15 dynamic-
-  // receiver loosening (`Class.method` → `var.method` for Ruby/Python/PHP)
-  // was reverted because generic-method patterns like `File.new(*)`,
-  // `Kernel.system(*)`, `IO.popen(*)` over-matched against unrelated
-  // receivers in the same language (e.g. `Regexp.new(...)` matching
-  // `File.new(*)`). Future loosening must be either per-method opt-in
-  // (allowlist) or driven by snake_case-of-class-name similarity, not a
-  // blanket bare-identifier acceptance. Param kept so call sites already
-  // thread `language` and a follow-up doesn't need to re-touch them.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _language?: MatcherLanguage,
 ): boolean {
@@ -607,6 +640,18 @@ export function matchesCallPattern(
   if (calleeText === p) return true;
   const last = p.split('.').pop();
   if (last && calleeText === last) return true;
+
+  // Per-method opt-in instance-receiver loosening. When pattern is
+  // `Class.method` and `method` is in PERMISSIVE_INSTANCE_METHODS, allow
+  // `<any>.method` callee text to match too — the method name is specific
+  // enough that the FP risk is bounded, and the alternative is forcing
+  // every bundled YAML to spell out `*.method(*)` explicitly for each
+  // permissive method (boilerplate that drifts as new CVEs land).
+  if (last && PERMISSIVE_INSTANCE_METHODS.has(last) && p.includes('.')) {
+    if (calleeText.endsWith('.' + last) || calleeText.endsWith('->' + last) || calleeText.endsWith('::' + last)) {
+      return true;
+    }
+  }
   return false;
 }
 
