@@ -64,6 +64,15 @@ const RAW_ALIASES: Record<string, string> = {
   // shapes. Both refer to the same primitive (broken TLS guarantee).
   improper_cert_validation: 'weak_crypto',
   tls_validation_bypass: 'weak_crypto',
+
+  // CVE-2021-25287 (pillow) — Qwen labels memory-safety bugs that surface
+  // through crafted image bytes as `out_of_bounds_read`. The engine has no
+  // memory-safety class today; the closest taint-shape primitive is `redos`
+  // (parser fed untrusted bytes triggers super-linear / unbounded compute).
+  // Same canonicalisation chain as `dos` / `resource_exhaustion`.
+  out_of_bounds_read: 'redos',
+  buffer_overflow: 'redos',
+  memory_corruption: 'redos',
 };
 
 /**

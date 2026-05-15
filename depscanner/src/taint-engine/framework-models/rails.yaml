@@ -543,8 +543,8 @@ sinks:
   # `bytesplice` is a rare method name (low FP risk).
   - pattern: "*.bytesplice(*)"
     vuln_class: xss
-    argument_indices: [1]
-    description: ActiveSupport::SafeBuffer#bytesplice — mutates buffer past the safe-flag check (CVE-2023-28120)
+    argument_indices: [1, 2]
+    description: ActiveSupport::SafeBuffer#bytesplice — mutates buffer past the safe-flag check (CVE-2023-28120). Indices cover both 2-arg `bytesplice(index, value)` and 3-arg `bytesplice(start, length, value)` overloads.
   - pattern: "*.replace(*)"
     vuln_class: xss
     argument_indices: [0]
