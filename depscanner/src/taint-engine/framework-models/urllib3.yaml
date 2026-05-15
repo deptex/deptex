@@ -26,7 +26,11 @@ sinks:
   - pattern: urllib3.PoolManager.urlopen(*)
     vuln_class: ssrf
     argument_indices: [1]
-    description: urllib3.PoolManager.urlopen(method, url, ...)
+    description: urllib3.PoolManager.urlopen(method, url, ...) — also fires F4 redirect-leak when redirect kwarg is missing or truthy (CVE-2023-45803)
+    required_arguments:
+      - name: redirect
+        match_mode: forbidden
+        unsafe_literals: ['True', 'true', '1']
   - pattern: urllib3.HTTPConnectionPool.request(*)
     vuln_class: ssrf
     argument_indices: [1]
@@ -111,7 +115,11 @@ sinks:
   - pattern: "*.urlopen(*)"
     vuln_class: ssrf
     argument_indices: [1]
-    description: <pool>.urlopen(method, url, ...)
+    description: <pool>.urlopen(method, url, ...) — also fires F4 redirect-leak (CVE-2023-45803)
+    required_arguments:
+      - name: redirect
+        match_mode: forbidden
+        unsafe_literals: ['True', 'true', '1']
   - pattern: "*.connection_from_url(*)"
     vuln_class: ssrf
     argument_indices: [0]

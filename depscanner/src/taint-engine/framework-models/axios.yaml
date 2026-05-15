@@ -64,4 +64,27 @@ sinks:
     argument_indices: [1, 2]
     description: axios.setProxy (qualified) — same SSRF surface
 
+  # ---------- axios.create config + AxiosHeaders.set (CVE-2026-25639 family) ----------
+  # axios.create(config) — first-arg keys flow into the global defaults
+  # chain, which `proxy`, `headers`, `transformRequest`, and friends
+  # propagate from. Attacker-controlled config keys (especially
+  # `__proto__` / `constructor.prototype`) poison the per-instance
+  # defaults and downstream cross-instance state. Qwen fixtures
+  # consistently emit this shape.
+  - pattern: axios.create(*)
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: axios.create(config) — first-arg keys flow into the per-instance defaults chain (CVE-2026-25639 family)
+  - pattern: "*.create(*)"
+    vuln_class: prototype_pollution
+    argument_indices: [0]
+    description: axios.create (wildcard receiver — destructured import)
+
+  # AxiosHeaders.set(name, value) routes both name + value into outbound
+  # headers; attacker-controlled name = header smuggling / proxy bypass.
+  - pattern: "*.set(*)"
+    vuln_class: ssrf
+    argument_indices: [0, 1]
+    description: AxiosHeaders.set — tainted header name/value routes outbound traffic
+
 sanitizers: []

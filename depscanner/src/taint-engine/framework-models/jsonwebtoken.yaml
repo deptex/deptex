@@ -19,7 +19,21 @@ framework: jsonwebtoken
 language: js
 version: "*"
 
-sources: []
+sources:
+  # CVE-2022-23541 — kid-header lookup gadget.
+  #
+  # Pre-fix shape: `const decoded = jwt.decode(token, { complete: true });`
+  # then `decoded.header.kid` is fed verbatim into a secret-lookup (DB /
+  # FS / KV) used by jwt.verify. The decoded object IS the attacker-
+  # controlled surface (header bytes are unauthenticated). Re-tainting
+  # decode's return lets the engine carry that taint to whatever lookup
+  # the user code invokes, which is the actual sink shape Qwen emits.
+  - pattern: jwt.decode(*)
+    taint_kind: http_input
+    description: jwt.decode — decoded header/payload re-tainted (kid lookup gadget, CVE-2022-23541)
+  - pattern: "*.decode(*)"
+    taint_kind: http_input
+    description: jsonwebtoken decode (wildcard receiver — destructured import)
 
 sinks:
   # CVE-2022-23539 — jwt.verify without an explicit algorithms allowlist.
