@@ -64,6 +64,12 @@ export interface PropagateResult {
   callgraph: Callgraph;
   stats: PropagateStats;
   /**
+   * True when the worklist aborted mid-loop because the cancellation signal
+   * fired (the 30-min hard timeout). `flows` is then a PARTIAL set — the
+   * pipeline must not treat absent flows as a clean unreachable verdict.
+   */
+  aborted: boolean;
+  /**
    * Phase F4 — the lowered IR for every analysed function, keyed by
    * FunctionId. Consumers (Gate 2 in rule-generator/validate.ts) walk these
    * to extract `CallSite[]` for the non-taint detector regime. Optional so
@@ -124,6 +130,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
   return {
     flows: result.flows,
     callgraph,
+    aborted: result.aborted,
     stats: {
       functionsAnalyzed: stateById.size,
       worklistIterations: result.iterations,

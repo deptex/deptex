@@ -24,6 +24,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { propagate, type PropagateResult } from './propagator';
 import { propagatePython } from './python/propagate';
 import { propagateJava } from './java/propagate';
@@ -332,28 +333,35 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       break;
   }
 
+  // Phase F4 + 3.3 — non-taint detector regimes. Walk IR callsites once and
+  // dispatch every loaded spec at the same set. Each finding is coerced to
+  // a single-hop Flow whose engine_confidence sits just below the FP-filter
+  // threshold so it is LLM-checked alongside taint flows (an over-broad
+  // detector sink can still false-positive).
+  const detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, onWarn);
+
   // Default: filter inactive, all flows pass through.
   let flowsAfterFilter: Flow[] = propagation.flows;
+  let detectorFlows: Flow[] = detectorFlowsRaw;
   let aiFilter: AiFilterStats | null = null;
 
   if (options.fpFilter) {
+    // Run taint flows + detector flows through the SAME filter pass so
+    // detector findings get the same LLM re-check. We tag detector flow ids
+    // up front so the survivors can be split back into the two buckets the
+    // pipeline writes separately.
+    const detectorIds = new Set(detectorFlowsRaw.map((f) => f.id));
     const result = await runFpFilterStage(
-      propagation.flows,
+      [...propagation.flows, ...detectorFlowsRaw],
       options.fpFilter,
       workspaceRoot,
       specs,
       onWarn,
     );
     aiFilter = result.stats;
-    flowsAfterFilter = result.flowsAfterFilter;
+    flowsAfterFilter = result.flowsAfterFilter.filter((f) => !detectorIds.has(f.id));
+    detectorFlows = result.flowsAfterFilter.filter((f) => detectorIds.has(f.id));
   }
-
-  // Phase F4 + 3.3 — non-taint detector regimes. Walk IR callsites once and
-  // dispatch every loaded spec at the same set. Each finding is coerced to
-  // a single-hop Flow (engine_confidence=0.95) and returned separately so
-  // the pipeline writes them through the same project_reachable_flows path
-  // without the FP filter mistakenly second-guessing them.
-  const detectorFlows: Flow[] = runDetectors(specs, propagation, language, onWarn);
 
   return {
     ran: true,
@@ -393,7 +401,7 @@ function runDetectors(
     const specOsvId = spec.sinks.find((s) => s.osv_id !== undefined)?.osv_id;
 
     try {
-      const sanitizerFindings = detectSanitizerAbsence(spec, callsites);
+      const sanitizerFindings = detectSanitizerAbsence(spec, callsites, language);
       for (const f of sanitizerFindings) {
         out.push(sanitizerAbsenceToFlow(f, spec.framework, specOsvId));
       }
@@ -585,16 +593,25 @@ async function runFpFilterStage(
       throw err;
     }
 
-    const result = await filterFlow(
-      { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
-      logger,
-      {
-        organizationId: fp.organizationId,
-        userId: fp.userId,
-        projectId: fp.projectId,
-        extractionRunId: fp.extractionRunId,
-      },
-    );
+    // The reservation above is held against the per-org Redis bucket. If
+    // filterFlow throws, the refund path below never runs and the full
+    // perFlowEstimate leaks permanently — refund it on the throw path.
+    let result;
+    try {
+      result = await filterFlow(
+        { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
+        logger,
+        {
+          organizationId: fp.organizationId,
+          userId: fp.userId,
+          projectId: fp.projectId,
+          extractionRunId: fp.extractionRunId,
+        },
+      );
+    } catch (err) {
+      await refundReservation(fp.organizationId, perFlowEstimate);
+      throw err;
+    }
 
     // Phase 33: roll per-call telemetry into scan_jobs. No-op when fp.jobId
     // is undefined (CLI mode). filterFlow returns costUsd on every verdict
@@ -656,16 +673,30 @@ function clampThreshold(raw: number | string | null | undefined): number {
 }
 
 /**
+ * Map an arbitrary key to a stable bucket in [0, 100). The same key always
+ * lands in the same bucket, so a given org's run/skip decision never flaps
+ * between scans (which would swing its depscore).
+ */
+function stableBucket(key: string): number {
+  const hex = createHash('sha1').update(key).digest('hex').slice(0, 8);
+  return (parseInt(hex, 16) % 10000) / 100;
+}
+
+/**
  * Staged rollout gate. Reads DEPTEX_TAINT_ENGINE_ROLLOUT_PCT (0-100); if
  * the env var is unset we default to 0 in production (engine off) and 100
  * elsewhere so the local CLI / tests always run the engine.
  *
- * The decision is randomized per-call so a single org's extractions get
- * roughly the configured percentage of engine runs over time. We bucket
- * on Math.random() rather than a deterministic hash because we want
- * variability across reruns of the same project during the canary period.
+ * The decision is bucketed on a STABLE hash of `bucketKey` (the org id) so a
+ * single org always lands on the same side of the rollout cut — re-scanning
+ * the same project never flips run↔skip, which would otherwise swing its
+ * depscore between scans. When no bucketKey is supplied (CLI / tests) we
+ * fall back to Math.random().
  */
-export function shouldRunForRollout(env: NodeJS.ProcessEnv = process.env): boolean {
+export function shouldRunForRollout(
+  env: NodeJS.ProcessEnv = process.env,
+  bucketKey?: string,
+): boolean {
   const raw = env.DEPTEX_TAINT_ENGINE_ROLLOUT_PCT;
   if (raw === undefined) {
     // Off by default in production; on otherwise.
@@ -675,7 +706,8 @@ export function shouldRunForRollout(env: NodeJS.ProcessEnv = process.env): boole
   if (Number.isNaN(pct)) return false;
   if (pct === 100) return true;
   if (pct === 0) return false;
-  return Math.random() * 100 < pct;
+  const roll = bucketKey ? stableBucket(`rollout:${bucketKey}`) : Math.random() * 100;
+  return roll < pct;
 }
 
 /**
@@ -698,16 +730,17 @@ export async function shouldRunForOrg(
       .select('rollout_pct_override')
       .eq('organization_id', organizationId)
       .maybeSingle();
-    if (error) return shouldRunForRollout(env);
+    if (error) return shouldRunForRollout(env, organizationId);
     const row = data as { rollout_pct_override?: number | null } | null;
     const override = row?.rollout_pct_override ?? null;
-    if (override === null || override === undefined) return shouldRunForRollout(env);
+    if (override === null || override === undefined) return shouldRunForRollout(env, organizationId);
     const pct = Math.max(0, Math.min(100, Number(override)));
-    if (!Number.isFinite(pct)) return shouldRunForRollout(env);
+    if (!Number.isFinite(pct)) return shouldRunForRollout(env, organizationId);
     if (pct === 100) return true;
     if (pct === 0) return false;
-    return Math.random() * 100 < pct;
+    // Stable per-org bucket so re-scans never flip run↔skip.
+    return stableBucket(`rollout:${organizationId}`) < pct;
   } catch {
-    return shouldRunForRollout(env);
+    return shouldRunForRollout(env, organizationId);
   }
 }

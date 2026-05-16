@@ -42,6 +42,8 @@ export interface PropagateJavaStats {
 export interface PropagateJavaResult {
   flows: Flow[];
   callgraph: Callgraph;
+  /** True when the worklist aborted mid-loop on the cancellation signal. */
+  aborted: boolean;
   stats: PropagateJavaStats;
   /** See PropagateResult.irFunctions. */
   irFunctions?: IrFunction[];
@@ -108,6 +110,7 @@ export async function propagateJava(options: PropagateJavaOptions): Promise<Prop
   return {
     flows: result.flows,
     callgraph,
+    aborted: result.aborted,
     stats: {
       functionsAnalyzed: stateById.size,
       worklistIterations: result.iterations,

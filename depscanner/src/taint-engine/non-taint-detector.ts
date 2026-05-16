@@ -120,12 +120,13 @@ export interface NonTaintFinding {
 export function detectSanitizerAbsence(
   spec: FrameworkSpec,
   callsites: CallSite[],
+  language?: 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp',
 ): NonTaintFinding[] {
   const findings: NonTaintFinding[] = [];
   for (const sink of spec.sinks) {
     if (!sink.required_arguments || sink.required_arguments.length === 0) continue;
     for (const cs of callsites) {
-      if (!matchesCallPattern(sink.pattern, cs.calleeText)) continue;
+      if (!matchesCallPattern(sink.pattern, cs.calleeText, language)) continue;
       for (const req of sink.required_arguments) {
         const mode: 'required' | 'forbidden' | 'must_equal' = req.match_mode ?? 'required';
         const trigger = evaluateRequirement(req, cs, mode);
@@ -320,11 +321,17 @@ function parseObjectLiteralProps(text: string): Record<string, string> {
     else if (ch === '"' || ch === "'" || ch === '`') {
       const close = ch;
       let j = i + 1;
+      let closed = false;
       while (j < body.length) {
         if (body[j] === '\\') { j += 2; continue; }
-        if (body[j] === close) break;
+        if (body[j] === close) { closed = true; break; }
         j++;
       }
+      // Unterminated string — the scanner can no longer tell delimiters from
+      // string content, so every subsequent comma/colon split is unreliable.
+      // Bail the whole parse rather than silently returning a partial prop
+      // set (which would under-report kwargs → false sanitizer-absence hits).
+      if (!closed) return {};
       i = j;
     }
   }

@@ -11,10 +11,12 @@
  * == the offending callsite. We synthesize `entry_point_*` from the same
  * location as the sink so the writer's signature hash stays deterministic.
  *
- * Engine confidence is fixed at 0.95 — well above the default FP-filter
- * threshold (0.7) so detector flows bypass the LLM re-check loop. The
- * filter is for noisy taint flows; detector findings are deterministic
- * AST matches and don't need the model to vote.
+ * Engine confidence is fixed just BELOW the default FP-filter threshold
+ * (0.7) so detector flows are routed through the same LLM re-check as
+ * sub-threshold taint flows. The detectors are deterministic AST matches
+ * but an over-broad sink pattern or a mis-parsed options object can still
+ * produce a false positive — letting them ride at 0.95 meant a busted
+ * detector finding bypassed every quality gate straight into the survivors.
  *
  * `taint_kind` is set to 'http_input' as a placeholder — these aren't
  * taint-flow shapes, but the column is NOT NULL on
@@ -28,7 +30,9 @@ import type { Flow, FlowNode } from './flow';
 import type { NonTaintFinding } from './non-taint-detector';
 import type { InsecureDefaultFinding } from './insecure-default-detector';
 
-const DETECTOR_ENGINE_CONFIDENCE = 0.95;
+// Just below the default FP-filter threshold (0.7) so detector flows are
+// LLM-checked like sub-threshold taint flows rather than bypassing the filter.
+const DETECTOR_ENGINE_CONFIDENCE = 0.65;
 
 /**
  * Coerce a Phase F4 sanitizer-absence finding to a single-hop `Flow`.

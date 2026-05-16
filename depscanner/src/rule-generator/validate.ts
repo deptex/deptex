@@ -495,7 +495,7 @@ async function runEngineAndCount(args: RunEngineArgs): Promise<RunEngineResult> 
         (s) => s.required_arguments && s.required_arguments.length > 0,
       );
       if (hasReqArgs) {
-        const findings = detectSanitizerAbsence(spec, callsites);
+        const findings = detectSanitizerAbsence(spec, callsites, args.language);
         for (const f of findings) {
           if (args.cveSinkPatterns.has(f.sink_pattern)) count++;
         }

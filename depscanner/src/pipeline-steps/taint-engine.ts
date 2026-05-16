@@ -280,13 +280,34 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         totalMs: Date.now() - stepStart,
         errorCode: 'no_specs_loaded',
       });
+    } else if (engineResult.propagation.aborted) {
+      // The worklist aborted mid-loop because the 30-min hard timeout fired.
+      // propagation.flows is a PARTIAL set — un-walked CVEs would otherwise be
+      // demoted to 'unreachable' by the downstream classifier on the strength
+      // of absent flows. Stamp the run incomplete and SKIP the flow write so
+      // the classifier has nothing to misread as a clean verdict.
+      await log.warn(
+        'taint_engine',
+        `Aborted: 30-min hard timeout fired mid-propagation; partial flow set discarded (${engineResult.propagation.flows.length} flows walked so far)`,
+      );
+      await writeTaintEngineRun(supabase, {
+        projectId,
+        organizationId,
+        extractionRunId: runId,
+        status: 'aborted',
+        callgraphBuildMs: engineResult.propagation.stats.callgraphMs,
+        taintPropagationMs: engineResult.propagation.stats.propagationMs,
+        totalMs: Date.now() - stepStart,
+        flowsEmitted: engineResult.propagation.flows.length,
+        errorCode: 'timeout_partial',
+      });
     } else {
       const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter, detectorFlows } = engineResult;
       const taintSurvivors = flowsAfterFilter ?? propagation.flows;
       // Detector flows (Phase F4 sanitizer-absence + Phase 3.3 insecure-default)
-      // bypass the FP filter at engine_confidence=0.95 and ride alongside
-      // taint flows into project_reachable_flows. Empty for projects whose
-      // specs don't carry required_arguments / insecure_defaults entries.
+      // are LLM-checked alongside taint flows and ride into
+      // project_reachable_flows. Empty for projects whose specs don't carry
+      // required_arguments / insecure_defaults entries.
       const survivors = detectorFlows.length > 0
         ? [...taintSurvivors, ...detectorFlows]
         : taintSurvivors;
@@ -317,6 +338,11 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         frameworksDetected: frameworksLoaded,
         isTypedJsProject: propagation.callgraph.isTypedJsProject,
         typedFilesPct: propagation.callgraph.typedFilesPct,
+        // When the organization_generated_rules read failed, the engine ran
+        // the framework-generic pass only — every CVE-targeted verdict is
+        // missing. Stamp the run so the classifier can tell this apart from
+        // a genuine 0-CVE project rather than silently demoting CVEs.
+        errorCode: cveSpecResult.dbError ? 'cve_specs_db_error' : undefined,
       });
       const detectorSuffix =
         detectorFlows.length > 0 ? ` + ${detectorFlows.length} detector finding(s)` : '';

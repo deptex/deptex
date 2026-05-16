@@ -255,14 +255,14 @@ export function buildAttemptFailureFeedback(args: {
     lines.push('- argument_indices points at an argument that the fixture does not reach (e.g. [1] when the fixture passes data at position 0)');
     lines.push('- the vulnerable_fixture does not actually exercise the sink, OR the framework spec has no source matching the fixture');
     lines.push('Fix: ensure (a) the vulnerable_fixture uses an HTTP-source-style entry point (req.body, request.args.get, etc. — these are the framework spec sources), AND (b) the sink pattern matches the callee text exactly.');
-    appendPatchSymbolsHint(lines, args.patchDiff);
+    appendPatchSymbolsHint(lines, args.patchDiff, nonce);
   } else if (log.fixture_pre_matches > 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your FrameworkSpec is too BROAD — both fixtures produce flows.');
     lines.push('Fix: write the safe_fixture so the sink receives a STATIC LITERAL (hard-coded constant) instead of tainted data — that breaks the source→sink flow without needing a sanitizer. If the CVE genuinely requires a sanitizer (the patch added a real validation function), declare it under `sanitizers` and call it in the safe_fixture.');
   } else if (log.fixture_pre_matches === 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your spec emitted a flow on the SAFE fixture but NOT the vulnerable one. The fixtures are inverted.');
     lines.push('Fix: re-read the vulnerability description. The vulnerable_fixture must contain the unsafe form (tainted data → sink); the safe_fixture must contain the literal/sanitized form.');
-    appendPatchSymbolsHint(lines, args.patchDiff);
+    appendPatchSymbolsHint(lines, args.patchDiff, nonce);
   } else if (log.patch_post_matches !== null && log.patch_post_matches > 0) {
     lines.push('Diagnosis: spec fires on the post-fix patched code. Whatever upstream added in the patch must NOT match your spec.');
     lines.push('Fix: tighten the sink pattern so the patched code does not match — usually the patch swaps to a different (safer) callee, e.g. `yaml.load` → `yaml.safe_load`. Make sure your sink pattern names ONLY the unsafe callee.');
@@ -292,13 +292,21 @@ function appendObservedCallsitesHint(lines: string[], log: ValidationLog): void 
   }
 }
 
-function appendPatchSymbolsHint(lines: string[], patchDiff: string | undefined): void {
+function appendPatchSymbolsHint(
+  lines: string[],
+  patchDiff: string | undefined,
+  nonce: string,
+): void {
   if (!patchDiff) return;
   const symbols = extractPatchAddedSymbols(patchDiff);
   if (symbols.length === 0) return;
   lines.push('');
   lines.push('-- Symbols the upstream patch ADDED (high-signal hint) --');
-  lines.push(symbols.join(', '));
+  // The symbol list is derived from the publisher-controlled patch diff, so
+  // it is attacker-influenceable — wrap it in the same nonce delimiters used
+  // for the spec / fixture blobs so a crafted identifier can't be read as an
+  // instruction.
+  lines.push(wrapBlob('patch_added_symbols', symbols.join(', '), nonce));
   lines.push('A sound spec for this CVE usually references at least one of these symbols (as the sink callee, the post-fix safe callee, or in the sanitizer pattern). If your spec uses none of them, you are likely looking at the wrong sink.');
 }
 

@@ -43,6 +43,8 @@ export interface PropagateCSharpStats {
 export interface PropagateCSharpResult {
   flows: Flow[];
   callgraph: Callgraph;
+  /** True when the worklist aborted mid-loop on the cancellation signal. */
+  aborted: boolean;
   stats: PropagateCSharpStats;
   /** See PropagateResult.irFunctions. */
   irFunctions?: IrFunction[];
@@ -127,6 +129,7 @@ export async function propagateCSharp(options: PropagateCSharpOptions): Promise<
   return {
     flows: result.flows,
     callgraph,
+    aborted: result.aborted,
     stats: {
       functionsAnalyzed: stateById.size,
       worklistIterations: result.iterations,

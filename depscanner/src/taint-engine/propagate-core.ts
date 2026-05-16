@@ -683,7 +683,11 @@ function sinkHitToFlow(hit: SinkHit, sinkContainingFunc: FunctionNode, maxPathLe
     flowNodes.push(sinkNode);
   }
   const idHash = createHash('sha1');
-  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}|${flowNodes.length}|${hit.sink.vuln_class}`);
+  // Include the sink pattern + column so two distinct sinks that fire on the
+  // same source line (and hence the same source/sink file:line coords) don't
+  // collapse to one flow id in aggregateFlows's `seen` set — that silently
+  // dropped the second flow.
+  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}:${sinkNode.column ?? 0}|${flowNodes.length}|${hit.sink.vuln_class}|${hit.sink.pattern}`);
 
   return {
     id: idHash.digest('hex').slice(0, 16),
