@@ -48,31 +48,6 @@ export async function doFinalize(
   await log.info('uploading', 'Updating project status...');
 
   const status = newDepsToPopulate.length > 0 ? 'analyzing' : 'ready';
-  await supabase
-    .from('project_repositories')
-    .update({
-      status,
-      extraction_step: 'completed',
-      extraction_error: null,
-      ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('project_id', projectId);
-
-  // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
-  const didUpdateJob = status === 'ready' && !!job.jobId;
-  if (didUpdateJob) {
-    await updateJobStatus(supabase, job.jobId!, 'completed');
-  }
-
-  await supabase
-    .from('projects')
-    .update({
-      dependencies_count: projectDepsCount,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', projectId)
-    .eq('organization_id', organizationId);
 
   // Phase 19.3: atomic finalization. See file header for the full list of
   // operations the single-transaction RPC performs.
@@ -133,6 +108,36 @@ export async function doFinalize(
       finalizeSummary = finalizeData ?? null;
     },
   });
+
+  // Status writes happen AFTER finalize_extraction succeeds. If the RPC fails,
+  // runStage rethrows above and these never run — so the project can't show
+  // 'ready' with stale findings while the active_extraction_run_id pointer is
+  // still un-flipped.
+  await supabase
+    .from('project_repositories')
+    .update({
+      status,
+      extraction_step: 'completed',
+      extraction_error: null,
+      ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('project_id', projectId);
+
+  // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
+  const didUpdateJob = status === 'ready' && !!job.jobId;
+  if (didUpdateJob) {
+    await updateJobStatus(supabase, job.jobId!, 'completed');
+  }
+
+  await supabase
+    .from('projects')
+    .update({
+      dependencies_count: projectDepsCount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', projectId)
+    .eq('organization_id', organizationId);
 
   // Post-finalize: write detected infra types onto the projects row. This
   // happens AFTER finalize_extraction returns success (architect-f5: NOT

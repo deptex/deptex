@@ -29,12 +29,7 @@ async function getIntegrationToken(integrationId: string): Promise<{ access_toke
 }
 
 function makeTempDir(): string {
-  const tempDir = path.join(
-    os.tmpdir(),
-    `deptex-extract-${Date.now()}-${Math.random().toString(36).substring(7)}`
-  );
-  fs.mkdirSync(tempDir, { recursive: true });
-  return tempDir;
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-extract-'));
 }
 
 async function cloneWithToken(

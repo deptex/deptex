@@ -119,14 +119,19 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
 
       const backendBaseUrl = process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001';
       const workerSecret = process.env.EXTRACTION_WORKER_SECRET;
-      // In local CLI mode there is no backend to accept the populate job — skip silently.
-      const skipPopulate = process.env.DEPTEX_CLI_MODE === '1' || !workerSecret;
+      const isCliMode = process.env.DEPTEX_CLI_MODE === '1';
+      // In local CLI mode there is no backend to accept the populate job — skip
+      // silently. In worker mode a missing secret is a misconfiguration that
+      // would silently drop dependency population, so warn.
+      const skipPopulate = isCliMode || !workerSecret;
       if (ctx.newDepsToPopulate.length > 0 && !skipPopulate) {
         try {
           await callQueuePopulate(backendBaseUrl, workerSecret, projectId, organizationId, ctx.newDepsToPopulate, jobEcosystem);
         } catch (e: any) {
           await log.warn('populate', `Failed to queue dependency population: ${e.message}`);
         }
+      } else if (ctx.newDepsToPopulate.length > 0 && !isCliMode && !workerSecret) {
+        await log.warn('populate', 'EXTRACTION_WORKER_SECRET not set — dependency population skipped; registry metadata, GHSA and policy evaluation will not run for new direct dependencies');
       }
 
       // Phase 19 hybrid: upsert project_dependencies by (project_id, name, version, is_direct, source).

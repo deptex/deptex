@@ -45,9 +45,10 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
       }
     },
     fn: async () => {
-      execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null || true`, {
+      execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null`, {
         stdio: 'pipe',
-        timeout: 60000,
+        timeout: 19 * 60_000,
+        maxBuffer: 64 * 1024 * 1024,
       });
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
       if (fs.existsSync(semgrepPath)) {

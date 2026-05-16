@@ -75,11 +75,10 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
 
       if (exitCode !== 0) {
         await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}`);
+        // TruffleHog stderr can echo fragments of detected secrets. Keep raw
+        // stderr in the worker console only; extraction_logs is browser-streamed.
         if (stderr.trim()) {
-          const stderrLines = stderr.trim().split('\n').slice(0, 10);
-          for (const line of stderrLines) {
-            await log.warn('trufflehog', `[stderr] ${line.trim()}`);
-          }
+          console.error('[trufflehog] stderr:\n' + stderr.trim());
         }
       }
 

@@ -27,11 +27,36 @@ async function resolveDependencies(
   // workspace: references that npm rejects. The lockfile is the
   // unambiguous signal of which manager to use; corepack (Node ≥ 16.9) shims
   // pnpm and yarn so they're available without a separate install.
+  //
+  // A workspace monorepo with no committed lockfile would otherwise fall to
+  // `npm install` and fail on `workspace:` refs, yielding an empty SBOM. So we
+  // also consult package.json's `packageManager` field, pnpm-workspace.yaml,
+  // and a root `workspaces` array as secondary manager signals.
   const npmCmd = (() => {
     if (fs.existsSync(path.join(workspacePath, 'pnpm-lock.yaml'))) {
       return 'corepack pnpm install --ignore-scripts 2>&1';
     }
     if (fs.existsSync(path.join(workspacePath, 'yarn.lock'))) {
+      return 'corepack yarn install --ignore-scripts --no-immutable 2>&1';
+    }
+
+    // No lockfile — fall back to manager detection from package.json's
+    // `packageManager` field and pnpm-workspace.yaml so workspace monorepos
+    // with no committed lockfile don't break on `npm install` (which rejects
+    // `workspace:` refs). A bare npm `workspaces` array needs no special
+    // handling — npm install resolves classic workspaces natively.
+    let pkgManagerField = '';
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(workspacePath, 'package.json'), 'utf8')) as {
+        packageManager?: string;
+      };
+      pkgManagerField = typeof pkg.packageManager === 'string' ? pkg.packageManager : '';
+    } catch { /* no package.json or parse error */ }
+
+    if (pkgManagerField.startsWith('pnpm') || fs.existsSync(path.join(workspacePath, 'pnpm-workspace.yaml'))) {
+      return 'corepack pnpm install --ignore-scripts 2>&1';
+    }
+    if (pkgManagerField.startsWith('yarn')) {
       return 'corepack yarn install --ignore-scripts --no-immutable 2>&1';
     }
     return 'npm install --ignore-scripts --no-audit --no-fund 2>&1';

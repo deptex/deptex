@@ -264,14 +264,23 @@ export function runScannerSubprocess(
         }, heartbeatIntervalMs)
       : null;
 
+    // A scanner may ignore SIGTERM; escalate to SIGKILL after a grace period so
+    // the child can't outlive the step and have the workspace rm'd under it.
+    // Cleared on close/error so a clean exit doesn't kill.
+    let sigkillTimer: NodeJS.Timeout | undefined;
+    const escalateKill = () => {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch { /* already dead */ }
+        }, 5000);
+      }
+    };
+
     let internalTimeout: NodeJS.Timeout | null = null;
     if (opts.timeoutMs) {
       internalTimeout = setTimeout(() => {
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* already dead */
-        }
+        escalateKill();
         reject(
           new Error(
             `${opts.exe} timed out after ${opts.timeoutMs} ms (internal)`
@@ -283,11 +292,7 @@ export function runScannerSubprocess(
     // External abort: kill the child only. Don't reject — the outer withTimeout
     // owns the timeout error class. (Mirrors runDepScan rationale.)
     const onAbort = () => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already dead */
-      }
+      escalateKill();
     };
     if (opts.signal) {
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -296,6 +301,7 @@ export function runScannerSubprocess(
     child.on('close', (code: number | null) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
@@ -303,6 +309,7 @@ export function runScannerSubprocess(
     child.on('error', (err: Error) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });

@@ -83,8 +83,21 @@ function runDepScanProcess(
       } catch {}
     }, 60_000);
 
+    // dep-scan (Python) ignores SIGTERM; escalate to SIGKILL after a grace
+    // period so the child can't outlive the worker and leak as a zombie on a
+    // scale-to-zero machine. Cleared on close so a clean exit doesn't kill.
+    let sigkillTimer: NodeJS.Timeout | undefined;
+    const escalateKill = () => {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch { /* already dead */ }
+        }, 5000);
+      }
+    };
+
     const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
+      escalateKill();
       clearInterval(heartbeatInterval);
       reject(new Error(`dep-scan timed out after ${timeoutMs / 60000} min`));
     }, timeoutMs);
@@ -96,7 +109,7 @@ function runDepScanProcess(
     // queues its microtask before the outer's), leaking an opaque error that
     // classifyError can't map to code='timeout'.
     const onAbort = () => {
-      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+      escalateKill();
     };
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
@@ -105,6 +118,7 @@ function runDepScanProcess(
     child.on('close', (code: number | null) => {
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
@@ -112,6 +126,7 @@ function runDepScanProcess(
     child.on('error', (err: Error) => {
       clearInterval(heartbeatInterval);
       clearTimeout(timeout);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       signal?.removeEventListener('abort', onAbort);
       reject(err);
     });
@@ -242,30 +257,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     } catch { return []; }
   };
 
-  const vdrInReports = listVdrFiles(reportsDir);
-  const vdrInRoot = listVdrFiles(workspaceRoot);
-  let vdrFiles = [...vdrInReports, ...vdrInRoot];
-
-  if (vdrFiles.length === 0) {
-    const isVdrFile = (name: string) => name.endsWith('.vdr.json') || name === 'dep-scan.json';
-    const seenDirs = new Set<string>();
-    const stack: string[] = [workspaceRoot];
-    const found: string[] = [];
-    const MAX_DIRS = 5000;
-    while (stack.length > 0 && seenDirs.size < MAX_DIRS && found.length === 0) {
-      const dir = stack.pop()!;
-      if (seenDirs.has(dir)) continue;
-      seenDirs.add(dir);
-      let fsEntries: fs.Dirent[];
-      try { fsEntries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const entry of fsEntries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) stack.push(fullPath);
-        else if (entry.isFile() && isVdrFile(entry.name)) found.push(fullPath);
-      }
-    }
-    if (found.length > 0) vdrFiles = found;
-  }
+  // Discovery is restricted to `reportsDir` — freshly created this run via
+  // mkdirSync above. A workspace-wide recursive walk could pick up stale
+  // `*.vdr.json` / `dep-scan.json` from a prior run still on disk and silently
+  // report old vulnerabilities for the current extraction.
+  const vdrFiles = listVdrFiles(reportsDir);
 
   const tryParseJson = (p: string): Record<string, unknown> | null => {
     try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
@@ -289,7 +285,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     const vulns = parsed && (parsed as { vulnerabilities?: unknown }).vulnerabilities;
     if (Array.isArray(vulns)) { depScanPath = p; break; }
   }
-  if (!depScanPath) depScanPath = vdrFiles[0] ?? path.join(workspaceRoot, 'dep-scan.json');
+  if (!depScanPath) depScanPath = vdrFiles[0] ?? path.join(reportsDir, 'dep-scan.json');
 
   const reportExists = fs.existsSync(depScanPath);
 
@@ -351,7 +347,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       const kevCveSet = new Set<string>();
       try {
-        const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json');
+        const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', { signal: AbortSignal.timeout(15000) });
         if (kevRes.ok) {
           const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
           for (const entry of kevJson.vulnerabilities ?? []) {
@@ -455,7 +451,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         for (let i = 0; i < cvesToFetch.length; i += EPSS_BATCH) {
           const batch = cvesToFetch.slice(i, i + EPSS_BATCH);
           try {
-            const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`);
+            const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`, { signal: AbortSignal.timeout(15000) });
             if (epssRes.ok) {
               const json = (await epssRes.json()) as { data?: Array<{ cve?: string; epss?: string }> };
               for (const row of json.data ?? []) {
@@ -505,7 +501,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
           const { error: insertErr } = await supabase
             .from('project_dependency_vulnerabilities')
             .insert(chunk);
-          if (insertErr) throw insertErr;
+          if (insertErr) {
+            // One bad chunk must not drop every remaining vulnerability — log
+            // the failing chunk range and continue with the rest.
+            await log.warn('vuln_scan', `Failed to insert vulnerability chunk ${i}-${i + chunk.length - 1}: ${insertErr.message}`);
+          }
         }
       }
 

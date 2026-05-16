@@ -17,21 +17,27 @@ export async function loadAssetTier(ctx: PipelineContext): Promise<void> {
   let assetTier: AssetTier = 'EXTERNAL';
   let tierMultiplier: number | undefined;
 
-  const { data: projRow } = await supabase
+  const { data: projRow, error: projErr } = await supabase
     .from('projects')
     .select('asset_tier, asset_tier_id')
     .eq('id', projectId)
-    .single();
+    .maybeSingle();
+  if (projErr) {
+    console.warn(`[asset-tier] Failed to load project asset tier for ${projectId}; defaulting to EXTERNAL:`, projErr.message);
+  }
   const raw = (projRow as { asset_tier?: string; asset_tier_id?: string } | null)?.asset_tier;
   if (raw && VALID_ASSET_TIERS.includes(raw as AssetTier)) assetTier = raw as AssetTier;
 
   const tierIdVal = (projRow as { asset_tier_id?: string } | null)?.asset_tier_id;
   if (tierIdVal) {
-    const { data: tierData } = await supabase
+    const { data: tierData, error: tierErr } = await supabase
       .from('organization_asset_tiers')
       .select('environmental_multiplier')
       .eq('id', tierIdVal)
-      .single();
+      .maybeSingle();
+    if (tierErr) {
+      console.warn(`[asset-tier] Failed to load tier multiplier for ${tierIdVal}; depscore uses default multiplier:`, tierErr.message);
+    }
     if (tierData?.environmental_multiplier != null) {
       tierMultiplier = Number(tierData.environmental_multiplier);
     }
