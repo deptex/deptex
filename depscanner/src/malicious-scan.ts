@@ -293,9 +293,12 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
         ? 'failed'
         : 'partial';
 
-  // Hard-fail only when every package errored (clear infra outage).
+  // All-failed is a soft-fail: return status='failed' and let the pipeline
+  // step persist `malicious_scan_status='failed'` and skip event emission.
+  // Throwing here would discard the status and surface a transient
+  // registry blip as a hard pipeline error — soft-fail is the design intent.
   if (status === 'failed') {
-    throw new Error(`malicious-scan failed for all ${ctx.packages.length} packages`);
+    await ctx.log.warn(STEP, `malicious-scan failed for all ${ctx.packages.length} packages`);
   }
 
   // Atomic batch insert + recompute is_malicious (RPC).
@@ -307,7 +310,12 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   // Apply org-wide allowlist after insert: any matching finding is
   // soft-suppressed with `suppressed_reason='allowlist:<entry_id>'`.
   // Soft-fail — RPC failure logs a warn but doesn't fail the scan.
-  if (inserted > 0) {
+  //
+  // Run unconditionally whenever the insert RPC didn't error and there are
+  // pending findings: on an idempotent re-scan the insert RPC inserts 0
+  // new rows (ON CONFLICT DO NOTHING), but an allowlist entry added AFTER
+  // the original scan must still take effect against the existing rows.
+  if (!rpcError && pending.length > 0) {
     try {
       const { data: suppressed, error: allowlistError } = await ctx.supabase.rpc<number>(
         'apply_malicious_allowlist',

@@ -154,10 +154,10 @@ export function parseGuardDogJson(
       }
     }
 
-    if (rawMatches.length === 0 && !(body as any).severity && !(body as any).message) {
-      // Body wasn't empty but yielded no usable findings (e.g. some
-      // metadata-rules emit error stanzas we don't model). Skip rather
-      // than fabricate a no-evidence finding.
+    if (rawMatches.length === 0) {
+      // No concrete matches → no evidence. A rule body carrying only a
+      // stray `message`/`severity` field but zero matches must NOT become
+      // a no-evidence WARNING finding. Skip rather than fabricate one.
       continue;
     }
 

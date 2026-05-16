@@ -409,7 +409,13 @@ async function advisoryToEntries(
         a.vulnerableVersionRange,
         cache,
       );
-      if (resolved && resolved.length > 0) versions = resolved.slice(0, 200);
+      if (resolved && resolved.length > 0) {
+        // If the resolved set is too large to store as discrete rows,
+        // collapse to a single `version=null` flag-all row. Truncating
+        // to an arbitrary subset would silently drop malicious versions
+        // beyond the cap → false negatives.
+        versions = resolved.length > RESOLVED_VERSION_CAP ? [null] : resolved;
+      }
     }
 
     // 3. Fallback: one row with version=null = matches every installed version.
@@ -431,9 +437,18 @@ async function advisoryToEntries(
   return entries;
 }
 
+// Max discrete versions stored as individual rows for one (package,
+// advisory). Beyond this we write a single `version=null` flag-all row
+// rather than an arbitrary truncated subset, so no malicious version is
+// silently dropped.
+const RESOLVED_VERSION_CAP = 200;
+
 function pickVersions(affected: any): Array<string | null> | null {
   if (Array.isArray(affected?.versions) && affected.versions.length > 0) {
-    return affected.versions.slice(0, 50);
+    // Too many explicit versions to store discretely → flag-all row.
+    return affected.versions.length > RESOLVED_VERSION_CAP
+      ? [null]
+      : affected.versions;
   }
   return null;
 }
