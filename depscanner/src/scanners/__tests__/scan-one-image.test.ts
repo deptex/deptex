@@ -30,6 +30,12 @@ jest.mock('../trivy', () => ({
     return m[1];
   }),
   parseDockerfileFinalStage: jest.fn(),
+  parseDockerfileFinalStageDetailed: jest.fn(),
+  parseImageHost: jest.fn((s: string) => ({
+    host: s.split('/')[0] || 'docker.io',
+    path: s,
+    isImplicitDockerHub: false,
+  })),
   resolveImageDigest: jest.fn(),
   resolvePullStrategy: jest.fn(),
   RegistryUnavailableError: class RegistryUnavailableError extends Error {},

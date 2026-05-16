@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { runScannerSubprocess, type ScannerSubprocessLogger } from '../with-timeout';
 import { resolveRegistryHostname } from './registry-auth';
@@ -17,6 +18,11 @@ import type {
 const FROM_LINE_RE =
   /^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+([A-Za-z0-9_-]+))?\s*$/i;
 
+// Matches `ARG NAME` or `ARG NAME=default` (optionally quoted default). Only
+// ARGs with a default are usable for FROM substitution — a bare `ARG NAME`
+// has no value until `docker build --build-arg`, which we can't observe.
+const ARG_LINE_RE = /^\s*ARG\s+([A-Za-z0-9_]+)(?:=(.*))?\s*$/i;
+
 export interface DockerfileStage {
   imageRef: string;
   alias: string | null;
@@ -31,22 +37,67 @@ export interface DockerfileFinalStage {
 }
 
 /**
+ * Substitute `${VAR}` / `$VAR` against collected ARG defaults. Returns the
+ * resolved string, or null if any referenced variable has no known default
+ * (the caller treats this as an `unresolved_arg` skip rather than passing the
+ * literal `${VAR}` downstream to crane/trivy).
+ */
+function substituteArgs(
+  ref: string,
+  args: Map<string, string>
+): string | null {
+  let unresolved = false;
+  const resolved = ref.replace(
+    /\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)/g,
+    (_m, braced, bare) => {
+      const name = braced ?? bare;
+      const val = args.get(name);
+      if (val === undefined) {
+        unresolved = true;
+        return '';
+      }
+      return val;
+    }
+  );
+  return unresolved ? null : resolved;
+}
+
+export type ParseDockerfileResult =
+  | { kind: 'stage'; stage: DockerfileFinalStage }
+  | { kind: 'skip'; reason: 'parse_failed' | 'unresolved_arg' };
+
+/**
  * Parse all FROM directives from a Dockerfile and return the FINAL stage —
  * the image that ships to production. v1 returns the last FROM regardless of
  * inter-stage references; intermediate `AS builder` stages are intentionally
  * not scanned at v1 (their findings would be noise — they don't ship).
  *
  * Returns null when no FROM lines parse cleanly, or when the final stage is
- * `scratch` (which has no userland packages to scan).
+ * `scratch` (which has no userland packages to scan). Thin wrapper over
+ * parseDockerfileFinalStageDetailed for callers that don't need the skip
+ * reason.
  */
 export function parseDockerfileFinalStage(
   dockerfilePath: string
 ): DockerfileFinalStage | null {
+  const r = parseDockerfileFinalStageDetailed(dockerfilePath);
+  return r.kind === 'stage' ? r.stage : null;
+}
+
+/**
+ * Same as parseDockerfileFinalStage but distinguishes a clean parse miss from
+ * an `unresolved_arg` skip — a `FROM ${VAR}` where VAR has no ARG default we
+ * could observe. Passing the literal `${VAR}` to crane/trivy silently skips
+ * the image; this lets the orchestrator record a distinct skip reason.
+ */
+export function parseDockerfileFinalStageDetailed(
+  dockerfilePath: string
+): ParseDockerfileResult {
   let text: string;
   try {
     text = fs.readFileSync(dockerfilePath, 'utf8');
   } catch {
-    return null;
+    return { kind: 'skip', reason: 'parse_failed' };
   }
   const stages: DockerfileStage[] = [];
   const rawLines = text.split(/\r?\n/);
@@ -65,14 +116,43 @@ export function parseDockerfileFinalStage(
     buf = '';
   }
   if (buf) logicalLines.push(buf);
+  // Collect ARG defaults as we scan so a `FROM ${BASE}` line can resolve
+  // against an `ARG BASE=node:20` declared above it. Docker only honors ARGs
+  // declared before the FROM that uses them, so a single forward pass with a
+  // running map is the correct scope.
+  const args = new Map<string, string>();
+  let sawUnresolvedArg = false;
   for (const line of logicalLines) {
+    const argMatch = ARG_LINE_RE.exec(line);
+    if (argMatch) {
+      if (argMatch[2] !== undefined) {
+        // Strip surrounding quotes from the default value.
+        const raw = argMatch[2].trim();
+        const val = raw.replace(/^(['"])(.*)\1$/, '$2');
+        args.set(argMatch[1], val);
+      }
+      continue;
+    }
     const m = FROM_LINE_RE.exec(line);
     if (!m) continue;
-    stages.push({ imageRef: m[1], alias: m[2] ?? null, index: stages.length });
+    let imageRef = m[1];
+    if (imageRef.includes('$')) {
+      const resolved = substituteArgs(imageRef, args);
+      if (resolved === null) {
+        sawUnresolvedArg = true;
+        continue;
+      }
+      imageRef = resolved;
+    }
+    stages.push({ imageRef, alias: m[2] ?? null, index: stages.length });
   }
-  if (stages.length === 0) return null;
+  if (stages.length === 0) {
+    return { kind: 'skip', reason: sawUnresolvedArg ? 'unresolved_arg' : 'parse_failed' };
+  }
   const final = stages[stages.length - 1];
-  if (/^scratch(:|@|$)/i.test(final.imageRef)) return null;
+  if (/^scratch(:|@|$)/i.test(final.imageRef)) {
+    return { kind: 'skip', reason: 'parse_failed' };
+  }
   // Skip when the final stage's "imageRef" is actually an earlier stage's
   // alias (case-insensitive per Docker's stage-name matching). E.g.
   // `FROM builder AS production` flattens — `production` is built from the
@@ -83,13 +163,16 @@ export function parseDockerfileFinalStage(
       stages[i].alias &&
       stages[i].alias!.toLowerCase() === final.imageRef.toLowerCase()
     ) {
-      return null;
+      return { kind: 'skip', reason: 'parse_failed' };
     }
   }
   return {
-    imageRef: final.imageRef,
-    stageIndex: final.index,
-    totalStages: stages.length,
+    kind: 'stage',
+    stage: {
+      imageRef: final.imageRef,
+      stageIndex: final.index,
+      totalStages: stages.length,
+    },
   };
 }
 
@@ -100,13 +183,52 @@ export function parseDockerfileFinalStage(
 // check, which still needs the image's owner segment.
 // ============================================================
 
-export function extractGhcrOwner(imageRef: string): string | null {
-  const noDigest = imageRef.split('@')[0];
+/**
+ * Single source of truth for splitting an image reference into its registry
+ * host + remaining path. The host segment is lowercased exactly once here so
+ * `GHCR.IO/owner/img` and `ghcr.io/owner/img` are treated identically by every
+ * call site. A bare name (`nginx`, `library/nginx`) implies Docker Hub.
+ *
+ *   host                — lowercased registry host (port stripped)
+ *   path                — everything after the host (no leading slash); for an
+ *                          implicit-hub ref this is the whole ref minus digest
+ *   isImplicitDockerHub — true when no explicit host was present
+ */
+export function parseImageHost(imageRef: string): {
+  host: string;
+  path: string;
+  isImplicitDockerHub: boolean;
+} {
+  const noDigest = imageRef.split('@')[0].trim();
   const firstSlash = noDigest.indexOf('/');
-  if (firstSlash === -1) return null;
-  if (noDigest.slice(0, firstSlash) !== 'ghcr.io') return null;
-  const rest = noDigest.slice(firstSlash + 1);
-  const owner = rest.split('/')[0]?.split(':')[0] ?? '';
+  if (firstSlash === -1) {
+    return { host: 'docker.io', path: noDigest, isImplicitDockerHub: true };
+  }
+  const firstSegment = noDigest.slice(0, firstSlash);
+  const looksLikeHost =
+    firstSegment === 'localhost' ||
+    /\./.test(firstSegment) ||
+    /:\d+$/.test(firstSegment);
+  if (!looksLikeHost) {
+    return { host: 'docker.io', path: noDigest, isImplicitDockerHub: true };
+  }
+  // Strip an explicit port so `registry.example:5000` keys as the bare host.
+  const colon = firstSegment.lastIndexOf(':');
+  const hostNoPort =
+    colon !== -1 && /^\d+$/.test(firstSegment.slice(colon + 1))
+      ? firstSegment.slice(0, colon)
+      : firstSegment;
+  return {
+    host: hostNoPort.toLowerCase(),
+    path: noDigest.slice(firstSlash + 1),
+    isImplicitDockerHub: false,
+  };
+}
+
+export function extractGhcrOwner(imageRef: string): string | null {
+  const { host, path } = parseImageHost(imageRef);
+  if (host !== 'ghcr.io') return null;
+  const owner = path.split('/')[0]?.split(':')[0] ?? '';
   return owner.length > 0 ? owner : null;
 }
 
@@ -115,11 +237,13 @@ export function extractGhcrOwner(imageRef: string): string | null {
 // ============================================================
 
 // Trivy emits Resource strings like `Dockerfile:RUN apt-get install foo`,
-// where the cause segment legitimately contains whitespace and a handful of
-// shell-shaped chars. The fingerprint validator must accept these so we don't
-// drop real findings; the rule-id segment stays restrictive (uppercase
-// alphanum + dashes) since Trivy's IDs are stable.
-const TRIVY_RULE_RE = /^trivy:[A-Z0-9-]+:[\w./@\-+:#=,\s\[\](){}'"$*?!|<>]+$/;
+// where the cause segment is the raw instruction — it contains `;`, backticks,
+// backslashes and non-ASCII constantly. We only structurally validate the
+// `trivy:` prefix + rule-id segment (Trivy's IDs are stable uppercase
+// alphanum + dashes); the free-text cause is treated as opaque and hashed
+// into the fingerprint so it can never fail validation and silently drop a
+// finding's status carry-forward.
+const TRIVY_RULE_ID_RE = /^[A-Z0-9-]+$/;
 
 interface TrivyConfigMisconfig {
   ID?: string;
@@ -152,9 +276,13 @@ function trivyFingerprint(rule: TrivyConfigMisconfig, target: string): string | 
   const ruleId = rule.AVDID ?? rule.ID;
   const cause = rule.CauseMetadata?.Resource || target;
   if (!ruleId || !cause) return null;
-  const fp = `trivy:${ruleId}:${cause}`;
-  if (!TRIVY_RULE_RE.test(fp)) return null;
-  return fp;
+  // Only the rule-id is structurally validated; the cause segment is opaque
+  // free text (raw RUN instructions) so we hash it instead of embedding it
+  // raw. A short hash keeps the fingerprint stable for status carry-forward
+  // without risking a regex rejection on shell metacharacters.
+  if (!TRIVY_RULE_ID_RE.test(ruleId)) return null;
+  const causeHash = createHash('sha256').update(cause, 'utf8').digest('hex').slice(0, 16);
+  return `trivy:${ruleId}:${causeHash}`;
 }
 
 function trivySnippet(misconfig: TrivyConfigMisconfig): string | null {
@@ -436,7 +564,9 @@ export async function runTrivyImage(
 // ============================================================
 
 let cachedVersion: string | null = null;
-let cachedDbVersionDay: string | null = null;
+// undefined = not yet probed; null = probed but DB block absent (caching
+// disabled for this scan); string = the DB UpdatedAt day.
+let cachedDbVersionDay: string | null | undefined = undefined;
 
 async function readTrivyVersionOutput(): Promise<string | null> {
   try {
@@ -472,11 +602,13 @@ export async function trivyVersion(): Promise<string> {
  *     UpdatedAt: 2026-05-06 06:24:30.123456 +0000 UTC
  *     ...
  *
- * Falls back to today's UTC date if the DB block is absent (older Trivy or
- * malformed output) — strictly no worse than the previous wall-clock impl.
+ * Returns null when the DB block is absent (older Trivy or malformed output).
+ * Callers MUST treat null as "disable caching for this scan" — substituting
+ * the wall-clock date would let two scans on the same calendar day but with
+ * different actual CVE DBs collide on the cache key and serve stale results.
  */
-export async function trivyDbVersionDay(): Promise<string> {
-  if (cachedDbVersionDay) return cachedDbVersionDay;
+export async function trivyDbVersionDay(): Promise<string | null> {
+  if (cachedDbVersionDay !== undefined) return cachedDbVersionDay;
   const stdout = await readTrivyVersionOutput();
   if (stdout) {
     // Match `UpdatedAt: YYYY-MM-DD ...` inside the Vulnerability DB block.
@@ -486,14 +618,14 @@ export async function trivyDbVersionDay(): Promise<string> {
       return cachedDbVersionDay;
     }
   }
-  cachedDbVersionDay = new Date().toISOString().slice(0, 10);
-  return cachedDbVersionDay;
+  cachedDbVersionDay = null;
+  return null;
 }
 
 /** Test-only: clears the version + DB-version cache between cases. */
 export function _resetTrivyVersionCacheForTests(): void {
   cachedVersion = null;
-  cachedDbVersionDay = null;
+  cachedDbVersionDay = undefined;
 }
 
 export type { SkippedImage };
@@ -540,16 +672,8 @@ const PUBLIC_PULL_HOSTS = new Set([
 ]);
 
 function extractImageHost(imageRef: string): { host: string; isImplicitDockerHub: boolean } {
-  const noDigest = imageRef.split('@')[0];
-  const firstSlash = noDigest.indexOf('/');
-  if (firstSlash === -1) return { host: 'docker.io', isImplicitDockerHub: true };
-  const firstSegment = noDigest.slice(0, firstSlash);
-  const looksLikeHost =
-    firstSegment === 'localhost' ||
-    /\./.test(firstSegment) ||
-    /:\d+$/.test(firstSegment);
-  if (!looksLikeHost) return { host: 'docker.io', isImplicitDockerHub: true };
-  return { host: firstSegment, isImplicitDockerHub: false };
+  const { host, isImplicitDockerHub } = parseImageHost(imageRef);
+  return { host, isImplicitDockerHub };
 }
 
 /**
@@ -614,7 +738,11 @@ export type CraneRunner = (
 ) => Promise<CraneRunResult>;
 
 const CRANE_TIMEOUT_MS = 5000;
-const CRANE_MAX_BUFFER = 65536;
+// 1 MiB. A `crane digest` response is a single sha256 line, but registries
+// and auth layers interleave warnings/redirect noise on stdout; a 64 KiB cap
+// could truncate a legitimate response and surface as a misleading
+// maxBuffer ENOBUFS error. 1 MiB still bounds a malicious registry's output.
+const CRANE_MAX_BUFFER = 1024 * 1024;
 
 /**
  * Default crane runner. execFile with explicit timeout, SIGKILL on timeout,
@@ -647,6 +775,19 @@ function defaultCraneRunner(
           const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
           if (e.killed || e.signal === 'SIGKILL' || e.code === 'ETIMEDOUT') {
             reject(new RegistryUnavailableError(imageRef, 'crane probe timed out'));
+            return;
+          }
+          // execFile raises ERR_CHILD_PROCESS_STDIO_MAXBUFFER when stdout
+          // exceeds maxBuffer. With the 1 MiB cap this only fires on a
+          // genuinely abusive registry — classify it distinctly rather than
+          // letting it fall through as a generic registry error.
+          if (
+            e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
+            /maxBuffer/i.test(e.message ?? '')
+          ) {
+            reject(
+              new RegistryUnavailableError(imageRef, 'crane output exceeded maxBuffer')
+            );
             return;
           }
           reject(err);

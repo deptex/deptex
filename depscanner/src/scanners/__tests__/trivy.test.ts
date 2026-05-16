@@ -166,38 +166,49 @@ describe('parseTrivyConfigOutput', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].framework).toBe('dockerfile');
     expect(findings[0].rule_id).toBe('AVD-DS-0001');
-    expect(findings[0].iac_fingerprint).toBe('trivy:AVD-DS-0001:Dockerfile:RUN');
+    // Fingerprint is `trivy:<rule-id>:<16-hex cause hash>` — the cause segment
+    // is opaque free text (raw RUN instructions), so it is hashed rather than
+    // embedded, and can never trip a regex validator.
+    expect(findings[0].iac_fingerprint).toMatch(/^trivy:AVD-DS-0001:[a-f0-9]{16}$/);
   });
 
-  it('accepts Resource values containing whitespace (Dockerfile RUN/COPY/etc.)', () => {
-    // Trivy commonly emits Resource strings like `Dockerfile:RUN apt-get install foo`.
-    // The fingerprint validator must allow whitespace inside the cause segment.
-    const sample = JSON.stringify({
-      Results: [
-        {
-          Target: 'Dockerfile',
-          Type: 'dockerfile',
-          Misconfigurations: [
-            {
-              ID: 'AVD-DS-0026',
-              AVDID: 'AVD-DS-0026',
-              Title: 'no-healthcheck',
-              Severity: 'LOW',
-              CauseMetadata: {
-                Resource: 'Dockerfile:RUN apt-get install -y curl',
-                StartLine: 7,
-                EndLine: 7,
+  it('produces a stable, regex-safe fingerprint for Resource values with shell metacharacters', () => {
+    // Trivy emits Resource strings like `Dockerfile:RUN apt-get install -y curl`
+    // containing whitespace, semicolons, backticks, etc. The fingerprint must
+    // never be dropped to null over these — the cause is hashed.
+    const make = (resource: string) =>
+      JSON.stringify({
+        Results: [
+          {
+            Target: 'Dockerfile',
+            Type: 'dockerfile',
+            Misconfigurations: [
+              {
+                ID: 'AVD-DS-0026',
+                AVDID: 'AVD-DS-0026',
+                Title: 'no-healthcheck',
+                Severity: 'LOW',
+                CauseMetadata: { Resource: resource, StartLine: 7, EndLine: 7 },
               },
-            },
-          ],
-        },
-      ],
-    });
-    const findings = parseTrivyConfigOutput(sample, 'trivy@0.50.4');
-    expect(findings).toHaveLength(1);
-    expect(findings[0].iac_fingerprint).toBe(
-      'trivy:AVD-DS-0026:Dockerfile:RUN apt-get install -y curl',
+            ],
+          },
+        ],
+      });
+    const a = parseTrivyConfigOutput(
+      make('Dockerfile:RUN apt-get install -y curl && echo `id`; ls'),
+      'trivy@0.50.4',
     );
+    expect(a).toHaveLength(1);
+    expect(a[0].iac_fingerprint).toMatch(/^trivy:AVD-DS-0026:[a-f0-9]{16}$/);
+    // Same input → same fingerprint (status carry-forward depends on this).
+    const a2 = parseTrivyConfigOutput(
+      make('Dockerfile:RUN apt-get install -y curl && echo `id`; ls'),
+      'trivy@0.50.4',
+    );
+    expect(a2[0].iac_fingerprint).toBe(a[0].iac_fingerprint);
+    // Different cause → different fingerprint.
+    const b = parseTrivyConfigOutput(make('Dockerfile:RUN something else'), 'trivy@0.50.4');
+    expect(b[0].iac_fingerprint).not.toBe(a[0].iac_fingerprint);
   });
 
   it('returns [] on malformed JSON', () => {
