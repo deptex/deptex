@@ -15,7 +15,9 @@ import {
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
-const HEARTBEAT_INTERVAL_MS = 60_000;
+// 30s pulse vs the 5-minute stuck-recovery threshold: a few missed pulses
+// (slow Supabase, a blocking synchronous step) no longer trip false recovery.
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
 
@@ -41,6 +43,8 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
 
   await logger.info('cloning', 'Extraction started');
 
+  let lastCancelledKnown = false;
+
   await runPipeline(
     {
       projectId: job.project_id,
@@ -55,16 +59,30 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
       jobId: job.id,
     },
     logger,
-    async () => isJobCancelled(supabase, job.id),
-    async () => { await sendHeartbeat(supabase, job.id); }
+    async () => {
+      lastCancelledKnown = await isJobCancelled(supabase, job.id, lastCancelledKnown);
+      return lastCancelledKnown;
+    },
+    async () => { await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id); }
   );
 
-  if (await isJobCancelled(supabase, job.id)) {
+  if (await isJobCancelled(supabase, job.id, lastCancelledKnown)) {
     await logger.warn('complete', 'Extraction cancelled by user');
-    await updateJobStatus(supabase, job.id, 'failed', 'Cancelled by user');
+    // Guarded write: only flip to failed if THIS machine+run still owns the
+    // job. A 0-row result means it was already cancelled/recovered out from
+    // under us — do not overwrite a finalized row.
+    const claimed = await updateJobStatus(supabase, job.id, MACHINE_ID, job.run_id, 'failed', 'Cancelled by user');
+    if (!claimed) {
+      console.warn(`[ext-${job.id}] Claim revoked before cancel finalize — not overwriting`);
+    }
   } else {
     await logger.success('complete', 'Extraction complete');
-    await updateJobStatus(supabase, job.id, 'completed');
+    const claimed = await updateJobStatus(supabase, job.id, MACHINE_ID, job.run_id, 'completed');
+    if (!claimed) {
+      // Job was cancelled or recovered (run_id rotated) mid-flight; the
+      // successful run no longer owns the row. Do NOT clobber it to failed.
+      console.warn(`[ext-${job.id}] Claim revoked before completion finalize — not overwriting`);
+    }
   }
 }
 
@@ -80,11 +98,19 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
   console.log(`${tag} Dispatching ${job.type} job for project ${job.project_id}`);
 
+  // Send one explicit heartbeat right after the claim — the first interval
+  // pulse is otherwise HEARTBEAT_INTERVAL_MS away.
+  try {
+    await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id);
+  } catch {
+    // non-fatal
+  }
+
   // Single shared heartbeat regardless of type. The pipeline-specific code below
   // also pulses heartbeat at step boundaries inside long-running subprocesses.
   const heartbeatInterval = setInterval(async () => {
     try {
-      await sendHeartbeat(supabase, job.id);
+      await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id);
     } catch {
       // non-fatal
     }
@@ -102,7 +128,7 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
     } else {
       const message = `Unsupported scan type: ${job.type}`;
       console.error(`${tag} ${message}`);
-      await updateJobStatus(supabase, job.id, 'failed', message);
+      await updateJobStatus(supabase, job.id, MACHINE_ID, job.run_id, 'failed', message);
     }
   } catch (e: any) {
     const message = e.message || 'Unknown error';
@@ -111,7 +137,10 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
       const logger = new ExtractionLogger(supabase, job.project_id, job.run_id);
       await logger.error('complete', `Extraction failed: ${message}`, e);
     }
-    await updateJobStatus(supabase, job.id, 'failed', message);
+    const claimed = await updateJobStatus(supabase, job.id, MACHINE_ID, job.run_id, 'failed', message);
+    if (!claimed) {
+      console.warn(`${tag} Claim revoked before failure finalize — not overwriting`);
+    }
   } finally {
     clearInterval(heartbeatInterval);
   }

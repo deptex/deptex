@@ -48,6 +48,7 @@ export async function doReachabilityAndEpd(
     workspaceRoot,
     jobEcosystem,
     runId,
+    astParsedSuccessfully,
   } = ctx;
 
   // Reachability classification runs for every ecosystem — it consumes
@@ -57,6 +58,7 @@ export async function doReachabilityAndEpd(
   await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot, {
     validOsvIds,
     organizationId,
+    astParsedSuccessfully,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
@@ -100,12 +102,19 @@ export async function doReachabilityAndEpd(
           cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
           assetTier: rscoreTier, tierMultiplier: rscoreTierMult,
         });
-        await supabase.from('project_dependency_vulnerabilities')
+        const { error: rescoreErr } = await supabase.from('project_dependency_vulnerabilities')
           .update({ depscore: newScore, base_depscore_no_reachability: newBase })
           .eq('id', row.id);
+        if (rescoreErr) {
+          await log.warn('reachability', `depscore rescore write failed for pdv ${row.id}: ${rescoreErr.message}`);
+        }
       }
     }
-  } catch { /* non-fatal */ }
+  } catch (rescoreErr: any) {
+    // Non-fatal — the run still completes with base depscores — but never
+    // discard silently: a partial failure here means stale scores ship.
+    await log.warn('reachability', `depscore recalculation failed (continuing with stale depscores): ${rescoreErr?.message ?? rescoreErr}`);
+  }
 
   // --- EPD contextual scoring (Phase 4) ---
   // Wired now that Phase 3 produces taint flows with framework-input

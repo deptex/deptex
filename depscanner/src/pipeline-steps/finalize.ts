@@ -127,7 +127,7 @@ export async function doFinalize(
   // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
   const didUpdateJob = status === 'ready' && !!job.jobId;
   if (didUpdateJob) {
-    await updateJobStatus(supabase, job.jobId!, 'completed');
+    await updateJobStatus(supabase, job.jobId!, undefined, undefined, 'completed');
   }
 
   await supabase
