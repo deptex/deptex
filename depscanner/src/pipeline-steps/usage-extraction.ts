@@ -16,6 +16,7 @@ import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
 import { extractUsage, type SupportedEcosystem } from '../tree-sitter-extractor';
 import { storeUsageExtractionResults } from '../tree-sitter-extractor/storage';
+import { getDetectorErrorSummary, resetDetectorErrors } from '../tree-sitter-extractor/detector-errors';
 import { storeEntryPoints } from '../framework-rules/storage';
 import { updateStep } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -58,10 +59,15 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
       }
 
       let perFileErrorCount = 0;
+      // Hard cap so a huge monorepo can't accumulate unbounded results and
+      // OOM/timeout the worker.
+      const MAX_FILES = 50_000;
+      resetDetectorErrors();
       const result = await extractUsage({
         workspaceRoot,
         ecosystem: jobEcosystem as SupportedEcosystem,
         deps,
+        maxFiles: MAX_FILES,
         onFileError: (filePath, fileErr) => {
           perFileErrorCount++;
           if (perFileErrorCount <= 5) {
@@ -86,9 +92,16 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
         },
       });
 
+      // A grammar that failed to load means an entire language was skipped —
+      // surface it loudly and don't claim full AST coverage.
+      const grammarsFailed = result.failedGrammars.length > 0;
+      if (grammarsFailed) {
+        await log.warn('usage_extraction', `Tree-sitter grammar load failed for: ${result.failedGrammars.join(', ')} — those languages were skipped`);
+      }
+
       if (result.files.length === 0) {
-        if (perFileErrorCount > 0) {
-          await log.warn('usage_extraction', `Extractor returned zero files but encountered ${perFileErrorCount} per-file error(s) — treating as soft failure`);
+        if (perFileErrorCount > 0 || grammarsFailed) {
+          await log.warn('usage_extraction', `Extractor returned zero files (per-file errors: ${perFileErrorCount}, grammar failures: ${result.failedGrammars.length}) — treating as soft failure`);
         } else {
           ctx.astParsedSuccessfully = true;
         }
@@ -103,7 +116,7 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
         jobEcosystem,
         result,
       );
-      if (storeResult.success) {
+      if (storeResult.success && !grammarsFailed) {
         ctx.astParsedSuccessfully = true;
       } else if (storeResult.error) {
         await log.warn('usage_extraction', `Usage-extraction write failed: ${storeResult.error}`);
@@ -139,6 +152,19 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
         }
       } else if (entryResult.count > 0) {
         await log.info('framework_detection', `Detected ${entryResult.count} framework entry point(s)`);
+      }
+
+      // Surface detector exceptions once — a bare per-file catch would
+      // otherwise silently zero a framework's entry points across the repo.
+      const detectorErrors = getDetectorErrorSummary();
+      if (detectorErrors.total > 0 && detectorErrors.firstError) {
+        const offenders = Object.entries(detectorErrors.perDetector)
+          .map(([name, count]) => `${name} (${count})`)
+          .join(', ');
+        await log.warn(
+          'framework_detection',
+          `${detectorErrors.total} detector error(s) across [${offenders}]; first: ${detectorErrors.firstError.detector}: ${detectorErrors.firstError.message}`,
+        );
       }
     },
     // non-fatal — runner persists the failure as warn and swallows.

@@ -1,10 +1,11 @@
 import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveNugetImport } from '../import-mapping/nuget';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const CSHARP_EXTENSIONS: readonly string[] = ['.cs'];
 
@@ -28,11 +29,11 @@ export const csharpModule: LanguageModule = {
     return CSHARP_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
   async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage('tree-sitter-c_sharp.wasm');
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
-    if (!tree) return { filePath, language: 'csharp', imports: [], usages: [] };
-
+    const tree = await parseSource('tree-sitter-c_sharp.wasm', source);
+    if (!tree) {
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
+    }
+    try {
     const imports: ImportBinding[] = [];
     const usages: UsageSlice[] = [];
 
@@ -142,9 +143,12 @@ export const csharpModule: LanguageModule = {
         return false;
       });
       if (!triggered) continue;
-      try { entryPoints.push(...detector.detect({ source, tree, file: extracted })); } catch { /* non-fatal */ }
+      try { entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: ctx.workspaceRoot, depNames: ctx.deps.map((d) => d.name) })); } catch (err) { recordDetectorError(detector.name, err); }
     }
     extracted.entryPoints = entryPoints;
     return extracted;
+    } finally {
+      tree.delete();
+    }
   },
 };

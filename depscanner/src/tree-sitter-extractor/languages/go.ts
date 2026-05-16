@@ -1,11 +1,12 @@
 import type { Node } from 'web-tree-sitter';
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveGoImport } from '../import-mapping/go';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const GO_EXTENSIONS: readonly string[] = ['.go'];
 
@@ -170,32 +171,34 @@ export const goModule: LanguageModule = {
     return GO_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
   async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage('tree-sitter-go.wasm');
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
+    const tree = await parseSource('tree-sitter-go.wasm', source);
     if (!tree) {
-      return { filePath, language: 'go', imports: [], usages: [] };
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
     }
-    const selfModule = readGoModulePath(ctx.workspaceRoot);
-    const depNames = ctx.deps.map((d) => d.name);
-    const { imports, aliasToPath } = collectImports(tree.rootNode, source, selfModule);
-    const usages = collectUsages(tree.rootNode, source, filePath, aliasToPath, depNames);
+    try {
+      const selfModule = readGoModulePath(ctx.workspaceRoot);
+      const depNames = ctx.deps.map((d) => d.name);
+      const { imports, aliasToPath } = collectImports(tree.rootNode, source, selfModule);
+      const usages = collectUsages(tree.rootNode, source, filePath, aliasToPath, depNames);
 
-    const extracted: ExtractedFile = { filePath, language: 'go', imports, usages };
-    const entryPoints: EntryPoint[] = [];
-    for (const detector of getDetectorsForLanguage('go')) {
-      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
-        for (const imp of imports) {
-          if (imp.source === t || imp.source.startsWith(`${t}/`)) return true;
-        }
-        return false;
-      });
-      if (!triggered) continue;
-      try {
-        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
-      } catch { /* non-fatal */ }
+      const extracted: ExtractedFile = { filePath, language: 'go', imports, usages };
+      const entryPoints: EntryPoint[] = [];
+      for (const detector of getDetectorsForLanguage('go')) {
+        const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+          for (const imp of imports) {
+            if (imp.source === t || imp.source.startsWith(`${t}/`)) return true;
+          }
+          return false;
+        });
+        if (!triggered) continue;
+        try {
+          entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: ctx.workspaceRoot, depNames }));
+        } catch (err) { recordDetectorError(detector.name, err); }
+      }
+      extracted.entryPoints = entryPoints;
+      return extracted;
+    } finally {
+      tree.delete();
     }
-    extracted.entryPoints = entryPoints;
-    return extracted;
   },
 };

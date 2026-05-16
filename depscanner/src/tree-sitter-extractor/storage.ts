@@ -48,12 +48,6 @@ export async function storeUsageExtractionResults(
     const usageSliceRows: Array<Record<string, unknown>> = [];
 
     for (const file of result.files) {
-      for (const imp of file.imports) {
-        // Imports drive file-count AND give us the distinct function names
-        // that the source actually binds from each dep.
-        if (imp.importedName) addToMap(functionsByDep, 'pending', imp.importedName);
-        // ^ deferred: we'll reassign to depName after resolving via usages below
-      }
       for (const usage of file.usages) {
         if (!usage.depName) continue;
         const depId = lookup(usage.depName);
@@ -76,9 +70,6 @@ export async function storeUsageExtractionResults(
         });
       }
     }
-
-    // Drop the placeholder bucket we used while iterating imports.
-    functionsByDep.delete('pending');
 
     // Also count files via the bulk aggregate — imports that have no usages
     // still count as an "imported" file and should bump the counter.
