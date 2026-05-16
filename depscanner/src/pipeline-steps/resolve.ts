@@ -89,7 +89,11 @@ async function resolveDependencies(
     },
     gem: {
       check: 'Gemfile',
-      cmd: 'bundle install --jobs 4 2>&1',
+      // `bundle lock` resolves the full dependency graph and writes
+      // Gemfile.lock (which cdxgen reads) without downloading or building
+      // any gems — an SBOM only needs the graph, not installed gems, and
+      // this avoids needing a native build toolchain in the image.
+      cmd: 'bundle lock 2>&1',
       timeout: 300_000,
     },
     composer: {
