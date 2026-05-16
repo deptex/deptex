@@ -26,6 +26,11 @@ import { canonicalizeEcosystem } from './malicious/ecosystem';
 import { lookupFeed } from './malicious/feeds';
 import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, type GuardDogRule } from './malicious/guarddog';
 import { TarballCache } from './malicious/tarball-cache';
+import pLimit from 'p-limit';
+
+// Per-package malicious scans are independent and subprocess/network bound;
+// run a few concurrently rather than serially.
+const MALICIOUS_SCAN_CONCURRENCY = 4;
 import {
   insertFindingsBatch,
   readCapabilityCache,
@@ -144,31 +149,38 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   let guarddogHits = 0;
   const lastHeartbeat = { at: Date.now() };
 
+  const limit = pLimit(MALICIOUS_SCAN_CONCURRENCY);
+  let cancelled = false;
   try {
-    for (const pkg of ctx.packages) {
+    await Promise.all(ctx.packages.map((pkg) => limit(async () => {
+      if (cancelled) return;
       if (ctx.checkCancelled && (await ctx.checkCancelled())) {
-        await ctx.log.warn(STEP, 'Scan cancelled — releasing worker.');
-        break;
+        if (!cancelled) {
+          cancelled = true;
+          await ctx.log.warn(STEP, 'Scan cancelled — releasing worker.');
+        }
+        return;
       }
 
       // Heartbeat every ~30s so the stuck-job recovery cron doesn't
-      // reclaim a long-running scan.
+      // reclaim a long-running scan. Stamp the clock before the await so
+      // concurrent slots don't all fire a heartbeat at once.
       if (ctx.heartbeat && Date.now() - lastHeartbeat.at > 30_000) {
+        lastHeartbeat.at = Date.now();
         try {
           await ctx.heartbeat();
         } catch { /* non-fatal */ }
-        lastHeartbeat.at = Date.now();
       }
 
       const canonical = canonicalizeEcosystem(pkg.ecosystem);
       if (!canonical) {
         // Unrecognized ecosystem — skip cleanly (not a failure).
         scanned++;
-        continue;
+        return;
       }
       if (!pkg.version) {
         scanned++;
-        continue;
+        return;
       }
 
       try {
@@ -281,7 +293,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
           await ctx.log.warn(STEP, `Failed to scan ${pkg.name}@${pkg.version}: ${err?.message ?? err}`);
         }
       }
-    }
+    })));
   } finally {
     cache.cleanup();
   }
