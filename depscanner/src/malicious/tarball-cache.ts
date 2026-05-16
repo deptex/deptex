@@ -125,7 +125,7 @@ export class TarballCache {
     // Versions are passed unquoted to pacote — restrict to characters that
     // semver-coerce can handle without hitting the version-spec parser's
     // own URL/git fallback path.
-    if (!/^[A-Za-z0-9.+\-_]+$/.test(version)) {
+    if (!/^[A-Za-z0-9.+\-_]{1,256}$/.test(version)) {
       throw new Error(`malicious-scan: rejected non-version npm version ${JSON.stringify(version)}`);
     }
     // pacote is already a runtime dep of the worker; --no-scripts disables
@@ -150,7 +150,7 @@ export class TarballCache {
     if (!PYPI_NAME_RE.test(packageName)) {
       throw new Error(`malicious-scan: rejected non-distribution PyPI spec ${JSON.stringify(packageName)}`);
     }
-    if (!/^[A-Za-z0-9.+\-_!]+$/.test(version)) {
+    if (!/^[A-Za-z0-9.+\-_!]{1,256}$/.test(version)) {
       throw new Error(`malicious-scan: rejected non-version PyPI version ${JSON.stringify(version)}`);
     }
     // pip download can produce sdist OR wheel. We try sdist first

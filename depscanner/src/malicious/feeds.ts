@@ -41,9 +41,12 @@ export function normalizeVersionForCompare(
   switch (ecosystem) {
     case 'npm':
     case 'cargo': {
-      // semver: coerce to `major.minor.patch[-prerelease]`. Extract the
-      // first three numeric segments; keep a `-prerelease` tail if present.
-      const m = v.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-.]([0-9A-Za-z.-]+))?/);
+      // semver: coerce to `major.minor.patch[-prerelease]`. Anchor the whole
+      // string and only accept a `-`-delimited prerelease tail — a 4th
+      // dotted numeric segment (`1.2.3.4`) is not semver, so it fails the
+      // match and returns null ("flag anyway") rather than colliding with
+      // `1.2.3-4`.
+      const m = v.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/);
       if (!m) return null;
       const core = `${m[1]}.${m[2] ?? '0'}.${m[3] ?? '0'}`;
       return m[4] ? `${core}-${m[4].toLowerCase()}` : core;
@@ -63,10 +66,12 @@ export function normalizeVersionForCompare(
       return segs.join('.') + suffix;
     }
     case 'maven': {
-      // Maven versions are case-insensitive on the qualifier (`.RELEASE`
-      // vs `.release`); normalize case and treat `-`/`.` as equivalent
-      // separators between the numeric core and the qualifier.
-      return v.toLowerCase().replace(/[-_]/g, '.');
+      // Maven qualifiers are case-insensitive and the separator before a
+      // qualifier varies (`1.0.RELEASE` vs `1.0-RELEASE`). Lowercase, and
+      // normalize only a separator that precedes an alphabetic qualifier —
+      // a separator before a numeric segment is left intact so `1.0-1`
+      // (build number) does not collide with `1.0.1`.
+      return v.toLowerCase().replace(/[-_.]+([a-z])/g, '.$1');
     }
     default:
       // golang/rubygems/composer/nuget/github-actions: lowercase only.

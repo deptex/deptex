@@ -82,15 +82,10 @@ describe('claimJob', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when RPC returns error', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+  it('throws when RPC returns error so the worker retries instead of treating it as idle', async () => {
     mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'DB error' } });
 
-    const result = await claimJob(mockSupabase as any, machineId);
-
-    expect(result).toBeNull();
-    expect(consoleSpy).toHaveBeenCalledWith('[EXTRACT] Failed to claim job:', 'DB error');
-    consoleSpy.mockRestore();
+    await expect(claimJob(mockSupabase as any, machineId)).rejects.toThrow('DB error');
   });
 
   it('two concurrent claims never return the same job when RPC simulates skip locked', async () => {

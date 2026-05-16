@@ -45,12 +45,21 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
       }
     },
     fn: async () => {
-      execSync(`semgrep scan --config auto --json --output "${path.join(workspaceRoot, 'semgrep.json')}" "${workspaceRoot}" 2>/dev/null`, {
-        stdio: 'pipe',
-        timeout: 19 * 60_000,
-        maxBuffer: 64 * 1024 * 1024,
-      });
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
+      try {
+        execSync(`semgrep scan --config auto --json --output "${semgrepPath}" "${workspaceRoot}" 2>/dev/null`, {
+          stdio: 'pipe',
+          timeout: 19 * 60_000,
+          maxBuffer: 64 * 1024 * 1024,
+        });
+      } catch (e: any) {
+        // Semgrep exits non-zero on a partial scan (e.g. status 1 — some
+        // target files failed to parse) while still writing a complete
+        // results file. Only treat it as a real failure when no output
+        // landed; otherwise proceed with the partial results it produced.
+        if (!fs.existsSync(semgrepPath)) throw e;
+        await log.warn('semgrep', `Semgrep exited non-zero (status ${e?.status ?? '?'}); using the partial results it wrote`);
+      }
       if (fs.existsSync(semgrepPath)) {
         const content = fs.readFileSync(semgrepPath, 'utf8');
         let semgrepParsed: any = null;
