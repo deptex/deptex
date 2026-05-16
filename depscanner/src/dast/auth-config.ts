@@ -56,6 +56,37 @@ export class UnsupportedAuthStrategyError extends Error {
   }
 }
 
+/**
+ * Thrown when a credential field contains characters that could inject HTTP
+ * headers into every ZAP request (CR/LF/control chars in a cookie name/value,
+ * or a JWT token with characters outside the base64url/JWT alphabet). The
+ * pipeline maps this to a clean job failure.
+ */
+export class InvalidCredentialCharacterError extends Error {
+  code = 'dast_credential_invalid_characters';
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidCredentialCharacterError';
+  }
+}
+
+// CR, LF, or any C0/C1 control char would let a crafted credential break out
+// of the intended header and inject arbitrary headers into ZAP requests.
+// eslint-disable-next-line no-control-regex
+const CONTROL_OR_CRLF = /[\x00-\x1f\x7f]/;
+
+// A JWT is three base64url segments joined by '.'. Restrict to that alphabet
+// so a token can't carry CR/LF/spaces/control chars into the Bearer header.
+const JWT_TOKEN_RE = /^[A-Za-z0-9._-]+$/;
+
+function assertNoControlChars(label: string, value: string): void {
+  if (CONTROL_OR_CRLF.test(value)) {
+    throw new InvalidCredentialCharacterError(
+      `DAST ${label} contains a CR, LF, or control character`,
+    );
+  }
+}
+
 export function buildAuthForStrategy(
   strategy: DastAuthStrategy,
   payload: CredentialPayload,
@@ -97,6 +128,14 @@ export function buildAuthForStrategy(
 
   if (strategy === 'jwt') {
     const p = payload as JwtCredentialPayload;
+    // A JWT placed into `Bearer <token>` must contain only base64url/JWT
+    // characters — anything else (whitespace, CR/LF, control chars) could
+    // inject headers into every ZAP request.
+    if (typeof p.token !== 'string' || !JWT_TOKEN_RE.test(p.token)) {
+      throw new InvalidCredentialCharacterError(
+        'DAST JWT token contains characters outside the JWT alphabet',
+      );
+    }
     return {
       replacerRules: [
         {
@@ -115,6 +154,12 @@ export function buildAuthForStrategy(
     const p = payload as CookieCredentialPayload;
     if (p.cookies.length === 0) {
       throw new Error(`DAST auth cookie payload has no cookies`);
+    }
+    // A CR/LF/control char in a cookie name or value would let a crafted
+    // credential inject arbitrary headers into every ZAP request.
+    for (const c of p.cookies) {
+      assertNoControlChars('cookie name', c.name);
+      assertNoControlChars('cookie value', c.value);
     }
     const cookieHeader = p.cookies
       .map((c) => `${c.name}=${c.value}`)
