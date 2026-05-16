@@ -231,7 +231,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
           if (entry) {
             // GuardDog consumer
             if (guarddogAvailable && !guarddogCacheHit) {
-              const result = runGuardDog(entry.dir, canonical, pkg.name);
+              const result = await runGuardDog(entry.dir, canonical, pkg.name);
               rules = result.rules;
               await upsertGuardDogCache(ctx.supabase, {
                 package_name: pkg.name,

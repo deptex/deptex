@@ -10,10 +10,13 @@
  * postinstall hooks while introspecting metadata. That + tarball-cache's
  * `--ignore-scripts` are the only execution barriers.
  */
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalizeEcosystem, guarddogCliVerb, type CanonicalEcosystem } from './ecosystem';
+
+const execFileAsync = promisify(execFile);
 
 export const GUARDDOG_VERSION = 'guarddog@2.9.0';
 const GUARDDOG_BIN = '/opt/guarddog-venv/bin/guarddog';
@@ -46,11 +49,11 @@ export interface GuardDogResult {
  * hits (already filtered by GuardDog's own severity rules) for the
  * insertion path to map onto Deptex severity.
  */
-export function runGuardDog(
+export async function runGuardDog(
   unpackedDir: string,
   ecosystem: string,
   packageName: string,
-): GuardDogResult {
+): Promise<GuardDogResult> {
   const canonical = canonicalizeEcosystem(ecosystem);
   if (!canonical) return { rules: [], errored: false };
 
@@ -59,16 +62,19 @@ export function runGuardDog(
 
   let stdout: string;
   try {
-    stdout = execFileSync(
+    // Async exec — runGuardDog is called under a concurrency gate, and a
+    // synchronous execFileSync would block the event loop and serialize
+    // every "parallel" slot onto one GuardDog subprocess at a time.
+    const res = await execFileAsync(
       GUARDDOG_BIN,
       [verb, 'scan', unpackedDir, '--output-format', 'json', '--exit-non-zero-on-finding'],
       {
-        stdio: ['ignore', 'pipe', 'pipe'],
         timeout: PER_PACKAGE_TIMEOUT_MS,
         encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024,
       },
     );
+    stdout = res.stdout;
   } catch (err: any) {
     // GuardDog exits non-zero ON finding. The stdout is still the json
     // result. Distinguish "exit because findings" from "exit because
