@@ -36,6 +36,12 @@ export interface ScanOptions {
   verbose?: boolean;
   /** Suppress everything except warnings + errors. */
   quiet?: boolean;
+  /**
+   * Opt-in: allow the workspace path to resolve outside the current working
+   * directory. Off by default — without it, a path like `../../etc` is
+   * rejected so a scan can't read arbitrary host files.
+   */
+  allowOutsideCwd?: boolean;
 }
 
 export interface ScanResult {
@@ -55,6 +61,25 @@ export async function runScan(opts: ScanOptions): Promise<ScanResult> {
   }
   if (!fs.statSync(absWorkspace).isDirectory()) {
     throw new Error(`workspace is not a directory: ${absWorkspace}`);
+  }
+
+  // Path confinement. Inside the Docker image the host wrappers always mount
+  // the workspace at /workspace, so confinement is unnecessary (and would
+  // mis-fire since cwd differs from the mount). Outside container mode,
+  // resolve symlinks and reject any path that escapes process.cwd() — a
+  // caller passing `../../etc` would otherwise scan arbitrary host files.
+  // `--allow-outside-cwd` opts out for deliberate out-of-tree scans.
+  const inContainer = process.env.DEPTEX_LOCAL_CLI === '1';
+  if (!inContainer && !opts.allowOutsideCwd) {
+    const realWorkspace = fs.realpathSync(absWorkspace);
+    const realCwd = fs.realpathSync(process.cwd());
+    const rel = path.relative(realCwd, realWorkspace);
+    if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+      throw new Error(
+        `workspace path '${realWorkspace}' is outside the current directory ` +
+          `(${realCwd}); pass --allow-outside-cwd to scan it deliberately`,
+      );
+    }
   }
 
   const label = opts.label ?? path.basename(absWorkspace);

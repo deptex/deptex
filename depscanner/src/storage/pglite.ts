@@ -327,6 +327,14 @@ class PGLiteFilterBuilder<T> implements FilterBuilder<T> {
 
   private async execute(): Promise<StorageResult<T> | StorageResult<T[]>> {
     try {
+      // Empty insert/upsert array: Supabase silently succeeds with no rows.
+      // buildSql would throw — match Supabase by short-circuiting here.
+      if (
+        (this.state.op === 'insert' || this.state.op === 'upsert') &&
+        (!this.state.insertRows || this.state.insertRows.length === 0)
+      ) {
+        return { data: null, error: null };
+      }
       const { sql, params } = buildSql(this.state);
       const res = await this.db.query<any>(sql, params);
       return shapeResult<T>(this.state, res.rows as any[]);
@@ -392,16 +400,37 @@ function buildSql(s: BuilderState): { sql: string; params: unknown[] } {
       if (!s.insertRows || s.insertRows.length === 0) {
         throw new Error('upsert: cannot upsert zero rows');
       }
-      const { cols, valuesSql } = buildInsertValues(s.insertRows, bind);
-      let sql = `INSERT INTO ${s.table} (${cols.join(', ')}) VALUES ${valuesSql}`;
       const conflictCols = (s.upsertOnConflict ?? '')
         .split(',')
         .map((c) => c.trim())
         .filter(Boolean);
+      // Postgres rejects `ON CONFLICT DO UPDATE` when one statement has two
+      // rows sharing the conflict-key tuple. PostgREST de-dups server-side;
+      // PGLite does not, so dedup here (last-write-wins) before VALUES gen.
+      let rows = s.insertRows;
+      if (conflictCols.length > 0 && rows.length > 1) {
+        const byKey = new Map<string, any>();
+        for (const row of rows) {
+          const key = JSON.stringify(conflictCols.map((c) => row[c]));
+          byKey.set(key, row);
+        }
+        rows = [...byKey.values()];
+      }
+      const { cols, valuesSql } = buildInsertValues(rows, bind);
+      let sql = `INSERT INTO ${s.table} (${cols.join(', ')}) VALUES ${valuesSql}`;
       if (conflictCols.length === 0) {
-        // Supabase treats missing onConflict as "use primary key"; PGLite needs it
-        // explicit. If callers ever forget, let Postgres complain naturally.
-        sql += ` ON CONFLICT DO NOTHING`;
+        // Supabase upserts on the primary key when onConflict is omitted.
+        // PGLite can't infer that without the column list, and emitting
+        // `ON CONFLICT DO NOTHING` would silently skip a row that should
+        // have been updated — a divergence that passes with error: null.
+        // Without ignoreDuplicates, emit a plain INSERT so a real conflict
+        // surfaces as a Postgres unique-violation instead of being swallowed.
+        if (s.upsertIgnoreDuplicates) {
+          throw new Error(
+            'upsert: ignoreDuplicates requires an explicit onConflict column list in local (PGLite) mode',
+          );
+        }
+        // plain INSERT — no ON CONFLICT clause
       } else if (s.upsertIgnoreDuplicates) {
         sql += ` ON CONFLICT (${conflictCols.join(', ')}) DO NOTHING`;
       } else {
@@ -555,9 +584,20 @@ function shapeResult<T>(
 }
 
 function wrapError(e: unknown): Error & { message: string; status?: number } {
-  if (e instanceof Error) return e as Error & { message: string };
-  const err = new Error(String(e));
-  return err as Error & { message: string };
+  // Preserve the Postgres error code (e.g. '23505' unique_violation) and
+  // related metadata so callers branching on `error.code` behave the same
+  // on PGLite as they do on Supabase/PostgREST.
+  const src = e as any;
+  const err =
+    e instanceof Error ? (e as Error & { message: string }) : new Error(String(e));
+  if (src && typeof src === 'object') {
+    if (src.code != null && (err as any).code == null) (err as any).code = src.code;
+    if (src.detail != null && (err as any).detail == null) (err as any).detail = src.detail;
+    if (src.constraint != null && (err as any).constraint == null) {
+      (err as any).constraint = src.constraint;
+    }
+  }
+  return err as Error & { message: string; status?: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +610,18 @@ async function invokeRpc<T>(
   args: Record<string, unknown>,
 ): Promise<StorageResult<T>> {
   try {
+    // `name` and arg keys are string-interpolated into SQL — validate them
+    // as plain SQL identifiers so a hostile/malformed key can't inject SQL.
+    const IDENT = /^[a-z_][a-z0-9_]*$/i;
+    if (!IDENT.test(name)) {
+      throw new Error(`invokeRpc: invalid RPC function name '${name}'`);
+    }
     const entries = Object.entries(args);
+    for (const [k] of entries) {
+      if (!IDENT.test(k)) {
+        throw new Error(`invokeRpc: invalid RPC argument name '${k}'`);
+      }
+    }
     const params = entries.map(([, v]) => normalizeValue(v));
     const argSql = entries
       .map(([k], i) => `${k} := $${i + 1}`)
@@ -579,9 +630,11 @@ async function invokeRpc<T>(
     const res = await db.query<any>(sql, params);
     const rows = res.rows as any[];
     if (rows.length === 0) {
-      // Convention: scalar-return functions still yield one row.
-      // Zero rows means a SETOF function with no results.
-      return { data: null as any, error: null };
+      // A SETOF function with no results. Supabase yields `data: []` for
+      // these; return [] so callers doing `.length`/`.map()` don't crash
+      // in CLI mode. (Scalar functions always yield one row, so a zero-row
+      // result is unambiguously the empty-SETOF case.)
+      return { data: [] as any, error: null };
     }
     const keys = Object.keys(rows[0] ?? {});
     // Scalar-return (e.g. JSONB): PGLite gives one row with one column
