@@ -119,8 +119,10 @@ RUN python3 -m venv /opt/guarddog-venv \
   && /opt/guarddog-venv/bin/guarddog --version
 
 # Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
-# and atom (reachability engine used by dep-scan --profile research)
-RUN npm install -g @cyclonedx/cdxgen @appthreat/atom \
+# and atom (reachability engine used by dep-scan --profile research).
+# Pinned exact: both run against untrusted customer repos inside the worker —
+# a floating `latest` is a supply-chain vector. Bump deliberately.
+RUN npm install -g @cyclonedx/cdxgen@12.3.3 @appthreat/atom@2.5.2 \
   && java -version \
   && cdxgen --version \
   && atom --help >/dev/null 2>&1 || true
