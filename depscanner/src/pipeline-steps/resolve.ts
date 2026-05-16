@@ -98,7 +98,11 @@ async function resolveDependencies(
     },
     composer: {
       check: 'composer.json',
-      cmd: 'composer install --no-scripts --no-interaction 2>&1',
+      // `update --no-install` resolves the graph and writes composer.lock
+      // (which cdxgen reads) without installing packages into vendor/ — and
+      // unlike `install`, it works when the repo ships no committed lock
+      // (common for library repos). Same rationale as gem `bundle lock`.
+      cmd: 'composer update --no-install --no-scripts --no-interaction --no-audit 2>&1',
       timeout: 300_000,
     },
   };
