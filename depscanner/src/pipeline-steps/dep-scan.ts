@@ -189,8 +189,12 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       }
 
       // Phase 6.5 / M5 task 34 — atom integration retired. See file header.
+      // The `research` profile is a preset that re-enables `--deep` +
+      // `--reachability-analyzer` (the atom phase) — dropping the individual
+      // flags but keeping the profile defeated the retirement and made the
+      // step the dominant scan-time cost. dep-scan's default profile still
+      // produces the CycloneDX VDR this step consumes.
       const depScanArgs = [
-        '--profile', 'research',
         '-i', workspaceRoot,
         '--reports-dir', outArg,
         '-t', jobEcosystem,
