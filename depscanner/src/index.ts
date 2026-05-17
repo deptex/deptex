@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
 import { runDastPipeline } from './dast/pipeline';
+import { sweepStaleDastTmpDirs } from './dast/nuclei-runner';
 import { ExtractionLogger } from './logger';
 import {
   claimJob,
@@ -128,6 +129,10 @@ async function runWorker(): Promise<void> {
   console.log(
     `[depscanner] Worker starting, machine: ${MACHINE_ID}, supported_types=${supportedTypes.join(',')}${dastEnabled ? '' : ' (DAST disabled — DAST_CREDENTIAL_KEY missing)'}`,
   );
+
+  // Clear any dast-nuclei-* credential dirs orphaned by a hard crash that
+  // skipped runNuclei's finally cleanup. Best-effort, never throws.
+  sweepStaleDastTmpDirs();
 
   let lastJobTime = Date.now();
 

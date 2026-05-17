@@ -42,6 +42,7 @@
     "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
     "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
     "test:dast-v2-1c-migration-pglite": "tsx test/dast-v2-1c-migration-pglite.ts",
+    "test:dast-nuclei-runner": "tsx test/dast-nuclei-runner.test.ts",
     "docker:prepare": "mkdir -p .schema && cp ../backend/database/schema.sql .schema/schema.sql && tsx ../scripts/sync-encryption.ts",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
