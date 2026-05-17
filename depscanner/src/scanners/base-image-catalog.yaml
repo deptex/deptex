@@ -14,6 +14,8 @@
 #   - drop_in_score (0-100) is a curated confidence that the swap is drop-in.
 #   - provider: chainguard | distroless | dhi | official_slim | wolfi
 #
+# Tag variants of one major share an alternatives list via a YAML anchor —
+# the curated alternative is the hardened image for that major line.
 # Phase 2.5 replaces hand-curation with a weekly registry-catalog scrape.
 # ============================================================================
 
@@ -22,7 +24,7 @@ families:
   - family: node
     sources:
       - source_image: node:20
-        alternatives:
+        alternatives: &node20
           - image: cgr.dev/chainguard/node:20
             provider: chainguard
             has_shell: false
@@ -37,6 +39,13 @@ families:
             drop_in_score: 80
             cve_count: 2
             notes: "Google distroless. No shell, no package manager."
+          - image: dhi.io/node:20
+            provider: dhi
+            has_shell: true
+            libc_family: glibc
+            drop_in_score: 78
+            cve_count: 1
+            notes: "Docker Hardened Image — keeps a shell for wrapper-script entrypoints."
           - image: node:20-alpine
             provider: official_slim
             has_shell: true
@@ -45,46 +54,13 @@ families:
             cve_count: 6
             notes: "musl libc — native glibc-only addons may need rebuilding."
       - source_image: node:20-slim
-        alternatives:
-          - image: cgr.dev/chainguard/node:20
-            provider: chainguard
-            has_shell: false
-            libc_family: glibc
-            drop_in_score: 85
-            cve_count: 0
-            notes: "Same node binary path; glibc-compatible."
-          - image: dhi.io/node:20
-            provider: dhi
-            has_shell: true
-            libc_family: glibc
-            drop_in_score: 75
-            cve_count: 1
-            notes: "Docker Hardened Image — keeps a shell, glibc-compatible."
+        alternatives: *node20
       - source_image: node:20-bullseye
-        alternatives:
-          - image: cgr.dev/chainguard/node:20
-            provider: chainguard
-            has_shell: false
-            libc_family: glibc
-            drop_in_score: 85
-            cve_count: 0
-            notes: "Same node binary path; glibc-compatible."
-          - image: dhi.io/node:20
-            provider: dhi
-            has_shell: true
-            libc_family: glibc
-            drop_in_score: 78
-            cve_count: 1
-            notes: "Docker Hardened Image — keeps a shell for wrapper-script entrypoints."
-          - image: node:20-bookworm-slim
-            provider: official_slim
-            has_shell: true
-            libc_family: glibc
-            drop_in_score: 70
-            cve_count: 9
-            notes: "Newer Debian base than bullseye; still glibc, still has a shell."
+        alternatives: *node20
+      - source_image: node:20-bookworm
+        alternatives: *node20
       - source_image: node:22
-        alternatives:
+        alternatives: &node22
           - image: cgr.dev/chainguard/node:22
             provider: chainguard
             has_shell: false
@@ -106,12 +82,34 @@ families:
             drop_in_score: 60
             cve_count: 5
             notes: "musl libc — verify native addon compatibility."
+      - source_image: node:22-slim
+        alternatives: *node22
+      - source_image: node:18
+        alternatives: &node18
+          - image: cgr.dev/chainguard/node:18
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 80
+            cve_count: 0
+            notes: "Node 18 is in maintenance — consider bumping to 20 while hardening."
+          - image: node:20-slim
+            provider: official_slim
+            has_shell: true
+            libc_family: glibc
+            drop_in_score: 70
+            cve_count: 9
+            notes: "Bump off maintenance-track Node 18 to the active LTS."
+      - source_image: node:18-slim
+        alternatives: *node18
+      - source_image: node:21
+        alternatives: *node22
 
   # ----- Python ------------------------------------------------------------
   - family: python
     sources:
       - source_image: python:3.12
-        alternatives:
+        alternatives: &py312
           - image: cgr.dev/chainguard/python:3.12
             provider: chainguard
             has_shell: false
@@ -119,6 +117,13 @@ families:
             drop_in_score: 82
             cve_count: 0
             notes: "No shell — exec-form CMD only. pip not present at runtime."
+          - image: gcr.io/distroless/python3-debian12
+            provider: distroless
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 72
+            cve_count: 3
+            notes: "Distroless Python 3 — no shell, no pip."
           - image: python:3.12-slim
             provider: official_slim
             has_shell: true
@@ -127,23 +132,27 @@ families:
             cve_count: 12
             notes: "Official slim variant; keeps a shell and apt."
       - source_image: python:3.12-slim
-        alternatives:
-          - image: cgr.dev/chainguard/python:3.12
+        alternatives: *py312
+      - source_image: python:3.13
+        alternatives: &py313
+          - image: cgr.dev/chainguard/python:3.13
             provider: chainguard
             has_shell: false
             libc_family: glibc
-            drop_in_score: 80
+            drop_in_score: 82
             cve_count: 0
-            notes: "Drops the shell; glibc-compatible."
-          - image: gcr.io/distroless/python3-debian12
-            provider: distroless
-            has_shell: false
+            notes: "Hardened Python 3.13; exec-form CMD only."
+          - image: python:3.13-slim
+            provider: official_slim
+            has_shell: true
             libc_family: glibc
-            drop_in_score: 72
-            cve_count: 3
-            notes: "Distroless Python 3 — no shell, no pip."
-      - source_image: python:3.11-slim
-        alternatives:
+            drop_in_score: 78
+            cve_count: 8
+            notes: "Official slim variant."
+      - source_image: python:3.13-slim
+        alternatives: *py313
+      - source_image: python:3.11
+        alternatives: &py311
           - image: cgr.dev/chainguard/python:3.11
             provider: chainguard
             has_shell: false
@@ -151,6 +160,15 @@ families:
             drop_in_score: 80
             cve_count: 0
             notes: "glibc-compatible; exec-form CMD only."
+          - image: python:3.11-slim
+            provider: official_slim
+            has_shell: true
+            libc_family: glibc
+            drop_in_score: 78
+            cve_count: 12
+            notes: "Official slim variant."
+      - source_image: python:3.11-slim
+        alternatives: *py311
       - source_image: python:3.10-slim
         alternatives:
           - image: cgr.dev/chainguard/python:3.11
@@ -160,12 +178,21 @@ families:
             drop_in_score: 65
             cve_count: 0
             notes: "Minor version bump 3.10 -> 3.11 alongside the hardening."
+      - source_image: python:3.9-slim
+        alternatives:
+          - image: cgr.dev/chainguard/python:3.11
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 55
+            cve_count: 0
+            notes: "Python 3.9 nears end-of-life — bump to 3.11 while hardening."
 
   # ----- Go ----------------------------------------------------------------
   - family: golang
     sources:
       - source_image: golang:1.23
-        alternatives:
+        alternatives: &go
           - image: gcr.io/distroless/static-debian12
             provider: distroless
             has_shell: false
@@ -173,7 +200,7 @@ families:
             drop_in_score: 75
             cve_count: 0
             notes: "Runtime image for a CGO_ENABLED=0 static binary — use as the final stage."
-          - image: cgr.dev/chainguard/go:1.23
+          - image: cgr.dev/chainguard/go:latest
             provider: chainguard
             has_shell: false
             libc_family: glibc
@@ -181,20 +208,15 @@ families:
             cve_count: 0
             notes: "Hardened Go toolchain image for the build stage."
       - source_image: golang:1.22
-        alternatives:
-          - image: gcr.io/distroless/static-debian12
-            provider: distroless
-            has_shell: false
-            libc_family: none
-            drop_in_score: 75
-            cve_count: 0
-            notes: "Runtime image for a static Go binary."
+        alternatives: *go
+      - source_image: golang:1.21
+        alternatives: *go
 
   # ----- Java --------------------------------------------------------------
   - family: java
     sources:
       - source_image: eclipse-temurin:21
-        alternatives:
+        alternatives: &java21
           - image: cgr.dev/chainguard/jdk:openjdk-21
             provider: chainguard
             has_shell: false
@@ -209,8 +231,12 @@ families:
             drop_in_score: 74
             cve_count: 2
             notes: "Distroless JRE 21 — runtime only, no build tooling."
+      - source_image: openjdk:21
+        alternatives: *java21
+      - source_image: amazoncorretto:21
+        alternatives: *java21
       - source_image: eclipse-temurin:17
-        alternatives:
+        alternatives: &java17
           - image: gcr.io/distroless/java17-debian12
             provider: distroless
             has_shell: false
@@ -218,21 +244,14 @@ families:
             drop_in_score: 74
             cve_count: 2
             notes: "Distroless JRE 17."
-      - source_image: openjdk:21
-        alternatives:
-          - image: cgr.dev/chainguard/jdk:openjdk-21
-            provider: chainguard
-            has_shell: false
-            libc_family: glibc
-            drop_in_score: 76
-            cve_count: 0
-            notes: "openjdk:* is deprecated upstream — chainguard jdk is the maintained path."
+      - source_image: openjdk:17
+        alternatives: *java17
 
   # ----- Debian / Ubuntu / Alpine base -------------------------------------
   - family: debian
     sources:
       - source_image: debian:bookworm
-        alternatives:
+        alternatives: &deb
           - image: cgr.dev/chainguard/wolfi-base
             provider: wolfi
             has_shell: true
@@ -247,8 +266,10 @@ families:
             drop_in_score: 80
             cve_count: 14
             notes: "Official slim — fewer preinstalled packages, same shell."
+      - source_image: debian:12
+        alternatives: *deb
       - source_image: debian:bullseye
-        alternatives:
+        alternatives: &deb11
           - image: debian:bookworm-slim
             provider: official_slim
             has_shell: true
@@ -256,10 +277,12 @@ families:
             drop_in_score: 75
             cve_count: 14
             notes: "Bullseye -> bookworm is a supported base bump; pairs with the slim variant."
+      - source_image: debian:11
+        alternatives: *deb11
   - family: ubuntu
     sources:
       - source_image: ubuntu:24.04
-        alternatives:
+        alternatives: &ubu
           - image: cgr.dev/chainguard/wolfi-base
             provider: wolfi
             has_shell: true
@@ -267,8 +290,10 @@ families:
             drop_in_score: 68
             cve_count: 0
             notes: "Wolfi-base — glibc, apk-based, much smaller CVE surface than Ubuntu."
+      - source_image: ubuntu:latest
+        alternatives: *ubu
       - source_image: ubuntu:22.04
-        alternatives:
+        alternatives: &ubu22
           - image: ubuntu:24.04
             provider: official_slim
             has_shell: true
@@ -276,10 +301,19 @@ families:
             drop_in_score: 80
             cve_count: 18
             notes: "LTS bump 22.04 -> 24.04; fresher package set."
+          - image: cgr.dev/chainguard/wolfi-base
+            provider: wolfi
+            has_shell: true
+            libc_family: glibc
+            drop_in_score: 66
+            cve_count: 0
+            notes: "Wolfi-base — much smaller CVE surface."
+      - source_image: ubuntu:20.04
+        alternatives: *ubu22
   - family: alpine
     sources:
       - source_image: alpine:3.20
-        alternatives:
+        alternatives: &alp
           - image: cgr.dev/chainguard/wolfi-base
             provider: wolfi
             has_shell: true
@@ -287,8 +321,10 @@ families:
             drop_in_score: 65
             cve_count: 0
             notes: "Wolfi is the hardened apk-based base; note glibc (Alpine is musl)."
+      - source_image: alpine:latest
+        alternatives: *alp
       - source_image: alpine:3.19
-        alternatives:
+        alternatives: &alp319
           - image: alpine:3.20
             provider: official_slim
             has_shell: true
@@ -296,12 +332,14 @@ families:
             drop_in_score: 85
             cve_count: 2
             notes: "Same-family patch bump 3.19 -> 3.20."
+      - source_image: alpine:3.18
+        alternatives: *alp319
 
   # ----- Service images ----------------------------------------------------
   - family: nginx
     sources:
       - source_image: nginx:latest
-        alternatives:
+        alternatives: &nginx
           - image: cgr.dev/chainguard/nginx:latest
             provider: chainguard
             has_shell: false
@@ -316,10 +354,14 @@ families:
             drop_in_score: 70
             cve_count: 4
             notes: "Official unprivileged Alpine variant."
+      - source_image: nginx:stable
+        alternatives: *nginx
+      - source_image: nginx:alpine
+        alternatives: *nginx
   - family: redis
     sources:
       - source_image: redis:7
-        alternatives:
+        alternatives: &redis
           - image: cgr.dev/chainguard/redis:7
             provider: chainguard
             has_shell: false
@@ -334,6 +376,10 @@ families:
             drop_in_score: 78
             cve_count: 3
             notes: "Official Alpine variant."
+      - source_image: redis:latest
+        alternatives: *redis
+      - source_image: redis:6
+        alternatives: *redis
   - family: postgres
     sources:
       - source_image: postgres:16
@@ -354,12 +400,21 @@ families:
             drop_in_score: 70
             cve_count: 0
             notes: "Hardened postgres 15."
+      - source_image: postgres:14
+        alternatives:
+          - image: cgr.dev/chainguard/postgres:latest
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 60
+            cve_count: 0
+            notes: "Postgres 14 is older — hardened latest pairs the upgrade with the bump."
 
   # ----- Ruby / PHP --------------------------------------------------------
   - family: ruby
     sources:
       - source_image: ruby:3.3
-        alternatives:
+        alternatives: &ruby33
           - image: cgr.dev/chainguard/ruby:3.3
             provider: chainguard
             has_shell: false
@@ -374,6 +429,8 @@ families:
             drop_in_score: 62
             cve_count: 5
             notes: "musl — native gems with C extensions may need rebuilding."
+      - source_image: ruby:3.4
+        alternatives: *ruby33
       - source_image: ruby:3.2
         alternatives:
           - image: cgr.dev/chainguard/ruby:3.2
@@ -386,7 +443,7 @@ families:
   - family: php
     sources:
       - source_image: php:8.3
-        alternatives:
+        alternatives: &php83
           - image: cgr.dev/chainguard/php:8.3
             provider: chainguard
             has_shell: false
@@ -410,8 +467,28 @@ families:
             drop_in_score: 70
             cve_count: 0
             notes: "Hardened PHP 8.2."
+      - source_image: php:8.1
+        alternatives:
+          - image: cgr.dev/chainguard/php:8.3
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 58
+            cve_count: 0
+            notes: "PHP 8.1 nears end of security support — bump to 8.3 while hardening."
 
-  # ----- Minimal base ------------------------------------------------------
+  # ----- Build tooling / minimal base --------------------------------------
+  - family: maven
+    sources:
+      - source_image: maven:3.9
+        alternatives:
+          - image: cgr.dev/chainguard/maven:latest
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 68
+            cve_count: 0
+            notes: "Hardened Maven build image; use only for the build stage."
   - family: busybox
     sources:
       - source_image: busybox:latest

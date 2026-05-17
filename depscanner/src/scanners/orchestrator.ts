@@ -36,10 +36,13 @@ import {
 } from './registry-auth';
 import {
   lookupContainerScanCache,
+  upsertBaseImageRecommendations,
   upsertContainerFindings,
   upsertContainerScanCache,
   upsertIaCFindings,
+  type BaseImageRecommendationInsert,
 } from './storage';
+import { generateRecommendation } from './base-image-advisor';
 import {
   AuthMintError,
   CredDecryptError,
@@ -902,6 +905,58 @@ async function scanContainerImages(
 }
 
 // ---------------------------------------------------------------------------
+// Base-image advisor — one recommendation per Dockerfile
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate and persist a base-image recommendation for every Dockerfile in the
+ * repo. Counts the live container findings per image to drive the CVE delta.
+ * Best-effort: a failure surfaces as a warning, never blocks the scan.
+ */
+async function runBaseImageAdvisor(
+  ctx: ScannerStepContext,
+  dockerfileFindings: ContainerFinding[]
+): Promise<{ written: number; warnings: string[] }> {
+  const warnings: string[] = [];
+  const rows: BaseImageRecommendationInsert[] = [];
+
+  for (const dfPath of findDockerfiles(ctx.repoPath)) {
+    const stage = parseDockerfileFinalStage(dfPath);
+    if (!stage) continue;
+    let text: string | null = null;
+    try {
+      text = fs.readFileSync(dfPath, 'utf8');
+    } catch {
+      text = null;
+    }
+    const relPath = path.relative(ctx.repoPath, dfPath).split(path.sep).join('/');
+    const imageFindings = dockerfileFindings.filter(
+      (f) => f.image_reference === stage.imageRef
+    );
+    const row = generateRecommendation({
+      project_id: ctx.projectId,
+      organization_id: ctx.organizationId,
+      extraction_run_id: ctx.runId,
+      dockerfile_path: relPath.slice(0, 1024),
+      currentImage: stage.imageRef,
+      currentImageDigest: imageFindings[0]?.image_digest ?? null,
+      currentImageFindingCount: imageFindings.length,
+      dockerfileText: text,
+    });
+    rows.push({ ...row });
+  }
+
+  if (rows.length === 0) return { written: 0, warnings };
+  try {
+    const result = await upsertBaseImageRecommendations(ctx.supabase, rows);
+    return { written: result.inserted, warnings };
+  } catch (e: any) {
+    warnings.push(`base_image_advisor_failed:${e?.message ?? 'unknown'}`);
+    return { written: 0, warnings };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point — IaC + container in one step
 // ---------------------------------------------------------------------------
 
@@ -1096,6 +1151,17 @@ export async function runIaCAndContainerScans(
         'container_scan',
         `Container scan complete — ${summary.containerFindingsWritten} findings written, ${containerResult.skipped.length} images skipped`
       );
+
+      // Base-image advisor — recommendations are derived from the Dockerfile
+      // findings just written, so this runs after the container upsert.
+      const advisor = await runBaseImageAdvisor(ctx, containerResult.findings.dockerfile);
+      summary.warnings.push(...advisor.warnings);
+      if (advisor.written > 0) {
+        await ctx.logger.info(
+          'container_scan',
+          `Base-image advisor — ${advisor.written} recommendation(s) written`
+        );
+      }
     } catch (err: any) {
       summary.warnings.push(`container_failed:${err?.message ?? 'unknown'}`);
       await logStepError(ctx.supabase as any, {

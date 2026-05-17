@@ -188,6 +188,53 @@ export async function upsertContainerFindings(
 }
 
 // ============================================================================
+// project_base_image_recommendations — one card per Dockerfile per run
+// ============================================================================
+
+/** Row shape accepted by upsertBaseImageRecommendations — mirrors the advisor's
+ *  BaseImageRecommendationRow without importing the advisor module. */
+export interface BaseImageRecommendationInsert extends Record<string, unknown> {
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  dockerfile_path: string;
+  current_image: string;
+  current_image_digest: string | null;
+  current_image_cve_count: number | null;
+  recommended_image: string | null;
+  recommended_image_cve_count: number | null;
+  cve_delta: number | null;
+  alternatives: unknown;
+  shell_compat_verdict: string;
+  shell_compat_evidence: unknown;
+  drop_in_score: number;
+}
+
+/**
+ * Upsert base-image recommendations. The unique key (project, run, dockerfile)
+ * means a re-run of the same extraction replaces its prior rows; a new
+ * extraction_run_id naturally supersedes the previous run's recommendations.
+ */
+export async function upsertBaseImageRecommendations(
+  supabase: SupabaseClient,
+  rows: BaseImageRecommendationInsert[]
+): Promise<UpsertResult> {
+  if (rows.length === 0) return { inserted: 0, staleDeleted: 0 };
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const { error } = await supabase
+      .from('project_base_image_recommendations')
+      .upsert(batch, { onConflict: 'project_id,extraction_run_id,dockerfile_path' });
+    if (error) {
+      throw new Error(`upsertBaseImageRecommendations batch ${i}: ${error.message}`);
+    }
+    inserted += batch.length;
+  }
+  return { inserted, staleDeleted: 0 };
+}
+
+// ============================================================================
 // container_image_scan_cache — global digest-keyed result cache (M7)
 //
 // Lookup is read-only and gated by:
