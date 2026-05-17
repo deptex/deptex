@@ -59,6 +59,10 @@ async function bootDb(): Promise<PGlite> {
       expires_at timestamptz
     );
   `);
+  // The schema dump emits functions in name order, so a few forward-reference
+  // each other (pg_catalog_dump_v1_all calls pg_catalog_dump_v1, defined
+  // later). Disable parse-time body validation so the dump loads on PGLite.
+  await db.exec(`SET check_function_bodies = off;`);
   const schemaSql = fs.readFileSync(SCHEMA_FILE, 'utf8');
   await db.exec(schemaSql);
   return db;
