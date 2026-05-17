@@ -184,8 +184,8 @@ RUN mkdir -p /zap/wrk && chown worker:worker /zap/wrk
 # Pinned release zip + sha256sum -c, same supply-chain posture as Trivy /
 # crane / TruffleHog: Nuclei runs inside the worker that holds decrypted
 # customer credentials, so a compromised binary equals credential exfil.
-# Multi-arch via the buildx-populated TARGETARCH. Bumping NUCLEI_VERSION
-# without both SHAs is caught by .github/workflows/nuclei-pin-check.yml.
+# Multi-arch via the buildx-populated TARGETARCH. Always bump NUCLEI_VERSION
+# and BOTH SHAs together — the build fails closed on a sha256sum mismatch.
 ARG NUCLEI_VERSION=v3.8.0
 ARG NUCLEI_SHA256_AMD64=cd4ea43c88b50af8ab96eb6ad3fb4debd8e9d51efaff4d4c2d99106041578943
 ARG NUCLEI_SHA256_ARM64=deb622901acda6bbc6ffe771b98b2d41276667cc5dca6ce403b6ae331ccba64e
