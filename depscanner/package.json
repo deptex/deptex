@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && node -e \"require('fs').cpSync('src/taint-engine/framework-models', 'dist/taint-engine/framework-models', { recursive: true })\"",
+    "build": "tsc && node -e \"const fs=require('fs');fs.cpSync('src/taint-engine/framework-models','dist/taint-engine/framework-models',{recursive:true});fs.copyFileSync('src/scanners/base-image-catalog.yaml','dist/scanners/base-image-catalog.yaml')\"",
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "schema:dump": "tsx scripts/dump-schema.ts",
