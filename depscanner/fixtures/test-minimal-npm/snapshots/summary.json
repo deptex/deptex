@@ -1,0 +1,31 @@
+{
+  "schema_version": "deptex-local-v1",
+  "project_name": "test-minimal-npm",
+  "ecosystem": "npm",
+  "dependencies_count": 1,
+  "vulnerabilities_count": 5,
+  "semgrep_count": 0,
+  "secrets_count": 0,
+  "reachable_flows_count": 0,
+  "entry_points_count": 0,
+  "finalize_summary": {
+    "reap": {
+      "pdv_deleted": 0,
+      "flows_deleted": 0,
+      "secret_deleted": 0,
+      "slices_deleted": 0,
+      "semgrep_deleted": 0,
+      "dep_files_deleted": 0,
+      "entry_points_deleted": 0,
+      "dep_functions_deleted": 0
+    },
+    "vulns_new": 5,
+    "deps_removed": 0,
+    "sla_computed": 0,
+    "vulns_reopened": 0,
+    "rereview_enabled": true,
+    "vulns_critical_new": 0,
+    "vulns_carried_forward": 0,
+    "vulns_re_review_fired": 0
+  }
+}
