@@ -46,6 +46,7 @@ import {
   classifyContainerScanError,
 } from './scanner-errors';
 import { validateScanTimeHost } from './host-guard';
+import { decorateContainerFindingsWithReachability } from './container-reachability';
 import type {
   ContainerFinding,
   CredentialPlaintext,
@@ -845,6 +846,41 @@ async function scanContainerImages(
       }
       const result = await scanOneImage(image, ctx, envelope, switches, installationLogin);
       if ('findings' in result) {
+        // Decorate findings with static OS-package reachability BEFORE they are
+        // collected for upsert. This runs here, inside the per-image loop,
+        // rather than in runIaCAndContainerScans — the DOCKER_CONFIG envelope
+        // is still alive, so crane export can authenticate against private
+        // registries. Its wall-clock cost is naturally charged against
+        // CONTAINER_SCAN_TOTAL_BUDGET_MS via this loop's budget check above.
+        if (result.findings.length > 0) {
+          const reachScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-reach-'));
+          try {
+            const reach = await decorateContainerFindingsWithReachability(result.findings, {
+              imageRef: image.imageRef,
+              scratchDir: reachScratch,
+              dockerConfigDir: envelope.dockerConfigDir,
+              logger: ctx.logger,
+            });
+            await ctx.logger.info(
+              'container_scan.reachability',
+              `${image.imageRef}: ${reach.module} loaded, ${reach.unreachable} unreachable` +
+                (reach.fallbackReason ? ` (fallback: ${reach.fallbackReason})` : '')
+            );
+          } catch (e: any) {
+            // Decoration is best-effort — a failure leaves reachability_level
+            // null and never blocks the scan findings from being written.
+            await ctx.logger.warn(
+              'container_scan.reachability',
+              `${image.imageRef}: ${e?.message ?? e}`
+            );
+          } finally {
+            try {
+              fs.rmSync(reachScratch, { recursive: true, force: true });
+            } catch {
+              /* best-effort */
+            }
+          }
+        }
         if (image.source === 'dockerfile_base') {
           dockerfileFindings.push(...result.findings);
         } else {

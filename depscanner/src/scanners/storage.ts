@@ -52,6 +52,8 @@ interface ContainerRow extends Record<string, unknown> {
   description: string | null;
   rule_doc_url: string | null;
   container_fingerprint: string | null;
+  reachability_level: 'module' | 'unreachable' | null;
+  reachability_details: Record<string, unknown> | null;
 }
 
 export interface UpsertResult {
@@ -164,6 +166,8 @@ export async function upsertContainerFindings(
     description: f.description,
     rule_doc_url: f.rule_doc_url,
     container_fingerprint: f.container_fingerprint,
+    reachability_level: f.reachability_level ?? null,
+    reachability_details: f.reachability_details ?? null,
   }));
 
   let inserted = 0;
