@@ -4044,6 +4044,8 @@ export interface DastFindingDTO {
   linked_sast_finding_id?: string | null;
   cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
+  /** CISA Known-Exploited flag — true only for KEV-tagged Nuclei findings. */
+  kev: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
   created_at: string;
@@ -4120,6 +4122,11 @@ export interface ProjectVulnerability {
   sla_deadline_at?: string | null;
   /** Reachability (org list rows) */
   reachability_level?: ReachabilityLevel;
+  /** v2.1c — set when a Nuclei DAST scan confirmed this vuln at runtime. */
+  runtime_confirmed_at?: string | null;
+  runtime_confirmed_dast_finding_id?: string | null;
+  /** Reachability level the row held before the runtime confirmation flipped it. */
+  runtime_confirmed_prior_level?: string | null;
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
   project_name?: string;
