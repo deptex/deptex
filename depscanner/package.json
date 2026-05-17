@@ -41,6 +41,7 @@
     "test:few-shot-gate2": "tsx test/few-shot-roundtrip-gate2.ts",
     "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
     "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
+    "test:dast-v2-1c-migration-pglite": "tsx test/dast-v2-1c-migration-pglite.ts",
     "docker:prepare": "mkdir -p .schema && cp ../backend/database/schema.sql .schema/schema.sql && tsx ../scripts/sync-encryption.ts",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
