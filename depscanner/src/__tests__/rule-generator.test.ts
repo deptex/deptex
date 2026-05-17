@@ -281,8 +281,8 @@ describe('prompt-builder', () => {
     expect(closeMatches.length).toBe(4);
   });
 
-  it('getPromptVersion is the bumped framework-spec-v1', () => {
-    expect(getPromptVersion()).toBe('framework-spec-v1');
+  it('getPromptVersion reports the current framework-spec prompt version', () => {
+    expect(getPromptVersion()).toBe('framework-spec-v3-revert-ruby-hint');
   });
 
   it('omits the few-shot section when no examples available', () => {

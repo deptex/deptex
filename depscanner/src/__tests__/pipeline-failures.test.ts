@@ -32,6 +32,10 @@ function createChain() {
       const v = supabaseResolves.shift() ?? { data: null, error: null };
       return Promise.resolve(v);
     }),
+    maybeSingle: jest.fn().mockImplementation(() => {
+      const v = supabaseResolves.shift() ?? { data: null, error: null };
+      return Promise.resolve(v);
+    }),
   };
   (chain as any).then = function (resolve: (v: unknown) => void) {
     const v = supabaseResolves.shift() ?? { data: [], error: null };
@@ -250,7 +254,10 @@ describe('runPipeline', () => {
       });
       return child;
     });
-    fsExistsSync = () => true;
+    // semgrep.json is absent — an OOM-killed semgrep wrote no output, so the
+    // step rethrows and the OOM-specific onError branch fires. (When a partial
+    // output file exists the step instead swallows the error and keeps it.)
+    fsExistsSync = (p: string) => !String(p).endsWith('semgrep.json');
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];

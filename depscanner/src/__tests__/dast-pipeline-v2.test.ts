@@ -193,6 +193,23 @@ function makeCredRow(encryptedPayload: string, overrides: Record<string, unknown
   };
 }
 
+// Build a structurally valid `nonce:ciphertext:tag` credential blob encrypted
+// under `keyHex` (aes-256-gcm). decryptCredential's up-front structural checks
+// pass; the auth-tag check fails only when the worker holds a different key —
+// which is the genuine stale-key scenario (distinct from a corrupt blob).
+function makeCredentialBlob(keyHex: string, plaintext = '{"username":"u","password":"p"}'): string {
+  const key = Buffer.from(keyHex, 'hex');
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [
+    nonce.toString('base64'),
+    ciphertext.toString('base64'),
+    tag.toString('base64'),
+  ].join(':');
+}
+
 function primeHappyPath(mock: MockSupabase, job: ExtractionJobRow, withCredential?: { encrypted_payload: string }) {
   // tenant-guard load: scan_jobs.single, project_dast_targets.single (target),
   // projects.single. cred load uses maybeSingle on project_dast_credentials.
@@ -288,13 +305,15 @@ describe('runDastPipeline — credential abort paths', () => {
   });
 
   it('aborts with dast_credential_key_stale when current+previous keys both reject the ciphertext', async () => {
-    // Provide a key that won't decrypt the (intentionally invalid) payload.
+    // Structurally valid ciphertext, but encrypted under a key the worker does
+    // not hold. The auth-tag check fails and no previous key is configured, so
+    // this is a stale-key problem — not a corrupt-credential format error.
     process.env.DAST_CREDENTIAL_KEY = '0'.repeat(64);
     delete process.env.DAST_CREDENTIAL_KEY_PREV;
 
     const mock = makeMockSupabase();
     const job = makeJobRow();
-    primeHappyPath(mock, job, { encrypted_payload: 'AAAA:BBBB:CCCC' });
+    primeHappyPath(mock, job, { encrypted_payload: makeCredentialBlob('a'.repeat(64)) });
 
     const err = await runDastPipeline(job, mock.client as never).catch((e) => e);
     expect(err).toBeInstanceOf(DastPipelineAbortError);
@@ -377,7 +396,7 @@ describe('runDastPipeline — scope_config propagation', () => {
       error: null,
     });
 
-    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID, 'https://example.com');
     expect(out).toBeDefined();
     expect(out!.includePaths).toEqual(['^https://example\\.com/api/.*$']);
     expect(out!.excludePaths).toEqual(['^https://example\\.com/admin/.*$']);
@@ -409,7 +428,13 @@ describe('runDastPipeline — scope_config propagation', () => {
     mock.pushTableResponse('project_dast_config', {
       data: {
         scope_config: {
-          include_patterns: ['ok', 42, null, 'also-ok'], // non-strings dropped
+          // non-strings dropped; include patterns must stay within target origin
+          include_patterns: [
+            '^https://example\\.com/ok',
+            42,
+            null,
+            '^https://example\\.com/also-ok',
+          ],
           header_rules: [
             { name: 'X-Ok', value: 'v' }, // missing scope → defaults 'all'
             { name: 'X-Bad', value: 123 }, // value not string → dropped
@@ -420,8 +445,11 @@ describe('runDastPipeline — scope_config propagation', () => {
       },
       error: null,
     });
-    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
-    expect(out!.includePaths).toEqual(['ok', 'also-ok']);
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID, 'https://example.com');
+    expect(out!.includePaths).toEqual([
+      '^https://example\\.com/ok',
+      '^https://example\\.com/also-ok',
+    ]);
     expect(out!.headerRules).toEqual([
       { name: 'X-Ok', value: 'v', scope: 'all' },
       { name: 'X-Bad-Scope', value: 'v', scope: 'all' },
@@ -430,12 +458,15 @@ describe('runDastPipeline — scope_config propagation', () => {
 
   it('caps include/exclude arrays at 32 entries', async () => {
     const mock = makeMockSupabase();
-    const big = Array.from({ length: 50 }, (_, i) => `pat-${i}`);
+    // include patterns must stay within the target origin; exclude patterns
+    // only narrow reach so they are not origin-checked.
+    const bigInclude = Array.from({ length: 50 }, (_, i) => `^https://example\\.com/pat-${i}`);
+    const bigExclude = Array.from({ length: 50 }, (_, i) => `pat-${i}`);
     mock.pushTableResponse('project_dast_config', {
-      data: { scope_config: { include_patterns: big, exclude_patterns: big } },
+      data: { scope_config: { include_patterns: bigInclude, exclude_patterns: bigExclude } },
       error: null,
     });
-    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID);
+    const out = await __test_loadScopeConfig(mock.client as never, PROJECT_ID, 'https://example.com');
     expect(out!.includePaths).toHaveLength(32);
     expect(out!.excludePaths).toHaveLength(32);
   });
