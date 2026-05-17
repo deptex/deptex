@@ -1,0 +1,117 @@
+{
+  "scenario": "dogfood-round2",
+  "orgId": "5a7b7c20-8d56-4005-9a8e-9ee63391b102",
+  "userId": "077c1edc-3c1e-4049-952f-1794b564c2c9",
+  "cases": [
+    {
+      "id": "01-single-fix",
+      "description": "Single fix baseline — NO set_todos, single request_fix.",
+      "turns": [
+        {
+          "user": "Open a fix for the highest-severity reachable CVE in my org.",
+          "expect": {
+            "tools_called": ["request_fix"],
+            "tools_not_called": ["set_todos"],
+            "tools_called_count": { "request_fix": 1 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "02-multi-create-revise",
+      "description": "Multi-fix create → multi-revise → second-revise (combines dogfood prompts 2/3/4 into one chat).",
+      "turns": [
+        {
+          "user": "Open fix plans for the top 3 highest-severity reachable CVEs in my org.",
+          "expect": {
+            "tools_called": ["set_todos", "request_fix"],
+            "tools_called_count": { "request_fix": 3 }
+          }
+        },
+        {
+          "user": "Revise all three plans to add unit tests.",
+          "expect": {
+            "tools_called": ["set_todos", "revise_fix"],
+            "tools_called_count": { "revise_fix": 3 }
+          }
+        },
+        {
+          "user": "Now revise each of them to add longer issue descriptions.",
+          "expect": {
+            "tools_called": ["set_todos", "revise_fix"],
+            "tools_called_count": { "revise_fix": 3 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "03-readonly-confound",
+      "description": "Negative test — no set_todos for chained read-only tool calls.",
+      "turns": [
+        {
+          "user": "Show me my security posture, list my top 5 projects, and recommend an action.",
+          "expect": {
+            "tools_not_called": ["set_todos", "request_fix", "revise_fix", "approve_fix"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "04-cross-turn-dedup",
+      "description": "Cross-turn idempotency — repeating the same request_fix on turn 2 should hit the dedup hint, not insert a duplicate row.",
+      "turns": [
+        {
+          "user": "Open a fix for the highest-severity reachable CVE in my org.",
+          "expect": {
+            "tools_called": ["request_fix"],
+            "tools_called_count": { "request_fix": 1 }
+          }
+        },
+        {
+          "user": "Do that same one again.",
+          "expect": {
+            "tools_with_error": ["request_fix"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "05-duplicate-revise-stress",
+      "description": "Duplicate-revise stress — agent should call revise_fix once with combined instructions, OR twice with the second hitting the dedup guard.",
+      "turns": [
+        {
+          "user": "Open a fix for the highest-severity reachable CVE in my org.",
+          "expect": {
+            "tools_called": ["request_fix"]
+          }
+        },
+        {
+          "user": "Revise the Log4j plan to add tests, and also revise the Log4j plan to mention the CVSS score.",
+          "expect": {
+            "tools_called": ["revise_fix"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "06-cross-finding-mismatch",
+      "description": "Stable-id matcher — even when summary has drifted, substring 'commons-text' should match because the matcher checks fileChanges paths + osv_id.",
+      "turns": [
+        {
+          "user": "Open a fix plan for CVE-2022-42889 (commons-text) in deptex-test-java.",
+          "expect": {
+            "tools_called": ["request_fix"],
+            "tools_called_count": { "request_fix": 1 }
+          }
+        },
+        {
+          "user": "Revise the commons-text plan to add unit tests.",
+          "expect": {
+            "tools_called": ["revise_fix"],
+            "tools_called_count": { "revise_fix": 1 }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -174,7 +174,7 @@ When you DO set refusal, still populate the other fields with best-effort placeh
 const SHIP_GATE_LANGS = ['js', 'ts', 'python', 'go', 'other'] as const;
 const ALL_PLAN_LANGS = ['js', 'ts', 'python', 'go', 'java', 'ruby', 'php', 'rust', 'csharp', 'other'] as const;
 
-function getEnabledPlannerLanguages(): readonly string[] {
+export function getEnabledPlannerLanguages(): readonly string[] {
   const raw = process.env.LANGUAGE_GATE?.trim();
   if (!raw) return SHIP_GATE_LANGS;
   if (raw.toLowerCase() === 'all') return ALL_PLAN_LANGS;
