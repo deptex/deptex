@@ -95,10 +95,8 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
     if (job.type === 'extraction') {
       await processExtractionJob(supabase, job);
     } else if (job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei') {
-      // v2.1a routes all 'dast*' types through the same pipeline. The
-      // dast_zap / dast_nuclei split lands in v2.1c (engine column on
-      // findings, separate runner dispatchers). For now the worker treats
-      // them as aliases of 'dast'.
+      // All 'dast*' types share one pipeline; runDastPipeline dispatches to the
+      // ZAP or Nuclei engine internally based on scan_jobs.type (v2.1c).
       await processDastJob(supabase, job);
     } else {
       const message = `Unsupported scan type: ${job.type}`;

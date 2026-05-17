@@ -54,6 +54,8 @@ import {
 } from './yaml-builder';
 import {
   buildAuthForStrategy,
+  buildNucleiAuthHeaders,
+  UnsupportedAuthStrategyError,
   type CredentialPayload,
   type DastAuthStrategy,
 } from './auth-config';
@@ -64,6 +66,8 @@ import {
   type DastFindingRaw,
   type DastScanProfile,
 } from './runner';
+import { runNuclei } from './nuclei-runner';
+import { confirmPdvsFromDastRun } from './cross-link-cve';
 import {
   spawnExternal,
   createAuthLostWatcher,
@@ -150,7 +154,9 @@ interface DastFindingInsert {
   linked_sca_project_dependency_id: string | null;
   cross_link_metadata: Record<string, unknown>;
   auth_state: DastAuthState;
-  engine: 'zap';
+  engine: 'zap' | 'nuclei';
+  /** CISA Known-Exploited flag — always false for ZAP, tag-derived for Nuclei. */
+  kev: boolean;
   status: 'open';
 }
 
@@ -190,6 +196,8 @@ export interface DastPipelineResult {
   duration_seconds: number;
   cross_linked_count: number;
   auth_state_summary: DastAuthState;
+  /** PDV rows flipped to 'confirmed' by the Nuclei runtime-confirmation batch. */
+  runtime_confirmed_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +621,95 @@ async function runZapWithControlPlane(
 }
 
 // ---------------------------------------------------------------------------
+// Engine dispatch (v2.1c)
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a scan_jobs.type to the DAST engine. 'dast_nuclei' → Nuclei; 'dast' (the
+ * legacy v2.1a alias) and 'dast_zap' → ZAP.
+ */
+export function resolveEngine(jobType: string): 'zap' | 'nuclei' {
+  return jobType === 'dast_nuclei' ? 'nuclei' : 'zap';
+}
+
+/**
+ * Build the cross_link_metadata payload for an inserted finding. Nuclei
+ * findings get a `nuclei.cve_ids` array merged in — confirm_pdvs_from_dast_run
+ * reads exactly that JSON path. ZAP findings pass the base metadata through.
+ */
+export function buildEngineCrossLinkMetadata(
+  engine: 'zap' | 'nuclei',
+  baseMetadata: Record<string, unknown>,
+  cveIds: string[],
+): Record<string, unknown> {
+  if (engine !== 'nuclei') return baseMetadata;
+  return { ...baseMetadata, nuclei: { cve_ids: cveIds } };
+}
+
+// ---------------------------------------------------------------------------
+// Nuclei engine wrapper (v2.1c)
+// ---------------------------------------------------------------------------
+
+interface ScanControlOptions {
+  onHeartbeat: () => Promise<void>;
+  isCancelled: () => Promise<boolean>;
+  pollIntervalMs: number;
+}
+
+interface NucleiRunInputs {
+  targetUrl: string;
+  authHeaders?: Record<string, string>;
+  scanTimeoutMinutes: number;
+  spawnImpl?: typeof import('child_process').spawn;
+}
+
+/**
+ * Run a Nuclei scan and translate its abort/exit outcomes into the same
+ * DastPipelineAbortError vocabulary the ZAP wrapper uses, so the pipeline
+ * branches identically regardless of engine.
+ */
+async function runNucleiWithControlPlane(
+  inputs: NucleiRunInputs,
+  options: ScanControlOptions,
+): Promise<{ findings: DastFindingRaw[]; durationMs: number }> {
+  const result = await runNuclei(
+    {
+      targetUrl: inputs.targetUrl,
+      authHeaders: inputs.authHeaders,
+      scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+      spawnImpl: inputs.spawnImpl,
+    },
+    options,
+  );
+
+  if (result.aborted && result.abortReason === 'cancellation_requested') {
+    throw new DastPipelineAbortError(
+      'unknown',
+      { aborted_reason: 'cancellation_requested' },
+      'DAST scan cancelled by user',
+    );
+  }
+  if (result.aborted && result.abortReason === 'scan_timeout') {
+    throw new DastPipelineAbortError(
+      'timeout',
+      { aborted_reason: 'scan_timeout', timeout_minutes: inputs.scanTimeoutMinutes },
+      `DAST scan exceeded scan_timeout_minutes=${inputs.scanTimeoutMinutes}`,
+    );
+  }
+  // Nuclei exits 0 on a clean run with or without findings; a non-zero exit
+  // that was not an abort is an engine crash.
+  if (!result.aborted && result.exitCode !== 0 && result.exitCode !== null) {
+    throw new DastPipelineAbortError(
+      'engine_crash',
+      { exit_code: result.exitCode },
+      `Nuclei exited with code ${result.exitCode}`,
+    );
+  }
+
+  return { findings: result.findings, durationMs: result.durationMs };
+}
+
+// ---------------------------------------------------------------------------
 // Atomic-commit + finalization
 // ---------------------------------------------------------------------------
 
@@ -754,43 +851,83 @@ export async function runDastPipeline(
     console.warn(`${tag} no active_extraction_run_id — skipping cross-link`);
   }
 
-  // Step 4: spawn ZAP via control-plane. The plaintext buffer is alive until
-  // buildAutomationYaml runs INSIDE runZapWithControlPlane → write to disk →
-  // we wipe immediately after.
+  // Step 4: run the selected DAST engine. job.type='dast_nuclei' → Nuclei,
+  // everything else ('dast' legacy alias, 'dast_zap') → ZAP. Both engines
+  // share the cancellation-poll + heartbeat control loop.
+  const engine = resolveEngine(job.type);
   const afProfile: AfScanProfile = scanProfile === 'api' ? 'auto' : (scanProfile as AfScanProfile);
-  let zapResult;
+
+  const control: ScanControlOptions = {
+    onHeartbeat: async () => {
+      try {
+        await sendHeartbeat(supabase, job.id);
+      } catch {
+        /* non-fatal */
+      }
+    },
+    isCancelled: async () => {
+      try {
+        return await isJobCancelled(supabase, job.id);
+      } catch {
+        return false;
+      }
+    },
+    pollIntervalMs: options.cancellationPollMs ?? DEFAULT_CANCELLATION_POLL_MS,
+  };
+
+  let scanFindings: DastFindingRaw[];
+  let scanDurationMs: number;
+  let authLostState: ZapRunOutputs['authLostState'] | null = null;
   try {
-    zapResult = await runZapWithControlPlane(
-      {
-        targetUrl: target.target_url,
-        scanProfile: afProfile,
-        detectedRuntime: target.detected_runtime,
-        authStrategy: cred?.credentialRow.auth_strategy,
-        authPayload: cred?.payload,
-        loggedInIndicator: cred?.credentialRow.logged_in_indicator ?? undefined,
-        loggedOutIndicator: cred?.credentialRow.logged_out_indicator ?? undefined,
-        scanTimeoutMinutes: timeoutMinutes,
-        zapWorkDir,
-        spawnImpl: options.spawnImpl,
-      },
-      {
-        onHeartbeat: async () => {
-          try {
-            await sendHeartbeat(supabase, job.id);
-          } catch {
-            /* non-fatal */
-          }
+    if (engine === 'nuclei') {
+      // Reduce the credential to flat headers. form / recorded auth cannot be
+      // expressed as static headers — abort rather than scan anonymous (the
+      // never-fall-back-to-anonymous invariant).
+      let authHeaders: Record<string, string> | undefined;
+      if (cred) {
+        try {
+          authHeaders = buildNucleiAuthHeaders(cred.credentialRow.auth_strategy, cred.payload);
+        } catch (e) {
+          throw new DastPipelineAbortError(
+            'auth_failed',
+            { strategy: cred.credentialRow.auth_strategy },
+            e instanceof UnsupportedAuthStrategyError
+              ? `Nuclei engine cannot use '${cred.credentialRow.auth_strategy}' auth — re-run this target with the ZAP engine`
+              : (e as Error).message,
+          );
+        }
+      }
+      const nucleiResult = await runNucleiWithControlPlane(
+        {
+          targetUrl: target.target_url,
+          authHeaders,
+          scanTimeoutMinutes: timeoutMinutes,
+          spawnImpl: options.spawnImpl,
         },
-        isCancelled: async () => {
-          try {
-            return await isJobCancelled(supabase, job.id);
-          } catch {
-            return false;
-          }
+        control,
+      );
+      scanFindings = nucleiResult.findings;
+      scanDurationMs = nucleiResult.durationMs;
+    } else {
+      const zapResult = await runZapWithControlPlane(
+        {
+          targetUrl: target.target_url,
+          scanProfile: afProfile,
+          detectedRuntime: target.detected_runtime,
+          authStrategy: cred?.credentialRow.auth_strategy,
+          authPayload: cred?.payload,
+          loggedInIndicator: cred?.credentialRow.logged_in_indicator ?? undefined,
+          loggedOutIndicator: cred?.credentialRow.logged_out_indicator ?? undefined,
+          scanTimeoutMinutes: timeoutMinutes,
+          zapWorkDir,
+          spawnImpl: options.spawnImpl,
         },
-        pollIntervalMs: options.cancellationPollMs ?? DEFAULT_CANCELLATION_POLL_MS,
-      },
-    );
+        control,
+      );
+      scanFindings = zapResult.findings;
+      scanDurationMs = zapResult.durationMs;
+      authLostState = zapResult.authLostState;
+    }
   } catch (e) {
     if (e instanceof DastPipelineAbortError) {
       console.error(`${tag} aborted during scan: ${e.errorCategory}`);
@@ -799,30 +936,30 @@ export async function runDastPipeline(
     throw e;
   }
   // Plaintext lifetime is GC-bound: V8 strings holding the decrypted
-  // password/token/cookies are unreferenced once runZapWithControlPlane
-  // returns and the YAML temp file is unlinked. Fly machine isolation
-  // (one tenant per scan, machine destroyed at end) is the load-bearing
-  // safety property here, not buffer scrubbing.
+  // password/token/cookies are unreferenced once the engine wrapper returns
+  // and any temp file is unlinked. Fly machine isolation (one tenant per scan,
+  // machine destroyed at end) is the load-bearing safety property here.
 
-  console.log(
-    `${tag} ZAP returned ${zapResult.findings.length} findings in ${zapResult.durationMs}ms (auth_lost=${zapResult.authLostState.consecutiveLostCount})`,
-  );
+  console.log(`${tag} ${engine} returned ${scanFindings.length} findings in ${scanDurationMs}ms`);
 
   // Step 5: build inserts with auth_state per finding.
   const dastRunId = `dast_${randomUUID()}`;
-  const authLostThresholdHit = zapResult.aborted && zapResult.authLostState.consecutiveLostCount >= 4;
+  const authLostThresholdHit = authLostState != null && authLostState.consecutiveLostCount >= 4;
   const baseAuthState: DastAuthState = cred ? 'authenticated' : 'anonymous';
-  // Findings collected after the trip carry 'authentication_lost'; we mark
-  // ALL findings 'authentication_lost' if the watcher tripped, since we don't
-  // get per-finding timestamps from the report. This is the same simplification
-  // the plan §"auth_state state machine" calls out — rule_state stays a
-  // run-level summary in v2.1a.
+  // Auth-lost is ZAP-only; the watcher trip marks ALL findings
+  // 'authentication_lost' since the report carries no per-finding timestamps.
   const findingAuthState: DastAuthState = authLostThresholdHit ? 'authentication_lost' : baseAuthState;
 
   let crossLinkedCount = 0;
-  const inserts: DastFindingInsert[] = zapResult.findings.map((f) => {
+  let cveSignalCount = 0;
+  const inserts: DastFindingInsert[] = scanFindings.map((f) => {
     const link = crossLinkFinding({ finding: f, entryPoints, flows, pdvByPurl, projectDependencyByPurl });
     if (link.linked_sca_osv_id) crossLinkedCount++;
+    // Nuclei findings carry their CVE ids in cross_link_metadata.nuclei.cve_ids
+    // — confirm_pdvs_from_dast_run reads exactly that JSON path.
+    const cveIds = engine === 'nuclei' ? f.cve_ids ?? [] : [];
+    if (cveIds.length > 0) cveSignalCount++;
+    const crossLinkMetadata = buildEngineCrossLinkMetadata(engine, link.cross_link_metadata, cveIds);
     return {
       project_id: job.project_id,
       organization_id: job.organization_id,
@@ -844,9 +981,10 @@ export async function runDastPipeline(
       handler_line: link.handler_line,
       linked_sca_osv_id: link.linked_sca_osv_id,
       linked_sca_project_dependency_id: link.linked_sca_project_dependency_id,
-      cross_link_metadata: link.cross_link_metadata,
+      cross_link_metadata: crossLinkMetadata,
       auth_state: findingAuthState,
-      engine: 'zap',
+      engine,
+      kev: f.kev ?? false,
       status: 'open',
     };
   });
@@ -867,21 +1005,36 @@ export async function runDastPipeline(
 
   await insertFindings(supabase, dedupedInserts);
 
-  // Step 6: atomic-commit via the new target-scoped RPC.
+  // Step 6: atomic-commit via the target-scoped RPC.
   await commitDastTargetRun(supabase, target.id, dastRunId);
+
+  // Step 6.5: Nuclei runtime-confirmation cross-link batch. Only runs when the
+  // engine is Nuclei and at least one inserted finding carried CVE ids; flips
+  // matching PDV rows to reachability_level='confirmed'. Best-effort — a
+  // failure is logged inside confirmPdvsFromDastRun, never fails the job.
+  let runtimeConfirmedCount = 0;
+  if (engine === 'nuclei' && cveSignalCount > 0) {
+    const confirmResult = await confirmPdvsFromDastRun(
+      supabase,
+      job.organization_id,
+      job.project_id,
+      dastRunId,
+    );
+    runtimeConfirmedCount = confirmResult.confirmed_count;
+  }
 
   // Step 7: finalize. Auth-lost trip → record as a JOB STATE (not a synthetic
   // finding row); findings collected during the run still ship.
   const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
-  if (authLostThresholdHit) {
+  if (authLostThresholdHit && authLostState) {
     await recordJobError(
       supabase,
       job.id,
       'auth_failed',
       {
-        consecutive_lost_count: zapResult.authLostState.consecutiveLostCount,
-        last_logged_out_url: zapResult.authLostState.lastLoggedOutUrl,
-        last_logged_out_at: zapResult.authLostState.lastLoggedOutAt,
+        consecutive_lost_count: authLostState.consecutiveLostCount,
+        last_logged_out_url: authLostState.lastLoggedOutUrl,
+        last_logged_out_at: authLostState.lastLoggedOutAt,
         findings_count: dedupedInserts.length,
       },
       'DAST authentication lost mid-scan',
@@ -890,7 +1043,10 @@ export async function runDastPipeline(
     await finalizeJob(supabase, job.id, dedupedInserts.length, durationSeconds);
   }
 
-  console.log(`${tag} DAST scan completed: ${dedupedInserts.length} findings, ${durationSeconds}s`);
+  console.log(
+    `${tag} DAST scan completed: ${dedupedInserts.length} findings, ${durationSeconds}s` +
+      (engine === 'nuclei' ? `, runtime_confirmed=${runtimeConfirmedCount}` : ''),
+  );
 
   return {
     dast_run_id: dastRunId,
@@ -898,6 +1054,7 @@ export async function runDastPipeline(
     duration_seconds: durationSeconds,
     cross_linked_count: crossLinkedCount,
     auth_state_summary: findingAuthState,
+    runtime_confirmed_count: runtimeConfirmedCount,
   };
 }
 

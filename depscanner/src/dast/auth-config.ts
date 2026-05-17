@@ -136,3 +136,35 @@ export function buildAuthForStrategy(
   // Should be unreachable given the union type, but cover it defensively.
   throw new UnsupportedAuthStrategyError(strategy);
 }
+
+// ---------------------------------------------------------------------------
+// v2.1c — Nuclei header auth
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten a credential payload into the HTTP header map the Nuclei engine
+ * injects via `-H @file`. jwt → Authorization, cookie → Cookie. form and
+ * recorded auth cannot be reduced to static headers — the caller aborts the
+ * run with `auth_failed` rather than silently scanning anonymous (the same
+ * never-fall-back-to-anonymous invariant the ZAP path enforces).
+ */
+export function buildNucleiAuthHeaders(
+  strategy: DastAuthStrategy,
+  payload: CredentialPayload,
+): Record<string, string> {
+  if (payload.kind !== strategy) {
+    throw new Error(
+      `DAST auth payload.kind='${payload.kind}' mismatches strategy='${strategy}'`,
+    );
+  }
+  if (strategy === 'jwt') {
+    return { Authorization: `Bearer ${(payload as JwtCredentialPayload).token}` };
+  }
+  if (strategy === 'cookie') {
+    const p = payload as CookieCredentialPayload;
+    if (p.cookies.length === 0) throw new Error('DAST auth cookie payload has no cookies');
+    return { Cookie: p.cookies.map((c) => `${c.name}=${c.value}`).join('; ') };
+  }
+  // form / recorded: not expressible as static headers.
+  throw new UnsupportedAuthStrategyError(strategy);
+}
