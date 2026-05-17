@@ -14,6 +14,7 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y \
   git \
   curl \
+  unzip \
   python3 \
   python3-pip \
   python3-venv \
@@ -178,6 +179,46 @@ RUN mkdir -p /data /data/cache && chown -R worker:worker /data
 # with `'/zap/wrk' is not mounted` otherwise). The runner writes report+stub
 # files there. Owned by `worker` so the runtime user can mkdtempSync into it.
 RUN mkdir -p /zap/wrk && chown worker:worker /zap/wrk
+
+# Nuclei (ProjectDiscovery) — second DAST engine (v2.1c), alongside ZAP.
+# Pinned release zip + sha256sum -c, same supply-chain posture as Trivy /
+# crane / TruffleHog: Nuclei runs inside the worker that holds decrypted
+# customer credentials, so a compromised binary equals credential exfil.
+# Multi-arch via the buildx-populated TARGETARCH. Bumping NUCLEI_VERSION
+# without both SHAs is caught by .github/workflows/nuclei-pin-check.yml.
+ARG NUCLEI_VERSION=v3.8.0
+ARG NUCLEI_SHA256_AMD64=cd4ea43c88b50af8ab96eb6ad3fb4debd8e9d51efaff4d4c2d99106041578943
+ARG NUCLEI_SHA256_ARM64=deb622901acda6bbc6ffe771b98b2d41276667cc5dca6ce403b6ae331ccba64e
+RUN set -eux; \
+    NUCLEI_NUM="${NUCLEI_VERSION#v}"; \
+    case "$TARGETARCH" in \
+      amd64) NUCLEI_ARCH=amd64; NUCLEI_SHA256=$NUCLEI_SHA256_AMD64 ;; \
+      arm64) NUCLEI_ARCH=arm64; NUCLEI_SHA256=$NUCLEI_SHA256_ARM64 ;; \
+      "") echo "TARGETARCH not set — build with docker buildx so it auto-populates"; exit 1 ;; \
+      *) echo "Unsupported arch: $TARGETARCH"; exit 1 ;; \
+    esac; \
+    curl -sSfL "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VERSION}/nuclei_${NUCLEI_NUM}_linux_${NUCLEI_ARCH}.zip" \
+      -o /tmp/nuclei.zip; \
+    echo "${NUCLEI_SHA256}  /tmp/nuclei.zip" | sha256sum -c -; \
+    unzip -j /tmp/nuclei.zip nuclei -d /usr/local/bin; \
+    rm /tmp/nuclei.zip; \
+    chmod +x /usr/local/bin/nuclei; \
+    nuclei -version
+
+# Nuclei templates corpus, pinned to an exact commit SHA — HEAD moves, so a
+# plain `git clone --depth 1` is not reproducible. git fetch-by-SHA is
+# supported by GitHub's smart HTTP transport. .git is dropped after checkout.
+ARG NUCLEI_TEMPLATES_SHA=58569cb13cb2ce23d4c840771132e9341a585e9d
+RUN set -eux; \
+    git init /opt/nuclei-templates; \
+    cd /opt/nuclei-templates; \
+    git remote add origin https://github.com/projectdiscovery/nuclei-templates.git; \
+    git fetch --depth 1 origin "$NUCLEI_TEMPLATES_SHA"; \
+    git checkout "$NUCLEI_TEMPLATES_SHA"; \
+    rm -rf .git; \
+    test "$(find /opt/nuclei-templates -name '*.yaml' | wc -l)" -gt 9000; \
+    chown -R worker:worker /opt/nuclei-templates
+ENV NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
 
 ENV VDB_HOME=/data
 ENV DEPSCAN_CACHE_DIR=/data/cache
