@@ -695,6 +695,15 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       return res.status(409).json({ error: 'target_disabled' });
     }
 
+    // Engine selection. Validated AFTER the permission + target-tenant guards
+    // so an unsupported engine value cannot probe target existence. Defaults
+    // to 'zap'; maps to the scan_jobs.type the worker dispatches on.
+    const engine = req.body?.engine ?? 'zap';
+    if (engine !== 'zap' && engine !== 'nuclei') {
+      return res.status(400).json({ code: 'unsupported_engine', supported: ['zap', 'nuclei'] });
+    }
+    const scanJobType = engine === 'nuclei' ? 'dast_nuclei' : 'dast_zap';
+
     // Re-validate URL (SSRF + DNS pinning).
     const urlGuard = await validateExternalUrl(guard.target.target_url);
     if (urlGuard.valid === false) {
@@ -734,8 +743,8 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
     const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
       p_project_id: projectId,
       p_organization_id: access.organizationId,
-      p_type: 'dast_zap',
-      p_payload: { source: 'manual_dast_scan', detected_runtime: detectedRuntime },
+      p_type: scanJobType,
+      p_payload: { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine },
       p_target_id: targetId,
       p_target_url: guard.target.target_url,
       p_scan_profile: scanProfile,
@@ -904,7 +913,7 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
     const query = supabase
       .from('project_dast_findings')
       .select(
-        'id, target_id, auth_state, engine, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
+        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
       )
       .eq('project_id', projectId)
       .eq('target_id', filterTargetId)
@@ -922,7 +931,8 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
       id: row.id,
       target_id: row.target_id ?? null,
       auth_state: row.auth_state ?? null,
-      engine: row.engine ?? null,
+      engine: row.engine ?? 'zap',
+      kev: row.kev ?? false,
       endpoint_url: row.endpoint_url,
       http_method: row.http_method,
       vulnerability_type: row.vulnerability_type,

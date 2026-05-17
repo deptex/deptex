@@ -16,8 +16,8 @@ export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
 export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
-// v2.1a inserts 'zap' only. 'nuclei' / 'merged' added in v2.1c.
-export type DastEngine = 'zap';
+// v2.1a inserts 'zap' only; v2.1c adds 'nuclei' as a second engine.
+export type DastEngine = 'zap' | 'nuclei';
 
 export interface DastTargetDTO {
   id: string;
@@ -135,7 +135,17 @@ export interface DastFindingDTO {
   linked_sast_finding_id?: string | null;
   cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
+  /** CISA Known-Exploited flag — true only for KEV-tagged Nuclei findings. */
+  kev: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
   created_at: string;
+}
+
+// v2.1c: runtime-confirmation fields on an SCA (PDV) finding — populated when
+// a Nuclei scan independently observed the vulnerability at runtime.
+export interface SCARuntimeConfirmation {
+  runtime_confirmed_at: string | null;
+  runtime_confirmed_dast_finding_id: string | null;
+  runtime_confirmed_prior_level: string | null;
 }
