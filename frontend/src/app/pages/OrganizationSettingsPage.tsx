@@ -2991,9 +2991,7 @@ export default function OrganizationSettingsPage() {
                           </p>
                           <Button
                             onClick={handleTransferOwnership}
-                            variant="outline"
-                            size="sm"
-                            className="h-8"
+                            variant="white"
                             disabled={!selectedTransferMemberId || isTransferringOwnership}
                           >
                             {isTransferringOwnership ? (
@@ -3025,9 +3023,9 @@ export default function OrganizationSettingsPage() {
                           {!showDeleteConfirm && organization && (
                             <Button
                               onClick={() => setShowDeleteConfirm(true)}
-                              variant="outline"
+                              variant="destructive"
                               size="sm"
-                              className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                              className="flex-shrink-0"
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
                               Delete
@@ -3045,6 +3043,7 @@ export default function OrganizationSettingsPage() {
                               value={deleteConfirmText}
                               onChange={(e) => setDeleteConfirmText(e.target.value)}
                               placeholder={organization.name}
+                              autoFocus
                               className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
                             />
                             <div className="flex gap-2">
@@ -3067,7 +3066,7 @@ export default function OrganizationSettingsPage() {
                                   setShowDeleteConfirm(false);
                                   setDeleteConfirmText('');
                                 }}
-                                variant="outline"
+                                variant="ghost"
                                 size="sm"
                                 className="h-8"
                               >

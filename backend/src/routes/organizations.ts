@@ -528,22 +528,29 @@ router.get('/:id/members', async (req: AuthRequest, res) => {
             };
           }
 
-          // Get user profile from user_profiles table
-          const { data: profile } = await supabase
-            .from('user_profiles')
-            .select('avatar_url, full_name')
-            .eq('user_id', m.user_id)
-            .single();
-
-          // Get avatar URL with priority:
-          // 1. Database profile (user_profiles table)
-          // 2. OAuth metadata picture (from raw_user_meta_data.picture)
-          // 3. OAuth metadata avatar_url (from raw_user_meta_data.avatar_url)
-          const avatarUrl = profile?.avatar_url
-            || user.user_metadata?.picture
-            || user.user_metadata?.avatar_url
-            || null;
-          const fullName = profile?.full_name || user.user_metadata?.full_name || null;
+          // Resolve avatar + name from the auth user. Identity lives on
+          // user_metadata after the user_profiles refactor; prefer a
+          // custom-uploaded avatar, then the OAuth picture, then the raw
+          // identity_data (Supabase doesn't always merge OAuth fields into
+          // user_metadata on the first session after sign-up).
+          const meta = user.user_metadata;
+          const idData = user.identities?.[0]?.identity_data as
+            | { picture?: string; avatar_url?: string; full_name?: string; name?: string }
+            | undefined;
+          const avatarUrl =
+            meta?.custom_avatar_url
+            ?? meta?.picture
+            ?? meta?.avatar_url
+            ?? idData?.picture
+            ?? idData?.avatar_url
+            ?? null;
+          const fullName =
+            meta?.custom_full_name
+            ?? meta?.full_name
+            ?? meta?.name
+            ?? idData?.full_name
+            ?? idData?.name
+            ?? null;
 
           return {
             user_id: m.user_id,

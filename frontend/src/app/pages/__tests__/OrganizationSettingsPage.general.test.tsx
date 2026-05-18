@@ -377,4 +377,35 @@ describe('OrganizationSettingsPage – General', () => {
       expect(mockTransferOrganizationOwnership).toHaveBeenCalledWith('org-1', 'user-2', expect.any(String));
     });
   });
+
+  it('Transfer member dropdown renders a long member list and filters by search', async () => {
+    const manyMembers = [
+      ownerMember,
+      ...Array.from({ length: 24 }, (_, i) => ({
+        user_id: `user-${i + 10}`,
+        email: `member${i + 10}@test.com`,
+        full_name: `Member ${i + 10}`,
+        role: 'member',
+      })),
+    ];
+    mockGetOrganizationMembers.mockResolvedValue(manyMembers);
+
+    render(<OrganizationSettingsPage />);
+    const memberDropdown = await screen.findByRole('button', { name: /Select a member/ }, { timeout: 5000 });
+    await userEvent.click(memberDropdown);
+
+    // The full list is rendered (first and last non-owner members both present).
+    await waitFor(() => {
+      expect(screen.getByText('Member 10')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Member 33')).toBeInTheDocument();
+
+    // Searching narrows the list to the matching member only.
+    const search = screen.getByPlaceholderText('Search members...');
+    await userEvent.type(search, 'Member 21');
+    await waitFor(() => {
+      expect(screen.queryByText('Member 10')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Member 21')).toBeInTheDocument();
+  });
 });
