@@ -50,6 +50,7 @@
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
     "scan": "./bin/deptex-scan",
     "scan:oss-corpus": "tsx scripts/oss-corpus.ts",
+    "test:reachability-corpus": "tsx scripts/reachability-corpus.ts",
     "test:fixtures": "tsx test/snapshot.ts",
     "test:fixtures:update": "tsx test/snapshot.ts --update",
     "test:snapshot-runner": "tsx test/snapshot-runner.test.ts",

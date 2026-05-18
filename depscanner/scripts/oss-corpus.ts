@@ -54,7 +54,10 @@ import * as os from 'node:os';
 
 interface GroundTruthCve {
   id: string;
-  expected_reachability: 'confirmed' | 'data_flow' | 'function' | 'module';
+  // `unreachable` is used by the purpose-built reachability corpus
+  // (scripts/reachability-corpus.yaml) — a CVE hand-labelled as not on any
+  // call path. The original oss-corpus.yaml only uses the reachable tiers.
+  expected_reachability: 'confirmed' | 'data_flow' | 'function' | 'module' | 'unreachable';
   source: string;
 }
 

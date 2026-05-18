@@ -1,0 +1,84 @@
+# Purpose-built reachability corpus — hand-labelled ground truth.
+#
+# WHY THIS EXISTS (separate from scripts/oss-corpus.yaml):
+#   oss-corpus.yaml's ground truth is "intentionally approximate (toy / first
+#   cut)" and only ever labels the *reachable* tiers. Measuring an honest
+#   noise-reduction number needs a corpus where each CVE is deliberately
+#   hand-labelled reachable OR unreachable after reading the repo's actual
+#   imports and call sites. That is this file.
+#
+# SCHEMA (shared with oss-corpus.ts — the same runner scans both):
+#   repos[]:
+#     name, repo_url, ecosystem, framework?, ref?, expected_min_findings?,
+#     notes?, skip?
+#     ground_truth_cves[]:
+#       id                      CVE id.
+#       expected_reachability   One of: confirmed | data_flow | function |
+#                               module | unreachable.
+#                               confirmed/data_flow/function = "reachable"
+#                               (the false-negative gate treats these as
+#                               must-not-be-classified-unreachable).
+#                               unreachable = the vulnerable code is on no
+#                               call path in this repo.
+#       source                  NVD/GHSA/OSV citation + the labeller's note
+#                               on WHY this label (which import / call site
+#                               was inspected).
+#
+# LABELLING METHOD (do this per CVE before adding it):
+#   1. Identify the vulnerable package + the specific vulnerable function
+#      from the advisory / patch.
+#   2. Clone the repo at `ref` and grep for the import + the vulnerable call.
+#   3. reachable  -> the vulnerable function is invoked (directly or via a
+#                    short call chain) from the repo's own code.
+#      unreachable-> the package is a transitive/dev dependency and nothing
+#                    in the repo reaches the vulnerable function.
+#   4. Record the evidence in `source` so the label is auditable.
+#
+# ACCEPTANCE GATES (scripts/reachability-corpus.ts, npm run test:reachability-corpus):
+#   1. corpus-wide noise reduction >= 60%   (unreachable + 0.5*module / observed)
+#   2. every ecosystem > 0% unreachable
+#   3. zero CVEs labelled reachable but scanned `unreachable` (false negatives)
+#
+# STATUS: STARTER. The entries below are a runnable seed reusing repos already
+# vetted in oss-corpus.yaml. Before the gates are statistically meaningful this
+# must be expanded to ~8-12 hand-labelled CVEs across ALL 8 ecosystems
+# (npm, pypi, maven, golang, gem, composer, cargo, nuget) — see the plan
+# (.cursor/plans/reachability-noise-reduction.plan.md, M4) and the M0 spike.
+# Each ecosystem needs at least one repo with a mix of reachable + unreachable
+# labels, or gate 2 will (correctly) fail as "corpus not yet populated".
+
+repos:
+  - name: express
+    repo_url: https://github.com/expressjs/express.git
+    ecosystem: npm
+    framework: express
+    ref: 4.18.2
+    ground_truth_cves:
+      - id: CVE-2024-29041
+        expected_reachability: function
+        source: |
+          GHSA-rv95-896h-c2vc — express open redirect via res.location().
+          REACHABLE: express itself ships res.location/res.redirect; the
+          vulnerable path is in first-party framework code.
+      - id: CVE-2022-24999
+        expected_reachability: data_flow
+        source: |
+          GHSA-hrpp-h998-j3pp — qs prototype pollution. REACHABLE: express
+          parses query strings through qs on every request.
+    expected_min_findings: 1
+    notes: |
+      STARTER entry. Needs unreachable-labelled CVEs added (e.g. a CVE in a
+      transitive dep that express never calls) before this repo contributes a
+      meaningful per-ecosystem unreachable %.
+
+  # TEMPLATE — copy per ecosystem, hand-label, delete this comment block.
+  # - name: <repo-name>
+  #   repo_url: https://github.com/<org>/<repo>.git
+  #   ecosystem: pypi   # one of npm|pypi|maven|golang|gem|composer|cargo|nuget
+  #   ref: <tag-or-sha>
+  #   ground_truth_cves:
+  #     - id: CVE-YYYY-NNNNN
+  #       expected_reachability: unreachable
+  #       source: |
+  #         <advisory> — <vulnerable pkg/function>. UNREACHABLE: <which
+  #         import was checked, why the vulnerable function is never called>.
