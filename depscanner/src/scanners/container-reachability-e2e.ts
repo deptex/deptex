@@ -29,32 +29,57 @@ import {
 } from './container-reachability';
 import type { ContainerFinding } from './types';
 
+/**
+ * What the case is meant to prove:
+ *  - `classified`         the real crane/tar/readelf path runs to a per-finding
+ *                         verdict (no fallback) — the entrypoint is a
+ *                         resolvable ELF binary.
+ *  - `fail_closed_module` the entrypoint is genuinely unanalyzable (a common
+ *                         `exec "$@"` wrapper); the classifier MUST fail closed
+ *                         — every finding `module`, none dropped `unreachable`.
+ */
+type Expectation = 'classified' | 'fail_closed_module';
+
 interface SmokeCase {
   image: string;
   ecosystem: string;
-  /** Real OS packages expected in the image — at least one must resolve in
-   *  the image's own dpkg/apk database for the case to count as exercised. */
+  /** Real OS packages expected in the image — at least one must resolve in the
+   *  image's own dpkg/apk database for a `classified` case to count. */
   packages: string[];
+  expect: Expectation;
+  note: string;
 }
 
-// Two real images chosen to exercise both package-database backends and both
-// libc families: a Debian-slim image (dpkg / glibc) and an Alpine image
-// (apk / musl). Both have a clean absolute-path ELF entrypoint that resolves.
+// Three real images: two with a resolvable ELF entrypoint (one dpkg/glibc, one
+// apk/musl — exercising both DB backends and both libc families), and one with
+// the ubiquitous `exec "$@"` wrapper entrypoint to prove the fail-closed path.
 const CASES: SmokeCase[] = [
-  { image: 'node:20-bookworm-slim', ecosystem: 'debian', packages: ['libssl3', 'libc6', 'perl-base'] },
-  { image: 'python:3.12-alpine', ecosystem: 'alpine', packages: ['musl', 'libssl3', 'busybox'] },
+  {
+    image: 'debian:bookworm-slim',
+    ecosystem: 'debian',
+    packages: ['libc6', 'libtinfo6', 'gzip'],
+    expect: 'classified',
+    note: 'dpkg / glibc — /bin/bash is a resolvable dynamic ELF entrypoint',
+  },
+  {
+    image: 'python:3.12-alpine',
+    ecosystem: 'alpine',
+    packages: ['musl', 'libssl3', 'busybox'],
+    expect: 'classified',
+    note: 'apk / musl — python3.12 is a resolvable dynamic ELF entrypoint',
+  },
+  {
+    image: 'node:20-bookworm-slim',
+    ecosystem: 'debian',
+    packages: ['libssl3', 'libc6'],
+    expect: 'fail_closed_module',
+    note: 'docker-entrypoint.sh is an `exec "$@"` wrapper — must fail closed to module',
+  },
 ];
 
 // Generous per-image budget: a first-time `crane export` pulls the whole image
 // over the network, which can take well past the 30s production default.
 const E2E_BUDGET_MS = 240_000;
-
-// A fallback reason that means the real binaries did NOT work — as opposed to a
-// legitimate "this image's entrypoint is genuinely unanalyzable". For the two
-// images above the entrypoint always resolves, so ANY fallback is a failure.
-function fallbackIsHardFailure(reason: string | null): boolean {
-  return reason !== null;
-}
 
 function makeFinding(c: SmokeCase, pkg: string, n: number): ContainerFinding {
   return {
@@ -79,7 +104,8 @@ function makeFinding(c: SmokeCase, pkg: string, n: number): ContainerFinding {
 }
 
 async function runCase(c: SmokeCase): Promise<boolean> {
-  console.log(`\n=== ${c.image} (${c.ecosystem}) ===`);
+  console.log(`\n=== ${c.image} (${c.ecosystem}) — expect ${c.expect} ===`);
+  console.log(`  ${c.note}`);
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reach-e2e-'));
   const findings = c.packages.map((pkg, i) => makeFinding(c, pkg, i + 1));
 
@@ -102,16 +128,28 @@ async function runCase(c: SmokeCase): Promise<boolean> {
         `unreachable=${summary.unreachable} fallback=${summary.fallbackReason ?? 'none'}`
     );
 
-    // A fallback means the real crane/tar/readelf path did not run to a verdict.
-    if (fallbackIsHardFailure(summary.fallbackReason)) {
-      console.error(`  FAIL — classifier fell back ('${summary.fallbackReason}'); the real path did not run`);
-      return false;
-    }
-    // The real path ran but classified nothing — package names drifted, or the
-    // dpkg/apk parse produced an empty index. Either way the smoke is useless.
-    if (summary.classified < 1) {
-      console.error('  FAIL — no finding was classified; package DB parse or lookup is broken');
-      return false;
+    if (c.expect === 'classified') {
+      // The real crane/tar/readelf path must run to per-finding verdicts.
+      if (summary.fallbackReason !== null) {
+        console.error(`  FAIL — fell back ('${summary.fallbackReason}'); the real path did not run`);
+        return false;
+      }
+      if (summary.classified < 1) {
+        console.error('  FAIL — nothing classified; the dpkg/apk parse or lookup is broken');
+        return false;
+      }
+    } else {
+      // Unanalyzable entrypoint: must fail CLOSED — never infer `unreachable`.
+      if (summary.fallbackReason === null) {
+        console.error('  FAIL — expected a fail-closed fallback, classifier reported none');
+        return false;
+      }
+      if (summary.unreachable > 0 || summary.module !== findings.length) {
+        console.error(
+          `  FAIL — not fail-closed: ${summary.unreachable} finding(s) marked unreachable`
+        );
+        return false;
+      }
     }
     console.log('  PASS');
     return true;
