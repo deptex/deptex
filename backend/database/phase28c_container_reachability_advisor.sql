@@ -104,9 +104,10 @@ ALTER TABLE public.project_container_findings
 COMMENT ON COLUMN public.project_container_findings.reachability_level IS
   'Phase 2 ships module|unreachable only; widen the CHECK via ALTER when the cross-file taint engine reaches container findings (Phase 3+).';
 
-CREATE INDEX IF NOT EXISTS idx_pcf_reachability
-  ON public.project_container_findings (project_id, reachability_level)
-  WHERE reachability_level = 'module';
+-- The idx_pcf_reachability index is built in phase28d as a standalone
+-- migration: project_container_findings is a hot write table, so the index
+-- must be created CONCURRENTLY, which cannot run inside this migration's
+-- transaction.
 
 -- ----------------------------------------------------------------------------
 -- 3. Reaper RPC for dismissed recommendations (retention default 90 days)

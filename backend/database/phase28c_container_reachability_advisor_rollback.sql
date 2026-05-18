@@ -4,7 +4,7 @@
 
 DROP FUNCTION IF EXISTS public.cleanup_dismissed_base_image_recommendations(INTEGER);
 
-DROP INDEX IF EXISTS public.idx_pcf_reachability;
+-- idx_pcf_reachability is dropped by phase28d_pcf_reachability_index_rollback.sql.
 
 ALTER TABLE public.project_container_findings
   DROP COLUMN IF EXISTS reachability_details,
