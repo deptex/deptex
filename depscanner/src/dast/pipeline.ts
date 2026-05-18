@@ -853,7 +853,7 @@ interface NucleiRunInputs {
  * DastPipelineAbortError vocabulary the ZAP wrapper uses, so the pipeline
  * branches identically regardless of engine.
  */
-async function runNucleiWithControlPlane(
+export async function runNucleiWithControlPlane(
   inputs: NucleiRunInputs,
   options: ScanControlOptions,
 ): Promise<{ findings: DastFindingRaw[]; durationMs: number }> {
@@ -881,13 +881,20 @@ async function runNucleiWithControlPlane(
       `DAST scan exceeded scan_timeout_minutes=${inputs.scanTimeoutMinutes}`,
     );
   }
-  // Nuclei exits 0 on a clean run with or without findings; a non-zero exit
-  // that was not an abort is an engine crash.
-  if (!result.aborted && result.exitCode !== 0 && result.exitCode !== null) {
+  // Nuclei exits 0 on a clean run, with or without findings. Any other exit
+  // is a runner-level failure that must NOT ship as a 0-findings success.
+  // A null exit code specifically means the process was terminated by a
+  // signal (OOM kill / SIGSEGV / external kill) and NOT via our own abort(),
+  // so `aborted` is false — treat it as an engine crash, the same way the
+  // ZAP wrapper does. Shipping it as a clean scan would be indistinguishable
+  // from a genuinely vulnerability-free target.
+  if (!result.aborted && result.exitCode !== 0) {
     throw new DastPipelineAbortError(
       'engine_crash',
       { exit_code: result.exitCode },
-      `Nuclei exited with code ${result.exitCode}`,
+      result.exitCode === null
+        ? 'Nuclei was terminated by a signal during the scan'
+        : `Nuclei exited with code ${result.exitCode}`,
     );
   }
 

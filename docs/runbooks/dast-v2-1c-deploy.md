@@ -7,6 +7,23 @@ The migration is **additive** — new columns, one widened CHECK, one new RPC,
 and a re-creation of `commit_extraction` / `finalize_extraction` with three
 extra carry-forward columns. No destructive step; no two-phase split needed.
 
+## Deploy order (do not skip)
+
+Three artifacts ship: the **migration**, the **depscanner worker image**, and
+the **backend**. The required order is:
+
+1. **Migration** (Step 1) — adds the `kev` / `runtime_confirmed_*` columns and
+   the `confirm_pdvs_from_dast_run` RPC the worker writes/calls.
+2. **Depscanner worker image** (Step 2) — ships the Nuclei binary + templates.
+3. **Backend** (Step 2b) — starts accepting `engine: 'nuclei'` and queuing
+   `type='dast_nuclei'` scan jobs.
+
+The backend MUST be last: if it deploys before the worker image, a user can
+queue a `dast_nuclei` job that an old worker image (no Nuclei binary) claims
+and fails with an ENOENT engine crash. Migration-before-worker is required so
+the worker's `kev`-column insert and `confirm_pdvs_from_dast_run` call land
+against schema that exists.
+
 ## Step 0 — Snapshot
 
 Trigger a Supabase manual snapshot (or note the PITR timestamp) before
@@ -46,6 +63,13 @@ docker buildx build --platform linux/amd64 -t <registry>/deptex-depscanner:v2.1c
 
 `buildx` is required so `TARGETARCH` populates (the Nuclei + crane installs
 fail fast otherwise).
+
+## Step 2b — Deploy the backend (Vercel)
+
+Deploy the backend **after** the depscanner image is live (see Deploy order
+above). `backend/src/routes/dast.ts` now accepts an `engine` field on
+`POST /dast/scan` and maps `engine: 'nuclei'` → `scan_jobs.type='dast_nuclei'`.
+Until this deploy, the route silently defaults every scan to ZAP.
 
 ## Step 3 — Verify the image
 
@@ -107,6 +131,17 @@ WHERE project_id = '<project>' AND osv_id ILIKE '%2017-12615%'
   AND extraction_run_id = (SELECT active_extraction_run_id FROM projects WHERE id = '<project>');
 -- expected: reachability_level still 'confirmed', runtime_confirmed_at still set
 ```
+
+## Known limitations
+
+- **DNS-rebinding TOCTOU.** The pipeline re-resolves and re-checks the target
+  host immediately before spawning the engine (Step 3c), but both Nuclei and
+  ZAP then resolve DNS themselves per request. A hostile target with a
+  short-TTL record can rebind to a private / metadata IP between the check and
+  the scan. This is engine-agnostic and pre-existing; the durable fix is an
+  IP-pinning egress proxy in front of the worker (tracked follow-up). Nuclei's
+  out-of-band (`interactsh`) templates are disabled (`-no-interactsh`) so this
+  cannot be amplified into external OOB callbacks.
 
 ## Rollback / escape hatch
 

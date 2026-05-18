@@ -114,7 +114,12 @@ export function mapNucleiResult(obj: NucleiResult): DastFindingRaw | null {
 
   const severity = NUCLEI_SEVERITY_MAP[(info.severity ?? 'info').toLowerCase()] ?? 'info';
 
-  const cweRaw = Array.isArray(classification['cwe-id']) ? classification['cwe-id'][0] : null;
+  // `cwe-id` is untrusted external-binary output: guard the element type as
+  // well as the array shape. A malformed `{'cwe-id':[123]}` would otherwise
+  // make `.replace(...)` throw and crash the whole parseNucleiJsonl run,
+  // dropping every finding in the batch.
+  const cweArr = classification['cwe-id'];
+  const cweRaw = Array.isArray(cweArr) && typeof cweArr[0] === 'string' ? cweArr[0] : null;
   const cweId = cweRaw ? cweRaw.replace(/^CWE-/i, '') : null;
 
   const cveIds = (Array.isArray(classification['cve-id']) ? classification['cve-id'] : [])
@@ -268,6 +273,17 @@ export async function runNuclei(
   // `-silent` keeps stdout to JSONL result lines only; `-jsonl` selects the
   // line-delimited format; `-disable-update-check` blocks any network fetch
   // of the templates corpus (we use the SHA-pinned baked copy).
+  // `-no-interactsh` disables ProjectDiscovery's hosted out-of-band (OAST)
+  // server: without it, blind/OOB templates make the worker — which holds
+  // decrypted customer credentials and sits inside the Fly 6PN private
+  // network — initiate callbacks to an external host. In-band matchers are
+  // sufficient for DAST findings and the runtime→SCA confirmation, so OAST
+  // is pure egress surface here.
+  //
+  // Note: `nuclei` resolves DNS itself per request, so a target hostname that
+  // passed the pipeline's scan-time SSRF re-check (pipeline.ts Step 3c) can
+  // still DNS-rebind mid-scan. This TOCTOU is shared with the ZAP engine; a
+  // full fix requires an IP-pinning egress proxy (tracked as a follow-up).
   const args = [
     '-target', inputs.targetUrl,
     '-templates', templatesDir,
@@ -275,6 +291,7 @@ export async function runNuclei(
     '-silent',
     '-no-color',
     '-disable-update-check',
+    '-no-interactsh',
   ];
   if (credFile) {
     args.push('-H', `@${credFile}`);
