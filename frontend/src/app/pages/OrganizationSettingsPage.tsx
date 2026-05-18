@@ -40,7 +40,6 @@ import AISection from '../../components/settings/AISection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/orgSettingsSections';
-import PageHeader from '../../components/PageHeader';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -2655,35 +2654,22 @@ export default function OrganizationSettingsPage() {
   // Section list lives in `lib/orgSettingsSections.tsx` so the sidebar drilldown renders the same items.
   const orgSettingsSections = buildOrgSettingsSections(effectivePermissions);
 
-  const activeSectionLabel = (() => {
-    for (const entry of orgSettingsSections) {
-      if (!('isCategory' in entry && entry.isCategory) && entry.id === activeSection) {
-        return entry.label;
-      }
-    }
-    return 'General';
-  })();
-
   // Don't render if organization not loaded or permissions not checked yet — show full-page settings skeleton with tab-specific content
   if (!organization || !permissionsChecked) {
     const loadingSection = sectionParam && VALID_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
-      <>
-        <PageHeader title={`Settings — ${activeSectionLabel}`} />
-        <div className="bg-background">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-            <OrgSettingsTabSkeleton section={loadingSection} />
-          </div>
+      <div className="bg-background">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-8">
+          <OrgSettingsTabSkeleton section={loadingSection} />
         </div>
-      </>
+      </div>
     );
   }
 
   return (
     <>
-      <PageHeader title={`Settings — ${activeSectionLabel}`} />
       <div className="bg-background">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-8">
           {/* Sub-nav lives in the sidebar drilldown (OrgSidebar). Content is single column. */}
           <div className="no-scrollbar">
             {activeSection === 'general' && (
