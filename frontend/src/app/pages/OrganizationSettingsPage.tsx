@@ -2748,9 +2748,7 @@ export default function OrganizationSettingsPage() {
                     {isOrgOwner ? (
                       <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between gap-4 flex-wrap">
                         <p className="text-xs text-foreground-secondary">
-                          {pendingAvatarFile
-                            ? 'New avatar selected. Click Save to apply.'
-                            : 'Please use 32 characters at maximum. Select an image to change the avatar.'}
+                          Please use 32 characters at maximum. Select an image to change the avatar.
                         </p>
                         <Button
                           onClick={handleSaveOrganizationDetails}
@@ -2985,10 +2983,7 @@ export default function OrganizationSettingsPage() {
                         )}
                       </div>
                       {members.filter(m => m.user_id !== user?.id).length > 0 && (
-                        <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                          <p className="text-xs text-foreground-secondary">
-                            This action is irreversible. Make sure you select the correct member.
-                          </p>
+                        <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                           <Button
                             onClick={handleTransferOwnership}
                             variant="green"
