@@ -57,8 +57,10 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 RUN pip3 install --no-cache-dir --break-system-packages \
   owasp-depscan==6.* \
   semgrep==1.160.0 \
+  pipdeptree==2.23.0 \
   && depscan --help >/dev/null \
-  && semgrep --version
+  && semgrep --version \
+  && pipdeptree --version
 
 # Install Checkov in an isolated venv at /opt/checkov-venv. Checkov pins
 # packageurl-python<0.14.0 while owasp-depscan pins >=0.16.0 — the two cannot

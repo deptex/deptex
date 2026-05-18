@@ -23,6 +23,7 @@ import {
   type ParsedSbomDep,
   type ParsedSbomRelationship,
 } from '../sbom';
+import { recoverDirectSet, applyRecoveredDirectSet } from '../dependency-graph';
 import { retry, updateStep, setError, classifyCdxgenError } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -123,8 +124,39 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     }
   }
 
-  const { dependencies, relationships, rawComponentCount, droppedVersionlessCount } = parseSbom(sbom);
+  const { dependencies, relationships, rawComponentCount, droppedVersionlessCount, directSetTrusted } =
+    parseSbom(sbom);
   const bomRefMap = getBomRefToNameVersion(sbom);
+
+  // cdxgen sometimes returns an unwired CycloneDX `dependencies` graph (no
+  // root node / no edges). When that happens `is_direct` on every dep is
+  // meaningless, which structurally disables the `unreachable` reachability
+  // tier. Rebuild the direct set from the ecosystem's manifest / resolved
+  // tree before anything downstream reads it. If recovery is unavailable,
+  // `graphTrusted` stays false so the classifier floors at `module` rather
+  // than guessing `unreachable`.
+  if (!directSetTrusted) {
+    try {
+      const recovery = recoverDirectSet(jobEcosystem, workspaceRoot);
+      if (recovery) {
+        const changed = applyRecoveredDirectSet(dependencies, recovery, jobEcosystem);
+        ctx.graphTrusted = true;
+        await log.info(
+          'sbom',
+          `cdxgen dependency graph unwired — recovered direct set via ${recovery.method} (${changed} dep(s) reclassified)`,
+        );
+      } else {
+        ctx.graphTrusted = false;
+        await log.warn(
+          'sbom',
+          'cdxgen dependency graph unwired and no manifest/tree available for recovery — reachability floored at module',
+        );
+      }
+    } catch (e: any) {
+      ctx.graphTrusted = false;
+      await log.warn('sbom', `dependency graph recovery failed (non-fatal): ${e?.message ?? e}`);
+    }
+  }
 
   // Patch devDependency detection by cross-referencing with manifest files
   try {

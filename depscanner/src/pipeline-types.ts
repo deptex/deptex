@@ -91,6 +91,16 @@ export interface PipelineContext {
   assetTier: AssetTier;
   tierMultiplier: number | undefined;
 
+  /**
+   * Whether the direct/transitive split on `project_dependencies` is
+   * trustworthy. True when cdxgen wired the CycloneDX graph OR the SBOM step's
+   * graph recovery rebuilt the direct set from the manifest/tree. False when
+   * cdxgen's graph was unwired AND recovery was unavailable — the reachability
+   * classifier must then floor at `module` and never emit `unreachable`.
+   * Defaults to true; only the SBOM step lowers it.
+   */
+  graphTrusted: boolean;
+
   // === Cross-step counters used by finalize ===
   projectDepsCount: number;
   newDepsToPopulate: Array<{ dependencyId: string; name: string }>;

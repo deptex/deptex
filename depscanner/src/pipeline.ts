@@ -74,6 +74,7 @@ export async function runPipeline(
     workspaceRoot: '',
     assetTier: 'EXTERNAL',
     tierMultiplier: undefined,
+    graphTrusted: true,
     projectDepsCount: 0,
     newDepsToPopulate: [],
     astParsedSuccessfully: false,

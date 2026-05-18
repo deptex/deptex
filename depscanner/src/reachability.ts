@@ -408,6 +408,15 @@ export interface UpdateReachabilityOptions {
    * `module` instead. Defaults to true so legacy callers keep prior behavior.
    */
   astParsedSuccessfully?: boolean;
+  /**
+   * Whether the direct/transitive split on `project_dependencies` is
+   * trustworthy (ctx.graphTrusted). False when cdxgen returned an unwired
+   * dependency graph AND graph recovery couldn't rebuild the direct set — in
+   * that case `is_direct` is meaningless, so the `unreachable` verdict (which
+   * keys on `!is_direct`) would hide real vulns. When false the classifier
+   * floors at `module`. Defaults to true so legacy callers keep prior behavior.
+   */
+  graphTrusted?: boolean;
 }
 
 export async function updateReachabilityLevels(
@@ -636,6 +645,20 @@ export async function updateReachabilityLevels(
     );
   }
 
+  // Second fail-open guard: `unreachable` keys on `!is_direct`, so it is only
+  // safe when the direct/transitive split is trustworthy. cdxgen sometimes
+  // returns an unwired dependency graph; when graph recovery also couldn't
+  // rebuild the direct set, every dep looks transitive and a real direct vuln
+  // could be hidden. Floor at `module` in that case.
+  const graphTrusted = options.graphTrusted ?? true;
+  if (!graphTrusted) {
+    await logger.warn(
+      'reachability',
+      'Dependency graph untrusted (cdxgen graph unwired, recovery unavailable) — ' +
+        'flooring unreachable verdicts at module',
+    );
+  }
+
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
   for (const u of usages ?? []) {
@@ -769,7 +792,7 @@ export async function updateReachabilityLevels(
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
-        if (usageAnalysisProducedOutput && meta && !meta.isDirect && meta.filesImporting === 0) {
+        if (graphTrusted && usageAnalysisProducedOutput && meta && !meta.isDirect && meta.filesImporting === 0) {
           level = 'unreachable';
         } else {
           level = 'module';

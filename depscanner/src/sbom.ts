@@ -114,6 +114,13 @@ export function parseSbom(sbom: CycloneDxSbom): {
    *  resolve it). Surfacing this lets the pipeline distinguish "manifest empty"
    *  from "manifest had stuff we couldn't parse." */
   droppedVersionlessCount: number;
+  /** False when cdxgen returned an unwired CycloneDX `dependencies` graph (no
+   *  root node / no edges). When false, the direct/transitive split on every
+   *  dep is untrustworthy — the caller must run lockfile/tree graph recovery
+   *  (`dependency-graph/`) before relying on `is_direct`, and the reachability
+   *  classifier must floor at `module` (never `unreachable`) if recovery also
+   *  fails. */
+  directSetTrusted: boolean;
 } {
   const components = sbom.components || [];
   const depGraph = sbom.dependencies || [];
@@ -152,16 +159,18 @@ export function parseSbom(sbom: CycloneDxSbom): {
     collectTransitive(ref);
   }
 
-  // Fallback: if the dependency graph traversal yielded nothing (e.g. pypi/maven SBOMs where
-  // cdxgen omits metadata.component or doesn't wire the root node), treat every component as a
-  // direct dependency so we don't drop valid packages.
+  // Fallback: cdxgen's CycloneDX `dependencies` graph came back unwired (no
+  // root node, or the root has no edges — common on pypi/maven SBOMs). Include
+  // every component so no valid package is dropped, but DO NOT mark them direct
+  // — the old behaviour (everything `is_direct: true`) structurally disabled
+  // the `unreachable` reachability tier. `directSetTrusted = false` tells the
+  // pipeline to run lockfile/tree graph recovery to rebuild the direct set.
+  let directSetTrusted = true;
   if (allDeps.size === 0 && components.length > 0) {
+    directSetTrusted = false;
     for (const c of components) {
       const ref = c['bom-ref'];
-      if (ref) {
-        allDeps.add(ref);
-        directRefs.add(ref);
-      }
+      if (ref) allDeps.add(ref);
     }
   }
 
@@ -213,7 +222,7 @@ export function parseSbom(sbom: CycloneDxSbom): {
     });
   }
 
-  return { dependencies, relationships, rawComponentCount, droppedVersionlessCount };
+  return { dependencies, relationships, rawComponentCount, droppedVersionlessCount, directSetTrusted };
 }
 
 function extractLicense(licenses: unknown): string | null {

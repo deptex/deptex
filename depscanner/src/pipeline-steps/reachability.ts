@@ -49,6 +49,7 @@ export async function doReachabilityAndEpd(
     jobEcosystem,
     runId,
     astParsedSuccessfully,
+    graphTrusted,
   } = ctx;
 
   // Reachability classification runs for every ecosystem — it consumes
@@ -59,6 +60,7 @@ export async function doReachabilityAndEpd(
     validOsvIds,
     organizationId,
     astParsedSuccessfully,
+    graphTrusted,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
