@@ -1696,7 +1696,7 @@ router.put('/:id', async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { name, avatar_url } = req.body;
 
-    // Check if user is admin or owner
+    // Only the organization owner can change org identity (name / avatar).
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -1708,8 +1708,8 @@ router.put('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins and owners can update organization' });
+    if (membership.role !== 'owner') {
+      return res.status(403).json({ error: 'Only the organization owner can update organization' });
     }
 
     // Get current organization data for activity logs

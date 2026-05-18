@@ -157,8 +157,20 @@ describe('Organization Routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 403 when user is not admin or owner', async () => {
+    it('returns 403 for any non-owner role', async () => {
       setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .put('/api/organizations/org-1')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'Renamed' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 403 for a custom role named "admin"', async () => {
+      // "admin" is not a structural role — only the owner may edit org identity.
+      setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
 
       const res = await request(app)
         .put('/api/organizations/org-1')
