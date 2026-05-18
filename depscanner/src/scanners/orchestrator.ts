@@ -13,6 +13,7 @@ import { runCheckov } from './checkov';
 import {
   extractGhcrOwner,
   normalizeDigest,
+  parseDockerfileFinalStage,
   parseDockerfileFinalStageDetailed,
   resolveImageDigest,
   resolvePullStrategy,
