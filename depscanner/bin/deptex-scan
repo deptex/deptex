@@ -108,6 +108,16 @@ fi
 mkdir -p "$OUTPUT_DIR"
 ABS_OUT="$(cd "$OUTPUT_DIR" && pwd)"
 
+# Persistent dep-scan vulnerability database (VDB) cache. dep-scan looks for
+# its database at VDB_HOME=/data inside the image; the image ships no VDB, so
+# without a persistent mount every scan cold-downloads the multi-GB database
+# and a batch run (OSS corpus harness) re-downloads it once per repo. Mount a
+# host cache dir at /data so the VDB is built once and reused across scans.
+# Override the location with DEPTEX_VDB_CACHE.
+VDB_CACHE_DIR="${DEPTEX_VDB_CACHE:-$HOME/.deptex/vdb}"
+mkdir -p "$VDB_CACHE_DIR"
+ABS_VDB="$(cd "$VDB_CACHE_DIR" && pwd)"
+
 TTY_FLAG=()
 if [ -t 1 ]; then
   TTY_FLAG=(-t)
@@ -165,6 +175,14 @@ fi
 # optional knobs for cheaper test runs (e.g. claude-haiku-4-5-20251001).
 if [ -n "${DEPTEX_RULE_GENERATION_ENABLED:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_ENABLED=$DEPTEX_RULE_GENERATION_ENABLED")
+fi
+
+# Reachability-focused fast scan: skip the optional IaC / malicious-package /
+# SAST / secrets steps (none affect reachability classification, and the
+# malicious step fans GuardDog out to a per-dependency semgrep run that
+# dominates scan time). Used by the reachability corpus harness.
+if [ -n "${DEPTEX_SKIP_OPTIONAL_SCANS:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_SKIP_OPTIONAL_SCANS=$DEPTEX_SKIP_OPTIONAL_SCANS")
 fi
 if [ -n "${DEPTEX_RULE_PROVIDER:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_RULE_PROVIDER=$DEPTEX_RULE_PROVIDER")
@@ -248,5 +266,6 @@ fi
 exec docker run --rm -i "${TTY_FLAG[@]}" "${USER_FLAG[@]}" "${ENV_FLAGS[@]}" \
   -v "$ABS_WS:/workspace" \
   -v "$ABS_OUT:/output" \
+  -v "$ABS_VDB:/data" \
   "$IMAGE" \
   node /app/dist/cli/index.js run /workspace --output=/output "${PASSTHROUGH[@]}"
