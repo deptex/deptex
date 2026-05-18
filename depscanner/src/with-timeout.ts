@@ -249,14 +249,33 @@ export function runScannerSubprocess(
         }, heartbeatIntervalMs)
       : null;
 
+    // Terminate the child gracefully (SIGTERM), then forcibly (SIGKILL) if it
+    // does not exit within a short grace window. A subprocess blocked on
+    // uninterruptible disk I/O — a hostile image filling the worker's disk —
+    // ignores SIGTERM, so SIGTERM alone does not actually stop the disk-fill.
+    let killEscalation: NodeJS.Timeout | null = null;
+    const terminate = () => {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* already dead */
+      }
+      if (!killEscalation) {
+        killEscalation = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* already dead */
+          }
+        }, 3_000);
+        killEscalation.unref?.();
+      }
+    };
+
     let internalTimeout: NodeJS.Timeout | null = null;
     if (opts.timeoutMs) {
       internalTimeout = setTimeout(() => {
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* already dead */
-        }
+        terminate();
         reject(
           new Error(
             `${opts.exe} timed out after ${opts.timeoutMs} ms (internal)`
@@ -268,11 +287,7 @@ export function runScannerSubprocess(
     // External abort: kill the child only. Don't reject — the outer withTimeout
     // owns the timeout error class. (Mirrors runDepScan rationale.)
     const onAbort = () => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already dead */
-      }
+      terminate();
     };
     if (opts.signal) {
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -281,6 +296,7 @@ export function runScannerSubprocess(
     child.on('close', (code: number | null) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
+      if (killEscalation) clearTimeout(killEscalation);
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
@@ -288,6 +304,7 @@ export function runScannerSubprocess(
     child.on('error', (err: Error) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
+      if (killEscalation) clearTimeout(killEscalation);
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });

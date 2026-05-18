@@ -64,13 +64,93 @@ export interface ReachabilityRunners {
 
 // crane export streams the whole flattened FS; a real slim image is a few
 // hundred MB. 3 GiB ceiling rejects a malicious image whose layers decompress
-// to something absurd before we ever try to untar it.
+// to something absurd. The ceiling is enforced WHILE crane writes the tar (a
+// size watchdog), not just after — a post-write check cannot stop a 50 GiB
+// decompression bomb from filling the worker's disk first.
 const MAX_IMAGE_TAR_BYTES = 3 * 1024 * 1024 * 1024;
+// crane export tars are uncompressed, so the extracted tree is ~tar size;
+// 4 GiB leaves headroom over the 3 GiB tar cap. Enforced by a watchdog over
+// real on-disk usage (sparse-file holes excluded) during `tar -xf`.
+const MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024;
+/** How often the extraction watchdogs sample on-disk size. */
+const EXTRACTION_WATCHDOG_INTERVAL_MS = 1_000;
+
+/** Current size of a file, or 0 if it does not exist yet / is unreadable. */
+function safeFileSize(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Real on-disk size of a directory tree, but the walk stops as soon as the
+ * running total exceeds `limit` — so a hostile tree costs O(limit), not
+ * O(tree). Uses block count (sparse-file holes excluded), so an extracted
+ * sparse file that consumes no real disk does not trip the watchdog.
+ */
+function directorySizeUpTo(dir: string, limit: number): number {
+  let total = 0;
+  const stack: string[] = [dir];
+  while (stack.length > 0) {
+    const cur = stack.pop() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) {
+        stack.push(full);
+      } else if (e.isFile()) {
+        try {
+          const st = fs.statSync(full);
+          total += st.blocks != null ? st.blocks * 512 : st.size;
+        } catch {
+          /* file vanished mid-walk */
+        }
+      }
+      if (total > limit) return total;
+    }
+  }
+  return total;
+}
+
+/**
+ * Poll `measure()` on a fixed interval; the first time it exceeds `limit`,
+ * invoke `onExceed` once. Returns a stop function the caller MUST invoke in a
+ * finally block.
+ */
+function startSizeWatchdog(
+  measure: () => number,
+  limit: number,
+  onExceed: () => void
+): () => void {
+  let fired = false;
+  const timer = setInterval(() => {
+    let size: number;
+    try {
+      size = measure();
+    } catch {
+      return;
+    }
+    if (size > limit && !fired) {
+      fired = true;
+      onExceed();
+    }
+  }, EXTRACTION_WATCHDOG_INTERVAL_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 async function craneExec(
   args: string[],
   dockerConfigDir: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<{ stdout: string; exitCode: number }> {
   const env: Record<string, string | undefined> = {};
   if (dockerConfigDir) env.DOCKER_CONFIG = dockerConfigDir;
@@ -79,6 +159,7 @@ async function craneExec(
     args,
     timeoutMs,
     env,
+    signal,
     // crane config stdout is small; crane export writes to a file arg.
     stdoutMaxBytes: 32 * 1024 * 1024,
   });
@@ -88,28 +169,65 @@ async function craneExec(
 export const defaultImageExtractor: ImageExtractor = {
   async extract(imageRef, destDir, opts) {
     const tarPath = path.join(destDir, '_image.tar');
-    const exported = await craneExec(
-      ['export', '--platform', 'linux/amd64', imageRef, tarPath],
-      opts.dockerConfigDir,
-      opts.timeoutMs
+
+    // ---- crane export, watchdogged against a disk-filling image ----
+    const exportAbort = new AbortController();
+    const stopExportWatchdog = startSizeWatchdog(
+      () => safeFileSize(tarPath),
+      MAX_IMAGE_TAR_BYTES,
+      () => exportAbort.abort()
     );
+    let exported: { exitCode: number };
+    try {
+      exported = await craneExec(
+        ['export', '--platform', 'linux/amd64', imageRef, tarPath],
+        opts.dockerConfigDir,
+        opts.timeoutMs,
+        exportAbort.signal
+      );
+    } finally {
+      stopExportWatchdog();
+    }
+    if (exportAbort.signal.aborted) {
+      fs.rmSync(tarPath, { force: true });
+      throw new Error(`image export exceeded the ${MAX_IMAGE_TAR_BYTES}-byte ceiling`);
+    }
     if (exported.exitCode !== 0) {
+      fs.rmSync(tarPath, { force: true });
       throw new Error(`crane export exit ${exported.exitCode}`);
     }
-    const stat = fs.statSync(tarPath);
-    if (stat.size > MAX_IMAGE_TAR_BYTES) {
+    // Defence in depth: a fast spike between watchdog samples.
+    const tarSize = safeFileSize(tarPath);
+    if (tarSize > MAX_IMAGE_TAR_BYTES) {
       fs.rmSync(tarPath, { force: true });
-      throw new Error(`image tar ${stat.size} bytes exceeds ceiling`);
+      throw new Error(`image tar ${tarSize} bytes exceeds ceiling`);
     }
+
+    // ---- tar extract, watchdogged against sparse/many-file expansion ----
     const fsRoot = path.join(destDir, 'rootfs');
     fs.mkdirSync(fsRoot, { recursive: true });
-    const untar = await runScannerSubprocess({
-      exe: 'tar',
-      // -p preserves nothing security-relevant here; we only read the tree.
-      args: ['-xf', tarPath, '-C', fsRoot],
-      timeoutMs: opts.timeoutMs,
-    });
+    const untarAbort = new AbortController();
+    const stopUntarWatchdog = startSizeWatchdog(
+      () => directorySizeUpTo(fsRoot, MAX_EXTRACTED_BYTES),
+      MAX_EXTRACTED_BYTES,
+      () => untarAbort.abort()
+    );
+    let untar: { exitCode: number };
+    try {
+      untar = await runScannerSubprocess({
+        exe: 'tar',
+        // -p preserves nothing security-relevant here; we only read the tree.
+        args: ['-xf', tarPath, '-C', fsRoot],
+        timeoutMs: opts.timeoutMs,
+        signal: untarAbort.signal,
+      });
+    } finally {
+      stopUntarWatchdog();
+    }
     fs.rmSync(tarPath, { force: true });
+    if (untarAbort.signal.aborted) {
+      throw new Error(`image extraction exceeded the ${MAX_EXTRACTED_BYTES}-byte ceiling`);
+    }
     if (untar.exitCode !== 0) {
       throw new Error(`tar extract exit ${untar.exitCode}`);
     }
@@ -129,6 +247,14 @@ export const defaultReachabilityRunners: ReachabilityRunners = {
 // ============================================================
 // Package database parsing — dpkg + apk
 // ============================================================
+
+// The dpkg/apk databases come from the untrusted extracted image. Reading them
+// whole with no bound lets a hostile image OOM the worker (a single huge file,
+// or many medium files accumulating in memory). Real dpkg `.list` files are a
+// few KB; a real apk `installed` DB is a few MB.
+const MAX_PKG_DB_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_PKG_DB_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_PKG_DB_FILES = 50_000;
 
 /** Standard PATH directories used to resolve a bare entrypoint command. */
 const DEFAULT_PATH_DIRS = [
@@ -155,14 +281,30 @@ function parseDpkgFileIndex(rootDir: string): Map<string, Set<string>> {
   } catch {
     return index;
   }
+  let totalBytes = 0;
+  let fileCount = 0;
   for (const entry of entries) {
     if (!entry.endsWith('.list')) continue;
+    if (++fileCount > MAX_PKG_DB_FILES) break;
     // `<pkg>.list` or `<pkg>:<arch>.list`.
     const pkg = entry.slice(0, -'.list'.length).split(':')[0].toLowerCase();
     if (!pkg) continue;
+    const listPath = path.join(infoDir, entry);
+    let size: number;
+    try {
+      size = fs.statSync(listPath).size;
+    } catch {
+      continue;
+    }
+    // Skip a single oversize `.list` (a real one is KB) — its package stays
+    // unclassified rather than risking a heap blow-up; stop entirely once the
+    // whole-DB budget is spent.
+    if (size > MAX_PKG_DB_FILE_BYTES) continue;
+    if (totalBytes + size > MAX_PKG_DB_TOTAL_BYTES) break;
+    totalBytes += size;
     let text: string;
     try {
-      text = fs.readFileSync(path.join(infoDir, entry), 'utf8');
+      text = fs.readFileSync(listPath, 'utf8');
     } catch {
       continue;
     }
@@ -184,9 +326,18 @@ function parseDpkgFileIndex(rootDir: string): Map<string, Set<string>> {
  */
 function parseApkFileIndex(rootDir: string): Map<string, Set<string>> {
   const index = new Map<string, Set<string>>();
+  const dbPath = path.join(rootDir, 'lib/apk/db/installed');
+  let size: number;
+  try {
+    size = fs.statSync(dbPath).size;
+  } catch {
+    return index;
+  }
+  // A hostile multi-GB apk DB — refuse rather than slurp it into memory.
+  if (size > MAX_PKG_DB_TOTAL_BYTES) return index;
   let text: string;
   try {
-    text = fs.readFileSync(path.join(rootDir, 'lib/apk/db/installed'), 'utf8');
+    text = fs.readFileSync(dbPath, 'utf8');
   } catch {
     return index;
   }
@@ -332,7 +483,7 @@ async function discoverSubprocessLibraries(
   entrypointDiskPath: string,
   rootDir: string,
   runner: ReadelfRunner
-): Promise<string[]> {
+): Promise<{ libraries: string[]; uncertain: boolean }> {
   let strings: string[] = [];
   try {
     const buf = await fs.promises.readFile(entrypointDiskPath);
@@ -344,20 +495,29 @@ async function discoverSubprocessLibraries(
     while ((m = SUBPROCESS_PATH_RE.exec(text)) !== null) seen.add(m[0]);
     strings = [...seen];
   } catch {
-    return [];
+    return { libraries: [], uncertain: false };
   }
   const merged = new Set<string>();
+  // `uncertain` = an exec'd ELF binary existed but readelf could not analyze
+  // it. Its loaded libraries are unknown, so the static-entrypoint verdict
+  // cannot safely conclude `unreachable` — the caller fails closed instead.
+  let uncertain = false;
   for (const imagePath of strings.slice(0, 50)) {
     const disk = path.join(rootDir, imagePath);
     try {
       if (!fs.existsSync(disk)) continue;
       if ((await detectFileKind(disk)) !== 'elf') continue;
-      for (const so of await extractDtNeeded(disk, runner)) merged.add(so);
+      const dt = await extractDtNeeded(disk, runner);
+      if (dt.status !== 'ok') {
+        uncertain = true;
+        continue;
+      }
+      for (const so of dt.needed) merged.add(so);
     } catch {
       /* skip unreadable subprocess binary */
     }
   }
-  return [...merged];
+  return { libraries: [...merged], uncertain };
 }
 
 // ============================================================
@@ -477,22 +637,51 @@ export async function decorateContainerFindingsWithReachability(
       return markAll(findings, 'module', { fallback_reason: 'reachability_timeout' });
     }
     const kind = await detectFileKind(entrypoint.entrypointPath);
+    if (kind !== 'elf') {
+      // The resolved entrypoint is not an ELF binary (a script we could not
+      // chase, or an unknown file) — the dynamic-linker graph cannot be
+      // analyzed. Fail closed: every finding stays `module`.
+      return markAll(findings, 'module', {
+        fallback_reason: 'entrypoint_not_elf',
+        entrypoint: entrypoint.imagePath,
+      });
+    }
+
     const directNeeded = await extractDtNeeded(entrypoint.entrypointPath, runners.readelf);
+    if (directNeeded.status !== 'ok') {
+      // readelf could not analyze the entrypoint — it is absent (binutils not
+      // installed) or the binary is corrupt / stripped / wrong-arch. An empty
+      // DT_NEEDED list here is NOT evidence of static linking, so inferring
+      // `unreachable` would be a guess. Fail closed to `module`.
+      return markAll(findings, 'module', {
+        fallback_reason:
+          directNeeded.status === 'unavailable' ? 'readelf_unavailable' : 'readelf_failed',
+        entrypoint: entrypoint.imagePath,
+      });
+    }
 
     let loadedSonames = new Set<string>();
     let staticLinked = false;
     let depthCapped = false;
 
-    if (kind === 'elf' && directNeeded.length === 0) {
-      // Statically linked — nothing dynamically loaded. Still chase subprocess
-      // binaries the static entrypoint may exec (skeptic-f10).
+    if (directNeeded.needed.length === 0) {
+      // Genuinely statically linked — readelf confirmed no dynamic section.
+      // Still chase subprocess binaries the static entrypoint may exec.
       staticLinked = true;
-      const subprocessLibs = await discoverSubprocessLibraries(
+      const subprocess = await discoverSubprocessLibraries(
         entrypoint.entrypointPath,
         rootDir,
         runners.readelf
       );
-      for (const so of subprocessLibs) loadedSonames.add(so.toLowerCase());
+      if (subprocess.uncertain) {
+        // A binary the entrypoint may exec could not be analyzed — its loaded
+        // libraries are unknown, so an `unreachable` verdict would be a guess.
+        return markAll(findings, 'module', {
+          fallback_reason: 'subprocess_analysis_incomplete',
+          entrypoint: entrypoint.imagePath,
+        });
+      }
+      for (const so of subprocess.libraries) loadedSonames.add(so.toLowerCase());
     } else {
       const resolved = await resolveLoadedLibraries({
         entrypointPath: entrypoint.entrypointPath,
@@ -503,7 +692,7 @@ export async function decorateContainerFindingsWithReachability(
       depthCapped = resolved.depth_capped || resolved.width_capped;
       for (const so of resolved.loaded) loadedSonames.add(so.toLowerCase());
       const dlopen = await extractDlopenStrings(entrypoint.entrypointPath, runners.readelf);
-      for (const so of dlopen) loadedSonames.add(so.toLowerCase());
+      for (const so of dlopen.libraries) loadedSonames.add(so.toLowerCase());
     }
 
     // Static binary with no exec'd subprocesses → every OS package unreachable.
@@ -525,7 +714,7 @@ export async function decorateContainerFindingsWithReachability(
       wrapper_script: entrypoint.isWrapperScript,
       static_linked: staticLinked,
       depth_capped: depthCapped,
-      dt_needed: directNeeded,
+      dt_needed: directNeeded.needed,
       loaded_count: loadedSonames.size,
     };
     for (const f of findings) {

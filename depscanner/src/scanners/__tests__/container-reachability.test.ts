@@ -538,4 +538,108 @@ describe('decorateContainerFindingsWithReachability', () => {
     expect(findings.map((f) => f.reachability_level)).toEqual(['module', 'unreachable', null]);
     expect(summary.classified).toBe(2);
   });
+
+  it('fails closed to module (not unreachable) when readelf cannot be run', async () => {
+    // Regression guard: a missing readelf must NOT be mistaken for a static
+    // binary — every OS-package CVE would otherwise be wrongly marked
+    // unreachable and silently dropped from triage.
+    const { runners } = buildFakeImage({
+      entrypoint: { imagePath: '/usr/local/bin/node', kind: 'elf', dtNeeded: ['libssl.so.3'] },
+      files: { '/usr/lib/libssl.so.3': { kind: 'elf', dtNeeded: [] } },
+      dpkg: { libssl3: ['/usr/lib/libssl.so.3'] },
+      config: { Entrypoint: ['/usr/local/bin/node'] },
+    });
+    runners.readelf = async () => {
+      throw new Error('readelf: command not found');
+    };
+    const findings = [finding('libssl3', 'CVE-2024-0101')];
+    const summary = await decorateContainerFindingsWithReachability(findings, {
+      imageRef: 'node:20-slim',
+      scratchDir: scratch,
+      runners,
+    });
+    expect(findings[0].reachability_level).toBe('module');
+    expect(summary.fallbackReason).toBe('readelf_unavailable');
+  });
+
+  it('fails closed to module when readelf cannot parse the entrypoint', async () => {
+    const { runners } = buildFakeImage({
+      entrypoint: { imagePath: '/usr/local/bin/node', kind: 'elf', dtNeeded: ['libssl.so.3'] },
+      dpkg: { libssl3: ['/usr/lib/libssl.so.3'] },
+      config: { Entrypoint: ['/usr/local/bin/node'] },
+    });
+    runners.readelf = async () => ({ stdout: 'readelf: Error: not an ELF file', exitCode: 1 });
+    const findings = [finding('libssl3', 'CVE-2024-0102')];
+    const summary = await decorateContainerFindingsWithReachability(findings, {
+      imageRef: 'node:20-slim',
+      scratchDir: scratch,
+      runners,
+    });
+    expect(findings[0].reachability_level).toBe('module');
+    expect(summary.fallbackReason).toBe('readelf_failed');
+  });
+
+  it('fails closed to module when a subprocess binary cannot be analyzed', async () => {
+    const { runners } = buildFakeImage({
+      entrypoint: {
+        imagePath: '/app/server',
+        kind: 'elf',
+        dtNeeded: [],
+        content: 'spawn /usr/bin/git clone',
+      },
+      files: { '/usr/bin/git': { kind: 'elf', dtNeeded: ['libcurl.so.4'] } },
+      dpkg: { libcurl4: ['/usr/lib/libcurl.so.4'] },
+      config: { Entrypoint: ['/app/server'] },
+    });
+    // readelf confirms the entrypoint is static but fails on the git subprocess.
+    runners.readelf = async (args) => {
+      const base = path.basename(args[args.length - 1]);
+      if (base === 'server') return { stdout: READELF_STATIC, exitCode: 0 };
+      return { stdout: '', exitCode: 1 };
+    };
+    const findings = [finding('libcurl4', 'CVE-2024-0103')];
+    const summary = await decorateContainerFindingsWithReachability(findings, {
+      imageRef: 'go-app:latest',
+      scratchDir: scratch,
+      runners,
+    });
+    expect(findings[0].reachability_level).toBe('module');
+    expect(summary.fallbackReason).toBe('subprocess_analysis_incomplete');
+  });
+
+  it('skips an oversize dpkg .list file instead of reading it into memory', async () => {
+    // A hostile image ships a >16 MiB package list; the parser must skip it —
+    // the package stays unclassified — rather than slurp it into the heap.
+    const extractor: ImageExtractor = {
+      async extract(_ref, destDir) {
+        const rootDir = path.join(destDir, 'rootfs');
+        const infoDir = path.join(rootDir, 'var/lib/dpkg/info');
+        fs.mkdirSync(infoDir, { recursive: true });
+        const binDir = path.join(rootDir, 'usr/bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        fs.writeFileSync(path.join(binDir, 'app'), ELF_MAGIC);
+        fs.mkdirSync(path.join(rootDir, 'usr/lib'), { recursive: true });
+        fs.writeFileSync(path.join(rootDir, 'usr/lib/libssl.so.3'), ELF_MAGIC);
+        // A real path line — if the parser read this file libssl3 would
+        // classify as module — followed by 17 MiB of padding.
+        const huge = '/usr/lib/libssl.so.3\n' + 'x'.repeat(17 * 1024 * 1024);
+        fs.writeFileSync(path.join(infoDir, 'libssl3.list'), huge);
+      },
+      async config() {
+        return JSON.stringify({ config: { Entrypoint: ['/usr/bin/app'] } });
+      },
+    };
+    const readelf: ReadelfRunner = async () => ({
+      stdout: readelfDynamic(['libssl.so.3']),
+      exitCode: 0,
+    });
+    const findings = [finding('libssl3', 'CVE-2024-0104')];
+    await decorateContainerFindingsWithReachability(findings, {
+      imageRef: 'img:latest',
+      scratchDir: scratch,
+      runners: { imageExtractor: extractor, readelf },
+    });
+    expect(findings[0].reachability_level).toBeNull();
+    expect(findings[0].reachability_details?.reason).toBe('package_not_in_os_db');
+  });
 });

@@ -87,32 +87,42 @@ describe('extractDtNeeded', () => {
     const runner = makeRunner({
       '/app/node': { dynamic: readelfDynamic(['libssl.so.3', 'libcrypto.so.3', 'libc.so.6']) },
     });
-    const needed = await extractDtNeeded('/app/node', runner);
-    expect(needed).toEqual(['libssl.so.3', 'libcrypto.so.3', 'libc.so.6']);
+    const r = await extractDtNeeded('/app/node', runner);
+    expect(r.status).toBe('ok');
+    expect(r.needed).toEqual(['libssl.so.3', 'libcrypto.so.3', 'libc.so.6']);
   });
 
-  it('returns [] for a statically-linked binary (no dynamic section)', async () => {
+  it('reports status ok with no sonames for a statically-linked binary', async () => {
     const runner = makeRunner({ '/app/server': { dynamic: READELF_STATIC } });
-    expect(await extractDtNeeded('/app/server', runner)).toEqual([]);
+    const r = await extractDtNeeded('/app/server', runner);
+    expect(r.status).toBe('ok');
+    expect(r.needed).toEqual([]);
   });
 
   it('de-duplicates a soname that appears twice', async () => {
     const runner = makeRunner({
       '/app/bin': { dynamic: readelfDynamic(['libc.so.6', 'libc.so.6', 'libm.so.6']) },
     });
-    expect(await extractDtNeeded('/app/bin', runner)).toEqual(['libc.so.6', 'libm.so.6']);
+    expect((await extractDtNeeded('/app/bin', runner)).needed).toEqual([
+      'libc.so.6',
+      'libm.so.6',
+    ]);
   });
 
-  it('returns [] when readelf exits non-zero (missing / unreadable binary)', async () => {
+  it('reports status unparsable (not static) when readelf exits non-zero', async () => {
     const runner: ReadelfRunner = async () => ({ stdout: '', exitCode: 1 });
-    expect(await extractDtNeeded('/nope', runner)).toEqual([]);
+    const r = await extractDtNeeded('/nope', runner);
+    expect(r.status).toBe('unparsable');
+    expect(r.needed).toEqual([]);
   });
 
-  it('returns [] when the runner throws', async () => {
+  it('reports status unavailable (not static) when readelf cannot be spawned', async () => {
     const runner: ReadelfRunner = async () => {
       throw new Error('spawn failed');
     };
-    expect(await extractDtNeeded('/app/bin', runner)).toEqual([]);
+    const r = await extractDtNeeded('/app/bin', runner);
+    expect(r.status).toBe('unavailable');
+    expect(r.needed).toEqual([]);
   });
 });
 
@@ -125,27 +135,39 @@ describe('extractDlopenStrings', () => {
         rodata: readelfRodata(['/etc/ssl/certs', 'libnss_dns.so.2', 'libgssapi_krb5.so.2']),
       },
     });
-    const hits = await extractDlopenStrings('/app/bin', runner);
-    expect(hits.sort()).toEqual(['libgssapi_krb5.so.2', 'libnss_dns.so.2']);
+    const r = await extractDlopenStrings('/app/bin', runner);
+    expect(r.status).toBe('ok');
+    expect(r.libraries.sort()).toEqual(['libgssapi_krb5.so.2', 'libnss_dns.so.2']);
   });
 
   it('de-duplicates and lower-cases matched literals', async () => {
     const runner = makeRunner({
       '/app/bin': { rodata: readelfRodata(['libfoo.so', 'LibFoo.so', 'libfoo.so']) },
     });
-    expect(await extractDlopenStrings('/app/bin', runner)).toEqual(['libfoo.so']);
+    expect((await extractDlopenStrings('/app/bin', runner)).libraries).toEqual(['libfoo.so']);
   });
 
-  it('returns [] when the .rodata section is absent', async () => {
+  it('returns no libraries when the .rodata section is absent', async () => {
     const runner = makeRunner({ '/app/bin': { dynamic: READELF_STATIC } }); // no rodata key
-    expect(await extractDlopenStrings('/app/bin', runner)).toEqual([]);
+    const r = await extractDlopenStrings('/app/bin', runner);
+    expect(r.status).toBe('ok');
+    expect(r.libraries).toEqual([]);
+  });
+
+  it('reports status unavailable when readelf cannot be spawned', async () => {
+    const runner: ReadelfRunner = async () => {
+      throw new Error('spawn failed');
+    };
+    const r = await extractDlopenStrings('/app/bin', runner);
+    expect(r.status).toBe('unavailable');
+    expect(r.libraries).toEqual([]);
   });
 
   it('ignores strings that are not shared-library names', async () => {
     const runner = makeRunner({
       '/app/bin': { rodata: readelfRodata(['GET / HTTP/1.1', 'some.config.value', '/proc/self/exe']) },
     });
-    expect(await extractDlopenStrings('/app/bin', runner)).toEqual([]);
+    expect((await extractDlopenStrings('/app/bin', runner)).libraries).toEqual([]);
   });
 });
 

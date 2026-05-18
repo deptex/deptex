@@ -44,6 +44,36 @@ export const defaultReadelfRunner: ReadelfRunner = async (args) => {
 };
 
 // ============================================================
+// readelf query outcome
+// ============================================================
+
+/**
+ * Outcome of a readelf query.
+ *  - `ok`          readelf ran and its output is trustworthy.
+ *  - `unparsable`  readelf ran but failed on this binary (corrupt / stripped /
+ *                  wrong-arch ELF) — it exited non-zero.
+ *  - `unavailable` readelf could not be executed at all — the binary is absent
+ *                  from PATH (e.g. binutils not installed in the image).
+ *
+ * The reachability classifier MUST treat anything other than `ok` as
+ * uncertainty and fail closed to `module`. An empty result is only evidence of
+ * static linking when the status is `ok` — never otherwise.
+ */
+export type ReadelfStatus = 'ok' | 'unparsable' | 'unavailable';
+
+export interface DtNeededResult {
+  status: ReadelfStatus;
+  /** DT_NEEDED sonames. Meaningful only when `status === 'ok'`. */
+  needed: string[];
+}
+
+export interface DlopenResult {
+  /** `unavailable` only when readelf could not be executed; otherwise `ok`. */
+  status: 'ok' | 'unavailable';
+  libraries: string[];
+}
+
+// ============================================================
 // DT_NEEDED — declared shared-library dependencies
 // ============================================================
 
@@ -53,21 +83,28 @@ const NEEDED_RE = /\(NEEDED\)\s+Shared library:\s+\[([^\]]+)\]/;
 
 /**
  * Extract the `DT_NEEDED` sonames a binary declares — the libraries the
- * dynamic linker loads eagerly at process start. A statically-linked binary
- * (Go with CGO_ENABLED=0, Rust musl-static) has no dynamic section and
- * returns `[]`, which is the correct signal that no OS package is loaded.
+ * dynamic linker loads eagerly at process start.
+ *
+ * The return is a tri-state, NOT a bare array: a statically-linked binary
+ * (status `ok`, empty `needed`) must be distinguishable from a binary readelf
+ * could not parse (`unparsable`) or could not run against at all
+ * (`unavailable`). Collapsing all three to `[]` lets the classifier mistake a
+ * missing/broken readelf for a static binary and wrongly mark live CVEs
+ * `unreachable`.
  */
 export async function extractDtNeeded(
   binaryPath: string,
   runner: ReadelfRunner = defaultReadelfRunner
-): Promise<string[]> {
+): Promise<DtNeededResult> {
   let result: { stdout: string; exitCode: number };
   try {
     result = await runner(['-d', binaryPath]);
   } catch {
-    return [];
+    // readelf could not be spawned (ENOENT) — this is NOT a static binary.
+    return { status: 'unavailable', needed: [] };
   }
-  if (result.exitCode !== 0) return [];
+  // Non-zero exit: a corrupt / stripped / wrong-arch ELF readelf cannot read.
+  if (result.exitCode !== 0) return { status: 'unparsable', needed: [] };
 
   const out: string[] = [];
   const seen = new Set<string>();
@@ -78,7 +115,7 @@ export async function extractDtNeeded(
       out.push(m[1]);
     }
   }
-  return out;
+  return { status: 'ok', needed: out };
 }
 
 // ============================================================
@@ -99,15 +136,17 @@ const SO_LITERAL_RE = /lib[a-z0-9_+.\-]*\.so(?:\.[0-9]+)*/g;
 export async function extractDlopenStrings(
   binaryPath: string,
   runner: ReadelfRunner = defaultReadelfRunner
-): Promise<string[]> {
+): Promise<DlopenResult> {
   let result: { stdout: string; exitCode: number };
   try {
     result = await runner(['-p', '.rodata', binaryPath]);
   } catch {
-    return [];
+    // readelf could not be spawned — the dlopen signal is unknown, not empty.
+    return { status: 'unavailable', libraries: [] };
   }
-  // readelf exits non-zero / warns when .rodata is absent — treat as no hits.
-  if (result.exitCode !== 0) return [];
+  // readelf exits non-zero / warns when .rodata is absent — that is a genuine
+  // "no dlopen literals", not an analysis failure, so the status stays `ok`.
+  if (result.exitCode !== 0) return { status: 'ok', libraries: [] };
 
   const seen = new Set<string>();
   SO_LITERAL_RE.lastIndex = 0;
@@ -115,7 +154,7 @@ export async function extractDlopenStrings(
   while ((m = SO_LITERAL_RE.exec(result.stdout)) !== null) {
     seen.add(m[0].toLowerCase());
   }
-  return [...seen];
+  return { status: 'ok', libraries: [...seen] };
 }
 
 // ============================================================
@@ -300,7 +339,10 @@ export async function resolveLoadedLibraries(
     if (visitedPaths.has(cur.diskPath)) continue;
     visitedPaths.add(cur.diskPath);
 
-    const needed = await extractDtNeeded(cur.diskPath, runner);
+    // A child library readelf cannot parse contributes no further edges; the
+    // walk continues from what it can read. The entrypoint's own readability
+    // is gated upstream by the classifier (fail-closed) before this runs.
+    const needed = (await extractDtNeeded(cur.diskPath, runner)).needed;
     chain[cur.label] = needed;
 
     if (cur.depth >= maxDepth) {
