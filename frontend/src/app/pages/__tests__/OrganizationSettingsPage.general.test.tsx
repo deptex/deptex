@@ -289,6 +289,75 @@ describe('OrganizationSettingsPage – General', () => {
     });
   });
 
+  it('Save is disabled when the org name is unchanged', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+    expect(saveBtn).toBeDisabled();
+  });
+
+  it('editing the org name enables Save', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+    expect(saveBtn).toBeDisabled();
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed Org');
+
+    expect(saveBtn).not.toBeDisabled();
+  });
+
+  it('Save calls api.updateOrganization with the trimmed new name', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, '  Renamed Org  ');
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockUpdateOrganization).toHaveBeenCalledWith('org-1', { name: 'Renamed Org' });
+    });
+  });
+
+  it('Save keeps its label during saving', async () => {
+    let resolveUpdate: (value: unknown) => void;
+    mockUpdateOrganization.mockImplementation(() => new Promise((r) => { resolveUpdate = r; }));
+
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed Org');
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(saveBtn).toHaveTextContent('Save');
+    });
+    resolveUpdate!({});
+  });
+
+  it('non-owner cannot edit the org name field', async () => {
+    mockOrgContext.organization = {
+      id: 'org-1',
+      name: 'Test Org',
+      role: 'admin',
+      permissions: { view_settings: true },
+    };
+    mockGetOrganizationMembers.mockResolvedValue([ownerMember, otherMember]);
+
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
+    });
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.type(nameInput, 'hacked');
+    expect(nameInput).toHaveValue('Test Org');
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
   it('Transfer calls api.transferOrganizationOwnership with correct params when member selected', async () => {
     mockGetOrganizationMembers.mockResolvedValue([ownerMember, otherMember]);
 

@@ -1720,7 +1720,12 @@ router.put('/:id', async (req: AuthRequest, res) => {
       .single();
 
     const updateData: any = {};
-    if (name !== undefined) updateData.name = name;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json({ error: 'Organization name must be a non-empty string' });
+      }
+      updateData.name = name.trim();
+    }
     if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
     updateData.updated_at = new Date().toISOString();
 
@@ -1736,13 +1741,13 @@ router.put('/:id', async (req: AuthRequest, res) => {
     }
 
     // Create activity logs
-    if (name !== undefined && name !== currentOrg?.name) {
+    if (name !== undefined && updateData.name !== currentOrg?.name) {
       await createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_org_name',
-        description: `updated organization name from "${currentOrg?.name}" to "${name}"`,
-        metadata: { old_name: currentOrg?.name, new_name: name },
+        description: `updated organization name from "${currentOrg?.name}" to "${updateData.name}"`,
+        metadata: { old_name: currentOrg?.name, new_name: updateData.name },
       });
     }
 

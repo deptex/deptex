@@ -24,6 +24,7 @@ import { Progress } from '../../components/ui/progress';
 import { cn } from '../../lib/utils';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
+import { UserAvatar, OrgAvatar } from '../../components/Avatar';
 import { Badge } from '../../components/ui/badge';
 import { Switch } from '../../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
@@ -2146,10 +2147,11 @@ export default function OrganizationSettingsPage() {
         title: 'Organization name updated',
         description: 'The organization name has been updated successfully.',
       });
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error updating organization name:', error);
       toast({
         title: 'Update failed',
-        description: error.message || 'Failed to update organization name.',
+        description: 'Failed to update organization name. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2241,11 +2243,11 @@ export default function OrganizationSettingsPage() {
         title: 'Avatar updated',
         description: 'The organization avatar has been updated successfully.',
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error uploading avatar:', error);
       toast({
         title: 'Upload failed',
-        description: error.message || 'Failed to upload avatar. Please try again.',
+        description: 'Failed to upload avatar. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2618,10 +2620,11 @@ export default function OrganizationSettingsPage() {
       setSelectedNewRole('admin');
       await reloadOrganization();
       await loadMembers(); // Reload members to update the list
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error transferring ownership:', error);
       toast({
         title: 'Transfer failed',
-        description: error.message || 'Failed to transfer ownership. Please try again.',
+        description: 'Failed to transfer ownership. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2640,10 +2643,11 @@ export default function OrganizationSettingsPage() {
         description: 'The organization has been deleted successfully.',
       });
       navigate('/organizations');
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error deleting organization:', error);
       toast({
         title: 'Delete failed',
-        description: error.message || 'Failed to delete organization. Please try again.',
+        description: 'Failed to delete organization. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2711,8 +2715,8 @@ export default function OrganizationSettingsPage() {
                                 />
                                 <label htmlFor="org-avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
                                   <div className="relative">
-                                    <img
-                                      src={pendingAvatarPreview || organization.avatar_url || '/images/org_profile.png'}
+                                    <OrgAvatar
+                                      src={pendingAvatarPreview || organization.avatar_url}
                                       alt={organization.name}
                                       className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
                                     />
@@ -2729,8 +2733,8 @@ export default function OrganizationSettingsPage() {
                                 </label>
                               </>
                             ) : (
-                              <img
-                                src={organization.avatar_url || '/images/org_profile.png'}
+                              <OrgAvatar
+                                src={organization.avatar_url}
                                 alt={organization.name}
                                 className="h-20 w-20 rounded-full object-cover border-2 border-border opacity-75 shadow-lg"
                               />
@@ -2751,13 +2755,14 @@ export default function OrganizationSettingsPage() {
                         <Button
                           onClick={handleSaveOrganizationDetails}
                           disabled={isSavingOrgName || isUploadingAvatar || (orgName === organization?.name && !pendingAvatarFile)}
-                          size="sm"
-                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
+                          <span className={(isSavingOrgName || isUploadingAvatar) ? 'invisible' : ''}>Save</span>
                           {(isSavingOrgName || isUploadingAvatar) && (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            </span>
                           )}
-                          Save
                         </Button>
                       </div>
                     ) : (
@@ -2793,13 +2798,10 @@ export default function OrganizationSettingsPage() {
                                           if (!selectedMember) return <span className="text-foreground-secondary">Select a member...</span>;
                                           return (
                                             <>
-                                              <img
-                                                src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
+                                              <UserAvatar
+                                                src={selectedMember.avatar_url}
                                                 alt={selectedMember.full_name || selectedMember.email}
                                                 className="h-5 w-5 rounded-full object-cover border border-border flex-shrink-0"
-                                                onError={(e) => {
-                                                  e.currentTarget.src = '/images/blank_profile_image.png';
-                                                }}
                                               />
                                               <span className="truncate">{selectedMember.full_name || selectedMember.email.split('@')[0]}</span>
                                             </>
@@ -2856,14 +2858,10 @@ export default function OrganizationSettingsPage() {
                                                   }}
                                                   className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-background-subtle/50 transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
                                                 >
-                                                  <img
-                                                    src={member.avatar_url || '/images/blank_profile_image.png'}
+                                                  <UserAvatar
+                                                    src={member.avatar_url}
                                                     alt={member.full_name || member.email}
                                                     className="h-8 w-8 rounded-full object-cover border border-border flex-shrink-0"
-                                                    referrerPolicy="no-referrer"
-                                                    onError={(e) => {
-                                                      e.currentTarget.src = '/images/blank_profile_image.png';
-                                                    }}
                                                   />
                                                   <div className="flex-1 min-w-0">
                                                     <div className="text-sm font-medium text-foreground truncate">
@@ -3069,7 +3067,7 @@ export default function OrganizationSettingsPage() {
                                   setShowDeleteConfirm(false);
                                   setDeleteConfirmText('');
                                 }}
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 className="h-8"
                               >
