@@ -389,31 +389,25 @@ router.get('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Get organization details
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('id', id)
-      .single();
+    // Org details, plan tier, and the caller's role are independent reads.
+    const [
+      { data: organization, error: orgError },
+      { data: planRow },
+      { data: roleData },
+    ] = await Promise.all([
+      supabase.from('organizations').select('*').eq('id', id).single(),
+      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
+      supabase
+        .from('organization_roles')
+        .select('display_name, color, display_order, permissions')
+        .eq('organization_id', id)
+        .eq('name', membership.role)
+        .single(),
+    ]);
 
     if (orgError || !organization) {
       return res.status(404).json({ error: 'Organization not found' });
     }
-
-    // Plan tier comes from organization_plans (single source of truth)
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    // Get role display name, color, and rank (display_order)
-    const { data: roleData } = await supabase
-      .from('organization_roles')
-      .select('display_name, color, display_order, permissions')
-      .eq('organization_id', id)
-      .eq('name', membership.role)
-      .single();
 
     res.json({
       ...organization,

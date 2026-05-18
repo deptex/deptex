@@ -268,7 +268,14 @@ export default function OrganizationLayout() {
     }
   };
 
-  const reloadOrganization = async () => {
+  // With a patch, update org state locally with no refetch — used after a
+  // mutation whose new values are already known (e.g. renaming the org).
+  // Called with no args it does a full refetch.
+  const reloadOrganization = async (patch?: Partial<Organization>) => {
+    if (patch) {
+      setOrganization((prev) => (prev ? { ...prev, ...patch } : prev));
+      return;
+    }
     await loadOrganization();
   };
 

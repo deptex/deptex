@@ -44,7 +44,7 @@ import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/org
 
 interface OrganizationContextType {
   organization: Organization | null;
-  reloadOrganization: () => Promise<void>;
+  reloadOrganization: (patch?: Partial<Organization>) => Promise<void>;
 }
 
 interface PlanFeature {
@@ -2153,7 +2153,7 @@ export default function OrganizationSettingsPage() {
     try {
       setIsSavingOrgName(true);
       await api.updateOrganization(id, { name: orgName.trim() });
-      await reloadOrganization();
+      await reloadOrganization({ name: orgName.trim() });
       toast({
         title: 'Organization name updated',
         description: 'The organization name has been updated successfully.',
@@ -2242,7 +2242,7 @@ export default function OrganizationSettingsPage() {
 
       // Update organization
       await api.updateOrganization(id, { avatar_url: publicUrl });
-      await reloadOrganization();
+      await reloadOrganization({ avatar_url: publicUrl });
 
       if (pendingAvatarPreview) {
         URL.revokeObjectURL(pendingAvatarPreview);
