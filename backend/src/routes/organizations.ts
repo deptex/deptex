@@ -1697,13 +1697,27 @@ router.put('/:id', async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { name, avatar_url } = req.body;
 
-    // Only the organization owner can change org identity (name / avatar).
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
+    // Validate input up front — fail fast, before spending any DB round trip.
+    let normalizedName: string | undefined;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json({ error: 'Organization name must be a non-empty string' });
+      }
+      normalizedName = name.trim();
+    }
+
+    // Membership (the owner gate), the plan tier (needed for the response),
+    // and the current name (for the activity log) are independent reads —
+    // run them as one parallel batch instead of three sequential trips.
+    const [
+      { data: membership, error: membershipError },
+      { data: planRow },
+      { data: currentOrg },
+    ] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
+      supabase.from('organizations').select('name').eq('id', id).single(),
+    ]);
 
     if (membershipError || !membership) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
@@ -1713,22 +1727,9 @@ router.put('/:id', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Only the organization owner can update organization' });
     }
 
-    // Get current organization data for activity logs
-    const { data: currentOrg } = await supabase
-      .from('organizations')
-      .select('name')
-      .eq('id', id)
-      .single();
-
-    const updateData: any = {};
-    if (name !== undefined) {
-      if (typeof name !== 'string' || name.trim().length === 0) {
-        return res.status(400).json({ error: 'Organization name must be a non-empty string' });
-      }
-      updateData.name = name.trim();
-    }
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (normalizedName !== undefined) updateData.name = normalizedName;
     if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
-    updateData.updated_at = new Date().toISOString();
 
     const { data: organization, error: updateError } = await supabase
       .from('organizations')
@@ -1741,19 +1742,22 @@ router.put('/:id', async (req: AuthRequest, res) => {
       throw updateError;
     }
 
-    // Create activity logs
-    if (name !== undefined && updateData.name !== currentOrg?.name) {
-      await createActivity({
+    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+
+    // Activity logging is non-critical — fire it after the response so it
+    // never adds a round trip to the caller's save.
+    if (normalizedName !== undefined && normalizedName !== currentOrg?.name) {
+      void createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_org_name',
-        description: `updated organization name from "${currentOrg?.name}" to "${updateData.name}"`,
-        metadata: { old_name: currentOrg?.name, new_name: updateData.name },
+        description: `updated organization name from "${currentOrg?.name}" to "${normalizedName}"`,
+        metadata: { old_name: currentOrg?.name, new_name: normalizedName },
       });
     }
 
     if (avatar_url !== undefined) {
-      await createActivity({
+      void createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'changed_org_profile_image',
@@ -1761,14 +1765,6 @@ router.put('/:id', async (req: AuthRequest, res) => {
         metadata: { organization_name: organization.name },
       });
     }
-
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
   } catch (error: any) {
     console.error('Error updating organization:', error);
     res.status(500).json({ error: error.message || 'Failed to update organization' });
