@@ -1,0 +1,35 @@
+# v_a_source_expansion (tournament-2026-05-10-a) — openai/Qwen/Qwen3-235B-A22B-Instruct-2507
+baseUrl: https://api.deepinfra.com/v1/openai
+run: 2026-05-11T02:43:24.930Z → 2026-05-11T02:48:54.364Z  (329.4s)
+
+Final validation rate: 2/15 = 13.3%
+Total cost: $0.0703
+
+Funnel:
+  schema_pass:      13/15
+  fixture_pre:      2/15
+  fixture_safe:     13/15
+  patch_post_clean: 8/15
+  validated:        2/15
+
+Status breakdown:
+  failed_validation: 11
+  validated: 2
+  invalid_schema: 2
+
+Per-CVE:
+  ✗ CVE-2025-62718     failed_validation    $0.0063 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2017-16137     failed_validation    $0.0034 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2022-25883     validated            $0.0019 
+  ✗ CVE-2024-21484     failed_validation    $0.0155 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2018-18074     failed_validation    $0.0039 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-32681     failed_validation    $0.0038 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-26130     failed_validation    $0.0043 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-22195     invalid_schema       $0.0015 Generated payload failed schema: framework_spec.sinks.1.pattern=sink pattern is 
+  ✗ CVE-2017-7525      failed_validation    $0.0019 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-42889     failed_validation    $0.0094 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2021-44832     invalid_schema       $0.0069 Generated payload failed schema: framework_spec=Required; =Unrecognized key(s) i
+  ✗ CVE-2022-32149     failed_validation    $0.0045 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-28180     failed_validation    $0.0048 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-23633     failed_validation    $0.0014 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2024-32465     validated            $0.0008 

@@ -1,10 +1,11 @@
 import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveCargoImport } from '../import-mapping/cargo';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const RUST_EXTENSIONS: readonly string[] = ['.rs'];
 
@@ -129,11 +130,11 @@ export const rustModule: LanguageModule = {
     return RUST_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
   async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage('tree-sitter-rust.wasm');
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
-    if (!tree) return { filePath, language: 'rust', imports: [], usages: [] };
-
+    const tree = await parseSource('tree-sitter-rust.wasm', source);
+    if (!tree) {
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
+    }
+    try {
     const depNames = ctx.deps.map((d) => d.name);
     const imports: ImportBinding[] = [];
     const usages: UsageSlice[] = [];
@@ -198,9 +199,12 @@ export const rustModule: LanguageModule = {
       const aliases = new Set(aliasToCrate.values());
       const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => aliases.has(t));
       if (!triggered) continue;
-      try { entryPoints.push(...detector.detect({ source, tree, file: extracted })); } catch { /* non-fatal */ }
+      try { entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: ctx.workspaceRoot, depNames })); } catch (err) { recordDetectorError(detector.name, err); }
     }
     extracted.entryPoints = entryPoints;
     return extracted;
+    } finally {
+      tree.delete();
+    }
   },
 };

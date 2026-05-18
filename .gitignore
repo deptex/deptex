@@ -54,3 +54,8 @@ documents
 # Per-run review artefacts from /criticalreview and /ultrareview — ephemeral,
 # not shipped code.
 .cursor/reviews/.e2e-scratch/
+
+# OSS corpus harness output (depscanner/scripts/oss-corpus.ts). Per-run
+# artefacts are large (cloned workspaces + raw scan JSON) and re-derivable.
+# Summary lives at docs/oss-corpus-<date>.md.
+oss-corpus-runs/

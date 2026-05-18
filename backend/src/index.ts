@@ -190,7 +190,7 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     if (!process.env.AI_ENCRYPTION_KEY) {
-      console.warn('[AI] WARNING: AI_ENCRYPTION_KEY is not set. BYOK AI provider features will be unavailable.');
+      console.warn('[AI] WARNING: AI_ENCRYPTION_KEY is not set. IaC v2 registry credential storage will be unavailable.');
     }
     startSelfHostCrons();
   });

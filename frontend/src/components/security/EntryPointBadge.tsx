@@ -32,7 +32,6 @@ const STYLES: Record<Exclude<EpdEntryPointClassification, 'UNKNOWN'>, StyleDef> 
 const STATUS_HINT: Record<EpdStatus, string> = {
   // legacy (Phase 4)
   ai_verified:       'Verified by AI against your repository source.',
-  byok_missing:      'Heuristic classification — configure Anthropic BYOK in AI Configuration to enable AI verification.',
   fallback_no_ai:    'AI verification skipped for this reachability level.',
   ai_error_fallback: 'AI call failed; heuristic classification applied.',
   budget_exceeded:   'AI verification budget reached this extraction; heuristic classification applied for the rest.',

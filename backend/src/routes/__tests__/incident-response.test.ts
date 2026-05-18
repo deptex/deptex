@@ -679,8 +679,6 @@ describe('Post-Mortem', () => {
       return mockChain(null);
     });
 
-    jest.mock('../../lib/ai/provider', () => ({ getProviderForOrg: jest.fn().mockResolvedValue(null) }));
-
     const markdown = await generatePostMortem(incidentId);
 
     expect(markdown).toContain('## Timeline');
@@ -732,7 +730,7 @@ describe('Post-Mortem', () => {
     expect(markdown).toContain('Time to Remediate');
   });
 
-  it('24. Post-mortem generates without BYOK (template-based fallback)', async () => {
+  it('24. Post-mortem generates from template (template is the only path)', async () => {
     const incidentId = 'inc-1';
     const incident = {
       id: incidentId,
@@ -776,56 +774,9 @@ describe('Post-Mortem', () => {
     expect(markdown).toContain('## Recommendations');
   });
 
-  it('25. Post-mortem AI-enhanced when BYOK available', async () => {
-    const incidentId = 'inc-1';
-    const incident = {
-      id: incidentId,
-      organization_id: 'org-1',
-      title: 'Test',
-      incident_type: 'zero_day',
-      severity: 'high',
-      declared_at: '2025-01-01T00:00:00Z',
-      resolved_at: '2025-01-01T01:00:00Z',
-      total_duration_ms: 3600000,
-      affected_projects: [],
-      affected_packages: ['lodash'],
-      affected_cves: ['GHSA-xxx'],
-      timeline: [],
-      notes: [],
-    };
-
-    mockSupabaseFrom.mockImplementation((table: string) => {
-      if (table === 'security_incidents') {
-        return {
-          ...mockChain(incident),
-          select: jest.fn().mockReturnThis(),
-          eq: jest.fn().mockReturnThis(),
-          single: jest.fn().mockResolvedValue({ data: incident, error: null }),
-          update: jest.fn().mockReturnThis(),
-        };
-      }
-      if (table === 'incident_timeline') {
-        return { ...mockChain([]), select: jest.fn().mockReturnThis(), eq: jest.fn().mockReturnThis(), order: jest.fn().mockResolvedValue({ data: [], error: null }) };
-      }
-      if (table === 'incident_notes') {
-        return { ...mockChain([]), select: jest.fn().mockReturnThis(), eq: jest.fn().mockReturnThis(), order: jest.fn().mockResolvedValue({ data: [], error: null }) };
-      }
-      return mockChain(null);
-    });
-
-    jest.doMock('../../lib/ai/provider', () => ({
-      getProviderForOrg: jest.fn().mockResolvedValue({
-        chat: jest.fn().mockResolvedValue({
-          content: '# Enhanced Report\n\n## Root Cause\nAI analysis here.\n\n## Recommendations\nAI recommendations.',
-        }),
-      }),
-    }));
-
-    const markdown = await generatePostMortem(incidentId);
-
-    expect(typeof markdown).toBe('string');
-    expect(markdown.length).toBeGreaterThan(100);
-  });
+  // Test 25 (Post-mortem AI-enhanced when BYOK available) was retired with
+  // phase29_drop_byok — there is no AI-enhancement path anymore; the template
+  // is the source of truth. Test 24 still exercises the template fallback.
 });
 
 // ─── API Endpoints (26-31) ──────────────────────────────────────────────────

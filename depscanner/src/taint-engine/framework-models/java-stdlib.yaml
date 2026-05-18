@@ -104,10 +104,11 @@ sinks:
     vuln_class: path_traversal
     argument_indices: []
     description: FileWriter constructor
-  - pattern: "Paths.get(*)"
-    vuln_class: path_traversal
-    argument_indices: [0]
-    description: java.nio.file.Paths.get
+  # Paths.get(*) is intentionally NOT a sink — calling `Paths.get(userInput)`
+  # alone produces an inert Path object. The dangerous step is the downstream
+  # filesystem read/write (Files.readAllBytes, new FileInputStream, etc.),
+  # which already fires below. Listing Paths.get here as a sink double-counts
+  # the CVE and breaks chained-sanitizer fixtures (`Paths.get(name).getFileName()`).
   - pattern: "Files.readAllBytes(*)"
     vuln_class: path_traversal
     argument_indices: [0]
@@ -210,14 +211,11 @@ sinks:
     description: String.matches (re-compiles each call)
 
   # ---------- Log injection ----------
-  - pattern: "*.info(*)"
-    vuln_class: log_injection
-    argument_indices: [0]
-    description: SLF4J/Logback Logger.info
-  - pattern: "*.warn(*)"
-    vuln_class: log_injection
-    argument_indices: [0]
-    description: SLF4J/Logback Logger.warn
+  # Note: SLF4J / Log4j / Logback `Logger.<level>(...)` sinks live in
+  # log4j.yaml as `code_injection` (Log4Shell-shaped) so the per-level
+  # call patterns aren't duplicated here. The stdlib file intentionally
+  # ships no log_injection sink because the log call shape is framework-
+  # owned, not language-stdlib.
 
 sanitizers:
   # ---------- Path traversal ----------
@@ -230,6 +228,9 @@ sanitizers:
   - pattern: "FilenameUtils.getName(*)"
     vuln_classes: [path_traversal]
     description: Apache Commons IO FilenameUtils.getName
+  - pattern: "*.getFileName(*)"
+    vuln_classes: [path_traversal]
+    description: java.nio.file.Path.getFileName — strips directory components, leaves only the filename
 
   # ---------- Command injection ----------
   - pattern: "*.quote(*)"

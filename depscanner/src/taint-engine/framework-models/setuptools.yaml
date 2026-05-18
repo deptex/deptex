@@ -1,0 +1,98 @@
+# setuptools framework spec — Deptex cross-file taint engine.
+#
+# setuptools is sink-only (no sources). Sources come from flask.yaml /
+# django.yaml / fastapi.yaml + os.environ / sys.argv stdlib forms — cross-
+# spec stitching matches `request.args.get('package_url')` flowing into
+# `setuptools.package_index.PackageIndex().download(url, '/tmp')` here.
+#
+# Models CVE-2024-6345 — `pkg_resources` (and `setuptools.package_index`)
+# resolves a package index URL by executing arbitrary code paths (download
+# + extract + setup.py invocation). When the URL is attacker-controlled,
+# the library fetches a crafted distribution and runs its setup.py, which
+# is an RCE primitive. The AI-generated fixture in
+# `bench-iterate/v_base/2026-05-12T17-41-24/report.json` is:
+#
+#   @app.route('/install')
+#   def install():
+#       url = request.args.get('package_url')
+#       index = setuptools.package_index.PackageIndex()
+#       return index.download(url, '/tmp')
+#
+# vuln_class mapping rationale.
+#   `code_injection` is the closest enum match — setup.py execution from
+#   a downloaded distribution is "attacker bytes interpreted as code by
+#   the runtime", same bucket as lodash.yaml's `_.template` and jinja2's
+#   `Template(*)`. `path_traversal` would be a weaker match (it doesn't
+#   capture the RCE primitive); `deserialization` is too narrow (the
+#   setup.py is executed, not deserialized).
+#
+# Sources NOT redeclared here — Flask's `request.args.get` / Django's
+# `request.GET.get` / FastAPI's `@app.get` parameters are pre-tainted by
+# the respective framework specs. `os.environ.get(*)` is in the stdlib
+# source surface owned by python/source-discovery (env taint_kind).
+
+framework: setuptools
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- Code injection via package-index download + setup.py exec ----------
+  # CVE-2024-6345 — pkg_resources / setuptools.package_index download
+  # paths execute setup.py from the fetched archive. Any attacker-
+  # controlled URL routed through these calls is an RCE primitive.
+  - pattern: PackageIndex.download(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: setuptools.package_index PackageIndex.download — fetches + extracts + runs setup.py (CVE-2024-6345)
+  - pattern: PackageIndex.fetch_distribution(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PackageIndex.fetch_distribution — same setup.py invocation path
+  - pattern: PackageIndex.scan_url(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PackageIndex.scan_url — URL parsing routed through the same fetch chain
+  - pattern: PackageIndex.process_url(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PackageIndex.process_url — URL parsing routed through the same fetch chain
+  # Generic wildcard-receiver — the AI fixture writes
+  # `index.download(url, '/tmp')` so the receiver `index` is not the
+  # PackageIndex symbol literally. Following the moment.yaml / lodash.yaml
+  # / log4j.yaml precedent we add a wildcard-receiver alias.
+  - pattern: "*.download(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: setuptools.package_index `*.download` — wildcard receiver covering destructured / aliased PackageIndex instances (CVE-2024-6345)
+  - pattern: "*.fetch_distribution(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: setuptools.package_index `*.fetch_distribution` — wildcard receiver
+  # pkg_resources entry-point reading. CVE-2024-6345 also exercises the
+  # pkg_resources side of the same code path — `iter_entry_points` walks
+  # installed distributions but `get_entry_map` / `parse_requirements`
+  # accept attacker-controlled strings that are evaluated as requirement
+  # specifiers (which can pivot to arbitrary install).
+  - pattern: pkg_resources.parse_requirements(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: pkg_resources.parse_requirements — attacker-controlled spec strings
+  - pattern: pkg_resources.Requirement.parse(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: pkg_resources.Requirement.parse — attacker-controlled requirement string
+  # Top-level setuptools.setup() — running setup with attacker-controlled
+  # entry-point / install_requires lists invokes the same eval-during-
+  # install pipeline.
+  - pattern: setuptools.setup(*)
+    vuln_class: code_injection
+    argument_indices: []
+    description: setuptools.setup — any tainted kwargs (install_requires / entry_points / etc.) reach an eval-during-install path
+  - pattern: setup(*)
+    vuln_class: code_injection
+    argument_indices: []
+    description: bare setup() — destructured-import shape of setuptools.setup
+
+sanitizers: []

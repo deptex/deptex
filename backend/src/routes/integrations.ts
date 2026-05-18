@@ -1630,8 +1630,13 @@ function verifyGitHubWebhookSignature(req: express.Request): boolean {
   const rawBody = (req as any).rawBody;
   if (typeof rawBody !== 'string') return false;
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const sigBuf = Buffer.from(signature, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+  // timingSafeEqual throws on mismatched lengths — short-circuit explicitly so
+  // the catch only swallows the constant-time-equal call itself.
+  if (sigBuf.length !== expBuf.length) return false;
   try {
-    return crypto.timingSafeEqual(Buffer.from(signature, 'utf8'), Buffer.from(expected, 'utf8'));
+    return crypto.timingSafeEqual(sigBuf, expBuf);
   } catch {
     return false;
   }
@@ -1664,9 +1669,23 @@ async function recordWebhookDelivery(
   payloadSize: number,
   status: string = 'received'
 ) {
+  // delivery_id used to fall back to the literal 'unknown' when the
+  // x-github-delivery header was absent. Every such row collided with every
+  // other under the new UNIQUE (delivery_id, provider) index and dedup
+  // silently broke (one 'unknown' would shadow all later ones for an hour).
+  // Generate a UUID instead so each header-less delivery still gets an
+  // audit row that doesn't collide; emit a warning so the upstream bug
+  // (forged webhook? proxy stripping headers?) is visible.
+  let resolvedDeliveryId = deliveryId;
+  if (!resolvedDeliveryId) {
+    resolvedDeliveryId = crypto.randomUUID();
+    console.warn(
+      `[github webhook] missing x-github-delivery header; assigned synthetic id ${resolvedDeliveryId}`
+    );
+  }
   try {
     await supabase.from('webhook_deliveries').insert({
-      delivery_id: deliveryId || 'unknown',
+      delivery_id: resolvedDeliveryId,
       provider: 'github',
       event_type: eventType,
       action,
@@ -1717,6 +1736,12 @@ export async function githubWebhookHandler(req: express.Request, res: express.Re
 
     console.log('GitHub webhook received:', event, payload?.action || '');
 
+    // 8F.7: Deduplication — must run BEFORE recording delivery so retried
+    // deliveries don't accumulate duplicate audit rows.
+    if (await deduplicateWebhookDelivery(deliveryId)) {
+      return res.json({ received: true, skipped: 'duplicate' });
+    }
+
     const startMs = Date.now();
     await recordWebhookDelivery(
       deliveryId, event, payload?.action,
@@ -1724,12 +1749,6 @@ export async function githubWebhookHandler(req: express.Request, res: express.Re
       payload?.installation?.id?.toString(),
       payloadSize
     );
-
-    // 8F.7: Deduplication
-    if (await deduplicateWebhookDelivery(deliveryId)) {
-      await updateWebhookDeliveryStatus(deliveryId, 'skipped');
-      return res.json({ received: true, skipped: 'duplicate' });
-    }
 
     res.json({ received: true });
 
@@ -1788,7 +1807,9 @@ export async function githubWebhookHandler(req: express.Request, res: express.Re
     }
   } catch (error: any) {
     console.error('GitHub webhook error:', error);
-    res.status(200).json({ received: true, error: error.message });
+    if (!res.headersSent) {
+      res.status(200).json({ received: true, error: error.message });
+    }
   }
 }
 

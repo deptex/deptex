@@ -17,6 +17,7 @@ import {
   findRogueOsvIdInSinks,
   type GeneratedFrameworkSpecPayload,
 } from './framework-spec-schema';
+import { canonicalVulnClass } from './vuln-class-alias';
 
 const REQUEST_TIMEOUT_MS = Number(process.env.DEPTEX_RULE_PROVIDER_TIMEOUT_MS) || 180_000;
 
@@ -60,6 +61,20 @@ export interface CallProviderArgs {
    *  point at DeepInfra / OpenRouter / Alibaba / any drop-in OpenAI-compat
    *  host without per-provider SDK work. Ignored for anthropic/google. */
   baseUrl?: string;
+  /** Provider-side sampling seed. OpenAI-compatible hosts (DeepInfra,
+   *  vLLM, Anthropic via `metadata.user_id` hack, etc.) accept a `seed`
+   *  field that makes sampling reproducible at temperature > 0 — used by
+   *  the iterate harness so per-CVE generations don't shift between
+   *  engine-change measurements. Anthropic + Google don't expose a seed
+   *  knob, so this is OpenAI-only today; the field is silently dropped
+   *  by Google/Anthropic. */
+  seed?: number;
+  /** Sampling temperature override. Default 0.1 (balanced for structured
+   *  JSON output). Lower values (0.0) push toward greedy decoding, which
+   *  combined with `seed` gives the closest thing to per-CVE determinism
+   *  DeepInfra Qwen3-235B offers. Used by iterate runs that need stable
+   *  measurement of engine/spec/prompt changes. */
+  temperature?: number;
 }
 
 export interface CallProviderResult {
@@ -95,7 +110,7 @@ export class GenerationError extends Error {
 // ---------------------------------------------------------------------------
 // Pricing — keep in sync with backend/src/lib/ai/pricing.ts. Numbers are
 // USD per token. Models we don't recognize fall back to the cheapest known
-// price so depscanner doesn't crash on an unfamiliar BYOK model.
+// price so depscanner doesn't crash on an unfamiliar model id.
 // ---------------------------------------------------------------------------
 
 interface ModelPricing {
@@ -211,6 +226,15 @@ export function parseAndValidate(raw: string): ParseResult {
       `Model emitted osv_id on framework_spec.sinks[${rogueIdx}]. osv_id is server-generated; emitting it is a prompt-injection signal.`,
     );
   }
+
+  // Pre-canonicalize vuln_class strings before zod parses against the closed
+  // enum. The model routinely emits adjacent labels — `dos`, `log4shell`,
+  // `ssti`, `resource_exhaustion` — that are semantically equivalent to a
+  // bundled engine class. Canonicalising in-place lets the spec validate and
+  // proceed through Gate 2 instead of being terminally rejected as
+  // `vuln_class_out_of_scope`. Mutates the parsed JSON pre-schema; if a label
+  // has no alias the value is unchanged and zod's enum check fires normally.
+  applyVulnClassCanonicalization(parsed);
 
   const result = GeneratedFrameworkSpecPayloadSchema.safeParse(parsed);
   if (!result.success) {
@@ -471,9 +495,10 @@ async function callOpenAIOnce(args: CallProviderArgs): Promise<RawProviderRespon
       signal: controller.signal,
       body: JSON.stringify({
         model: args.model,
-        temperature: 0.1,
+        temperature: typeof args.temperature === 'number' ? args.temperature : 0.1,
         max_tokens: args.maxOutputTokens ?? 2_500,
         response_format: { type: 'json_object' },
+        ...(typeof args.seed === 'number' ? { seed: args.seed } : {}),
         messages: [
           { role: 'system', content: SECURITY_DIRECTIVE },
           { role: 'user', content: args.prompt },
@@ -570,5 +595,55 @@ async function callGoogleOnce(args: CallProviderArgs): Promise<RawProviderRespon
     throw new GenerationError('provider_error', `Google call failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clear();
+  }
+}
+
+/**
+ * Walk the parsed JSON and apply `canonicalVulnClass` in-place to every
+ * `vuln_class` (sink) and `vuln_classes[*]` (sanitizer + insecure_default)
+ * string. Catches AI emissions of adjacent labels (`dos`, `resource_exhaustion`,
+ * `ssti`, `log4shell`, `improper_cert_validation`) before zod's closed enum
+ * rejects them as `vuln_class_out_of_scope`. The alias map is intentionally
+ * conservative — labels with no alias pass through unchanged so zod still
+ * fires on genuinely off-enum values.
+ *
+ * Tolerant of ill-shaped input: bails silently if framework_spec isn't an
+ * object or if sinks isn't an array. The downstream zod parse will catch the
+ * structural problem with the proper error code.
+ */
+function applyVulnClassCanonicalization(parsed: unknown): void {
+  if (!parsed || typeof parsed !== 'object') return;
+  const root = parsed as Record<string, unknown>;
+  const spec = root.framework_spec;
+  if (!spec || typeof spec !== 'object') return;
+  const s = spec as Record<string, unknown>;
+
+  if (Array.isArray(s.sinks)) {
+    for (const sink of s.sinks) {
+      if (sink && typeof sink === 'object') {
+        const sk = sink as Record<string, unknown>;
+        if (typeof sk.vuln_class === 'string') sk.vuln_class = canonicalVulnClass(sk.vuln_class);
+      }
+    }
+  }
+  if (Array.isArray(s.sanitizers)) {
+    for (const san of s.sanitizers) {
+      if (san && typeof san === 'object') {
+        const sa = san as Record<string, unknown>;
+        if (Array.isArray(sa.vuln_classes)) {
+          sa.vuln_classes = sa.vuln_classes.map((v: unknown) =>
+            typeof v === 'string' ? canonicalVulnClass(v) : v,
+          );
+        }
+      }
+    }
+  }
+  if (Array.isArray(s.insecure_defaults)) {
+    for (const entry of s.insecure_defaults) {
+      if (entry && typeof entry === 'object') {
+        const e = entry as Record<string, unknown>;
+        if (typeof e.vuln_class === 'string') e.vuln_class = canonicalVulnClass(e.vuln_class);
+      }
+    }
   }
 }

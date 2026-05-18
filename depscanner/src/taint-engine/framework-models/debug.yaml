@@ -1,0 +1,34 @@
+# debug (npm `debug` package) framework spec — Deptex cross-file taint engine.
+#
+# CVE-2017-16137 — debug versions <2.6.9 / <3.1.0 have a catastrophic
+# backtracking regex in the format string parser. Pre-fix shape:
+#   const log = require('debug')('ns');
+#   log(req.query.input);
+# The attacker controls the string argument to the debug-instance call,
+# which the package then runs through `formatRegExp` for token
+# substitution. Crafted `%` sequences trigger super-linear backtracking.
+#
+# Sink shape `debug(*)` covers the named-export entry; the wildcard
+# `*.debug(*)` covers `logger.debug(...)` style usage where the bound
+# instance is reassigned. Method name is generic enough that we keep
+# the wildcard narrowly scoped (only the bound-instance shape, not
+# `console.debug` — but the engine has no way to distinguish; this is
+# the same cost-benefit as `*.urlopen(*)` in urllib3.yaml).
+
+framework: debug
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  - pattern: debug(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: debug('namespace')(*) — debug call with attacker string triggers regex backtracking (CVE-2017-16137)
+  - pattern: "*.debug(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: bound debug instance — wildcard receiver
+
+sanitizers: []

@@ -45,7 +45,25 @@ export type CalleeRef =
  * list reflects syntactic order, and branches join trivially.
  */
 export type Step =
-  | { kind: 'source'; target: LocalVar; sourceText: string; loc: SourceLocation }
+  | {
+      kind: 'source';
+      target: LocalVar;
+      sourceText: string;
+      loc: SourceLocation;
+      /**
+       * `weak: true` — only set target taint when a FrameworkSource pattern
+       * matches the sourceText exactly; skip the receiver-root fallback and
+       * do NOT delete target on no-match. Used by the Ruby lowerer to emit
+       * a *parity* source step alongside a `call` step for 0-arg method
+       * invocations (`params.x`, where syntactically the call shape hides
+       * what is semantically an accessor read). Without this, the call
+       * step's external-fallback would clobber any target taint a non-weak
+       * source step had just set, AND a non-weak source step on a sanitizer
+       * call like `q.to_i` would re-taint via the receiver-root fallback
+       * after the sanitizer had cleared it.
+       */
+      weak?: boolean;
+    }
   | { kind: 'assign'; target: LocalVar; from: LocalVar | null; loc: SourceLocation }
   | {
       kind: 'call';
@@ -55,6 +73,26 @@ export type Step =
       args: (LocalVar | null)[];
       /** The full text of each argument expression (used for sink/sanitizer pattern matching). */
       argTexts: string[];
+      /**
+       * Positions in `args` that came from keyword arguments (Python kwargs,
+       * other languages may extend later). When present and non-empty, a
+       * sink matcher with positional `argument_indices` should ALSO consider
+       * these positions tainted — because the language's positional indexing
+       * is not stable when the caller binds args by name. Over-approximation
+       * is intentional: any false-positive here is caught by Gate 3 fixture
+       * round-trip in rule-generator validation. Empty / undefined means all
+       * args were positional (or the lowerer doesn't model kwargs yet).
+       */
+      kwargIndices?: number[];
+      /**
+       * Parallel to `args` — when a position is a keyword argument, this
+       * carries the kwarg name; positional args carry null. Phase F4: the
+       * non-taint detector reads these to evaluate sanitizer-absence
+       * contracts (`requests.Session(verify=False)` → kwargNames[0] ===
+       * 'verify'). Only Python's IR lowerer populates this today; JS uses
+       * options-object property parsing in the non-taint detector directly.
+       */
+      kwargNames?: (string | null)[];
       loc: SourceLocation;
     }
   | { kind: 'return'; from: LocalVar | null; loc: SourceLocation };
@@ -66,6 +104,23 @@ export interface IrFunction {
   params: LocalVar[];
   /** Steps in syntactic order. */
   steps: Step[];
+  /**
+   * Map of single-assignment local names to the verbatim source text of their
+   * inline-literal initializer (Phase 2a of the reachability-90-percent plan).
+   * Populated by lowerers that see a `const foo = { ... }` / `const bar = [ ... ]`
+   * pattern; informs F4 non-taint-detector's option-bag matcher so that
+   * hoisted `const options = { algorithms: ['HS256'] }; jwt.verify(t, k, options)`
+   * resolves `options` back to its literal shape for kwarg parsing.
+   *
+   * Scope today: object-literal + array-literal initializers only, AND only
+   * when the target appears exactly once on a LHS in the function (no
+   * subsequent re-assignments). The JS lowerer populates this; other-language
+   * lowerers leave it unset until their kwarg story warrants it.
+   *
+   * Consumers MUST treat undefined as "no resolution available, fall back to
+   * the existing arg-text interpretation" so existing callers stay correct.
+   */
+  localOrigins?: Map<string, string>;
 }
 
 export interface LowerOptions {
@@ -79,6 +134,22 @@ export interface LowerOptions {
   declarationToNodeId: Map<ts.Node, string>;
   /** Pick a function declaration from a symbol; returns the AST node we registered. */
   pickFunctionDecl: (symbol: ts.Symbol) => ts.Node | undefined;
+  /**
+   * Accumulator for Phase 2a's hoisted-const resolution. Per-function fresh
+   * map; `lowerFunction` populates this from `const x = { ... }` /
+   * `const x = [ ... ]` declarations, then filters by step-target write
+   * counts before assigning the survivors to `IrFunction.localOrigins`.
+   * Internal to the lowerer; callers should not pass their own.
+   */
+  literalInitsAccumulator?: Map<string, string>;
+  /**
+   * Companion counter for `literalInitsAccumulator`. Records how many times
+   * any literal-init capture site mentioned a given target — separate from
+   * the step-target write count so that `const opts = {...}` followed by
+   * `opts = something` correctly disqualifies opts from resolver use even
+   * though the literal-init itself emits zero step writes.
+   */
+  literalInitsWrites?: Map<string, number>;
 }
 
 /**
@@ -116,10 +187,49 @@ export function lowerFunction(
   }
 
   const steps: Step[] = [];
+  const literalInits = new Map<string, string>();
+  const literalInitsWrites = new Map<string, number>();
   if (body) {
-    walkBody(body, steps, opts);
+    walkBody(body, steps, {
+      ...opts,
+      literalInitsAccumulator: literalInits,
+      literalInitsWrites,
+    });
   }
-  return { id: funcId, params, steps };
+
+  // Phase 2a: filter candidate literal initializers to single-assignment locals.
+  // Count writes from BOTH the emitted step list (assigns/sources/calls with a
+  // target) AND the literalInits capture-site counter (object/array literal
+  // inits emit 0 step writes on their own but still count as "this local was
+  // written here"). A target with >1 total write is dropped from the resolver
+  // map so re-declarations / reassignments correctly disqualify it.
+  const localOrigins = filterLocalOrigins(literalInits, literalInitsWrites, steps);
+
+  const ir: IrFunction = { id: funcId, params, steps };
+  if (localOrigins.size > 0) ir.localOrigins = localOrigins;
+  return ir;
+}
+
+function filterLocalOrigins(
+  candidates: Map<string, string>,
+  literalWrites: Map<string, number>,
+  steps: Step[],
+): Map<string, string> {
+  if (candidates.size === 0) return new Map();
+  const writeCounts = new Map<string, number>(literalWrites);
+  for (const step of steps) {
+    let target: string | undefined;
+    if (step.kind === 'assign') target = step.target;
+    else if (step.kind === 'source') target = step.target;
+    else if (step.kind === 'call' && step.target) target = step.target;
+    if (!target) continue;
+    writeCounts.set(target, (writeCounts.get(target) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const [name, init] of candidates) {
+    if ((writeCounts.get(name) ?? 0) <= 1) out.set(name, init);
+  }
+  return out;
 }
 
 /** Walk the body of a function (or module) and emit Steps in syntactic order. */
@@ -183,6 +293,31 @@ function walkStatement(stmt: ts.Node, steps: Step[], opts: LowerOptions): void {
     for (const decl of stmt.declarationList.declarations) {
       if (!decl.initializer) continue;
       const target = ts.isIdentifier(decl.name) ? decl.name.text : null;
+      // Phase 2a: capture inline-literal initializers (`const x = { ... }`,
+      // `const x = [ ... ]`) so F4 sanitizer-absence can resolve a hoisted
+      // identifier back to the option-bag literal at the call site. First-
+      // writer-wins, and we push a synthetic write into the literal counter
+      // so subsequent re-declarations or `opts = ...` reassignments cause
+      // the post-walk write-count filter to discard this entry — preventing
+      // a stale `const opts = X` from over-resolving an `opts = Y` later.
+      if (
+        target &&
+        opts.literalInitsAccumulator &&
+        (ts.isObjectLiteralExpression(decl.initializer) ||
+          ts.isArrayLiteralExpression(decl.initializer))
+      ) {
+        if (!opts.literalInitsAccumulator.has(target)) {
+          opts.literalInitsAccumulator.set(target, decl.initializer.getText(opts.sourceFile));
+        }
+        // Count this capture toward `target`'s eventual write count so the
+        // post-walk filter discards captured-then-reassigned locals. Object /
+        // array literal init emits 0 step writes on its own (properties
+        // dissolve into recursive walks against `target`), so without this
+        // bookkeeping the filter would treat them as single-writers.
+        if (opts.literalInitsWrites) {
+          opts.literalInitsWrites.set(target, (opts.literalInitsWrites.get(target) ?? 0) + 1);
+        }
+      }
       walkExpressionAsAssign(decl.initializer, target, steps, opts);
     }
     return;
@@ -214,7 +349,19 @@ function walkExpressionAsAssign(
   // Handle assignment expressions like `x = foo()` — treat as if the lhs
   // were a variable declaration's initializer.
   if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-    const lhsName = ts.isIdentifier(expr.left) ? expr.left.text : null;
+    const lhs = expr.left;
+    // Computed-key assignment: `obj[req.query.x] = rhs` should taint `obj`
+    // from BOTH the key and the rhs. Without this, the source pattern inside
+    // the key (`req.query.x`) is never read and the object never gains taint
+    // from the AI-rule shape `obj[req.query.x] = ...`. Unlocks code-injection
+    // flows where the object is later consumed by a template/eval sink.
+    if (ts.isElementAccessExpression(lhs) && ts.isIdentifier(lhs.expression)) {
+      const objName = lhs.expression.text;
+      walkExpressionAsAssign(lhs.argumentExpression, objName, steps, opts);
+      walkExpressionAsAssign(expr.right, objName, steps, opts);
+      return;
+    }
+    const lhsName = ts.isIdentifier(lhs) ? lhs.text : null;
     walkExpressionAsAssign(expr.right, lhsName, steps, opts);
     return;
   }
@@ -236,6 +383,28 @@ function walkExpressionAsAssign(
 
   // Call expression (or `new Foo(args)`).
   if (ts.isCallExpression(expr) || ts.isNewExpression(expr)) {
+    // Method-chain support: if the callee is a member access on an inner
+    // call (`a.b(x).c()`), lower the inner call as its own Step first so
+    // its sink-matching fires. Without this, `res.location(q).end()` would
+    // only fire `<chain>.end` as the outer callee and silently drop the
+    // `res.location(*)` sink. Recurses through deeper chains (`a().b().c()`)
+    // by calling walkExpressionAsAssign on the inner call, which re-enters
+    // this branch.
+    if (ts.isCallExpression(expr)) {
+      const calleeExpr = expr.expression;
+      if (
+        (ts.isPropertyAccessExpression(calleeExpr) || ts.isElementAccessExpression(calleeExpr)) &&
+        (ts.isCallExpression(calleeExpr.expression) || ts.isNewExpression(calleeExpr.expression))
+      ) {
+        const innerTmp = `<chain@${steps.length}>`;
+        walkExpressionAsAssign(calleeExpr.expression, innerTmp, steps, opts);
+        // Note: we don't try to propagate the inner call's return taint into
+        // the outer call's args or target — that's a separate alias-tracking
+        // concern handled imprecisely by the existing inner-as-temp logic
+        // for direct args. The point of the pre-walk here is only to give
+        // the worklist a chance to fire the inner-call sink.
+      }
+    }
     const callee = resolveCallee(expr, opts);
     const args: (LocalVar | null)[] = [];
     const argTexts: string[] = [];

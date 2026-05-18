@@ -88,7 +88,7 @@ const docMeta: Record<string, DocMeta> = {
   },
   aegis: {
     title: "Aegis",
-    description: "Autonomous security agent: chat, tasks, automations, Slack bot, PR review, and BYOK AI.",
+    description: "Autonomous security agent: chat, tasks, automations, Slack bot, and PR review.",
   },
 };
 

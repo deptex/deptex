@@ -342,7 +342,7 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
             <h3 className="text-sm font-semibold text-foreground">AI model and budget</h3>
           </div>
           <p className="text-xs text-foreground-secondary mt-1">
-            Generation uses your BYOK key for the chosen provider.
+            Generation uses the platform AI key.
           </p>
         </div>
         <div className="p-5 grid gap-5">

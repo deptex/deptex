@@ -19,7 +19,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import * as dotenv from 'dotenv';
 import type { VariantModule } from './runner';
-import { runVariant, formatSummary } from './runner';
+import { runVariant, runMultiTrial, formatSummary, formatMultiTrialSummary } from './runner';
 import type { AiProviderName } from '../../src/rule-generator/generate';
 
 interface CliFlags {
@@ -31,10 +31,31 @@ interface CliFlags {
   dryRun: boolean;
   limit?: number;
   outputRoot: string;
+  /** Provider-side sampling seed for reproducible iterate measurements.
+   *  Plumbed through to OpenAI-compatible `seed` body field. Anthropic /
+   *  Google ignore it (they don't expose a seed knob). Setting this lets
+   *  engine-change recall lifts emerge from AI-variance noise that
+   *  otherwise masks <6pp signal at temperature 0.1. */
+  seed?: number;
+  /** Sampling temperature override. Default 0.1; use 0 for greedy decoding
+   *  (closest to deterministic per-CVE with seed). */
+  temperature?: number;
+  /** Number of independent trials per CVE. When N>1, dispatch all (CVE × trial)
+   *  pairs through one pLimit gate and aggregate to union / majority /
+   *  intersection. Per-trial seed = `seed + trialIndex` so trial 0 reproduces
+   *  the single-trial baseline. Default 1 (preserves prior behaviour). */
+  trials: number;
+  /** Comma-separated CVE id allowlist. When set, only the listed CVE ids from
+   *  the CANDIDATES corpus are exercised — useful for cheap targeted re-runs
+   *  after a YAML / engine change (e.g. validating ~10 bucket-G targets for
+   *  ~$0.10 instead of the full 88-CVE run for ~$0.25). Matches case-
+   *  insensitively against `Candidate.cveId`. Unknown ids throw at startup. */
+  cves?: string[];
+  includeNonModelable?: boolean;
 }
 
 function parseFlags(argv: string[]): CliFlags {
-  const flags: Partial<CliFlags> = { concurrency: 2, dryRun: false };
+  const flags: Partial<CliFlags> = { concurrency: 2, dryRun: false, trials: 1 };
   for (const arg of argv) {
     if (arg.startsWith('--variant=')) flags.variant = arg.slice('--variant='.length);
     else if (arg.startsWith('--provider=')) flags.provider = arg.slice('--provider='.length) as AiProviderName;
@@ -44,6 +65,29 @@ function parseFlags(argv: string[]): CliFlags {
     else if (arg === '--dry-run') flags.dryRun = true;
     else if (arg.startsWith('--limit=')) flags.limit = parseInt(arg.slice('--limit='.length), 10);
     else if (arg.startsWith('--output-root=')) flags.outputRoot = arg.slice('--output-root='.length);
+    else if (arg.startsWith('--seed=')) {
+      const n = parseInt(arg.slice('--seed='.length), 10);
+      if (!Number.isFinite(n)) throw new Error(`--seed must be an integer, got "${arg.slice('--seed='.length)}"`);
+      flags.seed = n;
+    }
+    else if (arg.startsWith('--temperature=')) {
+      const t = parseFloat(arg.slice('--temperature='.length));
+      if (!Number.isFinite(t) || t < 0 || t > 2) throw new Error(`--temperature must be in [0, 2], got "${arg.slice('--temperature='.length)}"`);
+      flags.temperature = t;
+    }
+    else if (arg.startsWith('--trials=')) {
+      const n = parseInt(arg.slice('--trials='.length), 10);
+      if (!Number.isFinite(n) || n < 1) throw new Error(`--trials must be a positive integer, got "${arg.slice('--trials='.length)}"`);
+      flags.trials = n;
+    }
+    else if (arg === '--include-non-modelable') {
+      flags.includeNonModelable = true;
+    }
+    else if (arg.startsWith('--cves=')) {
+      const raw = arg.slice('--cves='.length);
+      flags.cves = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+      if (flags.cves.length === 0) throw new Error('--cves requires at least one comma-separated CVE id');
+    }
   }
   if (!flags.variant) throw new Error('missing --variant=<name>');
   if (!flags.provider) flags.provider = 'openai';
@@ -114,7 +158,49 @@ async function main(): Promise<void> {
   process.stderr.write(`[${variant.NAME}] starting variant=${variant.NAME}@${variant.VERSION} provider=${flags.provider} model=${flags.model} baseUrl=${flags.baseUrl ?? '(default)'} → ${outputDir}\n`);
 
   const { CANDIDATES } = await import('./candidates');
-  const candidates = flags.limit ? CANDIDATES.slice(0, flags.limit) : CANDIDATES;
+  let candidates = flags.limit ? CANDIDATES.slice(0, flags.limit) : CANDIDATES;
+  if (flags.cves) {
+    const allowed = new Set(flags.cves.map((c) => c.toLowerCase()));
+    const known = new Set(CANDIDATES.map((c) => c.cveId.toLowerCase()));
+    const unknown = flags.cves.filter((c) => !known.has(c.toLowerCase()));
+    if (unknown.length) throw new Error(`--cves contains unknown CVE id(s): ${unknown.join(', ')}`);
+    candidates = candidates.filter((c) => allowed.has(c.cveId.toLowerCase()));
+  }
+
+  // Drop CVEs forensically confirmed to not fit the taint data-flow model.
+  // They inflate the denominator without representing real engine gaps.
+  // `--include-non-modelable` re-includes them for re-confirmation runs.
+  if (!flags.includeNonModelable) {
+    const excluded = candidates.filter((c) => c.nonModelable);
+    if (excluded.length > 0) {
+      candidates = candidates.filter((c) => !c.nonModelable);
+      const reasons = excluded
+        .map((c) => `  - ${c.cveId} (${c.packageName}): ${c.nonModelable!.reason}`)
+        .join('\n');
+      process.stderr.write(
+        `[iterate] excluding ${excluded.length} non-modelable CVE(s); pass --include-non-modelable to keep them:\n${reasons}\n`,
+      );
+    }
+  }
+
+  if (flags.trials > 1) {
+    if (flags.dryRun) throw new Error('--dry-run is incompatible with --trials > 1 (no AI calls to repeat).');
+    const report = await runMultiTrial({
+      variant,
+      provider: flags.provider,
+      model: flags.model,
+      apiKey,
+      baseUrl: flags.baseUrl,
+      candidates,
+      concurrency: flags.concurrency,
+      outputDir,
+      seed: flags.seed,
+      temperature: flags.temperature,
+      trials: flags.trials,
+    });
+    process.stdout.write(formatMultiTrialSummary(report));
+    return;
+  }
 
   const report = await runVariant({
     variant,
@@ -126,6 +212,8 @@ async function main(): Promise<void> {
     concurrency: flags.concurrency,
     outputDir,
     dryRun: flags.dryRun,
+    seed: flags.seed,
+    temperature: flags.temperature,
   });
 
   process.stdout.write(formatSummary(report));

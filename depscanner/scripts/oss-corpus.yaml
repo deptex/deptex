@@ -1,0 +1,162 @@
+# OSS corpus ground-truth — depscanner hardening continuous testing harness.
+#
+# Each entry lists a real-world OSS repo + the CVEs the engine is EXPECTED to
+# flag as reachable when scanning that repo's checked-out source. Ground-truth
+# is intentionally approximate (toy / first cut) — we cite sources inline so
+# future ticks can refine. The harness runs depscanner against each repo and
+# compares observed findings to `ground_truth_cves` for recall/precision.
+#
+# Conventions:
+#   - `ref` is the commit/tag scanned (pin so ground truth stays stable). When
+#     unset, the harness uses the default branch HEAD (--depth=1 clone).
+#   - `ground_truth_cves[]` lists CVE IDs known to affect either the package
+#     ITSELF (first-party advisories) OR a transitive dependency the repo
+#     pulls in. Each entry has `expected_reachability` ∈ {confirmed, data_flow,
+#     function, module} and a `source` (NVD/GHSA/OSV/changelog citation).
+#   - `expected_min_findings` is a soft floor — fewer-than-this total findings
+#     usually means the SBOM step misfired.
+#   - `skip` skips the repo (with a reason) without failing the run.
+#
+# Sources: NVD (https://nvd.nist.gov), GHSA (https://github.com/advisories),
+# OSV (https://osv.dev), upstream CHANGELOG / release notes.
+
+repos:
+  - name: express
+    repo_url: https://github.com/expressjs/express.git
+    ecosystem: npm
+    framework: express
+    ref: 4.18.2  # tagged release with known CVEs in deps
+    ground_truth_cves:
+      - id: CVE-2024-29041  # express open redirect via malformed URL
+        expected_reachability: function
+        source: GHSA-rv95-896h-c2vc (express advisory, 2024-03-25)
+      - id: CVE-2022-24999  # qs prototype pollution (express dep)
+        expected_reachability: data_flow
+        source: GHSA-hrpp-h998-j3pp (qs <= 6.9.6)
+    expected_min_findings: 1
+    notes: |
+      Express itself is small (~1.4MB). Most CVE exposure flows through
+      transitive deps (qs, body-parser, send, serve-static).
+
+  - name: fastify
+    repo_url: https://github.com/fastify/fastify.git
+    ecosystem: npm
+    framework: fastify
+    ref: v4.26.0
+    ground_truth_cves:
+      - id: CVE-2024-22214  # fast-jwt vulnerability in fastify ecosystem
+        expected_reachability: module
+        source: GHSA-7v82-pwm5-vh5f
+    expected_min_findings: 1
+    notes: |
+      Monorepo with workspaces — cdxgen --deep may take 2-3min.
+
+  - name: nextjs
+    repo_url: https://github.com/vercel/next.js.git
+    ecosystem: npm
+    framework: nextjs
+    ref: v14.1.0
+    ground_truth_cves:
+      - id: CVE-2024-34351  # Next.js SSRF in Server Actions
+        expected_reachability: confirmed
+        source: GHSA-fr5h-rqp8-mj6g (Next.js >=13.4.0, <14.1.1)
+      - id: CVE-2024-46982  # Next.js cache poisoning
+        expected_reachability: data_flow
+        source: GHSA-gp8f-8m7h-r9q9
+    expected_min_findings: 5
+    notes: |
+      Very large repo. Use shallow clone + workspace root only. Timeout risk.
+
+  - name: flask
+    repo_url: https://github.com/pallets/flask.git
+    ecosystem: pypi
+    framework: flask
+    ref: 3.0.2
+    ground_truth_cves:
+      - id: CVE-2023-30861  # Flask session cookie disclosure
+        expected_reachability: function
+        source: GHSA-m2qf-hxjv-5gpq (Flask <2.2.5, <2.3.2)
+    expected_min_findings: 1
+    notes: |
+      Flask 3.x patched several historical CVEs. We scan main to confirm
+      the patched versions don't false-positive.
+
+  - name: django
+    repo_url: https://github.com/django/django.git
+    ecosystem: pypi
+    framework: django
+    ref: 5.0.2
+    ground_truth_cves:
+      - id: CVE-2024-24680  # Django denial of service via intcomma
+        expected_reachability: function
+        source: GHSA-xxj9-f6rv-m3x4 (Django 5.0.2 patches)
+    expected_min_findings: 1
+    notes: |
+      Django is large and uses setup.cfg + pyproject.toml mix. ORM sinks are
+      a major target for taint engine entry-point coverage.
+
+  - name: fastapi
+    repo_url: https://github.com/tiangolo/fastapi.git
+    ecosystem: pypi
+    framework: fastapi
+    ref: 0.109.2
+    ground_truth_cves:
+      - id: CVE-2024-24762  # python-multipart ReDoS (FastAPI dep)
+        expected_reachability: data_flow
+        source: GHSA-2jv5-9r88-3w3p (python-multipart < 0.0.7)
+    expected_min_findings: 1
+
+  - name: gin
+    repo_url: https://github.com/gin-gonic/gin.git
+    ecosystem: golang
+    framework: gin
+    ref: v1.9.1
+    ground_truth_cves:
+      - id: CVE-2023-29401  # gin filename header injection
+        expected_reachability: function
+        source: GHSA-3vp4-m3rf-835h (gin < 1.9.1)
+    expected_min_findings: 1
+    notes: |
+      Pinned to v1.9.1 which is the patched release. Testing whether the
+      engine still surfaces historical CVEs as informational.
+
+  - name: spring-petclinic
+    repo_url: https://github.com/spring-projects/spring-petclinic.git
+    ecosystem: maven
+    framework: spring
+    ref: main
+    ground_truth_cves:
+      - id: CVE-2024-22243  # Spring Framework URL parsing redirect
+        expected_reachability: data_flow
+        source: GHSA-2vmx-h857-w4g3 (spring-web 6.x < 6.1.4)
+    expected_min_findings: 1
+    notes: |
+      Reference Spring MVC app. pom.xml only — cdxgen calls maven goals.
+
+  - name: sinatra
+    repo_url: https://github.com/sinatra/sinatra.git
+    ecosystem: gem
+    framework: sinatra
+    ref: v4.0.0
+    ground_truth_cves:
+      - id: CVE-2024-21510  # sinatra path traversal via send_file
+        expected_reachability: function
+        source: GHSA-hxqq-ww5f-9q8m
+    expected_min_findings: 1
+    notes: |
+      Sinatra's DSL is currently a known framework-spec gap (memory:
+      phase6_engine_gaps.md). Recall here likely = 0 until the spec lands.
+
+  - name: laravel
+    repo_url: https://github.com/laravel/laravel.git
+    ecosystem: composer
+    framework: laravel
+    ref: v11.0.0
+    ground_truth_cves:
+      - id: CVE-2024-29291  # Laravel database driver credential exposure
+        expected_reachability: data_flow
+        source: GHSA-gv7v-rgg5-w6vh (laravel/framework < 10.48.0, < 11.0.7)
+    expected_min_findings: 1
+    notes: |
+      laravel/laravel is the skeleton app. Most CVE surface is in
+      laravel/framework (transitive).

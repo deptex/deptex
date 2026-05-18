@@ -1,5 +1,7 @@
 # Cross-File Taint Engine — Implementation Plan (Phase 6)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Status (2026-04-30) — SHIPPED, MERGED as PR #19
 
 Merge commit on main: `142b495`. 27 feature/test commits (`912e80e..231984b`) + critical-review fix (`e6a339b`) + main-merge (`d52ead1`). Scope expanded twice during build: TS/JS only → +Python/Java/Go → all 8 Phase 2 languages (Ruby, PHP, Rust, C#). 30 vuln/safe fixture pairs across the 7 non-JS languages (4 each); 11 vuln classes covered on Express; broader spec coverage for the rest.

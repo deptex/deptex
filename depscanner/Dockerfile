@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y \
   python3-pip \
   python3-venv \
   python-is-python3 \
+  ruby \
+  bundler \
+  php-cli \
+  composer \
   xmlstarlet \
   xvfb \
   xauth \
@@ -119,8 +123,10 @@ RUN python3 -m venv /opt/guarddog-venv \
   && /opt/guarddog-venv/bin/guarddog --version
 
 # Install cdxgen globally (dep-scan invokes it for SBOM generation + atom reachability)
-# and atom (reachability engine used by dep-scan --profile research)
-RUN npm install -g @cyclonedx/cdxgen @appthreat/atom \
+# and atom (reachability engine used by dep-scan --profile research).
+# Pinned exact: both run against untrusted customer repos inside the worker —
+# a floating `latest` is a supply-chain vector. Bump deliberately.
+RUN npm install -g @cyclonedx/cdxgen@12.3.3 @appthreat/atom@2.5.2 \
   && java -version \
   && cdxgen --version \
   && atom --help >/dev/null 2>&1 || true
@@ -209,5 +215,13 @@ RUN rm -rf src tsconfig.json && npm ci --only=production
 RUN chown -R worker:worker /app /tmp /data /backend/database /zap
 
 USER worker
+
+# Bump the V8 old-space cap to 8 GB. Default ~4 GB OOMs the worker on
+# moderate-sized JS monorepos (express, react, etc.) while tree-sitter +
+# downstream pipeline steps hold per-file extraction state. Fly machines and
+# typical local Docker Desktop setups have ≥8 GB available; the higher cap
+# is harmless on smaller hosts because V8 only uses what it needs. CLI users
+# can override by setting NODE_OPTIONS before invoking the container.
+ENV NODE_OPTIONS="--max-old-space-size=8192"
 
 CMD ["node", "dist/index.js"]

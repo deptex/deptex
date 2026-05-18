@@ -17,17 +17,29 @@
 /**
  * Closed taxonomy of vulnerability classes the engine can detect. Matches
  * the taint_engine_settings.vuln_classes_enabled DEFAULT list (phase26
- * migration; extended in phase28b to add `code_injection`).
+ * migration; extended in phase28b to add `code_injection`, and phase28c to
+ * add `weak_crypto` + `auth_bypass`).
  *
  * `code_injection` covers expression / template / eval-style sinks where
  * tainted data is interpreted as code by the runtime — Spring SpEL eval,
  * `eval(*)`, `Function(*)`, server-side template injection, etc. Added
  * because Qwen routinely emits this label for SpEL CVEs (e.g.
  * CVE-2023-34053) and the previous closed enum silently rejected the
- * generated spec under `invalid_schema`. Vuln classes that genuinely fall
- * outside taint flow (DoS, XML expansion, HTTP/2 reset attacks) are
- * surfaced via the `vuln_class_out_of_scope` generator failure code
- * instead of being modelled here.
+ * generated spec under `invalid_schema`.
+ *
+ * `weak_crypto` covers sinks where tainted data influences a cryptographic
+ * primitive in a way that breaks its security guarantees — e.g. CVE-2022-
+ * 23541 (jsonwebtoken `kid` claim resolves an attacker-controlled key into
+ * a verifier), HMAC keys built from untrusted input, predictable IVs, etc.
+ *
+ * `auth_bypass` covers sinks where tainted data routes around an
+ * authentication / authorization decision — e.g. CVE-2022-22978 (Spring
+ * Security RegexRequestMatcher newline bypass), URL-normalisation gaps in
+ * auth filters, etc.
+ *
+ * Vuln classes that genuinely fall outside taint flow (DoS, XML expansion,
+ * HTTP/2 reset attacks) are surfaced via the `vuln_class_out_of_scope`
+ * generator failure code instead of being modelled here.
  */
 export type VulnClass =
   | 'sql_injection'
@@ -41,7 +53,9 @@ export type VulnClass =
   | 'file_upload'
   | 'open_redirect'
   | 'log_injection'
-  | 'code_injection';
+  | 'code_injection'
+  | 'weak_crypto'
+  | 'auth_bypass';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -56,6 +70,8 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'open_redirect',
   'log_injection',
   'code_injection',
+  'weak_crypto',
+  'auth_bypass',
 ];
 
 /** Kind label attached to a tainted value as it flows through the program. */
@@ -81,6 +97,35 @@ export interface FrameworkSource {
 }
 
 /**
+ * Phase F4 (non-taint regime). When attached to a sink, the non-taint
+ * detector inspects each call site whose callee matches the sink's pattern
+ * and asserts the named-argument contract. See
+ * `docs/non-taint-detector-regime.md` for the design + corpus mapping, and
+ * `taint-engine/non-taint-detector.ts` for the matcher.
+ *
+ * Detector modes:
+ *   - `required`   : finding fires when the argument is ABSENT
+ *                    (CVE-2022-23539 `jwt.verify` missing `algorithms`).
+ *   - `forbidden`  : finding fires when the argument is PRESENT with a
+ *                    value matching `unsafe_literals`
+ *                    (CVE-2024-35195 `requests.Session(verify=False)`).
+ *   - `must_equal` : finding fires when the argument is PRESENT but its
+ *                    literal text is NOT in `safe_literals`.
+ */
+export interface RequiredArgument {
+  /** Kwarg name (or object-property key for JS option-object calls). */
+  name: string;
+  /** Positional-index fallback (0-based). Optional. */
+  position?: number;
+  /** Default 'required'. */
+  match_mode?: 'required' | 'forbidden' | 'must_equal';
+  /** Whitelist for 'must_equal' mode. */
+  safe_literals?: string[];
+  /** Blacklist for 'forbidden' mode. */
+  unsafe_literals?: string[];
+}
+
+/**
  * A sink: a function that, when called with a tainted argument at any of the
  * argument_indices positions, indicates a vulnerability of vuln_class.
  *
@@ -93,6 +138,11 @@ export interface FrameworkSource {
  * leave it undefined — those flows are framework-generic, not CVE-attributed.
  * When set, the propagator stamps it onto `Flow.osv_id` at sink-match so
  * downstream classification + suppression can key on the CVE.
+ *
+ * `required_arguments` (Phase F4) opts the sink into the non-taint detector
+ * regime: a call-site walk that flags sanitizer-absence shapes (missing or
+ * forbidden options). A sink may participate in BOTH regimes — taint flow
+ * (via `argument_indices`) and non-taint (via `required_arguments`).
  */
 export interface FrameworkSink {
   pattern: string;
@@ -100,6 +150,7 @@ export interface FrameworkSink {
   argument_indices: number[];
   description: string;
   osv_id?: string;
+  required_arguments?: RequiredArgument[];
 }
 
 /**
@@ -112,6 +163,58 @@ export interface FrameworkSanitizer {
   pattern: string;
   vuln_classes: VulnClass[];
   description: string;
+}
+
+/**
+ * Phase 3.2 — regex-literal detector. The framework spec declares regex
+ * literals known to exhibit catastrophic backtracking on attacker-influenced
+ * input. The detector walks the codebase for matching regex literals (JS
+ * `/pat/` and `new RegExp("pat")`, Python `re.compile("pat")`, etc.) and
+ * emits a `redos` finding for each match without requiring a taint flow.
+ *
+ * Distinct from the taint-flow regime: this fires on the PRESENCE of the
+ * unsafe regex literal in the codebase, not on a source→sink edge. The
+ * underlying CVE is typically baked into a dependency's regex constant,
+ * so the bundled or AI-generated spec encodes which literals are known
+ * bad (e.g. debug-17-16137, jinja2-20-28493).
+ */
+export interface UnsafeRegexPattern {
+  /** Exact regex literal source (without surrounding `/.../` delimiters
+   *  for JS or quotes for Python). Matched as a substring against the
+   *  literal source text emitted by the AST. */
+  regex: string;
+  description: string;
+}
+
+/**
+ * Phase 3.3 — insecure-default detector. The framework spec declares call
+ * patterns where a named or positional argument's omission, or its value
+ * matching one of `forbidden_value_shapes`, indicates a sanitizer-absence
+ * vulnerability shape independent of taint flow.
+ *
+ * Overlaps semantically with FrameworkSink.required_arguments (Phase F4),
+ * but lives at the top-level spec rather than per-sink so detectors can
+ * be authored without needing a paired taint sink. Used for CVEs whose
+ * vuln_class is `weak_crypto` / `weak_default` (e.g. requests-24-35195's
+ * `verify=False` shape, flask-23-30861 session-without-secure-cookie).
+ */
+export interface InsecureDefault {
+  pattern: string;
+  description: string;
+  /** Kwarg name to check. */
+  argument_name?: string;
+  /** Or positional-index fallback. */
+  argument_position?: number;
+  /** When SET, finding fires only when the argument is PRESENT and its
+   *  literal text matches one of these shapes (e.g. `verify=False` on
+   *  `requests.Session`). Absence is treated as the safe default and
+   *  ignored. When OMITTED (and argument_name/position set), finding fires
+   *  only on ABSENCE — used for "kwarg defaults to insecure" shapes like
+   *  flask's `session_cookie_secure`. */
+  forbidden_value_shapes?: string[];
+  /** vuln_class emitted by the detector. Defaults to `weak_default` if the
+   *  enum is extended; until then specs use `weak_crypto`. */
+  vuln_class?: VulnClass;
 }
 
 /** Language a framework spec applies to. Drives runner dispatch — Python
@@ -137,6 +240,14 @@ export interface FrameworkSpec {
   sources: FrameworkSource[];
   sinks: FrameworkSink[];
   sanitizers: FrameworkSanitizer[];
+  /** Phase 3.2 — regex literals the CVE patch identifies as ReDoS-prone.
+   *  Consumed by `regex-literal-detector.ts`. Optional; specs that don't
+   *  participate in the regex-literal regime leave it absent. */
+  unsafe_regex_patterns?: UnsafeRegexPattern[];
+  /** Phase 3.3 — call patterns where a missing kwarg or a forbidden literal
+   *  value indicates a sanitizer-absence shape. Consumed by
+   *  `insecure-default-detector.ts`. Optional. */
+  insecure_defaults?: InsecureDefault[];
 }
 
 /**

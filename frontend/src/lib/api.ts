@@ -3242,8 +3242,19 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/vulnerability-timeline${q}`);
   },
 
-  async triggerProjectSync(orgId: string, projectId: string): Promise<{ job_id: string; status: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, { method: 'POST' });
+  async triggerProjectSync(
+    orgId: string,
+    projectId: string,
+    opts?: { aiCostCapUsd?: number | null },
+  ): Promise<{ job_id: string; status: string }> {
+    const body =
+      opts?.aiCostCapUsd != null && Number.isFinite(opts.aiCostCapUsd) && opts.aiCostCapUsd > 0
+        ? { ai_cost_cap_usd: opts.aiCostCapUsd }
+        : undefined;
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, {
+      method: 'POST',
+      ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
   },
 
   async getOrgStats(orgId: string): Promise<OrgStats> {
@@ -4113,7 +4124,7 @@ export interface ProjectVulnerability {
   contextual_depscore?: number | null;
   /** EPD entry-point classification. Drives the Public/Authenticated/Background badge. */
   entry_point_classification?: EpdEntryPointClassification | null;
-  /** EPD scoring lifecycle state (ai_verified / byok_missing / fallback_no_ai / ai_error_fallback / budget_exceeded). */
+  /** EPD scoring lifecycle state (ai_verified / fallback_no_ai / ai_error_fallback / budget_exceeded). */
   epd_status?: EpdStatus | null;
   /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
@@ -5260,7 +5271,6 @@ export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'O
 export type EpdStatus =
   // legacy (Phase 4)
   | 'ai_verified'
-  | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded'

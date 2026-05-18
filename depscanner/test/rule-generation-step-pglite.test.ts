@@ -311,6 +311,7 @@ async function main() {
         reachability_validation_breakdown: {
           candidates: 3,
           schema_pass: 3,
+          pattern_compile_pass: 3,
           fixture_pre_pass: 2,
           fixture_safe_pass: 2,
           patch_pre_pass: 1,

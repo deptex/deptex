@@ -32,6 +32,27 @@ describe('redactCredentials', () => {
     expect(redactCredentials('api_key=abc123def456ghi789')).toContain('api_key=[REDACTED]');
   });
 
+  it('stops password redaction cleanly at URL / cookie delimiters', () => {
+    // Query-string: `&` must terminate the value so neighbouring params survive.
+    const url = redactCredentials('https://x.test/login?password=hunter2&user=alice');
+    expect(url).toBe('https://x.test/login?password=[REDACTED]&user=alice');
+    // Cookie-pair separator (`;`) — the cookie-line redactor doesn't fire here
+    // because the input has no `Cookie:` header, so password rule must stop at `;`.
+    const pair = redactCredentials('payload=password=hunter2;next=/dash');
+    expect(pair).toBe('payload=password=[REDACTED];next=/dash');
+    // Fragment / hash separator (`#`).
+    const frag = redactCredentials('?password=hunter2#section');
+    expect(frag).toBe('?password=[REDACTED]#section');
+  });
+
+  it('redacts api_key with base64 padding/special chars without truncating', () => {
+    // Base64 `+`, `/`, `=` must be consumed so padding doesn't leak after redaction.
+    const padded = redactCredentials('api_key=AbCd+ef/gh==&next=foo');
+    expect(padded).toBe('api_key=[REDACTED]&next=foo');
+    expect(padded).not.toContain('AbCd');
+    expect(padded).not.toContain('==&');
+  });
+
   it('redacts entire Cookie header value (multi-pair)', () => {
     const out = redactCredentials('GET /api/x Cookie: session=fixture-cookie-value-7f3e; csrf=abc123');
     expect(out).toBe('GET /api/x Cookie: [REDACTED]');

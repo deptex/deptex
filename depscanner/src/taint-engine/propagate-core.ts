@@ -22,7 +22,8 @@ import type {
   FrameworkSource,
   FrameworkSpec,
 } from './spec';
-import type { Flow, FlowNode, SinkHit, TaintTrace } from './flow';
+import type { DiagSink, DropRecord, Flow, FlowNode, SinkHit, TaintTrace } from './flow';
+import { serializeTrace } from './flow';
 import type { IrFunction, Step } from './ir';
 import type { FunctionId, FunctionNode } from './types';
 
@@ -57,6 +58,16 @@ export interface RunWorklistOptions {
    * caller can decide whether to surface them or discard.
    */
   signal?: AbortSignal;
+  /**
+   * Optional drop/sink-miss diagnostic emitter (Phase 1.2 of the
+   * reachability-90-percent plan). When defined, the propagator emits one
+   * `DropRecord` per (a) local-taint deletion and (b) spec-loaded sink that
+   * matched the callee but found no tainted arg. Use the NDJSON writer in
+   * `diag-writer.ts` to flush to disk, or pass an in-memory collector from
+   * tests. Zero overhead when undefined — every emission site is guarded
+   * by `if (diagSink)`.
+   */
+  diagSink?: DiagSink;
 }
 
 export interface RunWorklistResult {
@@ -108,6 +119,8 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       specs: opts.specs,
       worklist,
       maxPathLength,
+      diagSink: opts.diagSink,
+      language: (opts.specs[0]?.language as MatcherLanguage | undefined),
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -139,6 +152,51 @@ interface AnalyzeArgs {
   specs: FrameworkSpec[];
   worklist: Set<FunctionId>;
   maxPathLength: number;
+  diagSink?: DiagSink;
+  /**
+   * Project language. Threaded into `matchesCallPattern` so dynamic-receiver
+   * languages (Python/Ruby/PHP) accept `Class.method` patterns matching
+   * `var.method` callee text. Derived from `specs[0].language` at the
+   * runWorklistAndAggregate entry point; null when specs are empty.
+   */
+  language?: MatcherLanguage;
+}
+
+function emitDrop(
+  diagSink: DiagSink | undefined,
+  state: FunctionState,
+  step: Step,
+  reason: string,
+  traceAtDrop: TaintTrace | null,
+  sinkPattern?: string,
+): void {
+  if (!diagSink) return;
+  let stepText: string;
+  switch (step.kind) {
+    case 'source':
+      stepText = step.sourceText;
+      break;
+    case 'assign':
+      stepText = `${step.target} = ${step.from ?? '?'}`;
+      break;
+    case 'call':
+      stepText = step.callee.calleeText;
+      break;
+    case 'return':
+      stepText = `return ${step.from ?? ''}`.trim();
+      break;
+  }
+  const record: DropRecord = {
+    reason,
+    step_kind: step.kind,
+    step_loc: { filePath: step.loc.filePath, line: step.loc.line, column: step.loc.column },
+    step_text: stepText,
+    function_id: String(state.funcNode.id),
+    function_name: state.funcNode.name,
+    trace_at_drop: traceAtDrop ? serializeTrace(traceAtDrop) : null,
+    ...(sinkPattern ? { sink_pattern: sinkPattern } : {}),
+  };
+  diagSink(record);
 }
 
 interface AnalyzeOutcome {
@@ -147,7 +205,7 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, language } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
@@ -155,6 +213,14 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
   }
 
   let sourcesAddedThisPass = 0;
+  // Track whether `return`-step taint grew this pass, but DO NOT bail out
+  // mid-IR. The IR flattens branches into a straight-line list per design
+  // (see ir.ts `walkStatement` — if/else/try/switch all flatten), so a
+  // mid-body `return` step is regularly followed by post-return sinks,
+  // sources, and calls from other branches. Bailing on the first growth
+  // would silently drop those (bad FN). Convergence is still bounded by
+  // worklist iterations + monotonic state growth.
+  let changedReturn = false;
 
   for (const step of state.ir.steps) {
     switch (step.kind) {
@@ -163,6 +229,12 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         if (matched) {
           local.set(step.target, makeTrace(matched, step));
           sourcesAddedThisPass++;
+        } else if (step.weak) {
+          // Weak source step (Ruby accessor-parity emission): only fire on
+          // exact pattern match. Skip receiver-root fallback AND skip the
+          // delete-on-no-match so the preceding `call` step's resolution
+          // (sanitizer / sink / external fallback) is preserved. See the
+          // `weak` field doc in ir.ts.
         } else {
           // No framework source matched. If the source text reads like a
           // field/index access on a known-tainted local (e.g. `q.name`,
@@ -175,6 +247,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           if (trace) {
             local.set(step.target, extendPath(trace, hopFromStep(step, 'source'), maxPathLength));
           } else {
+            emitDrop(diagSink, state, step, 'source-no-match-no-receiver', local.get(step.target) ?? null);
             local.delete(step.target);
           }
         }
@@ -185,40 +258,71 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           const t = local.get(step.from)!;
           local.set(step.target, extendPath(t, hopFromStep(step, 'assign'), maxPathLength));
         } else {
+          emitDrop(diagSink, state, step, 'assign-from-untainted', local.get(step.target) ?? null);
           local.delete(step.target);
         }
         break;
       }
       case 'call': {
-        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs);
+        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs, language);
         if (callSourceMatch && step.target) {
           local.set(step.target, makeTraceFromCall(callSourceMatch, step));
           sourcesAddedThisPass++;
           break;
         }
 
-        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs);
+        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs, language);
         if (sanMatch) {
           if (step.target) local.delete(step.target);
           break;
         }
 
-        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs);
+        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
         if (sinkMatch) {
-          const idxs = sinkMatch.argument_indices.length > 0
-            ? sinkMatch.argument_indices
-            : step.args.map((_, i) => i);
+          // Indices to check for taint at this call site.
+          // - empty spec argument_indices → check every position (existing behaviour)
+          // - non-empty + no kwargs → check the spec-declared positions only
+          // - non-empty + kwargs present → ALSO check every kwarg position.
+          //   This over-approximates when a Python (or other kwarg-supporting
+          //   language) caller binds args by name, where the spec's positional
+          //   indexing wouldn't otherwise line up. False positives here are
+          //   caught by Gate 3 fixture round-trip in rule-generator validation;
+          //   the engine prefers extra recall over missed flows.
+          let idxs: number[];
+          if (sinkMatch.argument_indices.length === 0) {
+            idxs = step.args.map((_, i) => i);
+          } else if (step.kwargIndices && step.kwargIndices.length > 0) {
+            const widened = new Set<number>(sinkMatch.argument_indices);
+            for (const k of step.kwargIndices) widened.add(k);
+            idxs = Array.from(widened);
+          } else {
+            idxs = sinkMatch.argument_indices;
+          }
+          const seenArgs = new Set<string>();
+          let anyHit = false;
           for (const i of idxs) {
             const argName = step.args[i];
             if (!argName) continue;
+            // Dedup: with kwarg widening, a positional index and a kwarg index
+            // could point at the same local var; emit one hit, not two.
+            if (seenArgs.has(argName)) continue;
             const trace = local.get(argName);
             if (!trace) continue;
+            seenArgs.add(argName);
+            anyHit = true;
             const hit: SinkHit = {
               sink: sinkMatch,
               trace: extendPath(trace, hopFromStep(step, 'sink'), maxPathLength),
               hit_node: hopFromStep(step, 'sink'),
             };
             state.sinkHits.push(hit);
+          }
+          if (!anyHit) {
+            // Spec sink matched the callee but none of the checked arg
+            // positions held tainted locals. This is the dominant "engine
+            // saw the sink but taint didn't reach it" diagnostic — emit one
+            // record so the diag dump explains why the CVE didn't validate.
+            emitDrop(diagSink, state, step, 'sink-loaded-no-tainted-arg', null, sinkMatch.pattern);
           }
         }
 
@@ -240,9 +344,11 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
                 extendPath(callee.returnTaint, hopFromStep(step, 'return'), maxPathLength),
               );
             } else if (step.target) {
+              emitDrop(diagSink, state, step, 'call-internal-no-return-taint', null);
               local.delete(step.target);
             }
           } else if (step.target) {
+            emitDrop(diagSink, state, step, 'call-internal-callee-missing', null);
             local.delete(step.target);
           }
           break;
@@ -264,8 +370,44 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               step.target,
               extendPath(firstTainted, hopFromStep(step, 'call'), maxPathLength),
             );
+          } else if (step.args.length === 0 && local.has(step.target)) {
+            // 0-arg unresolved method call (e.g. Ruby `params.id` parsed as
+            // a call, no args, sanitizer/sink didn't match). The Ruby
+            // lowerer emits a *weak* source step right before this call
+            // step to encode the accessor-read semantics — if that already
+            // set target's taint, don't clobber it here. For non-Ruby
+            // lowerers (which don't emit weak source steps), this branch is
+            // unreachable because they don't seed target before the call.
+            // Leave target's existing trace in place.
           } else {
-            local.delete(step.target);
+            // Receiver-taint pass-through: when an unresolved/external call
+            // takes the shape `recv.method(...)` (or `recv::method`, etc.)
+            // and the receiver is a currently-tainted local, propagate that
+            // taint to the call's return. Covers common pass-through chains
+            // like `keyData.getBytes()`, `body.toString()`, `req.getReader()`
+            // — none of which match a positional arg but all of which carry
+            // the receiver's taint through to the result.
+            //
+            // Scoping (per the maven-recall-diagnosis 2026-05-12 design):
+            //   - Only reached AFTER sink/sanitizer/source matches above
+            //     have returned/break'd, so we never re-taint past a
+            //     sanitizer or shadow a sink hit.
+            //   - receiverRoot() returns null for literals / non-identifier
+            //     receivers (`"foo".toString()` won't propagate; nothing to
+            //     propagate from).
+            //   - Receiver must be an existing tainted local — `String.valueOf(x)`
+            //     where `String` is a class name is a no-op.
+            const recv = receiverRoot(step.callee.calleeText);
+            const recvTrace = recv ? local.get(recv) : undefined;
+            if (recvTrace) {
+              local.set(
+                step.target,
+                extendPath(recvTrace, hopFromStep(step, 'call'), maxPathLength),
+              );
+            } else {
+              emitDrop(diagSink, state, step, 'call-external-no-arg-no-receiver', null);
+              local.delete(step.target);
+            }
           }
         }
         break;
@@ -278,7 +420,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             // already subsumed
           } else {
             state.returnTaint = augmented;
-            return { changedReturn: true, sourcesAddedThisPass };
+            changedReturn = true;
           }
         }
         break;
@@ -286,7 +428,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
     }
   }
 
-  return { changedReturn: false, sourcesAddedThisPass };
+  return { changedReturn, sourcesAddedThisPass };
 }
 
 function mergeParamTaint(callee: FunctionState, paramIdx: number, trace: TaintTrace): boolean {
@@ -358,17 +500,24 @@ function hopFromStep(step: Step, kind: FlowNode['kind']): FlowNode {
 }
 
 /**
- * Given a source-step text like `q.name`, `q[idx]`, `obj->prop`, or
- * `Class::field`, return the leading identifier (the "receiver") so
- * propagate-core can fall back to receiver-taint when no framework
- * source pattern matches.
+ * Given a source-step text like `q.name`, `q[idx]`, `obj->prop`,
+ * `Class::field`, or `@params[:id]`, return the leading identifier (the
+ * "receiver") so propagate-core can fall back to receiver-taint when no
+ * framework source pattern matches.
  *
  * Returns null when the text is a single identifier (no field/index/scope
  * access) — in that case a source-step with no match means "this is just a
  * read of an untainted local", not "field access on tainted local".
+ *
+ * Ruby sigils — `@instance_var`, `@@class_var` — are part of the local
+ * binding name in the Ruby lowerer (ruby/ir.ts uses verbatim `textOf` for
+ * `instance_variable` / `class_variable` nodes), so the receiver must keep
+ * the sigil so the `local.get` lookup matches. PHP `$` is stripped
+ * upstream in `php/ir.ts:stripLeadingDollar` so it never reaches this
+ * function — keeping `$` rejected here surfaces upstream-strip regressions.
  */
 export function receiverRoot(text: string): string | null {
-  const m = text.match(/^([A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
+  const m = text.match(/^(@{0,2}[A-Za-z_][A-Za-z0-9_]*)([.\[(]|->|::)/);
   return m ? m[1] : null;
 }
 
@@ -389,35 +538,96 @@ function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSour
   return null;
 }
 
-function matchCallSourcePattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSource | null {
+function matchCallSourcePattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSource | null {
   for (const spec of specs) {
     for (const src of spec.sources) {
       if (!src.pattern.endsWith('(*)')) continue;
-      if (matchesCallPattern(src.pattern, calleeText)) return src;
+      if (matchesCallPattern(src.pattern, calleeText, language)) return src;
     }
   }
   return null;
 }
 
-function matchSinkPattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSink | null {
+function matchSinkPattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSink | null {
   for (const spec of specs) {
     for (const sink of spec.sinks) {
-      if (matchesCallPattern(sink.pattern, calleeText)) return sink;
+      if (matchesCallPattern(sink.pattern, calleeText, language)) return sink;
     }
   }
   return null;
 }
 
-function matchSanitizerPattern(calleeText: string, specs: FrameworkSpec[]): FrameworkSanitizer | null {
+function matchSanitizerPattern(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language?: MatcherLanguage,
+): FrameworkSanitizer | null {
   for (const spec of specs) {
     for (const san of spec.sanitizers) {
-      if (matchesCallPattern(san.pattern, calleeText)) return san;
+      if (matchesCallPattern(san.pattern, calleeText, language)) return san;
     }
   }
   return null;
 }
 
-export function matchesCallPattern(pattern: string, calleeText: string): boolean {
+type MatcherLanguage = 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp';
+
+/**
+ * Allowlist of method names where `Class.method` patterns may also match
+ * `var.method` callee text — opt-in dynamic-receiver loosening.
+ *
+ * Membership rule: the method name must be specific enough that false
+ * positives from an unrelated receiver are bounded. Concrete criteria:
+ *   1. Length ≥ 7 characters (filters generic 3-4 char names like `new`,
+ *      `open`, `read`, `get`, `set`).
+ *   2. Not a method on any stdlib base type (no `Object.toString`,
+ *      `String.split`, `Array.from` — those would match any local).
+ *   3. Tied to a known CVE shape OR a published library API surface where
+ *      the method is the load-bearing primitive.
+ *
+ * Adding a name here is equivalent to adding `*.method(*)` to every spec
+ * that mentions `Class.method(*)` for the same vuln_class. Same FP risk
+ * profile as the existing wildcard-receiver YAMLs (`*.bytesplice(*)` in
+ * rails.yaml, `*.setPropertyValues(*)` in spring-boot.yaml). The blanket
+ * dynamic-language loosening attempted 2026-05-15 was reverted because it
+ * accepted ALL bare-identifier receivers, which over-matched generic
+ * patterns like `File.new(*)` against `Regexp.new(...)`. This allowlist
+ * is the narrower, principled version of that same idea.
+ */
+const PERMISSIVE_INSTANCE_METHODS: ReadonlySet<string> = new Set([
+  // Ruby ActiveSupport SafeBuffer (CVE-2023-28120). `*.bytesplice(*)`
+  // already shipped in rails.yaml; this entry lets AI-emitted
+  // `SafeBuffer.bytesplice(*)` match `safe_buffer.bytesplice(...)` callees
+  // without the bundled wildcard.
+  'bytesplice',
+  // Spring4Shell (CVE-2022-22965) — DataBinder property paths and
+  // BeanWrapperImpl setters. AI patterns are class-qualified; the engine
+  // sees `wrapper.setPropertyValue(...)` callees in user fixtures.
+  'setPropertyValue',
+  'setPropertyValues',
+  // SpEL parsing (Spring4Shell + CVE-2023-34053 family). Method name is
+  // specific to SpelExpressionParser.
+  'parseExpression',
+  // Python str.format_map untrusted-format-string CVEs. `format_map` is
+  // python-stdlib-only on str; bare-identifier callees `template.format_map(d)`
+  // map cleanly to the AI's `String.format_map(*)` pattern.
+  'format_map',
+]);
+
+export function matchesCallPattern(
+  pattern: string,
+  calleeText: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _language?: MatcherLanguage,
+): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
   // Wildcard receiver: `*.method`, `*->method`, `*::method` — match any receiver
   // calling `method` via the spec-declared separator. Languages emit calleeText
@@ -430,6 +640,18 @@ export function matchesCallPattern(pattern: string, calleeText: string): boolean
   if (calleeText === p) return true;
   const last = p.split('.').pop();
   if (last && calleeText === last) return true;
+
+  // Per-method opt-in instance-receiver loosening. When pattern is
+  // `Class.method` and `method` is in PERMISSIVE_INSTANCE_METHODS, allow
+  // `<any>.method` callee text to match too — the method name is specific
+  // enough that the FP risk is bounded, and the alternative is forcing
+  // every bundled YAML to spell out `*.method(*)` explicitly for each
+  // permissive method (boilerplate that drifts as new CVEs land).
+  if (last && PERMISSIVE_INSTANCE_METHODS.has(last) && p.includes('.')) {
+    if (calleeText.endsWith('.' + last) || calleeText.endsWith('->' + last) || calleeText.endsWith('::' + last)) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -461,7 +683,11 @@ function sinkHitToFlow(hit: SinkHit, sinkContainingFunc: FunctionNode, maxPathLe
     flowNodes.push(sinkNode);
   }
   const idHash = createHash('sha1');
-  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}|${flowNodes.length}|${hit.sink.vuln_class}`);
+  // Include the sink pattern + column so two distinct sinks that fire on the
+  // same source line (and hence the same source/sink file:line coords) don't
+  // collapse to one flow id in aggregateFlows's `seen` set — that silently
+  // dropped the second flow.
+  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}:${sinkNode.column ?? 0}|${flowNodes.length}|${hit.sink.vuln_class}|${hit.sink.pattern}`);
 
   return {
     id: idHash.digest('hex').slice(0, 16),

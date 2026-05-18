@@ -1,5 +1,7 @@
 # DAST v2 — Feature Brief
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Problem Statement
 
 Deptex DAST v1 shipped a baseline ZAP wrapper with a structurally novel SCA cross-link (Confirmed Exploitable badge), but the core scanning capabilities are roughly a decade behind serious competitors. Today we cannot scan authenticated sites, cannot crawl SPAs, do not actively fuzz state-changing endpoints, do not schedule scans, and have no triage workflow for findings. The result is a feature that produces a few low-confidence passive findings on anonymous spider runs, while customers expect what Burp Enterprise / Invicti / StackHawk / Snyk DAST ship today. v2 closes the parity gap in two phases (Engine + Workflow), then leans into the cross-link moat in a third (UX + SAST cross-link + EPD prioritization).

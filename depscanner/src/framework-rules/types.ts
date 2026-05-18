@@ -52,6 +52,10 @@ export interface DetectorContext {
   tree: Tree;
   /** The file's extractor output — imports, usages, path. */
   file: ExtractedFile;
+  /** Absolute path to the workspace root — detectors derive workspace-relative paths from it. */
+  workspaceRoot: string;
+  /** Dependency names from the SBOM — detectors gate on the framework's own package being present. */
+  depNames: readonly string[];
 }
 
 export interface FrameworkDetector {

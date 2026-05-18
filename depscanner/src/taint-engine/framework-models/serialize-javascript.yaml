@@ -1,0 +1,41 @@
+# serialize-javascript framework spec — Deptex cross-file taint engine.
+#
+# `serialize-javascript` produces JavaScript source from arbitrary values
+# for SSR-style render-to-string flows. Two vulnerability shapes:
+#
+#   - CVE-2024-11831  XSS via insufficient escaping when the input
+#                     contains `</script>` literals — the produced JS
+#                     can break out of an embedding script tag.
+#   - CVE-2026-34043  ReDoS in the regex used to detect dangerous
+#                     character sequences during serialisation.
+#
+# Both are sourced by attacker-controlled data flowing into `serialize(x)`.
+# The AI rule generator emits two distinct sinks (one per vuln_class) on
+# the same callee text — modelled identically here so the union fires
+# regardless of which shape the AI's fixture exercises.
+
+framework: serialize-javascript
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  - pattern: serialize(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: serialize-javascript serialize(x) — insufficient escaping leaks `</script>` (CVE-2024-11831)
+  - pattern: serialize(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: serialize-javascript serialize(x) — ReDoS in the dangerous-char detection regex (CVE-2026-34043)
+  - pattern: "*.serialize(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: serialize-javascript instance-form serialize — same XSS shape
+  - pattern: "*.serialize(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: serialize-javascript instance-form serialize — same ReDoS shape
+
+sanitizers: []

@@ -36,8 +36,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 | AST parsing | web-tree-sitter (WASM) — 8 languages (JS/TS, Python, Java, Go, Ruby, PHP, Rust, C#), 34 framework detectors |
 | Queues | Upstash QStash (async jobs, cron schedules) |
 | Cache | Upstash Redis |
-| AI - Tier 1 | Google Gemini Flash (platform features, we pay). `getPlatformProvider()` in `backend/src/lib/ai/provider.ts` |
-| AI - Tier 2 | BYOK OpenAI/Anthropic/Google (Aegis, Aider). `organization_ai_providers`, AES-256-GCM encrypted keys |
+| AI | Platform-key only (we pay). Gemini Flash via `getPlatformProvider()`; OpenAI/Anthropic/Google for Aegis + Aider via `getPlatformKeyForProvider()` reading `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from the worker env. BYOK was retired in `phase29_drop_byok.sql`. |
 | AI - Agent | Vercel AI SDK (`ai`, `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google`). Frontend: `@ai-sdk/react` useChat |
 | Deployment | Fly.io (workers, scale-to-zero), Supabase (DB + auth), Vercel-style frontend |
 
@@ -88,11 +87,13 @@ frontend/src/
 
 ---
 
-## AI Architecture (Two-Tier)
+## AI Architecture (Platform-Key Only)
 
-- **Tier 1 (Platform):** Gemini Flash for docs assistant, policy AI, notification AI, usage analysis. We pay (~$0.0001/call). `getPlatformProvider()` when `GOOGLE_AI_API_KEY` set.
-- **Tier 2 (BYOK):** Org-configured OpenAI/Anthropic/Google for Aegis + Aider fixes. Keys encrypted with `AI_ENCRYPTION_KEY` (AES-256-GCM). `getProviderForOrg()`.
-- Rate limits: Tier 1 per-feature (5-50/day). Tier 2 Aegis 200 msg/day, 5 concurrent, monthly cost cap (Redis).
+- All AI calls run on Deptex-owned platform keys.
+- Gemini Flash via `getPlatformProvider()` for docs assistant, policy AI, notification AI, usage analysis (when `GOOGLE_AI_API_KEY` is set).
+- Aegis + EPD + rule generation pick provider via `getPlatformKeyForProvider()` (`backend/src/lib/aegis/llm-provider.ts`), which reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from the worker env.
+- Rate limits: per-feature daily (5–50/day), Aegis 200 msg/day, 5 concurrent, monthly cost cap on Redis (`ai:cost:{orgId}:*`).
+- BYOK (per-organization customer keys + `organization_ai_providers` + `AI_ENCRYPTION_KEY` envelope) was retired in `phase29_drop_byok.sql`. `AI_ENCRYPTION_KEY` env var is still required because the IaC-v2 registry credentials table reuses the same encryption helper.
 
 ---
 
@@ -116,7 +117,7 @@ Reachability rule packs live in `depscanner/reachability-rules/` — one folder 
 ### Aegis AI Agent
 ```
 POST /api/aegis/v2/stream (AI SDK SSE, useChat on frontend)
-  -> BYOK model via llm-provider.ts, pgvector memory context
+  -> platform-key model via llm-provider.ts, pgvector memory context
   -> Vercel AI SDK streamText(maxSteps) with 50+ tools across 10 categories
   -> Tool permission checks (RBAC + danger level), approval flow for dangerous tools
   -> Task system: plan-then-execute with QStash step execution, circuit breaker
@@ -148,8 +149,9 @@ PR -> check runs + smart comments + policy engine + PR tracking
 | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` | Caching, job queues |
 | `FLY_API_TOKEN`, `FLY_DEPSCANNER_APP` (fallback: `FLY_EXTRACTION_APP`), `FLY_FIX_APP` | Worker machine management |
 | `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | GitHub App (webhook secret required in prod) |
-| `GOOGLE_AI_API_KEY` | Tier 1 AI (Gemini Flash) |
-| `AI_ENCRYPTION_KEY` | BYOK key encryption (32-byte hex, required for Tier 2) |
+| `GOOGLE_AI_API_KEY` | Platform Gemini Flash key |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Platform OpenAI / Anthropic keys (used by Aegis, EPD Anthropic fallback, rule generation) |
+| `AI_ENCRYPTION_KEY` | AES-256-GCM key for `organization_registry_credentials` (32-byte hex). Reused encryption helper after BYOK retirement. |
 | `INTERNAL_API_KEY` | Protects internal/worker API endpoints |
 
 ---

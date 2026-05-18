@@ -266,8 +266,10 @@ async function main() {
       `last kept finding has a severity (got: ${lastKept?.severity})`
     );
 
-    // Round-trip the truncated payload through the cache to prove we don't
-    // bust the postgres CHECK on octet_length.
+    // A payload that only fits after truncation must NOT be cached: serving a
+    // silently-truncated row to a later org would hide its low-severity CVEs.
+    // upsertContainerScanCache skips the write and warns; the next lookup is a
+    // clean miss so that org runs a full scan.
     const fatKey: ContainerScanCacheKey = { ...key, image_digest: 'c'.repeat(64) };
     const originalWarn = console.warn;
     let warned = false;
@@ -282,11 +284,7 @@ async function main() {
     assert(warned, 'cache_row_truncated warning fired during upsert');
 
     const fatHit = await lookupContainerScanCache(supabase, fatKey);
-    assert(fatHit !== null, 'truncated cache row reads back cleanly');
-    assert(
-      fatHit !== null && fatHit.findings.length === result.findings.length,
-      `truncated readback length matches in-memory truncation (${fatHit?.findings.length} vs ${result.findings.length})`
-    );
+    assert(fatHit === null, 'truncating payload is not cached — lookup is a clean miss');
   }
 
   // ----- 8. reaper RPC ----------------------------------------------------

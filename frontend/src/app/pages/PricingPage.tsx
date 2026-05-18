@@ -33,7 +33,7 @@ const tiers = [
       '20 members',
       '100 syncs / month',
       'Everything in Free',
-      'Aegis AI Security Copilot (BYOK)',
+      'Aegis AI Security Copilot',
       'AI-powered fixes & sprints',
       'Background vulnerability monitoring',
       'Configurable sync frequency',

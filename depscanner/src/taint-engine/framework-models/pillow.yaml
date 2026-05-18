@@ -1,0 +1,76 @@
+# Pillow (PIL) framework spec — Deptex cross-file taint engine.
+#
+# Pillow exposes a few APIs that take attacker-controlled strings and
+# evaluate them as Python expressions or open them as files. The primary
+# CVE this spec unlocks is:
+#
+#   - CVE-2022-22817  PIL.ImageMath.eval — arbitrary code execution via
+#                     attacker-controlled expression string. Fixture flows
+#                     `request.args.get('expr')` directly into
+#                     `ImageMath.eval(expr)`.
+#
+# Pillow also has Image.open / ImageFile.LOAD_TRUNCATED_IMAGES /
+# Image.frombytes that can cause DoS via decoder bombs, but those are not
+# taint-flow shaped (they're zip-bomb-style untrusted-input issues that
+# semgrep / sast rules cover better). We focus on the eval surface here.
+
+framework: pillow
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- ImageMath.eval (CVE-2022-22817) ----------
+  - pattern: PIL.ImageMath.eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PIL.ImageMath.eval(expression) — arbitrary code execution (CVE-2022-22817)
+  - pattern: ImageMath.eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: ImageMath.eval (bare import)
+  - pattern: PIL.ImageMath.lambda_eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PIL.ImageMath.lambda_eval — post-fix variant; still attacker-evaluated
+  - pattern: ImageMath.lambda_eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: ImageMath.lambda_eval (bare import)
+  - pattern: PIL.ImageMath.unsafe_eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: PIL.ImageMath.unsafe_eval — explicit opt-in to the unsafe path
+  - pattern: ImageMath.unsafe_eval(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: ImageMath.unsafe_eval (bare import)
+
+  # ---------- Path-style sinks ----------
+  - pattern: PIL.Image.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PIL.Image.open(fp) — fp may be a path
+  - pattern: Image.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Image.open (bare import)
+  - pattern: PIL.ImageFile.ImageFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: PIL.ImageFile.ImageFile(fp)
+  - pattern: ImageFile.ImageFile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: ImageFile.ImageFile (bare)
+  - pattern: PIL.Image.frombytes(*)
+    vuln_class: deserialization
+    argument_indices: [2]
+    description: PIL.Image.frombytes(mode, size, data, ...)
+  - pattern: Image.frombytes(*)
+    vuln_class: deserialization
+    argument_indices: [2]
+    description: Image.frombytes (bare)
+
+sanitizers: []

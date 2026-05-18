@@ -29,10 +29,36 @@ export type {
   FrameworkSource,
   FrameworkSink,
   FrameworkSanitizer,
+  RequiredArgument,
   TaintKind,
   VulnClass,
 } from './spec';
 export { ALL_VULN_CLASSES } from './spec';
+
+export {
+  detectSanitizerAbsence,
+  extractCallSitesFromIr,
+} from './non-taint-detector';
+export type {
+  CallSite,
+  NonTaintFinding,
+} from './non-taint-detector';
+
+export {
+  detectUnsafeRegexLiterals,
+} from './regex-literal-detector';
+export type {
+  RegexLiteralFinding,
+  DetectRegexLiteralsOptions,
+} from './regex-literal-detector';
+
+export {
+  detectInsecureDefaults,
+} from './insecure-default-detector';
+export type {
+  InsecureDefaultFinding,
+  DetectInsecureDefaultsOptions,
+} from './insecure-default-detector';
 
 export { loadCveSpecsForExtraction } from './cve-specs';
 export type { LoadCveSpecsOptions, LoadCveSpecsResult } from './cve-specs';

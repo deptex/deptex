@@ -1,0 +1,30 @@
+# Lodash framework spec — Deptex cross-file taint engine.
+#
+# Lodash prototype-pollution sinks (_.merge, _.set, _.defaultsDeep, etc.)
+# already live in node-stdlib.yaml. This spec adds lodash's template-
+# compilation surface, which compiles a string into an executable function:
+# any attacker control over the template body OR the `imports` option
+# results in arbitrary code execution at render time.
+#
+# CVE-2026-4800 (and the historical CVE-2021-23337 of the same family)
+# both turn on this surface — `_.template(userTemplate, { imports: ... })`
+# inlines the imports keys into the generated function source.
+
+framework: lodash
+version: "*"
+language: js
+
+sources: []
+
+sinks:
+  # ---------- Code injection via _.template ----------
+  - pattern: _.template(*)
+    vuln_class: code_injection
+    argument_indices: [0, 1]
+    description: lodash _.template — both the template string and imports option are evaluated as code (CVE-2026-4800, CVE-2021-23337)
+  - pattern: lodash.template(*)
+    vuln_class: code_injection
+    argument_indices: [0, 1]
+    description: lodash.template namespaced — same code-injection surface
+
+sanitizers: []

@@ -75,46 +75,43 @@ DECLARE
   v_suppressed integer := 0;
   v_dep_ids uuid[];
 BEGIN
-  WITH allowlisted AS (
-    UPDATE public.project_malicious_findings pmf
-    SET
-      suppressed = true,
-      suppressed_at = now(),
-      suppressed_reason = 'allowlist:' || (
-        -- Pick the matching allowlist entry deterministically:
-        -- prefer version-pinned entries over "all versions" wildcards,
-        -- then most-recent. Stable identity for the audit cite.
-        SELECT oma.id::text
-        FROM public.organization_malicious_allowlist oma
-        INNER JOIN public.project_dependencies pd2 ON pd2.id = pmf.project_dependency_id
-        INNER JOIN public.dependencies d2 ON d2.id = pd2.dependency_id
-        WHERE oma.organization_id = p_org_id
-          AND oma.revoked_at IS NULL
-          AND oma.package_name = d2.name
-          AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d2.ecosystem)
-          AND (oma.version IS NULL OR oma.version = pd2.version)
-        ORDER BY (oma.version IS NULL) ASC, oma.added_at DESC
-        LIMIT 1
-      )
-    FROM public.organization_malicious_allowlist oma
+  -- Pick the deterministic-best allowlist entry per pmf.id via DISTINCT ON,
+  -- then UPDATE ... FROM that CTE. The earlier scalar-subquery-in-SET shape
+  -- raised "invalid reference to FROM-clause entry for table 'pmf'" because
+  -- the subquery introduced its own JOIN scope and the outer pmf
+  -- correlation didn't survive the join boundary. Same picking semantics
+  -- (version-pinned beats wildcard, then most-recent), different SQL shape.
+  WITH pmf_candidates AS (
+    SELECT DISTINCT ON (pmf.id)
+      pmf.id AS pmf_id,
+      oma.id AS allowlist_id,
+      pmf.dependency_id
+    FROM public.project_malicious_findings pmf
     INNER JOIN public.project_dependencies pd ON pd.id = pmf.project_dependency_id
     INNER JOIN public.dependencies d ON d.id = pd.dependency_id
-    WHERE pmf.organization_id = p_org_id
-      AND pmf.extraction_run_id = p_extraction_run_id
-      AND pmf.suppressed = false
-      AND oma.organization_id = p_org_id
+    INNER JOIN public.organization_malicious_allowlist oma
+      ON oma.organization_id = p_org_id
       AND oma.revoked_at IS NULL
       AND oma.package_name = d.name
       AND oma.ecosystem = public.canonicalize_malicious_ecosystem(d.ecosystem)
       AND (oma.version IS NULL OR oma.version = pd.version)
-    RETURNING pmf.id, pmf.dependency_id
+    WHERE pmf.organization_id = p_org_id
+      AND pmf.extraction_run_id = p_extraction_run_id
+      AND pmf.suppressed = false
+    ORDER BY pmf.id, (oma.version IS NULL) ASC, oma.added_at DESC
   ),
-  suppressed_count AS (
-    SELECT count(*)::integer AS n,
-           array_agg(DISTINCT dependency_id) AS dep_ids
-    FROM allowlisted
+  applied AS (
+    UPDATE public.project_malicious_findings pmf
+    SET suppressed = true,
+        suppressed_at = now(),
+        suppressed_reason = 'allowlist:' || c.allowlist_id::text
+    FROM pmf_candidates c
+    WHERE pmf.id = c.pmf_id
+    RETURNING pmf.id, pmf.dependency_id
   )
-  SELECT n, dep_ids INTO v_suppressed, v_dep_ids FROM suppressed_count;
+  SELECT count(*)::integer, array_agg(DISTINCT dependency_id)
+  INTO v_suppressed, v_dep_ids
+  FROM applied;
 
   -- Re-recompute is_malicious so the denorm reflects allowlist suppression.
   -- Note: recompute keeps is_malicious=true for deps still matched by

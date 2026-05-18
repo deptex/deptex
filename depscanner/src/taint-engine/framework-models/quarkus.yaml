@@ -1,0 +1,165 @@
+# Quarkus framework spec — Deptex cross-file taint engine.
+#
+# Quarkus is the second-most-deployed JVM framework after Spring (notably
+# RedHat-shop heavy + the default for graalvm-native JVM apps). Its REST
+# layer is JAX-RS based — handler params carry JAX-RS annotations
+# (@QueryParam, @PathParam, @FormParam, @HeaderParam, @CookieParam,
+# @MatrixParam, @BeanParam) plus @RequestBody for body-mapped POJOs. The
+# Java IR lowerer pre-taints any annotated formal_parameter via a synthetic
+# `source` step keyed on the verbatim annotation text (`@QueryParam` etc.).
+#
+# Generic Java stdlib sinks (JDBC, Runtime.exec, ObjectInputStream, Jackson,
+# SnakeYAML, file I/O, Pattern.compile, SSRF) live in java-stdlib.yaml — both
+# load together so taint introduced by JAX-RS source annotations flows to a
+# stdlib sink without redeclaration.
+#
+# Quarkus-specific source/sink coverage focuses on what java-stdlib doesn't:
+#   - JAX-RS / RESTEasy parameter annotations (Quarkus's primary input
+#     surface) — pre-tainted at IR-lowering time. Annotation-string sources
+#     match the same way Spring's @RequestParam et al do.
+#   - HttpServletRequest / RoutingContext accessors — Quarkus apps that use
+#     vanilla servlet bridges and Vert.x routing both show up.
+#   - SmallRye Mutiny bridges — `.runSubscriptionOn`, `.transform` are
+#     intentionally NOT modeled (over-approximation; deferred).
+
+framework: quarkus
+language: java
+version: "*"
+
+sources:
+  # JAX-RS controller parameter annotations — Quarkus's standard request
+  # binding (jakarta.ws.rs.* and javax.ws.rs.* both emit the same simple
+  # name through the tree-sitter grammar; the IR lowerer matches by name).
+  - pattern: "@QueryParam"
+    taint_kind: http_input
+    description: JAX-RS @QueryParam
+  - pattern: "@PathParam"
+    taint_kind: http_input
+    description: JAX-RS @PathParam
+  - pattern: "@FormParam"
+    taint_kind: http_input
+    description: JAX-RS @FormParam
+  - pattern: "@HeaderParam"
+    taint_kind: http_input
+    description: JAX-RS @HeaderParam
+  - pattern: "@CookieParam"
+    taint_kind: http_input
+    description: JAX-RS @CookieParam
+  - pattern: "@MatrixParam"
+    taint_kind: http_input
+    description: JAX-RS @MatrixParam
+  - pattern: "@BeanParam"
+    taint_kind: http_input
+    description: JAX-RS @BeanParam (full nested-fields POJO from request)
+  - pattern: "@RequestBody"
+    taint_kind: http_input
+    description: JAX-RS / OpenAPI @RequestBody body POJO
+  # MicroProfile config params are config-not-request, not modeled here.
+
+  # Vert.x RoutingContext (Quarkus's Reactive Routes path) — method-call
+  # shaped accessors. These layer on top of the JAX-RS surface for apps that
+  # mix Reactive Routes with REST endpoints.
+  - pattern: "*.request().getParam(*)"
+    taint_kind: http_input
+    description: Vert.x RoutingContext.request().getParam
+  - pattern: "*.queryParam(*)"
+    taint_kind: http_input
+    description: Vert.x RoutingContext.queryParam
+  - pattern: "*.pathParam(*)"
+    taint_kind: http_input
+    description: Vert.x RoutingContext.pathParam
+  - pattern: "*.getBodyAsString(*)"
+    taint_kind: http_input
+    description: Vert.x HttpRequest body
+  - pattern: "*.getBodyAsJson(*)"
+    taint_kind: http_input
+    description: Vert.x HttpRequest body as JSON
+  - pattern: "*.getBodyAsJsonArray(*)"
+    taint_kind: http_input
+    description: Vert.x HttpRequest body as JSON array
+  - pattern: "*.body(*)"
+    taint_kind: http_input
+    description: Quarkus REST Reactive RestRequest body accessor
+
+  # HttpServletRequest fallthrough (a Quarkus app may still expose servlet
+  # endpoints via undertow). Names mirror spring-boot.yaml so apps that
+  # blend Spring-shape input with JAX-RS endpoints have cohesive coverage.
+  - pattern: "*.getParameter(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getParameter
+  - pattern: "*.getParameterValues(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getParameterValues
+  - pattern: "*.getHeader(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getHeader
+  - pattern: "*.getQueryString(*)"
+    taint_kind: http_input
+    description: HttpServletRequest.getQueryString
+
+sinks:
+  # XSS via REST response writers. JAX-RS Response.entity(*) accepts any
+  # Object; when concatenated with attacker-controlled strings the framework
+  # serializes verbatim (text/html unless the producer overrides).
+  - pattern: "Response.entity(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: JAX-RS Response.entity — payload echoed
+  - pattern: "Response.ok(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: JAX-RS Response.ok — body echoed
+  # Vert.x response writers
+  - pattern: "*.response().end(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Vert.x HttpServerResponse.end — raw body
+  - pattern: "*.response().write(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Vert.x HttpServerResponse.write — raw chunk
+
+  # Open redirect — JAX-RS Response.seeOther / temporaryRedirect / Vert.x
+  # response.putHeader("Location", ...).
+  - pattern: "Response.seeOther(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: JAX-RS Response.seeOther
+  - pattern: "Response.temporaryRedirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: JAX-RS Response.temporaryRedirect
+
+  # Path traversal — Quarkus REST `staticResources` + Vert.x sendFile.
+  - pattern: "*.sendFile(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Vert.x HttpServerResponse.sendFile
+
+  # SSRF via Quarkus REST Client (MicroProfile RestClientBuilder + Mutiny
+  # Uni). Stdlib SSRF sinks (URL constructor, openConnection, HttpClient.send)
+  # cover the underlying transport.
+  - pattern: "RestClientBuilder.newBuilder().baseUri(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: MicroProfile RestClientBuilder baseUri
+
+sanitizers:
+  # JAX-RS / Quarkus does not ship a first-party HTML escaper; apps lean on
+  # OWASP encoder or Apache Commons. Re-list here so cross-language filter
+  # doesn't depend on spring-boot.yaml being present.
+  - pattern: "Encode.forHtml(*)"
+    vuln_classes: [xss]
+    description: OWASP Java Encoder Encode.forHtml
+  - pattern: "Encode.forHtmlAttribute(*)"
+    vuln_classes: [xss]
+    description: OWASP Java Encoder Encode.forHtmlAttribute
+  - pattern: "Encode.forJavaScript(*)"
+    vuln_classes: [xss]
+    description: OWASP Java Encoder Encode.forJavaScript
+  - pattern: "Encode.forUriComponent(*)"
+    vuln_classes: [xss, open_redirect]
+    description: OWASP Java Encoder Encode.forUriComponent
+  - pattern: "StringEscapeUtils.escapeHtml4(*)"
+    vuln_classes: [xss]
+    description: Apache Commons StringEscapeUtils.escapeHtml4

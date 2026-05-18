@@ -90,6 +90,47 @@ jobs:
         working-directory: depscanner
         run: npm run test:taint-engine-all
 
+      # Snapshot-runner meta-test: exercises the bootstrap path, diff
+      # detection, ignore-list, and arg parser against synthetic dirs.
+      # No Docker required — runs in <1s.
+      - name: Run snapshot-runner meta-test
+        working-directory: depscanner
+        run: npm run test:snapshot-runner
+
+  depscanner-fixtures:
+    # End-to-end snapshot suite. Builds the Docker image once, then runs
+    # `npm run test:fixtures` (default suite only — slow fixtures skipped
+    # in CI). On any snapshot diff, the job fails and prints the leaf-path
+    # delta so the PR review surface shows what flipped. Contributors
+    # regenerate locally with `npm run test:fixtures:update` and commit
+    # the snapshot deltas in the same PR.
+    name: Depscanner (fixture snapshots)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: depscanner/package-lock.json
+
+      - name: Install depscanner dependencies
+        working-directory: depscanner
+        run: npm ci
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build deptex-cli image
+        working-directory: depscanner
+        run: npm run docker:build
+
+      - name: Run snapshot fixture suite (default — fast fixtures only)
+        working-directory: depscanner
+        run: npm run test:fixtures
+
   fix-worker:
     name: Fix-worker (tsc)
     runs-on: ubuntu-latest

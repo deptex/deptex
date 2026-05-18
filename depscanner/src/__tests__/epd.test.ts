@@ -43,7 +43,7 @@ describe('ENTRY_WEIGHT_BY_CLASS', () => {
  * built-in $3 default. Regression guard for the change at epd.ts
  * where `getRunBudgetCapUsd()` became `orgRunBudgetCapUsd ?? env ?? default`.
  *
- * We drive applyEpdScoringFallback with no BYOK and one unreachable
+ * We drive applyEpdScoringFallback with no platform Anthropic key and one unreachable
  * PDV so the AI path never runs — the only thing we need to assert
  * is the `budget_cap_usd` that lands in the summary log.
  */
@@ -94,7 +94,6 @@ describe('applyEpdScoringFallback budget cap resolution', () => {
     return {
       projects: { data: { organization_id: 'org-1' }, error: null },
       organizations: { data: orgRow, error: null },
-      organization_ai_providers: { data: null, error: null }, // no BYOK
       project_dependency_vulnerabilities: {
         data: [
           {

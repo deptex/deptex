@@ -7,6 +7,7 @@
 
 import { filterSpecsByLanguage, type FrameworkSpec } from '../spec';
 import type { Flow } from '../flow';
+import type { IrFunction } from '../ir';
 import type { Callgraph, FunctionId } from '../types';
 import { buildPythonCallgraphContext, type PythonFileContext } from './callgraph';
 import { lowerPythonFunction } from './ir';
@@ -31,6 +32,8 @@ export interface PropagatePythonOptions {
 export interface PropagatePythonResult {
   flows: Flow[];
   callgraph: Callgraph;
+  /** True when the worklist aborted mid-loop on the cancellation signal. */
+  aborted: boolean;
   stats: {
     functionsAnalyzed: number;
     worklistIterations: number;
@@ -42,6 +45,8 @@ export interface PropagatePythonResult {
     propagationMs: number;
     totalMs: number;
   };
+  /** See PropagateResult.irFunctions. */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagatePython(
@@ -96,6 +101,7 @@ export async function propagatePython(
   return {
     flows: result.flows,
     callgraph,
+    aborted: result.aborted,
     stats: {
       functionsAnalyzed: stateById.size,
       worklistIterations: result.iterations,
@@ -107,5 +113,6 @@ export async function propagatePython(
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }

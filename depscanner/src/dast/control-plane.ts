@@ -13,8 +13,10 @@
 //      child within a bounded window even if Java refuses SIGTERM.
 //
 // On Windows `process.kill(-pid, signal)` is unsupported. Production runs on
-// Linux containers; the fallback is to kill the parent only (which is what
-// `child.kill()` does). Tests can substitute a stub spawn impl.
+// Linux containers; on Windows we shell out to `taskkill /F /T /PID` which
+// terminates the process and its descendant tree (the closest Windows
+// equivalent to a POSIX group-kill). Tests can substitute a stub spawn impl
+// and a stub taskkill spawn so OS-level semantics aren't exercised here.
 
 import { spawn, type ChildProcess } from 'child_process';
 
@@ -121,10 +123,27 @@ export function spawnExternal(opts: SpawnExternalOptions): SpawnExternalHandle {
       return;
     }
     if (process.platform === 'win32') {
+      // child.kill() alone leaves descendant processes orphaned on Windows
+      // (no group concept). taskkill /T walks the tree; /F forces. We still
+      // call child.kill() as a belt-and-braces signal in case taskkill
+      // fails (e.g. PID already exited, missing on PATH).
       try {
         child.kill(signal);
       } catch {
         /* noop */
+      }
+      try {
+        const tk = spawner('taskkill', ['/F', '/T', '/PID', String(child.pid)], {
+          stdio: 'ignore',
+        });
+        // Detach: we don't await. taskkill exits within ms; if it can't be
+        // spawned (PATH issue) the 'error' handler swallows so we don't
+        // leak an unhandled rejection.
+        tk.on('error', () => {
+          /* taskkill missing or PID gone; child.kill() above is best-effort */
+        });
+      } catch {
+        /* spawner threw synchronously — already past best-effort */
       }
       return;
     }

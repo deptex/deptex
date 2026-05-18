@@ -779,6 +779,24 @@ function emitCallStep(
   steps: Step[],
   ctx: WalkCtx,
 ): void {
+  // Method-chain pre-walk: when the receiver/object is itself a call (chain
+  // like `$client->get($url)->json()`, `Foo::make()->find($id)`), lower the
+  // inner call as its own Step first so its sink/source/sanitizer matching
+  // fires. Mirrors JS ir.ts:393-407, Java java/ir.ts:292-299, Ruby, Python.
+  if (expr.type === 'member_call_expression') {
+    const obj = expr.childForFieldName('object');
+    if (obj && (obj.type === 'member_call_expression' || obj.type === 'function_call_expression' || obj.type === 'scoped_call_expression' || obj.type === 'object_creation_expression')) {
+      const innerTmp = `<chain@${steps.length}>`;
+      walkExpressionAsAssign(obj, innerTmp, steps, ctx);
+    }
+  } else if (expr.type === 'scoped_call_expression') {
+    const scope = expr.childForFieldName('scope');
+    if (scope && (scope.type === 'member_call_expression' || scope.type === 'function_call_expression' || scope.type === 'scoped_call_expression')) {
+      const innerTmp = `<chain@${steps.length}>`;
+      walkExpressionAsAssign(scope, innerTmp, steps, ctx);
+    }
+  }
+
   // Determine the callee's textual root. We strip the leading `$` from any
   // variable-rooted callee/scope so spec patterns can be written without it
   // (e.g. `request->input(*)` matches `$request->input(...)`).

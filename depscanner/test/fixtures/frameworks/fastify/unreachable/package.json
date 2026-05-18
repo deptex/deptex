@@ -1,0 +1,10 @@
+{
+  "name": "deptex-fixture-fastify-unreachable",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "fastify": "4.10.0",
+    "lodash": "4.17.11"
+  }
+}

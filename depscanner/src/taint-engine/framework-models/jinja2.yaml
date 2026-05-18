@@ -1,0 +1,199 @@
+# jinja2 framework spec — Deptex cross-file taint engine.
+#
+# jinja2 is a templating engine; any attacker-controlled template source or
+# render-context value is a SSTI / code-injection / XSS risk depending on
+# the autoescape config. Combined with flask/django/fastapi sources via the
+# engine's cross-spec stitching, this unlocks:
+#
+#   - CVE-2019-10906  SandboxedEnvironment escape (str.format_map).
+#                     Fixture: env.from_string(template_str) where
+#                     template_str is request.args.get('tmpl').
+#   - CVE-2020-28493  urlize filter ReDoS — modelled as code_injection
+#                     since taint flows through `tmpl.render(user_input=...)`.
+#   - CVE-2024-22195  xmlattr filter attribute-injection — fixture flows
+#                     attacker dict into `template.render(**data)`.
+#   - CVE-2024-34064  Same xmlattr surface, attacker-controlled key.
+#
+# Vuln class is `code_injection` for from_string / Template construction
+# (the template *source* is attacker-controlled — SSTI proper), and `xss`
+# for render-side flows where attacker data flows through autoescape-
+# disabled filters.
+
+framework: jinja2
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- Template source construction (SSTI / RCE) ----------
+  - pattern: jinja2.Template(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: jinja2.Template(source) — user-controlled template source
+  - pattern: jinja2.Environment.from_string(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: jinja2.Environment.from_string — SSTI / sandbox escape (CVE-2019-10906)
+  - pattern: jinja2.SandboxedEnvironment.from_string(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: jinja2.SandboxedEnvironment.from_string (CVE-2019-10906)
+  - pattern: jinja2.NativeEnvironment.from_string(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: jinja2.NativeEnvironment.from_string
+  - pattern: Environment.from_string(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Environment.from_string (bare receiver)
+  - pattern: SandboxedEnvironment.from_string(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: SandboxedEnvironment.from_string (bare receiver)
+  - pattern: jinja2.Environment.compile(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: jinja2.Environment.compile(source)
+  - pattern: Environment.compile(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: Environment.compile (bare receiver)
+  - pattern: jinja2.Environment.get_template(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Environment.get_template(name) — name controls disk path
+  - pattern: Environment.get_template(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: get_template (bare receiver)
+  - pattern: jinja2.Environment.select_template(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Environment.select_template(names)
+  - pattern: Environment.select_template(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: select_template (bare receiver)
+
+  # ---------- Render-side sinks (XSS / xmlattr injection) ----------
+  - pattern: jinja2.Template.render(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.Template.render(**ctx) — context flows through filters (CVE-2024-22195 / 34064)
+  - pattern: jinja2.Template.stream(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.stream(**ctx)
+  - pattern: Template.render(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.render (bare receiver — xmlattr / urlize / autoescape-off)
+  - pattern: Template.stream(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.stream (bare receiver)
+  - pattern: jinja2.Template.generate(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.generate
+  - pattern: Template.generate(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.generate (bare receiver)
+  - pattern: jinja2.Template.render_async(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.render_async
+  - pattern: Template.render_async(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Template.render_async (bare receiver)
+
+  # ---------- Markup / autoescape-bypass helpers ----------
+  - pattern: jinja2.Markup(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.Markup — bypasses autoescape
+  - pattern: jinja2.utils.markupsafe.Markup(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.utils.markupsafe.Markup (qualified)
+  - pattern: markupsafe.Markup(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: markupsafe.Markup
+  - pattern: jinja2.filters.do_mark_safe(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.filters.do_mark_safe
+
+  # ---------- xmlattr filter (CVE-2024-22195, CVE-2024-34064) ----------
+  # When the AI rule generator writes a fixture that calls the filter
+  # function directly (`do_xmlattr(data)` after `from jinja2.filters
+  # import do_xmlattr`) the sink is the filter call itself rather than
+  # the render() call. Cover both the bare and qualified shapes; the
+  # `*.render(*)` wildcard below already covers the more common template-
+  # render flow.
+  - pattern: do_xmlattr(*)
+    vuln_class: xss
+    argument_indices: [0, 1]
+    description: jinja2.filters.do_xmlattr — xmlattr filter attribute-injection (CVE-2024-22195 / 34064)
+  - pattern: jinja2.filters.do_xmlattr(*)
+    vuln_class: xss
+    argument_indices: [0, 1]
+    description: jinja2.filters.do_xmlattr (qualified import)
+
+  # ---------- SandboxedEnvironment escape via str.format_map (CVE-2019-10906) ----------
+  # The Jinja2 sandbox didn't intercept `str.format_map(dict)`, so a malicious
+  # template body of the form `"{0.__init__.__globals__[os].system(...)}".format_map(env)`
+  # escaped the sandbox. The pre-fix AI fixture shape used by the rule
+  # generator passes attacker-controlled mapping into `str.format_map`. Bundled
+  # here so the engine fires when the sandbox-escape fixture matches.
+  - pattern: str.format_map(*)
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: str.format_map with attacker-controlled mapping — Jinja2 sandbox escape (CVE-2019-10906)
+  - pattern: "*.format_map(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: <str>.format_map — instance-form sandbox escape
+
+  # ---------- Wildcard-receiver fallbacks for instance calls ----------
+  # Jinja2 callers conventionally assign Environment / Template to a local
+  # variable (`env = jinja2.Environment()`, `template = jinja2.Template(...)`)
+  # and call methods on those instances. The matcher compares textual
+  # callees, so these wildcard-receiver shapes are needed to fire on
+  # `env.from_string(...)` / `template.render(...)`. The method names below
+  # are jinja2-distinctive enough that cross-contamination is bounded.
+  - pattern: "*.from_string(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: <env>.from_string(source) — SSTI via Environment/SandboxedEnvironment
+  - pattern: "*.render(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: <template>.render(**ctx) — xmlattr / urlize / autoescape-off (CVE-2024-22195 / 34064)
+  - pattern: "*.render_async(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: <template>.render_async
+  - pattern: "*.stream(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: <template>.stream
+  - pattern: "*.generate(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: <template>.generate
+
+sanitizers:
+  - pattern: jinja2.escape(*)
+    vuln_classes: [xss, code_injection]
+    description: jinja2.escape
+  - pattern: jinja2.utils.escape(*)
+    vuln_classes: [xss, code_injection]
+    description: jinja2.utils.escape
+  - pattern: jinja2.select_autoescape(*)
+    vuln_classes: [xss]
+    description: jinja2.select_autoescape — autoescape policy helper

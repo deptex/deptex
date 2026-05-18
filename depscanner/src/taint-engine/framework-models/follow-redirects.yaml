@@ -1,0 +1,90 @@
+# follow-redirects (node) framework spec — Deptex cross-file taint engine.
+#
+# CVE-2024-28849 — follow-redirects < 1.15.6 silently forwards the
+# `Proxy-Authorization` (and `Authorization` / `Cookie`) header to the
+# redirect target, even when the redirect crosses origins. An attacker who
+# can return a 30x pointing at their own host therefore exfiltrates the
+# secret credential. Upstream fix: the library now strips sensitive headers
+# on cross-origin redirects.
+#
+# User-side mitigation (the shape we model). Callers that pre-date 1.15.6
+# can supply a `beforeRedirect` callback in the request options and either
+# (a) abort the redirect when origin changes or (b) delete the sensitive
+# headers from `options.headers` before the follow-up request is issued.
+# A request that omits `beforeRedirect` entirely is therefore the
+# sanitizer-absence shape this spec asserts.
+#
+# vuln_class mapping rationale.
+#   `ssrf` is the closest in-scope class — the same call shape is the SSRF
+#   surface for tainted-URL flows, and the header-leak failure mode is best
+#   understood as "the request goes somewhere the caller did not intend".
+#   `auth_bypass` was considered (the leaked Proxy-Authorization defeats an
+#   auth check on the upstream proxy), but `ssrf` keeps the spec in line
+#   with how axios.yaml / requests.yaml model the same call family.
+#
+# AI fixture shape (bench-iterate/v_base/2026-05-12T20-00-19/report.json):
+#
+#   followRedirects.http.request(options, (response) => { ... }).end();
+#
+# — where `options.headers['Proxy-Authorization']` is the secret. The non-
+# taint detector regime fires on this call when `beforeRedirect` is absent
+# from the options object.
+#
+# Caveat — variable-indirect options aren't detected. The JS kwarg
+# inferencer at non-taint-detector.ts only parses inline object literals
+# passed positionally; a call like `request(options, cb)` where `options`
+# is a hoisted variable carries no kwargNames. The Qwen AI fixture for
+# CVE-2024-28849 in 2026-05-12T20-00-19 uses this hoisted shape, so this
+# spec won't unlock that exact iterate-run CVE until either Qwen retries
+# with an inline-options shape OR the non-taint detector learns to fold
+# simple `const options = {...}` definitions back into the call site.
+# Shipped anyway because (a) the inline shape is also common, and (b) the
+# spec is structurally correct — the limitation is upstream of the YAML.
+#
+# argument_indices: [99] sentinel — see jsonwebtoken.yaml for the same
+# pattern. The taint contract on `*.request(*)` is intentionally inert so
+# legitimate tainted-URL flows route through the `ssrf` axios / stdlib
+# entries instead of double-firing here.
+
+framework: follow-redirects
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  # follow-redirects' http + https namespaces expose the same Node http.Server
+  # request API. We model the four canonical entry points; the wildcard
+  # receiver covers both the namespaced `followRedirects.http.request(*)`
+  # and the destructured `const { http } = require('follow-redirects');
+  # http.request(*)` shape.
+  - pattern: "*.http.request(*)"
+    vuln_class: ssrf
+    argument_indices: [99]
+    description: follow-redirects http.request without a beforeRedirect callback (CVE-2024-28849 header-leak shape)
+    required_arguments:
+      - name: beforeRedirect
+        match_mode: required
+  - pattern: "*.https.request(*)"
+    vuln_class: ssrf
+    argument_indices: [99]
+    description: follow-redirects https.request without a beforeRedirect callback
+    required_arguments:
+      - name: beforeRedirect
+        match_mode: required
+  - pattern: "*.http.get(*)"
+    vuln_class: ssrf
+    argument_indices: [99]
+    description: follow-redirects http.get without a beforeRedirect callback
+    required_arguments:
+      - name: beforeRedirect
+        match_mode: required
+  - pattern: "*.https.get(*)"
+    vuln_class: ssrf
+    argument_indices: [99]
+    description: follow-redirects https.get without a beforeRedirect callback
+    required_arguments:
+      - name: beforeRedirect
+        match_mode: required
+
+sanitizers: []

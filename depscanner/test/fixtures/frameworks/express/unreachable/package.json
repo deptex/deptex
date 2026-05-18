@@ -1,0 +1,10 @@
+{
+  "name": "deptex-fixture-express-unreachable",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "express": "4.18.2",
+    "lodash": "4.17.20"
+  }
+}

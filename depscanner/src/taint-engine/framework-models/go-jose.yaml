@@ -1,0 +1,46 @@
+# go-jose (github.com/go-jose/go-jose) — JWE / JWS parse + decrypt sinks.
+#
+# CVE-2024-28180 (the seed for this spec): the JWE Decrypt path is vulnerable
+# to a chosen-ciphertext attack when an attacker controls the JWE payload.
+# Modelled as `deserialization` (parser-on-attacker-bytes regime, same family
+# as XML unmarshal / gob NewDecoder).
+#
+# Source convention: paired with net-http.yaml's `*.FormValue(*)` etc. — a
+# tainted JWE string flowing into ParseEncrypted / Parse / Decrypt fires.
+
+framework: go-jose
+language: go
+version: "*"
+
+sources: []
+
+sinks:
+  # ParseEncrypted is the canonical JWE entry point.
+  - pattern: jose.ParseEncrypted(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: go-jose ParseEncrypted — JWE parse, attacker controls ciphertext
+  - pattern: jose.ParseSigned(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: go-jose ParseSigned — JWS parse, attacker controls payload
+
+  # The AI fixture for CVE-2024-28180 uses method-shaped Parse + Decrypt on a
+  # JSONWebEncryption value. Wildcard receiver so it matches whatever local
+  # the consumer named (`obj`, `jwe`, `enc`, etc.).
+  - pattern: "*.Parse(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: go-jose JSONWebEncryption / JSONWebSignature Parse — attacker
+      controls the wire bytes; deserialization-class vuln
+  - pattern: "*.Decrypt(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: go-jose JSONWebEncryption Decrypt — CVE-2024-28180-style
+      chosen-ciphertext + attacker-controlled JWE
+  - pattern: "*.DecryptMulti(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: go-jose DecryptMulti
+
+sanitizers: []

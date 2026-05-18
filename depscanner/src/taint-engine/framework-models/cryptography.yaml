@@ -1,0 +1,77 @@
+# cryptography framework spec — Deptex cross-file taint engine.
+#
+# `cryptography` is a pure sink-only library — sources come from
+# flask/django/fastapi/etc. via cross-spec stitching. This spec covers
+# parsing entry points where attacker-controlled bytes trigger NULL-ptr
+# / type-confusion crashes in the underlying OpenSSL bindings:
+#
+#   - CVE-2023-49083  pkcs7.load_der_pkcs7_certificates /
+#                     pkcs7.load_pem_pkcs7_certificates — attacker bytes
+#                     hit a NULL-ptr deref in the C extension. The fix
+#                     adds input validation before the ffi call.
+#   - CVE-2024-26130  pkcs12.serialize_key_and_certificates — attacker-
+#                     controlled certs argument crashes the serializer.
+#
+# vuln_class mapping rationale.
+#   `deserialization` is the closest existing enum entry for "attacker
+#   bytes flow into a parser-style entry point that's been shown to crash
+#   or RCE." The DoS-shaped nature of these specific bugs isn't a perfect
+#   fit, but matches what the AI rule generator emits consistently in
+#   passing-trial fixtures (per multi-trial validation 2026-05-14).
+#   Migrating to a separate `parser_crash` vuln_class is out of scope.
+#
+# Receiver shapes — both qualified (`pkcs7.load_pem_pkcs7_certificates(...)`)
+# and bare-import (`load_pem_pkcs7_certificates(...)` after a module-level
+# `from cryptography.hazmat.primitives.serialization import pkcs7` or
+# similar) appear in real code. The qualified pattern matches the former
+# via exact-callee; the bare-form matches via last-segment fallback.
+
+framework: cryptography
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- pkcs7 parsing (CVE-2023-49083) ----------
+  - pattern: pkcs7.load_der_pkcs7_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: cryptography.hazmat.primitives.serialization.pkcs7.load_der_pkcs7_certificates — attacker bytes NULL-ptr deref (CVE-2023-49083)
+  - pattern: pkcs7.load_pem_pkcs7_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: cryptography.hazmat.primitives.serialization.pkcs7.load_pem_pkcs7_certificates — same NULL-ptr deref surface (CVE-2023-49083)
+  - pattern: serialization.pkcs7.load_der_pkcs7_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serialization.pkcs7.load_der_pkcs7_certificates — qualified import shape
+  - pattern: serialization.pkcs7.load_pem_pkcs7_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: serialization.pkcs7.load_pem_pkcs7_certificates — qualified import shape
+
+  # ---------- pkcs12 serialize (CVE-2024-26130) ----------
+  # Signature: serialize_key_and_certificates(name, key, cert, cas, encryption_algorithm)
+  # The `cas` parameter (index 3) and the additional cert chain are the
+  # attacker-influenceable inputs that trigger the NULL-ptr crash on
+  # malformed certs; the AI rule generator typically picks index 4 for
+  # the encryption_algorithm shape. Cover both to bound prompt variance.
+  - pattern: pkcs12.serialize_key_and_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [2, 3, 4]
+    description: cryptography.hazmat.primitives.serialization.pkcs12.serialize_key_and_certificates — NULL-ptr on attacker cert (CVE-2024-26130)
+  - pattern: serialization.pkcs12.serialize_key_and_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [2, 3, 4]
+    description: serialization.pkcs12.serialize_key_and_certificates — qualified import shape
+  - pattern: pkcs12.load_key_and_certificates(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pkcs12.load_key_and_certificates — same family parsing surface
+  - pattern: pkcs12.load_pkcs12(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pkcs12.load_pkcs12 — alternate parser entry
+
+sanitizers: []
