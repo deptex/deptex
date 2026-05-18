@@ -329,6 +329,28 @@ job).
 - Branch fresh off `main` per `feedback_one_branch_no_new_branches` /
   `feedback_sync_main_often`.
 
+## M4 Execution — REMAINING (the actual validation, not just the harness)
+
+M1–M3 code + the M4 harness are committed on `worktree-reachability-noise-reduction`
+(4 commits off main, tsc clean, 928 unit tests pass). NOT DONE: the corpus run +
+measured result. **Do not `/push-changes` until the gates produce a real number.**
+
+1. Rebuild the Docker image from this branch: `cd depscanner && npm run docker:build`.
+2. **Directional run first** — scan the 0%-ecosystem repos via the existing
+   `scripts/oss-corpus.yaml` (gin/golang, fastapi/pypi, sinatra/gem) plus a baseline
+   (express/npm, spring/maven). Compare the `reachability_level` distribution against
+   main. Confirm M1's `is_direct` recovery actually moves gin/sinatra/fastapi off 0%
+   unreachable. If it doesn't, debug M1 before continuing.
+3. Populate `scripts/reachability-corpus.yaml` — one real repo per ecosystem (8 total),
+   hand-label ~8–12 CVEs each reachable/unreachable per the YAML header's method.
+4. Run `npm run test:reachability-corpus`; record the 3-gate result.
+5. Iterate M1/M2 thresholds against the corpus until the gates pass — the M2
+   symbol-absent→unreachable branch is the documented tunable knob.
+6. Then `/push-changes`.
+
+Also pending: `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on the
+python/java/go fixtures, so their snapshots need regenerating + committing.
+
 ## Success Criteria
 All three gates pass on the M4 purpose-built corpus:
 1. **≥ 60%** corpus-wide noise reduction.
