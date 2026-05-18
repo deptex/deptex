@@ -61,14 +61,6 @@ export interface ContainerFinding {
   /** `${package_name}@${osv_id || cve_id}` — digest-independent. NULL when both
    *  osv_id and cve_id are missing. */
   container_fingerprint: string | null;
-  /** Phase 2 static OS-package reachability. `module` = the package owns a
-   *  shared library the entrypoint loads; `unreachable` = installed but not
-   *  loaded; null/absent = not classified (language package, or the classifier
-   *  could not run). Decorated by the container reachability classifier. */
-  reachability_level?: 'module' | 'unreachable' | null;
-  /** Evidence behind reachability_level — DT_NEEDED list, dlopen hits,
-   *  wrapper-script / static-linked / fallback flags. */
-  reachability_details?: Record<string, unknown> | null;
 }
 
 export interface SkippedImage {
