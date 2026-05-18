@@ -449,6 +449,32 @@ export function extractSymbolTokens(pattern: string): string[] {
   return [...tokens];
 }
 
+/**
+ * Framework-embedded runtime components — servlet containers, embedded
+ * app-servers, reactive runtimes and template engines that a framework's
+ * starter / auto-configuration wires into the application. The app's own
+ * first-party code never `import`s them (Spring Boot embeds Tomcat; the app
+ * never imports `org.apache.catalina`), so the import-absence heuristic below
+ * would wrongly collapse them to `unreachable` — yet the servlet container is
+ * on every request path and the template engine renders every view. Never
+ * emit `unreachable` for a dep whose name matches one of these; floor it at
+ * `module` (we know it runs; we just can't pin the vulnerable function).
+ *
+ * Surfaced by the M4 reachability corpus: spring-petclinic's tomcat-embed-core
+ * and thymeleaf-spring6 were false-negative `unreachable` verdicts.
+ */
+const FRAMEWORK_EMBEDDED_RUNTIME = [
+  'tomcat-embed', 'jetty', 'undertow', 'netty', 'spring-boot-starter-tomcat',
+  'thymeleaf', 'freemarker', 'mustache', 'pebble', 'groovy-templates',
+];
+
+/** True when `depName` is a framework-embedded runtime component (see above). */
+export function isFrameworkEmbeddedRuntime(depName: string | undefined): boolean {
+  if (!depName) return false;
+  const n = depName.toLowerCase();
+  return FRAMEWORK_EMBEDDED_RUNTIME.some((p) => n.includes(p));
+}
+
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
@@ -880,9 +906,20 @@ export async function updateReachabilityLevels(
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
-        if (graphTrusted && usageAnalysisProducedOutput && meta && !meta.isDirect && meta.filesImporting === 0) {
+        if (
+          graphTrusted &&
+          usageAnalysisProducedOutput &&
+          meta &&
+          !meta.isDirect &&
+          meta.filesImporting === 0 &&
+          !isFrameworkEmbeddedRuntime(depName)
+        ) {
           level = 'unreachable';
         } else {
+          // Direct deps, deps with >=1 import, and framework-embedded runtime
+          // components (servlet container / template engine wired in by a
+          // framework starter) floor at `module` — we know they run, we just
+          // can't pin the vulnerable function to a call path.
           level = 'module';
         }
       }

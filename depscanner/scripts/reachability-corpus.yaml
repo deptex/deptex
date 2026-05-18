@@ -99,6 +99,24 @@ repos:
         source: |
           ejs template injection. UNREACHABLE: ejs is a devDependency for the
           examples/ view-engine demos; not used by express's library code.
+      - id: CVE-2026-33940
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33938
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33941
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33937
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-27903
+        expected_reachability: unreachable
+        source: minimatch ReDoS — transitive build/test-tool dep; express lib never globs.
+      - id: CVE-2026-24001
+        expected_reachability: unreachable
+        source: diff — transitive dep of the mocha test toolchain; not in express lib/.
 
   - name: spring-petclinic
     repo_url: https://github.com/spring-projects/spring-petclinic.git

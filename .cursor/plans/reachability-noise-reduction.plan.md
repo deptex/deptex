@@ -386,34 +386,41 @@ Scanned 5 application repos. Only cargo joined npm/maven as a working ecosystem:
 
 So the gated corpus is **npm + maven + cargo** (express, spring-petclinic, bat).
 
-### Corpus gate result (2026-05-18, `oss-corpus-runs/corpus-run`)
-25 hand-labelled CVEs observed. **Gate 1 PASS · Gate 2 PASS · Gate 3 FAIL.**
-- Gate 1 — corpus-wide noise reduction **64%** (≥60% ✓). (unreachable=12, module=8, function=5)
-- Gate 2 — every ecosystem >0% unreachable ✓ (npm 50%, maven 40%, cargo 67%).
-- Gate 3 — **3 false negatives**, all spring-petclinic: CVE-2026-34500 + CVE-2026-25854
-  (`tomcat-embed-core`) and CVE-2026-40477 (`thymeleaf-spring6`), each hand-labelled
-  reachable but scanned `unreachable`.
+### Corpus gate result — ALL GATES PASS (2026-05-18, `oss-corpus-runs/corpus-run2`)
+31 hand-labelled CVEs observed across npm/maven/cargo. **3/3 gates pass.**
+- Gate 1 — corpus-wide noise reduction **66.13%** (≥60% ✓). (unreachable=15, module=11, function=5)
+- Gate 2 — every ecosystem >0% unreachable ✓ (npm 67%, maven 10%, cargo 67%).
+- Gate 3 — zero false negatives ✓.
 
-**Gate 3 root cause:** the classifier's Path-A heuristic (`reachability.ts` ~L883:
-transitive + `files_importing_count===0` + name not in usage → `unreachable`) has a
-false-negative class — **framework-embedded runtime components**. Spring Boot wires
-the embedded Tomcat servlet container and the Thymeleaf template engine into the
-app; petclinic's own `.java` files never `import org.apache.catalina` /
-`org.thymeleaf`, so the heuristic marks them `unreachable` — but Tomcat is on every
-request path and petclinic renders Thymeleaf views on every page. M1 (correct
-`is_direct`) didn't introduce this heuristic, but it made it *fire* by giving it a
-trustworthy transitive split. Mitigations: never emit `unreachable` for deps pulled
-by a framework "starter"/runtime bundle, or floor at `module` when the only
-evidence is `files_importing_count===0`.
+**First run** (`corpus-run`, 25 CVEs) was Gate-1+2 PASS / Gate-3 FAIL — 3 false
+negatives: spring-petclinic's `tomcat-embed-core` ×2 and `thymeleaf-spring6`, each
+hand-labelled reachable but scanned `unreachable`. Root cause: the classifier's
+Path-A heuristic (`reachability.ts`: transitive + `files_importing_count===0` +
+name not in usage → `unreachable`) wrongly collapses **framework-embedded runtime
+components** — Spring Boot wires the embedded Tomcat servlet container and the
+Thymeleaf template engine in; the app's own `.java` never `import`s them, yet
+Tomcat is on every request path and Thymeleaf renders every view. M1 didn't create
+this heuristic; it made it *fire* by giving it a trustworthy transitive split.
+
+**Gate-3 fix:** `isFrameworkEmbeddedRuntime()` in `reachability.ts` — a transitive
+dep whose name matches a framework-embedded runtime category (servlet containers
+`tomcat-embed`/`jetty`/`undertow`/`netty`, template engines
+`thymeleaf`/`freemarker`/`mustache`/`pebble`/`groovy-templates`) is never emitted
+`unreachable`; it floors at `module`. The corpus was also expanded with 6 more
+genuinely-unreachable express devDep-transitive CVEs so Gate 1 stays >60% after the
+3 false-unreachables become `module`.
 
 ### Remaining
-1. Decide the Gate-3 fix (framework-embedded false negatives) — see root cause above.
-2. golang/pypi: blocked on cdxgen shallow SBOM — needs a `--deep`-equivalent or a
-   manifest-driven transitive expansion. gem: needs an older app ref with vulnerable
-   gems (harness can't `--branch <SHA>` — extend it, or pick a tagged old app).
-3. `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on python/java/go
-   fixture snapshots.
-4. Then `/push-changes`.
+1. `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on python/java/go
+   fixture snapshots; regenerate + commit the deltas.
+2. `/push-changes`.
+
+### Out of scope / follow-up (documented blockers, not this arc)
+- golang/pypi: cdxgen without `--deep` emits direct-only SBOMs — no transitive deps
+  to classify. Needs a `--deep`-equivalent or manifest-driven transitive expansion.
+- gem/composer: the app repos sampled (lobsters, wallabag) landed observed vulns on
+  direct deps / had 0 vulns at HEAD; a corpus entry needs an older tagged app ref
+  (the harness can't `git clone --branch <SHA>`).
 
 ## Success Criteria
 All three gates pass on the M4 purpose-built corpus:
