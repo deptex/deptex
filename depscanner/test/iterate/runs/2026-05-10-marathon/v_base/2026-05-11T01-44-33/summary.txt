@@ -1,0 +1,109 @@
+# v_base (base-framework-spec-v1) — openai/Qwen/Qwen3-235B-A22B-Instruct-2507
+baseUrl: https://api.deepinfra.com/v1/openai
+run: 2026-05-11T01:44:33.713Z → 2026-05-11T02:16:46.181Z  (1932.5s)
+
+Final validation rate: 29/88 = 33.0%
+Total cost: $0.3029
+
+Funnel:
+  schema_pass:      82/88
+  fixture_pre:      29/88
+  fixture_safe:     82/88
+  patch_post_clean: 58/88
+  validated:        29/88
+
+Status breakdown:
+  failed_validation: 53
+  validated: 29
+  vuln_class_out_of_scope: 4
+  invalid_schema: 2
+
+Per-CVE:
+  ✗ CVE-2025-62718     failed_validation    $0.0061 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2026-40175     failed_validation    $0.0062 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2026-4800      validated            $0.0013 
+  ✓ CVE-2020-28500     validated            $0.0016 
+  ✗ CVE-2022-23539     failed_validation    $0.0077 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2022-23540     validated            $0.0018 
+  ✗ CVE-2022-23541     failed_validation    $0.0076 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2022-3517      validated            $0.0014 
+  ✓ CVE-2024-11831     validated            $0.0027 
+  ✓ CVE-2024-55565     validated            $0.0007 
+  ✓ CVE-2025-13465     validated            $0.0016 
+  ✗ CVE-2025-27152     failed_validation    $0.0110 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2025-64718     validated            $0.0012 
+  ✗ CVE-2026-25639     failed_validation    $0.0048 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2026-26996     validated            $0.0035 
+  ✓ CVE-2026-27903     validated            $0.0007 
+  ✓ CVE-2026-27904     validated            $0.0006 
+  ✗ CVE-2026-34043     failed_validation    $0.0037 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2021-23337     validated            $0.0016 
+  ✓ CVE-2018-3721      validated            $0.0013 
+  ✓ CVE-2019-10744     validated            $0.0011 
+  ✓ CVE-2020-8203      validated            $0.0012 
+  ✗ CVE-2017-16137     failed_validation    $0.0033 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2017-16138     validated            $0.0002 
+  ✓ CVE-2022-24999     validated            $0.0018 
+  ✗ CVE-2022-25883     failed_validation    $0.0075 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2022-46175     validated            $0.0004 
+  ✗ CVE-2022-37601     failed_validation    $0.0037 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2020-7720      validated            $0.0007 
+  ✓ CVE-2022-31129     validated            $0.0005 
+  ✓ CVE-2023-26115     validated            $0.0005 
+  ✗ CVE-2024-21484     failed_validation    $0.0154 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-28849     failed_validation    $0.0039 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2024-29041     validated            $0.0007 
+  ✓ CVE-2020-14343     validated            $0.0037 
+  ✓ CVE-2017-18342     validated            $0.0037 
+  ✗ CVE-2018-18074     failed_validation    $0.0037 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-32681     failed_validation    $0.0036 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-35195     failed_validation    $0.0039 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2020-26137     failed_validation    $0.0052 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-43804     failed_validation    $0.0081 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-45803     failed_validation    $0.0074 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-37891     failed_validation    $0.0051 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-26130     failed_validation    $0.0041 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2023-49083     validated            $0.0048 
+  ✗ CVE-2024-22195     failed_validation    $0.0028 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-34064     failed_validation    $0.0060 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2019-10906     failed_validation    $0.0032 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2020-28493     failed_validation    $0.0027 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-22817     failed_validation    $0.0008 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2021-25287     failed_validation    $0.0030 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-30861     failed_validation    $0.0038 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2024-3651      validated            $0.0011 
+  ✓ CVE-2022-29217     validated            $0.0031 
+  ✓ CVE-2024-21503     validated            $0.0013 
+  ✗ CVE-2023-37920     failed_validation    $0.0060 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-6345      failed_validation    $0.0052 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2021-44228     invalid_schema       $0.0068 Generated payload failed schema: framework_spec=Required; vulnerable_fixture=Req
+  ✗ CVE-2021-45046     invalid_schema       $0.0046 Generated payload failed schema: framework_spec=Required; =Unrecognized key(s) i
+  ✗ CVE-2021-44832     failed_validation    $0.0091 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2017-5645      failed_validation    $0.0035 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2019-12384     failed_validation    $0.0018 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2019-14439     failed_validation    $0.0019 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2020-9548      failed_validation    $0.0017 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2017-7525      failed_validation    $0.0018 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2018-7489      failed_validation    $0.0017 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-42889     failed_validation    $0.0092 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-22965     failed_validation    $0.0010 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-22978     failed_validation    $0.0010 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-34053     vuln_class_out_of_scope $0.0000 Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable
+  ✗ CVE-2023-44483     failed_validation    $0.0021 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-26464     failed_validation    $0.0008 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2017-12626     failed_validation    $0.0046 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-32149     failed_validation    $0.0044 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-27664     vuln_class_out_of_scope $0.0000 Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable
+  ✗ CVE-2023-3978      failed_validation    $0.0033 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-44487     vuln_class_out_of_scope $0.0000 Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable
+  ✗ CVE-2024-45337     failed_validation    $0.0043 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-21626     failed_validation    $0.0103 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-28180     failed_validation    $0.0046 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-21698     vuln_class_out_of_scope $0.0000 Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable
+  ✗ CVE-2022-29153     failed_validation    $0.0047 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-23633     failed_validation    $0.0013 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2023-28120     failed_validation    $0.0041 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✓ CVE-2024-26143     validated            $0.0018 
+  ✗ CVE-2024-25126     failed_validation    $0.0012 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2024-32465     failed_validation    $0.0033 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)
+  ✗ CVE-2022-23837     failed_validation    $0.0076 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)

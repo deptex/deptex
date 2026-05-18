@@ -1,0 +1,29 @@
+# nanoid framework spec — Deptex cross-file taint engine.
+#
+# CVE-2024-55565 — nanoid before 5.0.9 returned predictable / non-uniform
+# IDs when given a non-integer size argument (e.g. `nanoid(NaN)` or a
+# float). The fix adds an Math.floor + integer validation before the
+# crypto.getRandomValues loop. When the size argument is attacker-
+# controlled (e.g. from request data), the generated ID becomes guessable.
+#
+# vuln_class=weak_crypto matches the existing taint-engine enum; the
+# generated ID becoming predictable is a cryptographic-strength issue.
+# The AI rule generator emits this shape consistently in passing trials.
+
+framework: nanoid
+language: js
+version: "*"
+
+sources: []
+
+sinks:
+  - pattern: nanoid(*)
+    vuln_class: weak_crypto
+    argument_indices: [0]
+    description: nanoid with attacker-controlled size — non-integer triggers predictable output (CVE-2024-55565)
+  - pattern: customAlphabet(*)
+    vuln_class: weak_crypto
+    argument_indices: [0, 1]
+    description: nanoid.customAlphabet — attacker-controlled alphabet or default-size produces predictable IDs
+
+sanitizers: []

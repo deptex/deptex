@@ -1,10 +1,11 @@
 import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveNpmImport } from '../import-mapping/npm';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const JS_EXTENSIONS: readonly string[] = ['.js', '.mjs', '.cjs', '.jsx'];
 const TS_EXTENSIONS: readonly string[] = ['.ts', '.mts', '.cts'];
@@ -46,6 +47,11 @@ function findContainingMethod(node: Node | null, source: string): string | null 
       if (parent?.type === 'pair') {
         const key = parent.childForFieldName('key');
         if (key) return textOf(key, source);
+      }
+      // Class-field arrow function: `handler = () => {}` inside a class body.
+      if (parent?.type === 'field_definition' || parent?.type === 'public_field_definition') {
+        const n = parent.childForFieldName('name') ?? parent.childForFieldName('property');
+        if (n) return textOf(n, source);
       }
     }
   }
@@ -273,36 +279,38 @@ export const javascriptModule: LanguageModule = {
     return JS_EXTENSIONS.includes(ext) || TS_EXTENSIONS.includes(ext) || TSX_EXTENSIONS.includes(ext);
   },
   async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage(pickWasmForFile(filePath));
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
+    const tree = await parseSource(pickWasmForFile(filePath), source);
     if (!tree) {
-      return { filePath, language: 'javascript', imports: [], usages: [] };
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
     }
-    const root = tree.rootNode;
-    const { imports, aliases } = collectImports(root, source);
-    const depNames = ctx.deps.map((d) => d.name);
-    const usages = collectUsages(root, source, aliases, filePath, depNames);
+    try {
+      const root = tree.rootNode;
+      const { imports, aliases } = collectImports(root, source);
+      const depNames = ctx.deps.map((d) => d.name);
+      const usages = collectUsages(root, source, aliases, filePath, depNames);
 
-    const extracted: ExtractedFile = { filePath, language: 'javascript', imports, usages };
-    const entryPoints: EntryPoint[] = [];
-    for (const detector of getDetectorsForLanguage('javascript')) {
-      const importedSources = new Set(imports.map((i) => i.source));
-      // Empty triggerImports = run unconditionally (detectors like Next.js
-      // and AWS Lambda gate on filename/export convention, not on imports).
-      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
-        if (importedSources.has(t)) return true;
-        for (const imp of imports) if (imp.source.startsWith(`${t}/`)) return true;
-        return false;
-      });
-      if (!triggered) continue;
-      try {
-        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
-      } catch {
-        // Detector failures are non-fatal — skip and move on.
+      const extracted: ExtractedFile = { filePath, language: 'javascript', imports, usages };
+      const entryPoints: EntryPoint[] = [];
+      for (const detector of getDetectorsForLanguage('javascript')) {
+        const importedSources = new Set(imports.map((i) => i.source));
+        // Empty triggerImports = run unconditionally (detectors like Next.js
+        // and AWS Lambda gate on filename/export convention, not on imports).
+        const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+          if (importedSources.has(t)) return true;
+          for (const imp of imports) if (imp.source.startsWith(`${t}/`)) return true;
+          return false;
+        });
+        if (!triggered) continue;
+        try {
+          entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: ctx.workspaceRoot, depNames }));
+        } catch (err) {
+          recordDetectorError(detector.name, err);
+        }
       }
+      extracted.entryPoints = entryPoints;
+      return extracted;
+    } finally {
+      tree.delete();
     }
-    extracted.entryPoints = entryPoints;
-    return extracted;
   },
 };

@@ -1,0 +1,10 @@
+{
+  "language": "js",
+  "framework": "express",
+  "expected_osv_id": "CVE-2021-23337",
+  "expected_vuln_class": "code_injection",
+  "expected_vuln_flows_min": 1,
+  "expected_safe_flows_max": 0,
+  "package": "lodash",
+  "description": "Customer-shaped Express app where a /render endpoint receives a body parameter, hands it through a service module, and compiles it via lodash _.template — classic CVE-2021-23337 RCE. Safe side compiles a hard-coded template and only interpolates an HTML-escaped variable."
+}

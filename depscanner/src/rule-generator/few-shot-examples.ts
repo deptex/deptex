@@ -279,6 +279,152 @@ func main() {
 }
 `;
 
+/**
+ * CVE-2017-7525 — jackson-databind polymorphic deserialization. ObjectMapper.
+ * readValue resolves attacker-controlled class names into Java gadget chains
+ * IFF `enableDefaultTyping()` (or `@JsonTypeInfo`) is in effect somewhere
+ * upstream on the mapper. The FrameworkSpec format has no precondition gate
+ * (see jackson.yaml's documented spec-format gap), so the example MUST list
+ * BOTH the readValue sink AND the enableDefaultTyping marker — the fp-filter
+ * stage downstream prunes flows where no defaultTyping call is reachable.
+ *
+ * Teaches the model: Jackson CVEs (2017-7525, 2018-7489, 2019-12384,
+ * 2019-14439, 2020-9548) all share this shape — Spring controller source
+ * (@RequestBody / @RequestParam) -> mapper.readValue, with a config-gate
+ * marker sink so the fp-filter has signal.
+ */
+const CVE_2017_7525: FrameworkSpecJson = {
+  framework: 'jackson-databind',
+  version: '<2.8.10',
+  language: 'java',
+  sources: [],
+  sinks: [
+    {
+      pattern: 'ObjectMapper.readValue(*)',
+      vuln_class: 'deserialization',
+      argument_indices: [0],
+      description: 'Jackson ObjectMapper.readValue with untrusted JSON — gadget-chain RCE when defaultTyping is enabled OR @JsonTypeInfo is present on a target class',
+    },
+    {
+      pattern: 'ObjectMapper.enableDefaultTyping(*)',
+      vuln_class: 'deserialization',
+      argument_indices: [],
+      description: 'Jackson ObjectMapper.enableDefaultTyping — config gate that turns readValue into a gadget-chain sink',
+    },
+  ],
+  sanitizers: [],
+};
+
+const VULN_2017_7525 = `import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class IngestController {
+    @PostMapping("/ingest")
+    public Object ingest(@RequestBody String body) throws Exception {
+        ObjectMapper.enableDefaultTyping();
+        return ObjectMapper.readValue(body, Object.class);
+    }
+}
+`;
+
+const SAFE_2017_7525 = `import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class IngestController {
+    private static final String FIXED_JSON = "{\\"status\\":\\"ok\\"}";
+
+    @PostMapping("/ingest")
+    public Object ingest(@RequestBody String body) throws Exception {
+        return ObjectMapper.readValue(FIXED_JSON, Object.class);
+    }
+}
+`;
+
+/**
+ * Note on Log4j (Log4Shell, CVE-2021-44228 family): we do NOT inline a
+ * few-shot for the Log4j gadget shape here. The engine's bundled log4j.yaml
+ * already owns wildcard-receiver sinks for every Logger level (`*.info(*)`,
+ * `*.warn(*)`, etc.); since the CVE-targeted spec is loaded AFTER framework
+ * specs (`validate.ts` line ~230) and `matchSinkPattern` returns the FIRST
+ * matching sink, ANY model-emitted literal-receiver Log4j sink gets shadowed
+ * by the framework spec and never wins attribution. The Gate 2 round-trip
+ * therefore reports `pre=0` even though flows DO fire (they fire against the
+ * framework spec's pattern, which we don't count).
+ *
+ * The Log4j gadget shape is taught via the LOG4SHELL_GADGET_PRIMER text in
+ * `prompt-builder.ts` instead — the model still learns the shape, just not
+ * via a JSON example.
+ */
+
+/**
+ * CVE-2023-43804 — urllib3 leaks Cookie header on cross-origin redirect when
+ * the URL is attacker-controlled. Patch removes Cookie on redirect. Sink:
+ * urllib3.request top-level function (2.x) and PoolManager.urlopen.
+ *
+ * Teaches the model: urllib3 SSRF CVEs (2023-43804, 2023-45803, 2020-26137,
+ * 2024-37891) all share this shape — Flask source (request.args.get) -> any
+ * urllib3 entry point that consumes a URL argument. The argument_indices
+ * differ per entry point: urllib3.request(method, url) has the URL at index 1.
+ */
+const CVE_2023_43804: FrameworkSpecJson = {
+  framework: 'urllib3',
+  version: '<1.26.17 || >=2.0.0 <2.0.6',
+  language: 'python',
+  sources: [],
+  sinks: [
+    {
+      pattern: 'urllib3.request(*)',
+      vuln_class: 'ssrf',
+      argument_indices: [1],
+      description: 'urllib3.request(method, url) — Cookie / Authorization header leak on cross-origin redirect when URL is attacker-controlled',
+    },
+    {
+      pattern: 'PoolManager.urlopen(*)',
+      vuln_class: 'ssrf',
+      argument_indices: [1],
+      description: 'urllib3.PoolManager().urlopen(method, url) — same redirect-leak class',
+    },
+    {
+      pattern: 'PoolManager.request(*)',
+      vuln_class: 'ssrf',
+      argument_indices: [1],
+      description: 'urllib3.PoolManager().request(method, url) — same redirect-leak class',
+    },
+  ],
+  sanitizers: [],
+};
+
+const VULN_2023_43804 = `from flask import Flask, request
+import urllib3
+
+app = Flask(__name__)
+
+
+@app.route('/fetch')
+def fetch():
+    target = request.args.get('url')
+    response = urllib3.request('GET', target)
+    return response.data
+`;
+
+const SAFE_2023_43804 = `from flask import Flask, request
+import urllib3
+
+app = Flask(__name__)
+
+
+@app.route('/fetch')
+def fetch():
+    response = urllib3.request('GET', 'https://api.internal/status')
+    return response.data
+`;
+
 export const FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES: readonly FrameworkSpecFewShot[] = [
   example('CVE-2020-14343', 'pyyaml', 'pypi', {
     framework_spec: CVE_2020_14343,
@@ -311,6 +457,22 @@ export const FRAMEWORK_SPEC_FEW_SHOT_EXAMPLES: readonly FrameworkSpecFewShot[] =
     reachability_level: 'confirmed',
     entry_point_class: 'PUBLIC_UNAUTH',
     rationale: 'golang.org/x/text<0.3.8 has quadratic-time language tag parsing — DOS via crafted Accept-Language. Vulnerable: r.Header.Get -> language.ParseAcceptLanguage. Safe: literal "en-US" via MustParse, no taint flow.',
+  }),
+  example('CVE-2017-7525', 'com.fasterxml.jackson.core:jackson-databind', 'maven', {
+    framework_spec: CVE_2017_7525,
+    vulnerable_fixture: VULN_2017_7525,
+    safe_fixture: SAFE_2017_7525,
+    reachability_level: 'confirmed',
+    entry_point_class: 'PUBLIC_UNAUTH',
+    rationale: 'jackson-databind polymorphic deserialization is exploitable when the ObjectMapper has enableDefaultTyping() (or activateDefaultTyping in 2.10+) called on it, OR when a target class carries @JsonTypeInfo. Vulnerable fixture: Spring @RequestBody String body -> mapper.readValue, with enableDefaultTyping wired on the mapper. Safe fixture: same controller signature but reads a hard-coded literal JSON constant — body is unused, no taint reaches readValue. The spec emits BOTH the readValue sink AND an enableDefaultTyping marker sink so downstream fp-filter has a config-gate signal (the FrameworkSpec format has no native precondition field — see jackson.yaml header). Same shape applies to CVE-2018-7489, CVE-2019-12384, CVE-2019-14439, CVE-2020-9548.',
+  }),
+  example('CVE-2023-43804', 'urllib3', 'pypi', {
+    framework_spec: CVE_2023_43804,
+    vulnerable_fixture: VULN_2023_43804,
+    safe_fixture: SAFE_2023_43804,
+    reachability_level: 'confirmed',
+    entry_point_class: 'PUBLIC_UNAUTH',
+    rationale: "urllib3 leaks Cookie / Proxy-Authorization on cross-origin redirect when the request URL is attacker-controlled. Sink: any urllib3 entry point that takes a URL — urllib3.request(method, url), PoolManager.urlopen(method, url), PoolManager.request(method, url). The URL is at argument index 1, not 0 (method is index 0). Vulnerable fixture: Flask request.args.get('url') -> http.request('GET', target). Safe fixture: hard-coded internal URL literal. Same shape applies to CVE-2023-45803, CVE-2020-26137, CVE-2024-37891.",
   }),
 ];
 

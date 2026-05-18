@@ -19,6 +19,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import type { CanonicalEcosystem } from './ecosystem';
 
@@ -79,8 +80,14 @@ export class TarballCache {
       return { dir: cachedDir, cached: true };
     }
 
+    // The slug lossily collapses any char outside [A-Za-z0-9._-] to `_`,
+    // so distinct scoped packages (`@a/b-c` vs `@a-b/c`) can produce the
+    // same slug and write into the same dir — GuardDog would then scan a
+    // merged tree. Append a short hash of the full `ecosystem/name@version`
+    // key so each package gets a collision-free destination.
     const slug = packageName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const dest = path.join(this.root, ecosystem, `${slug}-${version}`);
+    const keyHash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 12);
+    const dest = path.join(this.root, ecosystem, `${slug}-${version}-${keyHash}`);
     fs.mkdirSync(dest, { recursive: true });
 
     try {
@@ -118,7 +125,7 @@ export class TarballCache {
     // Versions are passed unquoted to pacote — restrict to characters that
     // semver-coerce can handle without hitting the version-spec parser's
     // own URL/git fallback path.
-    if (!/^[A-Za-z0-9.+\-_]{1,64}$/.test(version)) {
+    if (!/^[A-Za-z0-9.+\-_]{1,256}$/.test(version)) {
       throw new Error(`malicious-scan: rejected non-version npm version ${JSON.stringify(version)}`);
     }
     // pacote is already a runtime dep of the worker; --no-scripts disables
@@ -143,7 +150,7 @@ export class TarballCache {
     if (!PYPI_NAME_RE.test(packageName)) {
       throw new Error(`malicious-scan: rejected non-distribution PyPI spec ${JSON.stringify(packageName)}`);
     }
-    if (!/^[A-Za-z0-9.+\-_!]{1,64}$/.test(version)) {
+    if (!/^[A-Za-z0-9.+\-_!]{1,256}$/.test(version)) {
       throw new Error(`malicious-scan: rejected non-version PyPI version ${JSON.stringify(version)}`);
     }
     // pip download can produce sdist OR wheel. We try sdist first
@@ -229,7 +236,9 @@ export class TarballCache {
     ).toString('utf8');
 
     let total = 0;
-    const resolvedRoot = path.resolve(dest);
+    // Append path.sep so the prefix check can't be satisfied by a sibling
+    // dir sharing a name prefix (`/tmp/x/pkg-1` vs `/tmp/x/pkg-1-evil`).
+    const resolvedRoot = path.resolve(dest) + path.sep;
     for (const { size, entryPath } of parseTarListing(listOut)) {
       total += size;
       if (total > MAX_UNCOMPRESSED_BYTES) {
@@ -238,7 +247,7 @@ export class TarballCache {
       if (tarballSize > 0 && total / tarballSize > MAX_COMPRESSION_RATIO) {
         throw new Error('compression ratio exceeds bomb threshold');
       }
-      const resolved = path.resolve(dest, entryPath);
+      const resolved = path.resolve(dest, entryPath) + path.sep;
       if (!resolved.startsWith(resolvedRoot)) {
         throw new Error(`zip-slip attempt: ${entryPath}`);
       }
@@ -275,7 +284,8 @@ with zipfile.ZipFile(src) as z:
     if zsize > 0 and (total / zsize) > RATIO:
       raise SystemExit('decompression bomb ratio')
     target = p.realpath(p.join(dst, info.filename))
-    if not target.startswith(p.realpath(dst)):
+    root = p.realpath(dst) + os.sep
+    if not (target + os.sep).startswith(root):
       raise SystemExit('zip-slip attempt: ' + info.filename)
   z.extractall(dst)
 `,

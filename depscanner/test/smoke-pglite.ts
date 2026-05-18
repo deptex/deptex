@@ -13,6 +13,7 @@ import { vector } from '@electric-sql/pglite/vector';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import * as fs from 'fs';
 import * as path from 'path';
+import { stripPgliteIncompatible } from '../src/storage/pglite';
 
 const SCHEMA_FILE = path.resolve(__dirname, '../../backend/database/schema.sql');
 
@@ -52,7 +53,7 @@ async function main() {
     );
   `);
 
-  const schemaSql = fs.readFileSync(SCHEMA_FILE, 'utf8');
+  const schemaSql = stripPgliteIncompatible(fs.readFileSync(SCHEMA_FILE, 'utf8'));
   console.log(`Loading schema dump (${(schemaSql.length / 1024).toFixed(1)} KB)...`);
   const t1 = Date.now();
   try {

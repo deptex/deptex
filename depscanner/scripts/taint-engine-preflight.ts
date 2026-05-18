@@ -18,10 +18,15 @@
  *   9. php                 — PHP substrate
  *  10. rust                — Rust substrate
  *  11. csharp              — C# substrate
- *  12. validate            — all framework specs against fixture matrix
- *  13. sanitizer-audit     — every -safe fixture exercises its sanitizer
- *  14. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
- *  15. recall              — global recall % across all -vulns/ fixture pairs
+ *  12. diag-emission       — DropReason exhaustiveness + NDJSON writer
+ *  13. const-resolver      — Phase 2a JS single-assignment const resolver
+ *  14. regex-literal       — Phase 3.2 regex-literal detector (substring + dedup)
+ *  15. insecure-default    — Phase 3.3 insecure-default detector (kwarg presence/value)
+ *  16. validate            — all framework specs against fixture matrix
+ *  17. sanitizer-audit     — every -safe fixture exercises its sanitizer
+ *  18. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
+ *  19. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
+ *  20. recall              — global recall % across all -vulns/ fixture pairs
  *
  * Run: npm run test:taint-engine-all
  *
@@ -49,9 +54,14 @@ const STAGES: Stage[] = [
   { name: 'php',              cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-php'] },
   { name: 'rust',             cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-rust'] },
   { name: 'csharp',           cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-csharp'] },
+  { name: 'diag-emission',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-diag'] },
+  { name: 'const-resolver',   cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-const-resolver'] },
+  { name: 'regex-literal',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-regex-literal'] },
+  { name: 'insecure-default', cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-insecure-default'] },
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },
   { name: 'sanitizer-audit',  cmd: 'npm', args: ['run', '--silent', 'taint-engine:sanitizer-audit'] },
   { name: 'cve-targeted',     cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-cve-targeted-fixtures'] },
+  { name: 'customer-app',     cmd: 'npm', args: ['run', '--silent', 'test:customer-app'] },
   { name: 'recall',           cmd: 'npm', args: ['run', '--silent', 'taint-engine:recall'] },
 ];
 

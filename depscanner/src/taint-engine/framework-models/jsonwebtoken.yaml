@@ -1,0 +1,75 @@
+# jsonwebtoken (node) framework spec — Deptex cross-file taint engine.
+#
+# jsonwebtoken's primary vulnerability shape is sanitizer-absence: callers
+# invoke `jwt.verify(token, key)` without an explicit `algorithms` allowlist,
+# which allows attackers to downgrade to `alg: none` or HMAC-with-RSA-pubkey
+# attacks (CVE-2022-23539). Without `algorithms`, the library auto-derives
+# the algorithm from the JWT header — exactly the value the attacker
+# controls.
+#
+# This spec models the F4 non-taint detector regime: `required_arguments`
+# on `jwt.verify(*)` fires a finding when the third positional (options
+# object) is absent OR when its `algorithms` property is missing.
+#
+# We do NOT model jwt.verify as a taint sink (no positional argument
+# carries attacker data in a way classical taint flow needs to find).
+# `argument_indices: []` keeps the propagator quiet on this entry.
+
+framework: jsonwebtoken
+language: js
+version: "*"
+
+sources:
+  # CVE-2022-23541 — kid-header lookup gadget.
+  #
+  # Pre-fix shape: `const decoded = jwt.decode(token, { complete: true });`
+  # then `decoded.header.kid` is fed verbatim into a secret-lookup (DB /
+  # FS / KV) used by jwt.verify. The decoded object IS the attacker-
+  # controlled surface (header bytes are unauthenticated). Re-tainting
+  # decode's return lets the engine carry that taint to whatever lookup
+  # the user code invokes, which is the actual sink shape Qwen emits.
+  - pattern: jwt.decode(*)
+    taint_kind: http_input
+    description: jwt.decode — decoded header/payload re-tainted (kid lookup gadget, CVE-2022-23541)
+  - pattern: "*.decode(*)"
+    taint_kind: http_input
+    description: jsonwebtoken decode (wildcard receiver — destructured import)
+
+sinks:
+  # CVE-2022-23539 — jwt.verify without an explicit algorithms allowlist.
+  #
+  # argument_indices: [99] is a sentinel out-of-bounds index — the propagator
+  # interprets [] as "any tainted arg fires", which would spuriously emit a
+  # flow on `jwt.verify(req.headers.token, secret)` even when the call is
+  # hardened with an algorithms allowlist. The non-taint detector regime
+  # (via `required_arguments`) is the only consumer here, so the taint
+  # contract should never fire. A future engine change can recognise
+  # "non-taint-only" sinks structurally; until then the sentinel keeps the
+  # two regimes from cross-talking.
+  - pattern: jwt.verify(*)
+    vuln_class: auth_bypass
+    argument_indices: [99]
+    description: jwt.verify without an explicit algorithms allowlist (CVE-2022-23539 shape)
+    required_arguments:
+      - name: algorithms
+        position: 2
+        match_mode: required
+
+  # CVE-2022-23539 / CVE-2022-23540 — taint-flow shape: when the
+  # secret/options arg of jwt.sign or jwt.verify is itself attacker-
+  # influenced (e.g. signed with a key derived from request data, or
+  # verified against a header-supplied algorithm list), the resulting
+  # token can be forged or downgrade-attacked. The AI rule generator
+  # consistently emits both jwt.sign + jwt.verify as auth_bypass sinks
+  # with argi=[1,2] in passing trials; mirror that here so the engine
+  # fires deterministically on the same fixture shape.
+  - pattern: jwt.sign(*)
+    vuln_class: auth_bypass
+    argument_indices: [0, 1, 2]
+    description: jwt.sign with attacker-influenced payload/secret/options — forgery surface (CVE-2022-23539 family)
+  - pattern: jwt.verify(*)
+    vuln_class: auth_bypass
+    argument_indices: [0, 1, 2]
+    description: jwt.verify with attacker-influenced token/secret/options — algorithm-confusion / weak-key / kid forgery (CVE-2022-23540 / 23541)
+
+sanitizers: []

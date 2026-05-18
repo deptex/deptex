@@ -1,10 +1,11 @@
 import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveMavenImport } from '../import-mapping/maven';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const JAVA_EXTENSIONS: readonly string[] = ['.java'];
 
@@ -198,35 +199,37 @@ export const javaModule: LanguageModule = {
     return JAVA_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
   async extractFile(source: string, filePath: string, langCtx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage('tree-sitter-java.wasm');
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
+    const tree = await parseSource('tree-sitter-java.wasm', source);
     if (!tree) {
-      return { filePath, language: 'java', imports: [], usages: [] };
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
     }
-    const root = tree.rootNode;
-    const { imports, ctx } = collectImports(root, source);
-    collectVariableTypes(root, source, ctx);
-    const usages = collectUsages(root, source, filePath, ctx, langCtx.deps);
+    try {
+      const root = tree.rootNode;
+      const { imports, ctx } = collectImports(root, source);
+      collectVariableTypes(root, source, ctx);
+      const usages = collectUsages(root, source, filePath, ctx, langCtx.deps);
 
-    const extracted: ExtractedFile = { filePath, language: 'java', imports, usages };
-    const entryPoints: EntryPoint[] = [];
-    for (const detector of getDetectorsForLanguage('java')) {
-      const importedSources = new Set(imports.map((i) => i.source));
-      const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
-        if (importedSources.has(t)) return true;
-        // Java imports often use the package-prefix form `org.springframework.*`
-        // or `javax.ws.rs.*` — match either the wildcard or any import path
-        // that shares the triggerPackage as a dotted prefix.
-        for (const imp of imports) if (imp.source === t || imp.source.startsWith(`${t}.`)) return true;
-        return false;
-      });
-      if (!triggered) continue;
-      try {
-        entryPoints.push(...detector.detect({ source, tree, file: extracted }));
-      } catch { /* non-fatal */ }
+      const extracted: ExtractedFile = { filePath, language: 'java', imports, usages };
+      const entryPoints: EntryPoint[] = [];
+      for (const detector of getDetectorsForLanguage('java')) {
+        const importedSources = new Set(imports.map((i) => i.source));
+        const triggered = detector.triggerImports.length === 0 || detector.triggerImports.some((t) => {
+          if (importedSources.has(t)) return true;
+          // Java imports often use the package-prefix form `org.springframework.*`
+          // or `javax.ws.rs.*` — match either the wildcard or any import path
+          // that shares the triggerPackage as a dotted prefix.
+          for (const imp of imports) if (imp.source === t || imp.source.startsWith(`${t}.`)) return true;
+          return false;
+        });
+        if (!triggered) continue;
+        try {
+          entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: langCtx.workspaceRoot, depNames: langCtx.deps.map((d) => d.name) }));
+        } catch (err) { recordDetectorError(detector.name, err); }
+      }
+      extracted.entryPoints = entryPoints;
+      return extracted;
+    } finally {
+      tree.delete();
     }
-    extracted.entryPoints = entryPoints;
-    return extracted;
   },
 };

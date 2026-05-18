@@ -34,7 +34,7 @@ cp .env.example .env   # or create .env with required vars
 
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`
 - For full stack: `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN`, `QSTASH_*`, GitHub App credentials, etc.
-- `AI_ENCRYPTION_KEY` (32-byte hex) — encrypts BYOK AI provider keys (`organization_ai_providers.encrypted_api_key`). Required for Tier 2 AI features (Aegis + Aider). Optional `AI_ENCRYPTION_KEY_PREV` + `AI_ENCRYPTION_KEY_VERSION=N` for key rotation.
+- `AI_ENCRYPTION_KEY` (32-byte hex) — AES-256-GCM key for `organization_registry_credentials.encrypted_credentials` (IaC v2 registry auth). BYOK AI was retired in `phase29_drop_byok`; the same encryption helper is reused for registry creds. Optional `AI_ENCRYPTION_KEY_PREV` + `AI_ENCRYPTION_KEY_VERSION=N` for key rotation.
 - `DAST_CREDENTIAL_KEY` (32-byte hex, **depscanner Fly env only — NOT backend API**) — encrypts per-target DAST credentials (`project_dast_credentials.encrypted_payload`). Required to scan authenticated apps; routes refuse credential PUT with `503 dast_encryption_not_configured` until set. Optional `DAST_CREDENTIAL_KEY_PREV` + `DAST_CREDENTIAL_KEY_VERSION=N` for rotation. Decryption is worker-side only — the API never decrypts.
 
 ### 3. Run the backend

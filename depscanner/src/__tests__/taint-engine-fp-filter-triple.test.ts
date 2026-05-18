@@ -616,6 +616,106 @@ describe('buildPrompt — system + user prompt with nonce wrapping', () => {
     expect(candidateBlock).toContain('escapeHtml(x)');
   });
 
+  // Wave 10 — Jackson + Log4j gating coverage. Engine relaxation
+  // (jackson.yaml, log4j.yaml) deliberately drops the precondition checks
+  // (`enableDefaultTyping`, `${jndi:` substring) and hands gating to the
+  // FP filter. The prompt must carry the safe-pattern + must-have-pattern
+  // markers for the model to suppress benign flows. See
+  // docs/fp-filter-audit-2026-05-10.md for the full audit.
+
+  describe('Jackson deserialization gating markers', () => {
+    test('system prompt lists default-typing enabler markers (must-have for kept)', () => {
+      // Tainted readValue on a concrete class with NO default typing enabled
+      // anywhere in scope. Prompt must teach the model these names so the
+      // model can decide to REJECT when none are visible.
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'deserialization', sink_method: 'mapper.readValue' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      expect(systemPrompt).toMatch(/Jackson deserialization gating/);
+      expect(systemPrompt).toContain('enableDefaultTyping');
+      expect(systemPrompt).toContain('activateDefaultTyping');
+      expect(systemPrompt).toContain('@JsonTypeInfo');
+      expect(systemPrompt).toContain('@JsonTypeIdResolver');
+    });
+
+    test('system prompt lists PTV markers (safe-pattern — must be REJECTED)', () => {
+      // BasicPolymorphicTypeValidator / setPolymorphicTypeValidator make the
+      // call safe even with default typing enabled.
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'deserialization', sink_method: 'mapper.readValue' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      expect(systemPrompt).toContain('setPolymorphicTypeValidator');
+      expect(systemPrompt).toContain('BasicPolymorphicTypeValidator');
+      expect(systemPrompt).toMatch(/MAKES the call safe.*MARK REJECTED/i);
+    });
+
+    test('system prompt tells the model to REJECT when no enabler/polymorphic target is visible', () => {
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'deserialization', sink_method: 'mapper.readValue' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      // The "concrete sealed/final class → REJECTED" instruction is the
+      // load-bearing one for the Wave 10 over-approximation.
+      expect(systemPrompt).toMatch(/concrete sealed.*MARK REJECTED/i);
+      // Polymorphic-target markers must also be named so the model
+      // distinguishes a real Object.class/Map.class call from a benign DTO.
+      expect(systemPrompt).toContain('Object.class');
+      expect(systemPrompt).toContain('Map.class');
+    });
+  });
+
+  describe('Log4j JNDI gating markers', () => {
+    test('system prompt lists \\${jndi:/\\${env: lookup markers (must-have for kept)', () => {
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'code_injection', sink_method: 'logger.error' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      expect(systemPrompt).toMatch(/Log4j JNDI gating/);
+      expect(systemPrompt).toContain('${jndi:');
+      expect(systemPrompt).toContain('${lower:jndi:');
+      expect(systemPrompt).toContain('${upper:jndi:');
+      expect(systemPrompt).toContain('${env:');
+    });
+
+    test('system prompt tells the model to REJECT when no ${...} interpolation is visible', () => {
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'code_injection', sink_method: 'logger.info' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      // The "no ${...} → REJECTED" instruction is what gates the parameterised
+      // logger.info("user={}", userId) Wave 10 false-positive class.
+      expect(systemPrompt).toMatch(/no\s+`?\$\{\.\.\.\}`?\s+template/i);
+      expect(systemPrompt).toMatch(/MARK REJECTED/);
+      // Explicit benign-shape example must remain in the prompt so the model
+      // recognises plain concatenation as safe.
+      expect(systemPrompt).toMatch(/parameterised/i);
+    });
+
+    test('system prompt lists formatMsgNoLookups / log4j ≥2.16 as safe-pattern markers', () => {
+      const { systemPrompt } = buildPrompt(
+        makeFlow({ vuln_class: 'code_injection', sink_method: 'logger.warn' }),
+        tmpDir,
+        [],
+        '0123456789abcdef',
+      );
+      expect(systemPrompt).toContain('formatMsgNoLookups');
+      expect(systemPrompt).toContain('log4j2.formatMsgNoLookups');
+      expect(systemPrompt).toMatch(/2\.16/);
+    });
+  });
+
   test('snippet that contains the closing tag is replaced with REDACTED-DELIMITER', () => {
     const NONCE = 'feedfacefeedface';
     const flow = makeFlow();

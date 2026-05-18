@@ -108,6 +108,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Error signing out:', error);
       throw error;
     }
+    // Notify in-memory caches (org switcher etc.) so they don't leak to the
+    // next user that signs in within the same tab session.
+    window.dispatchEvent(new Event('auth:signedOut'));
   };
 
   return (

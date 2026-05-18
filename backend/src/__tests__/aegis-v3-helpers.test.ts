@@ -39,7 +39,7 @@ describe('aegis-v3 helpers', () => {
   });
 
   describe('provider re-exports', () => {
-    it('exposes the v1 BYOK loaders unchanged', async () => {
+    it('exposes the v1 platform-key loaders unchanged', async () => {
       const provider = await import('../lib/aegis-v3/provider');
       expect(typeof provider.getLanguageModelForOrg).toBe('function');
       expect(typeof provider.getProviderInfoForOrg).toBe('function');

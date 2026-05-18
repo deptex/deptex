@@ -1,0 +1,54 @@
+# Reduced corpus for time-constrained baseline runs. See oss-corpus.yaml for
+# the full 10-repo definition. This subset covers npm/pypi/golang/gem at
+# small per-repo sizes so a single end-to-end run fits in ~25 min wall.
+# It exists so the harness has a fast-path the first hardening tick can
+# actually complete; the full corpus is the longer-running benchmark.
+
+repos:
+  - name: express
+    repo_url: https://github.com/expressjs/express.git
+    ecosystem: npm
+    framework: express
+    ref: 4.18.2
+    ground_truth_cves:
+      - id: CVE-2024-29041
+        expected_reachability: function
+        source: GHSA-rv95-896h-c2vc
+      - id: CVE-2022-24999
+        expected_reachability: data_flow
+        source: GHSA-hrpp-h998-j3pp
+    expected_min_findings: 1
+
+  - name: flask
+    repo_url: https://github.com/pallets/flask.git
+    ecosystem: pypi
+    framework: flask
+    ref: 3.0.2
+    ground_truth_cves:
+      - id: CVE-2023-30861
+        expected_reachability: function
+        source: GHSA-m2qf-hxjv-5gpq
+    expected_min_findings: 1
+
+  - name: gin
+    repo_url: https://github.com/gin-gonic/gin.git
+    ecosystem: golang
+    framework: gin
+    ref: v1.9.1
+    ground_truth_cves:
+      - id: CVE-2023-29401
+        expected_reachability: function
+        source: GHSA-3vp4-m3rf-835h
+    expected_min_findings: 1
+
+  - name: sinatra
+    repo_url: https://github.com/sinatra/sinatra.git
+    ecosystem: gem
+    framework: sinatra
+    ref: v4.0.0
+    ground_truth_cves:
+      - id: CVE-2024-21510
+        expected_reachability: function
+        source: GHSA-hxqq-ww5f-9q8m
+    expected_min_findings: 1
+    notes: Known framework-spec gap; recall expected = 0 today.

@@ -63,6 +63,7 @@ import { api, Organization, RolePermissions } from '../lib/api';
 import { aegisApi, AegisThread, FixStatusForBadge } from '../lib/aegis-api';
 import { useToast } from '../hooks/use-toast';
 import { ThreadIcon } from './aegis/ThreadIcon';
+import { UserAvatar } from './Avatar';
 import {
   buildOrgSettingsSections,
   computeEffectiveOrgPermissions,
@@ -540,7 +541,7 @@ export default function OrgSidebar({
   return (
     <>
       <Sidebar collapsible="offcanvas">
-        <SidebarHeader className="px-2 py-2">
+        <SidebarHeader className="px-2 py-3">
           {organization ? (
             <OrganizationSwitcher
               currentOrganizationId={organization.id}
@@ -549,12 +550,12 @@ export default function OrgSidebar({
               currentOrganizationRole={organization.role}
               currentOrganizationRoleDisplayName={organization.role_display_name}
               currentOrganizationRoleColor={organization.role_color}
-              triggerVariant="full"
             />
           ) : (
-            <div className="flex items-center gap-2 px-1 py-1" aria-hidden>
-              <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
+            <div className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1" aria-hidden>
+              <div className="h-7 w-7 rounded-full bg-muted animate-pulse flex-shrink-0" />
               <div className="h-4 w-24 rounded bg-muted animate-pulse" />
+              <div className="h-5 w-14 ml-auto rounded-full bg-muted animate-pulse flex-shrink-0" />
             </div>
           )}
         </SidebarHeader>
@@ -773,13 +774,9 @@ export default function OrgSidebar({
                   aria-label="Open account menu"
                   className="w-full flex items-center gap-2.5 h-9 px-1.5 rounded-md text-sm font-medium text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50 transition-colors"
                 >
-                  <img
+                  <UserAvatar
                     src={avatarUrl}
-                    alt=""
                     className="h-7 w-7 rounded-full object-cover border border-border flex-shrink-0"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <span className="truncate min-w-0 text-foreground">{displayName}</span>
                 </button>
@@ -787,18 +784,14 @@ export default function OrgSidebar({
               <DropdownMenuContent
                 align="start"
                 side="top"
-                className="w-72 p-0 px-3 pt-3 pb-3"
+                className="w-72 p-1.5 rounded-xl"
                 alignOffset={0}
                 sideOffset={8}
               >
-                <div className="flex items-center gap-3 px-0 py-3">
-                  <img
+                <div className="flex items-center gap-3 px-3 py-2">
+                  <UserAvatar
                     src={avatarUrl}
-                    alt=""
                     className="h-10 w-10 rounded-full object-cover border border-border flex-shrink-0"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <div className="min-w-0 flex-1">
                     {fullName && (
@@ -813,10 +806,10 @@ export default function OrgSidebar({
                 <DropdownMenuItem asChild>
                   <Link
                     to={`/organizations/${organizationId}/account/general`}
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <User className="h-4 w-4" />
+                    <User className="h-5 w-5" />
                     Account Settings
                   </Link>
                 </DropdownMenuItem>
@@ -825,10 +818,10 @@ export default function OrgSidebar({
                     href="/docs"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <BookOpen className="h-4 w-4" />
+                    <BookOpen className="h-5 w-5" />
                     Documentation
                   </a>
                 </DropdownMenuItem>
@@ -837,9 +830,9 @@ export default function OrgSidebar({
                     setProfileOpen(false);
                     setFeedbackOpen(true);
                   }}
-                  className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                  className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                 >
-                  <MessageSquare className="h-4 w-4" />
+                  <MessageSquare className="h-5 w-5" />
                   Feedback
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
@@ -847,27 +840,30 @@ export default function OrgSidebar({
                     href="/docs/help"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                     onClick={() => setProfileOpen(false)}
                   >
-                    <Mail className="h-4 w-4" />
+                    <Mail className="h-5 w-5" />
                     Contact Support
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <div className="pt-2">
-                  <DropdownMenuItem
-                    onClick={async () => {
-                      setProfileOpen(false);
+                <DropdownMenuItem
+                  onClick={async () => {
+                    setProfileOpen(false);
+                    try {
                       await onSignOut?.();
-                      navigate('/');
-                    }}
-                    className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10 flex items-center gap-2 rounded-md"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Log out
-                  </DropdownMenuItem>
-                </div>
+                    } catch {
+                      toast({ title: 'Sign out failed', description: 'Please try again.', variant: 'destructive' });
+                      return;
+                    }
+                    navigate('/');
+                  }}
+                  className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
+                >
+                  <LogOut className="h-5 w-5" />
+                  Log out
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarFooter>
@@ -882,7 +878,7 @@ export default function OrgSidebar({
       >
         <DialogContent
           hideClose
-          className="sm:max-w-[420px] bg-background p-0 gap-0 overflow-hidden"
+          className="sm:max-w-[420px] bg-background-card-header p-0 gap-0 overflow-hidden"
         >
           <div className="px-6 pt-6 pb-4">
             <DialogTitle>Delete chat?</DialogTitle>

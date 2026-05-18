@@ -191,20 +191,23 @@ router.post('/', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Organization name is required' });
     }
 
-    // Use creator's avatar for the new organization (user_profiles, then auth metadata)
-    let creatorAvatarUrl = null;
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('avatar_url')
-      .eq('user_id', userId)
-      .single();
-    if (profile?.avatar_url) {
-      creatorAvatarUrl = profile.avatar_url;
-    } else {
-      const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userId);
-      const meta = authUser?.user_metadata;
-      creatorAvatarUrl = meta?.picture ?? meta?.avatar_url ?? null;
-    }
+    // Use creator's avatar for the new organization. Identity now lives entirely
+    // on auth.users.user_metadata after the user_profiles refactor — prefer the
+    // custom-uploaded avatar over the OAuth-provided one. Fall back to the raw
+    // identity_data because Supabase doesn't always merge OAuth fields into
+    // user_metadata on the first session after sign-up.
+    const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userId);
+    const meta = authUser?.user_metadata;
+    const idData = authUser?.identities?.[0]?.identity_data as
+      | { picture?: string; avatar_url?: string }
+      | undefined;
+    const creatorAvatarUrl =
+      meta?.custom_avatar_url
+      ?? meta?.picture
+      ?? meta?.avatar_url
+      ?? idData?.picture
+      ?? idData?.avatar_url
+      ?? null;
 
     // Create organization (plan tier lives in organization_plans only)
     const { data: organization, error: orgError } = await supabase
@@ -359,6 +362,8 @@ router.post('/', async (req: AuthRequest, res) => {
       ...organization,
       plan: 'free',
       role: 'owner',
+      role_display_name: 'Owner',
+      role_color: '#f59e0b',
     });
   } catch (error: any) {
     console.error('Error creating organization:', error);
@@ -1022,6 +1027,48 @@ router.post('/:id/invitations/:invitationId/accept', async (req: AuthRequest, re
   }
 });
 
+// POST /api/organizations/:id/invitations/:invitationId/decline - Decline invitation
+// Distinct from the admin DELETE below: this validates the caller is the invitee
+// (via email match) rather than an admin/owner of the org.
+router.post('/:id/invitations/:invitationId/decline', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, invitationId } = req.params;
+
+    const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
+    if (userError || !user?.email) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const { data: invitation, error: invitationError } = await supabase
+      .from('organization_invitations')
+      .select('*')
+      .eq('id', invitationId)
+      .eq('organization_id', id)
+      .eq('email', user.email.toLowerCase())
+      .eq('status', 'pending')
+      .single();
+
+    if (invitationError || !invitation) {
+      return res.status(404).json({ error: 'Invitation not found or already used' });
+    }
+
+    const { error: deleteError } = await supabase
+      .from('organization_invitations')
+      .delete()
+      .eq('id', invitationId);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    res.json({ message: 'Invitation declined' });
+  } catch (error: any) {
+    console.error('Error declining invitation:', error);
+    res.status(500).json({ error: error.message || 'Failed to decline invitation' });
+  }
+});
+
 // DELETE /api/organizations/:id/invitations/:invitationId - Cancel invitation
 router.delete('/:id/invitations/:invitationId', async (req: AuthRequest, res) => {
   try {
@@ -1289,9 +1336,16 @@ router.get('/invitations/:invitationId', async (req, res) => {
     // Get organization name
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .eq('id', invitation.organization_id)
       .single();
+
+    const { data: roleRow } = await supabase
+      .from('organization_roles')
+      .select('display_name, color')
+      .eq('organization_id', invitation.organization_id)
+      .eq('name', invitation.role)
+      .maybeSingle();
 
     // Get teams from junction table
     const { data: invitationTeams } = await supabase
@@ -1327,8 +1381,11 @@ router.get('/invitations/:invitationId', async (req, res) => {
       id: invitation.id,
       email: invitation.email,
       role: invitation.role,
+      role_display_name: roleRow?.display_name || null,
+      role_color: roleRow?.color || null,
       organization_id: invitation.organization_id,
       organization_name: organization?.name || 'Organization',
+      organization_avatar_url: organization?.avatar_url || null,
       expires_at: invitation.expires_at,
       team_ids: teamIds,
       team_names: teamNames,
@@ -6206,7 +6263,8 @@ router.patch('/:id/teams/:teamId/notification-rules/:ruleId/snooze', async (req:
 });
 
 // ============================================================
-// AI Provider Management (BYOK)
+// hasManageIntegrations — used by /ai-usage and /ai-usage/logs below.
+// (BYOK provider management endpoints were retired with phase29_drop_byok.)
 // ============================================================
 
 async function hasManageIntegrations(orgId: string, userId: string): Promise<boolean> {
@@ -6228,241 +6286,6 @@ async function hasManageIntegrations(orgId: string, userId: string): Promise<boo
   return role?.permissions?.manage_integrations === true;
 }
 
-// POST /api/organizations/:id/ai-providers -- add or update provider
-router.post('/:id/ai-providers', async (req: AuthRequest, res) => {
-  try {
-    const { encryptApiKey, isEncryptionConfigured } = await import('../lib/ai/encryption');
-    if (!isEncryptionConfigured()) {
-      return res.status(503).json({ error: 'AI encryption not configured. Contact your administrator.' });
-    }
-
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-    if (!(await hasManageIntegrations(orgId, userId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-    }
-
-    const { provider, api_key, model_preference, monthly_cost_cap, display_name, api_base_url } = req.body;
-    if (!provider || !api_key) {
-      return res.status(400).json({ error: 'provider and api_key are required' });
-    }
-    if (!['openai', 'anthropic', 'google', 'custom'].includes(provider)) {
-      return res.status(400).json({ error: 'Invalid provider. Must be openai, anthropic, google, or custom' });
-    }
-    if (provider === 'custom' && (!display_name || typeof display_name !== 'string' || !display_name.trim())) {
-      return res.status(400).json({ error: 'display_name is required for custom provider' });
-    }
-    if (provider === 'custom' && (!api_base_url || typeof api_base_url !== 'string' || !api_base_url.trim())) {
-      return res.status(400).json({ error: 'api_base_url is required for custom provider' });
-    }
-
-    const { encrypted, version } = encryptApiKey(api_key);
-
-    const { data: existing } = await supabase
-      .from('organization_ai_providers')
-      .select('id')
-      .eq('organization_id', orgId);
-
-    const isOnlyProvider = !existing || existing.length === 0;
-
-    if (provider === 'custom') {
-      const { data, error } = await supabase
-        .from('organization_ai_providers')
-        .insert({
-          organization_id: orgId,
-          provider: 'custom',
-          encrypted_api_key: encrypted,
-          encryption_key_version: version,
-          display_name: (display_name || '').trim(),
-          api_base_url: (api_base_url || '').trim().replace(/\/$/, ''),
-          model_preference: model_preference || null,
-          monthly_cost_cap: monthly_cost_cap ?? 100,
-          is_default: isOnlyProvider,
-          updated_at: new Date().toISOString(),
-        })
-        .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
-        .single();
-      if (error) throw error;
-      return res.json({ ...data, connected: true });
-    }
-
-    const { data, error } = await supabase
-      .from('organization_ai_providers')
-      .upsert({
-        organization_id: orgId,
-        provider,
-        encrypted_api_key: encrypted,
-        encryption_key_version: version,
-        model_preference: model_preference || null,
-        monthly_cost_cap: monthly_cost_cap ?? 100,
-        is_default: isOnlyProvider ? true : undefined,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'organization_id,provider' })
-      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
-      .single();
-
-    if (error) throw error;
-    res.json({ ...data, connected: true });
-  } catch (error: any) {
-    console.error('Error adding AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to add AI provider' });
-  }
-});
-
-// GET /api/organizations/:id/ai-providers -- list providers (no keys)
-router.get('/:id/ai-providers', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-    if (!(await hasManageIntegrations(orgId, userId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-    }
-
-    const { data, error } = await supabase
-      .from('organization_ai_providers')
-      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, created_at, updated_at')
-      .eq('organization_id', orgId);
-
-    if (error) throw error;
-    res.json((data || []).map((p: any) => ({ ...p, connected: true })));
-  } catch (error: any) {
-    console.error('Error listing AI providers:', error);
-    res.status(500).json({ error: error.message || 'Failed to list AI providers' });
-  }
-});
-
-// DELETE /api/organizations/:id/ai-providers/:providerId
-router.delete('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-    if (!(await hasManageIntegrations(orgId, userId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-    }
-
-    const { providerId } = req.params;
-
-    const { data: activeThreads } = await supabase
-      .from('aegis_chat_threads')
-      .select('id')
-      .eq('organization_id', orgId)
-      .gte('updated_at', new Date(Date.now() - 5 * 60 * 1000).toISOString())
-      .limit(1);
-
-    let warning: string | undefined;
-    if (activeThreads?.length) {
-      warning = 'There are active Aegis conversations using this provider. They may be affected.';
-    }
-
-    const { error } = await supabase
-      .from('organization_ai_providers')
-      .delete()
-      .eq('id', providerId)
-      .eq('organization_id', orgId);
-
-    if (error) throw error;
-    res.json({ message: 'Provider deleted', ...(warning ? { warning } : {}) });
-  } catch (error: any) {
-    console.error('Error deleting AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete AI provider' });
-  }
-});
-
-// POST /api/organizations/:id/ai-providers/test -- test connection (dry-run)
-router.post('/:id/ai-providers/test', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-
-    const { checkRateLimit } = await import('../lib/rate-limit');
-    const rl = await checkRateLimit(`ai:test:${userId}`, 5, 60);
-    if (!rl.allowed) {
-      return res.status(429).json({ error: 'Too many test requests. Try again in a minute.' });
-    }
-
-    const { provider, api_key, model, api_base_url } = req.body;
-    if (!provider || !api_key) {
-      return res.status(400).json({ error: 'provider and api_key are required' });
-    }
-
-    const { createProviderFromKey } = await import('../lib/ai/provider');
-    const baseURL = provider === 'custom' ? (api_base_url || '').trim().replace(/\/$/, '') : undefined;
-    const aiProvider = createProviderFromKey(provider, api_key, model, baseURL);
-
-    const result = await aiProvider.chat([
-      { role: 'user', content: 'Say hello in exactly one word.' }
-    ], { maxTokens: 10 });
-
-    res.json({ success: true, model: result.model, response: result.content.slice(0, 100) });
-  } catch (error: any) {
-    const { AIProviderError } = await import('../lib/ai/types');
-    if (error instanceof AIProviderError) {
-      return res.json({ success: false, error: error.message, code: error.code });
-    }
-    res.json({ success: false, error: error.message || 'Connection test failed' });
-  }
-});
-
-// PATCH /api/organizations/:id/ai-providers/:providerId -- update model_preference, or (custom) display_name, api_base_url
-router.patch('/:id/ai-providers/:providerId', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-    const providerId = req.params.providerId;
-    if (!(await hasManageIntegrations(orgId, userId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-    }
-
-    const { model_preference, display_name, api_base_url } = req.body;
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (model_preference !== undefined) updates.model_preference = model_preference === '' ? null : model_preference;
-    if (display_name !== undefined) updates.display_name = display_name === '' ? null : (display_name || '').trim();
-    if (api_base_url !== undefined) updates.api_base_url = api_base_url === '' ? null : (api_base_url || '').trim().replace(/\/$/, '');
-
-    const { data, error } = await supabase
-      .from('organization_ai_providers')
-      .update(updates)
-      .eq('id', providerId)
-      .eq('organization_id', orgId)
-      .select('id, provider, model_preference, is_default, monthly_cost_cap, display_name, api_base_url, updated_at')
-      .single();
-
-    if (error) throw error;
-    res.json({ ...data, connected: true });
-  } catch (error: any) {
-    console.error('Error updating AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to update provider' });
-  }
-});
-
-// PATCH /api/organizations/:id/ai-providers/:providerId/default
-router.patch('/:id/ai-providers/:providerId/default', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const orgId = req.params.id;
-    if (!(await hasManageIntegrations(orgId, userId))) {
-      return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-    }
-
-    const { providerId } = req.params;
-
-    await supabase
-      .from('organization_ai_providers')
-      .update({ is_default: false, updated_at: new Date().toISOString() })
-      .eq('organization_id', orgId);
-
-    const { error } = await supabase
-      .from('organization_ai_providers')
-      .update({ is_default: true, updated_at: new Date().toISOString() })
-      .eq('id', providerId)
-      .eq('organization_id', orgId);
-
-    if (error) throw error;
-    res.json({ message: 'Default provider updated' });
-  } catch (error: any) {
-    console.error('Error setting default AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to set default provider' });
-  }
-});
 
 // ============================================================
 // EPD (reachability AI verification) org settings

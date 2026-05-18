@@ -38,8 +38,8 @@ export function RoleBadge({ role, roleDisplayName, roleColor, className }: RoleB
             borderColor: hexToRgba(roleColor, 0.2),
         };
     } else {
-        // No color set - transparent with subtle border for a plain, neutral look
-        badgeStyles = 'bg-transparent text-foreground-secondary border border-foreground/20';
+        // No color set — neutral fill in the foreground palette so it picks up theme
+        badgeStyles = 'bg-foreground/5 text-foreground-secondary border border-foreground/15';
     }
 
     // Determine display name
@@ -54,7 +54,7 @@ export function RoleBadge({ role, roleDisplayName, roleColor, className }: RoleB
 
     return (
         <span
-            className={cn(`px-2 py-0.5 rounded-full text-xs font-medium border flex-shrink-0 transition-colors`, badgeStyles, className)}
+            className={cn(`inline-flex items-center h-6 px-2 rounded-lg text-xs font-medium border flex-shrink-0 transition-colors`, badgeStyles, className)}
             style={customStyle}
         >
             {displayName}

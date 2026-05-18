@@ -80,6 +80,26 @@ describe('parseDockerfileFinalStage (Patch E)', () => {
     const f = writeTempDockerfile('no-from', `# just a comment\nRUN echo hi\n`);
     expect(parseDockerfileFinalStage(f)).toBeNull();
   });
+
+  it('returns null when the final FROM references an earlier stage alias', () => {
+    // `FROM builder AS production` flatten — the alias points to a prior
+    // stage, not an external image. Without the alias-vs-imageRef check,
+    // resolveImageDigest would crane-probe "builder" and waste budget.
+    const f = writeTempDockerfile(
+      'alias-final',
+      `FROM node:20 AS builder\nRUN npm run build\nFROM builder AS production\nCMD ["node", "."]\n`
+    );
+    expect(parseDockerfileFinalStage(f)).toBeNull();
+  });
+
+  it('handles a FROM line that wraps with a backslash continuation', () => {
+    const f = writeTempDockerfile(
+      'continuation',
+      `FROM \\\n  --platform=linux/amd64 \\\n  nginx:alpine AS final\nCOPY . /\n`
+    );
+    const stage = parseDockerfileFinalStage(f);
+    expect(stage?.imageRef).toBe('nginx:alpine');
+  });
 });
 
 describe('extractGhcrOwner', () => {
@@ -146,7 +166,49 @@ describe('parseTrivyConfigOutput', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].framework).toBe('dockerfile');
     expect(findings[0].rule_id).toBe('AVD-DS-0001');
-    expect(findings[0].iac_fingerprint).toBe('trivy:AVD-DS-0001:Dockerfile:RUN');
+    // Fingerprint is `trivy:<rule-id>:<16-hex cause hash>` — the cause segment
+    // is opaque free text (raw RUN instructions), so it is hashed rather than
+    // embedded, and can never trip a regex validator.
+    expect(findings[0].iac_fingerprint).toMatch(/^trivy:AVD-DS-0001:[a-f0-9]{16}$/);
+  });
+
+  it('produces a stable, regex-safe fingerprint for Resource values with shell metacharacters', () => {
+    // Trivy emits Resource strings like `Dockerfile:RUN apt-get install -y curl`
+    // containing whitespace, semicolons, backticks, etc. The fingerprint must
+    // never be dropped to null over these — the cause is hashed.
+    const make = (resource: string) =>
+      JSON.stringify({
+        Results: [
+          {
+            Target: 'Dockerfile',
+            Type: 'dockerfile',
+            Misconfigurations: [
+              {
+                ID: 'AVD-DS-0026',
+                AVDID: 'AVD-DS-0026',
+                Title: 'no-healthcheck',
+                Severity: 'LOW',
+                CauseMetadata: { Resource: resource, StartLine: 7, EndLine: 7 },
+              },
+            ],
+          },
+        ],
+      });
+    const a = parseTrivyConfigOutput(
+      make('Dockerfile:RUN apt-get install -y curl && echo `id`; ls'),
+      'trivy@0.50.4',
+    );
+    expect(a).toHaveLength(1);
+    expect(a[0].iac_fingerprint).toMatch(/^trivy:AVD-DS-0026:[a-f0-9]{16}$/);
+    // Same input → same fingerprint (status carry-forward depends on this).
+    const a2 = parseTrivyConfigOutput(
+      make('Dockerfile:RUN apt-get install -y curl && echo `id`; ls'),
+      'trivy@0.50.4',
+    );
+    expect(a2[0].iac_fingerprint).toBe(a[0].iac_fingerprint);
+    // Different cause → different fingerprint.
+    const b = parseTrivyConfigOutput(make('Dockerfile:RUN something else'), 'trivy@0.50.4');
+    expect(b[0].iac_fingerprint).not.toBe(a[0].iac_fingerprint);
   });
 
   it('returns [] on malformed JSON', () => {
@@ -200,6 +262,51 @@ describe('parseTrivyImageOutput', () => {
       ],
     });
     expect(parseTrivyImageOutput(sample, 'nginx:alpine', 'trivy@0.50.4').findings).toEqual([]);
+  });
+
+  it('returns empty imageDigest when neither RepoDigests nor ImageID is present (no tag fallback)', () => {
+    // Trivy occasionally omits both RepoDigests and ImageID for images
+    // pulled by tag from a registry that doesn't expose digests. Falling
+    // back to the tag (e.g. `nginx:1.25`) would make every later rescan of
+    // the same tag look like a different image once upstream re-pushes.
+    // The parser must surface '' so the runner can warn instead.
+    const sample = JSON.stringify({
+      ArtifactName: 'nginx:1.25',
+      Metadata: {},
+      Results: [
+        {
+          Class: 'os-pkgs',
+          Type: 'alpine',
+          Vulnerabilities: [
+            {
+              VulnerabilityID: 'CVE-2024-9999',
+              PkgName: 'curl',
+              InstalledVersion: '8.5.0-r0',
+              Severity: 'MEDIUM',
+            },
+          ],
+        },
+      ],
+    });
+    const parsed = parseTrivyImageOutput(sample, 'nginx:1.25', 'trivy@0.50.4');
+    expect(parsed.imageDigest).toBe('');
+    expect(parsed.findings).toHaveLength(1);
+    // image_reference still carries the tag for human-readable display, but
+    // image_digest must NOT be the tag.
+    expect(parsed.findings[0].image_reference).toBe('nginx:1.25');
+    expect(parsed.findings[0].image_digest).toBe('');
+  });
+
+  it('falls back to ImageID when RepoDigests is empty', () => {
+    const sample = JSON.stringify({
+      Metadata: {
+        ImageID: 'sha256:deadbeef',
+        RepoDigests: [],
+      },
+      Results: [],
+    });
+    const parsed = parseTrivyImageOutput(sample, 'nginx:1.25', 'trivy@0.50.4');
+    expect(parsed.imageDigest).toBe('sha256:deadbeef');
   });
 });
 

@@ -1,0 +1,4 @@
+{
+  "_comment": "Per-fixture ignore list (merged with DEFAULT_IGNORE_FIELDS in test/snapshot.ts). `active` and `previous` appear only inside finalize_summary.reap and are run-id strings the CLI mints fresh on every invocation (see schema.sql reap_old_extractions). The top-level *_extraction_run_id columns are already ignored globally; these are aliased copies inside the reap JSONB.",
+  "ignore_fields": ["active", "previous"]
+}

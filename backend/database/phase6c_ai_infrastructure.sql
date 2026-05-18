@@ -1,25 +1,12 @@
 -- Phase 6C: AI Infrastructure and Aegis Security Copilot
--- organization_ai_providers, ai_usage_logs, aegis_chat_threads additions, projects vuln check columns, permission migration
+-- ai_usage_logs, aegis_chat_threads additions, projects vuln check columns, permission migration
 --
 -- Prerequisite: aegis_chat_threads must exist (run aegis_chat_threads_schema.sql first).
 -- If it doesn't exist, the aegis_chat_threads ALTER block is skipped; run it again after creating the table.
-
--- BYOK AI provider configuration per organization
-CREATE TABLE IF NOT EXISTS organization_ai_providers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic', 'google')),
-  encrypted_api_key TEXT NOT NULL,
-  encryption_key_version INTEGER DEFAULT 1,
-  model_preference TEXT,
-  is_default BOOLEAN DEFAULT false,
-  monthly_cost_cap NUMERIC(8, 2) DEFAULT 100.00,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(organization_id, provider)
-);
-
-CREATE INDEX IF NOT EXISTS idx_oap_org ON organization_ai_providers(organization_id);
+--
+-- Note: this migration originally also created organization_ai_providers
+-- (the BYOK table) and phase_ai_custom_provider.sql extended it. Both were
+-- removed in phase29_drop_byok.sql when Deptex switched to platform-key-only AI.
 
 -- AI usage logging for cost tracking and audit
 CREATE TABLE IF NOT EXISTS ai_usage_logs (
@@ -27,7 +14,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_logs (
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,
   feature TEXT NOT NULL,
-  tier TEXT NOT NULL CHECK (tier IN ('platform', 'byok')),
+  tier TEXT NOT NULL CHECK (tier IN ('platform', 'byok')), -- 'byok' retained for historical row compatibility; new writes always 'platform'
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   input_tokens INTEGER NOT NULL,

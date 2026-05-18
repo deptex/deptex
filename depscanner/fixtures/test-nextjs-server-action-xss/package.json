@@ -1,0 +1,12 @@
+{
+  "name": "deptex-fixture-nextjs-server-action-xss",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "next": "13.4.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "dompurify": "2.0.10"
+  }
+}

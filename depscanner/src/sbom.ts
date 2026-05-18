@@ -107,9 +107,18 @@ export function getBomRefToNameVersion(sbom: CycloneDxSbom): Map<string, { name:
 export function parseSbom(sbom: CycloneDxSbom): {
   dependencies: ParsedSbomDep[];
   relationships: ParsedSbomRelationship[];
+  /** Number of components present in the SBOM before name/version filtering. */
+  rawComponentCount: number;
+  /** Components dropped because name or version couldn't be resolved (e.g. cdxgen
+   *  emitted a name without a version when the package manager failed to
+   *  resolve it). Surfacing this lets the pipeline distinguish "manifest empty"
+   *  from "manifest had stuff we couldn't parse." */
+  droppedVersionlessCount: number;
 } {
   const components = sbom.components || [];
   const depGraph = sbom.dependencies || [];
+  const rawComponentCount = components.length;
+  let droppedVersionlessCount = 0;
 
   const bomRefToComponent = new Map<string, SbomComponent>();
   for (const c of components) {
@@ -179,7 +188,10 @@ export function parseSbom(sbom: CycloneDxSbom): {
       if (!name) name = nameFromPurl(comp.purl);
       if (!version) version = versionFromPurl(comp.purl);
     }
-    if (!name || !version) continue;
+    if (!name || !version) {
+      droppedVersionlessCount++;
+      continue;
+    }
 
     const license = extractLicense(comp.licenses);
 
@@ -201,7 +213,7 @@ export function parseSbom(sbom: CycloneDxSbom): {
     });
   }
 
-  return { dependencies, relationships };
+  return { dependencies, relationships, rawComponentCount, droppedVersionlessCount };
 }
 
 function extractLicense(licenses: unknown): string | null {

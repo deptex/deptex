@@ -66,12 +66,14 @@ describe('taint-engine defaults', () => {
   });
 
   test('vuln_classes_enabled DEFAULT migrations cover every ALL_VULN_CLASSES entry', () => {
-    // The column was introduced in phase26 (initial 11-class taxonomy) and
-    // extended in phase28b (added `code_injection` for SpEL-style CVEs). Every
-    // class in the engine taxonomy must appear in at least one phase*.sql
-    // migration so the live DB DEFAULT keeps tracking the engine. Surface the
-    // combined migration text so the next taxonomy expansion can't ship
-    // without a matching migration.
+    // The column was introduced in phase26 (initial 11-class taxonomy),
+    // extended in phase28b (added `code_injection` for SpEL-style CVEs), and
+    // extended again in phase28c (added `weak_crypto` + `auth_bypass` for
+    // jsonwebtoken-kid / Spring-Security CVEs). Every class in the engine
+    // taxonomy must appear in at least one phase*.sql migration so the live
+    // DB DEFAULT keeps tracking the engine. Surface the combined migration
+    // text so the next taxonomy expansion can't ship without a matching
+    // migration.
     const phase26 = fs.readFileSync(
       path.resolve(__dirname, '../../database/phase26_taint_engine.sql'),
       'utf8',
@@ -80,7 +82,11 @@ describe('taint-engine defaults', () => {
       path.resolve(__dirname, '../../database/phase28b_code_injection_vuln_class.sql'),
       'utf8',
     );
-    const combined = `${phase26}\n${phase28b}`;
+    const phase28c = fs.readFileSync(
+      path.resolve(__dirname, '../../database/phase28c_extend_vuln_class_enum.sql'),
+      'utf8',
+    );
+    const combined = `${phase26}\n${phase28b}\n${phase28c}`;
     for (const cls of ALL_VULN_CLASSES) {
       expect(combined).toContain(cls);
     }

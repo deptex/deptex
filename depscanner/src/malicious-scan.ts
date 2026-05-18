@@ -26,6 +26,11 @@ import { canonicalizeEcosystem } from './malicious/ecosystem';
 import { lookupFeed } from './malicious/feeds';
 import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, type GuardDogRule } from './malicious/guarddog';
 import { TarballCache } from './malicious/tarball-cache';
+import pLimit from 'p-limit';
+
+// Per-package malicious scans are independent and subprocess/network bound;
+// run a few concurrently rather than serially.
+const MALICIOUS_SCAN_CONCURRENCY = 4;
 import {
   insertFindingsBatch,
   readCapabilityCache,
@@ -144,31 +149,38 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   let guarddogHits = 0;
   const lastHeartbeat = { at: Date.now() };
 
+  const limit = pLimit(MALICIOUS_SCAN_CONCURRENCY);
+  let cancelled = false;
   try {
-    for (const pkg of ctx.packages) {
+    await Promise.all(ctx.packages.map((pkg) => limit(async () => {
+      if (cancelled) return;
       if (ctx.checkCancelled && (await ctx.checkCancelled())) {
-        await ctx.log.warn(STEP, 'Scan cancelled — releasing worker.');
-        break;
+        if (!cancelled) {
+          cancelled = true;
+          await ctx.log.warn(STEP, 'Scan cancelled — releasing worker.');
+        }
+        return;
       }
 
       // Heartbeat every ~30s so the stuck-job recovery cron doesn't
-      // reclaim a long-running scan.
+      // reclaim a long-running scan. Stamp the clock before the await so
+      // concurrent slots don't all fire a heartbeat at once.
       if (ctx.heartbeat && Date.now() - lastHeartbeat.at > 30_000) {
+        lastHeartbeat.at = Date.now();
         try {
           await ctx.heartbeat();
         } catch { /* non-fatal */ }
-        lastHeartbeat.at = Date.now();
       }
 
       const canonical = canonicalizeEcosystem(pkg.ecosystem);
       if (!canonical) {
         // Unrecognized ecosystem — skip cleanly (not a failure).
         scanned++;
-        continue;
+        return;
       }
       if (!pkg.version) {
         scanned++;
-        continue;
+        return;
       }
 
       try {
@@ -219,7 +231,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
           if (entry) {
             // GuardDog consumer
             if (guarddogAvailable && !guarddogCacheHit) {
-              const result = runGuardDog(entry.dir, canonical, pkg.name);
+              const result = await runGuardDog(entry.dir, canonical, pkg.name);
               rules = result.rules;
               await upsertGuardDogCache(ctx.supabase, {
                 package_name: pkg.name,
@@ -281,7 +293,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
           await ctx.log.warn(STEP, `Failed to scan ${pkg.name}@${pkg.version}: ${err?.message ?? err}`);
         }
       }
-    }
+    })));
   } finally {
     cache.cleanup();
   }
@@ -293,9 +305,12 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
         ? 'failed'
         : 'partial';
 
-  // Hard-fail only when every package errored (clear infra outage).
+  // All-failed is a soft-fail: return status='failed' and let the pipeline
+  // step persist `malicious_scan_status='failed'` and skip event emission.
+  // Throwing here would discard the status and surface a transient
+  // registry blip as a hard pipeline error — soft-fail is the design intent.
   if (status === 'failed') {
-    throw new Error(`malicious-scan failed for all ${ctx.packages.length} packages`);
+    await ctx.log.warn(STEP, `malicious-scan failed for all ${ctx.packages.length} packages`);
   }
 
   // Atomic batch insert + recompute is_malicious (RPC).
@@ -307,7 +322,12 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   // Apply org-wide allowlist after insert: any matching finding is
   // soft-suppressed with `suppressed_reason='allowlist:<entry_id>'`.
   // Soft-fail — RPC failure logs a warn but doesn't fail the scan.
-  if (inserted > 0) {
+  //
+  // Run unconditionally whenever the insert RPC didn't error and there are
+  // pending findings: on an idempotent re-scan the insert RPC inserts 0
+  // new rows (ON CONFLICT DO NOTHING), but an allowlist entry added AFTER
+  // the original scan must still take effect against the existing rows.
+  if (!rpcError && pending.length > 0) {
     try {
       const { data: suppressed, error: allowlistError } = await ctx.supabase.rpc<number>(
         'apply_malicious_allowlist',

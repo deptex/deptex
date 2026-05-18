@@ -253,9 +253,10 @@ export async function upsertBaseImageRecommendations(
 // initial-writer attribution they were inserted with.
 //
 // Truncation: scan_results is bounded by a Postgres CHECK at 1 MB. If the
-// findings array serializes larger, we sort by severity desc and drop tail
-// findings until it fits, logging `cache_row_truncated`. The truncation is
-// transparent to readers — the cached array is the canonical scan result.
+// findings array would serialize larger, the row is NOT cached at all — a
+// partial result must never be served to other orgs as if it were complete.
+// `truncateFindingsToFit` still exists to detect the over-budget case; the
+// caller logs `cache_row_truncated_skip` and skips the write.
 // ============================================================================
 
 export type ContainerCacheScanner = 'trivy';
@@ -430,10 +431,16 @@ export async function upsertContainerScanCache(
 ): Promise<void> {
   const { findings, truncated } = truncateFindingsToFit(parsedFindings);
   if (truncated) {
+    // A truncated row is a partial scan result. Writing it would silently
+    // serve the lossy subset to every other org that later hits this digest,
+    // with no signal that findings were dropped. There is no DB column to
+    // flag the row as partial, so we simply don't cache it — subsequent orgs
+    // become a clean cache miss and run their own full Trivy scan.
     console.warn(
-      `cache_row_truncated digest=${key.image_digest} ` +
-        `original=${parsedFindings.length} kept=${findings.length}`
+      `cache_row_truncated_skip digest=${key.image_digest} ` +
+        `original=${parsedFindings.length} would_keep=${findings.length} — not caching`
     );
+    return;
   }
 
   const row: ContainerScanCacheRow = {

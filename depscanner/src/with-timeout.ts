@@ -116,6 +116,21 @@ export async function logStepError(
       step: opts.step,
       code: opts.code,
     });
+    // Last-ditch structured marker: when Supabase is down, this is the only
+    // record of the original error we were trying to persist. Operators can
+    // grep `[LOGSTEPERROR_FALLBACK]` to recover the swallowed errors.
+    console.error(
+      '[LOGSTEPERROR_FALLBACK]',
+      JSON.stringify({
+        jobId: opts.jobId,
+        projectId: opts.projectId,
+        step: opts.step,
+        code: opts.code,
+        severity: opts.severity ?? 'error',
+        originalErrorMessage: opts.message,
+        insertFailureReason: error.message,
+      }),
+    );
   }
 }
 
@@ -249,33 +264,23 @@ export function runScannerSubprocess(
         }, heartbeatIntervalMs)
       : null;
 
-    // Terminate the child gracefully (SIGTERM), then forcibly (SIGKILL) if it
-    // does not exit within a short grace window. A subprocess blocked on
-    // uninterruptible disk I/O — a hostile image filling the worker's disk —
-    // ignores SIGTERM, so SIGTERM alone does not actually stop the disk-fill.
-    let killEscalation: NodeJS.Timeout | null = null;
-    const terminate = () => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already dead */
-      }
-      if (!killEscalation) {
-        killEscalation = setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* already dead */
-          }
-        }, 3_000);
-        killEscalation.unref?.();
+    // A scanner may ignore SIGTERM; escalate to SIGKILL after a grace period so
+    // the child can't outlive the step and have the workspace rm'd under it.
+    // Cleared on close/error so a clean exit doesn't kill.
+    let sigkillTimer: NodeJS.Timeout | undefined;
+    const escalateKill = () => {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch { /* already dead */ }
+        }, 5000);
       }
     };
 
     let internalTimeout: NodeJS.Timeout | null = null;
     if (opts.timeoutMs) {
       internalTimeout = setTimeout(() => {
-        terminate();
+        escalateKill();
         reject(
           new Error(
             `${opts.exe} timed out after ${opts.timeoutMs} ms (internal)`
@@ -287,7 +292,7 @@ export function runScannerSubprocess(
     // External abort: kill the child only. Don't reject — the outer withTimeout
     // owns the timeout error class. (Mirrors runDepScan rationale.)
     const onAbort = () => {
-      terminate();
+      escalateKill();
     };
     if (opts.signal) {
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -296,7 +301,7 @@ export function runScannerSubprocess(
     child.on('close', (code: number | null) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
@@ -304,7 +309,7 @@ export function runScannerSubprocess(
     child.on('error', (err: Error) => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (internalTimeout) clearTimeout(internalTimeout);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       reject(err);
     });

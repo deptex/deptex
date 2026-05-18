@@ -36,6 +36,11 @@ export async function runStalenessWatchdog(): Promise<WatchdogResult> {
 
   let events_emitted = 0;
   if (stale.length > 0) {
+    // `no_runs_recorded` is expected on a fresh deploy before the first
+    // feed sync ever runs — it must not page on-call. When EVERY stale
+    // source is in that bootstrap state, downgrade the event to `info`;
+    // a genuine staleness/failure reason keeps the `critical` priority.
+    const onlyBootstrap = stale.every((s) => s.reason === 'no_runs_recorded');
     // One aggregated event covering all stale sources — saves N
     // pages-on-call incidents for a single OSV outage.
     try {
@@ -43,7 +48,7 @@ export async function runStalenessWatchdog(): Promise<WatchdogResult> {
         type: 'feed_sync_stale',
         organizationId: '00000000-0000-0000-0000-000000000000',
         source: 'malicious_feed_sync_watchdog',
-        priority: 'critical',
+        priority: onlyBootstrap ? 'info' : 'critical',
         payload: {
           stale_sources: stale,
           checked_at: new Date().toISOString(),

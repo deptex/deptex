@@ -67,6 +67,39 @@ const CASES: FixtureCase[] = [
     specs: ['sinatra'],
     expectedVulnClass: 'xss',
   },
+  {
+    name: 'Sinatra Rack-middleware ReDoS (CVE-2024-25126 shape)',
+    vulnDir: 'sinatra-rack-redos-vuln',
+    safeDir: 'sinatra-rack-redos-safe',
+    specs: ['sinatra'],
+    expectedVulnClass: 'redos',
+  },
+  {
+    name: 'Rails Rack-middleware ReDoS (Rack::Utils.parse_query → Regexp.new)',
+    vulnDir: 'rails-rack-redos-vuln',
+    safeDir: 'rails-rack-redos-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'redos',
+  },
+  {
+    name: 'Rails cross-file XSS (controller → raw)',
+    vulnDir: 'rails-xss-vuln',
+    safeDir: 'rails-xss-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'xss',
+  },
+  {
+    // Guards the bracket-vs-dot accessor parity in the Ruby IR lowerer
+    // (handleCall emits a weak `source` step for 0-arg method calls so
+    // `params.x` flows like `params[:x]`). Vuln fixture uses BOTH forms;
+    // safe fixture exercises the sanitizer interaction so the weak source
+    // step doesn't bypass `Integer(...)` / `*.to_i`.
+    name: 'Rails accessor parity (params[:x] vs params.x)',
+    vulnDir: 'accessor-parity-vuln',
+    safeDir: 'accessor-parity-safe',
+    specs: ['rails'],
+    expectedVulnClass: 'sql_injection',
+  },
 ];
 
 function summarize(flows: Flow[]): string {

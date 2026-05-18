@@ -10,6 +10,7 @@ import { rustModule } from './languages/rust';
 import { csharpModule } from './languages/csharp';
 import { resolveImportToDep } from './import-mapping';
 import { walkSourceFiles } from './walk';
+import { LanguageLoadError } from './parser';
 
 export type { ExtractedFile, UsageSlice, ImportBinding, SupportedEcosystem, SupportedLanguageId, KnownDep } from './languages/types';
 export { resolveImportToDep } from './import-mapping';
@@ -29,6 +30,8 @@ export interface ExtractUsageResult {
   files: ExtractedFile[];
   /** Map from dep name → number of distinct files that imported it. */
   filesImportingByDep: Record<string, number>;
+  /** wasm grammars that failed to load — every file of that language was skipped. */
+  failedGrammars: string[];
 }
 
 const LANGUAGE_MODULES: LanguageModule[] = [
@@ -59,6 +62,7 @@ export async function extractUsage(options: ExtractUsageOptions): Promise<Extrac
 
   const extracted: ExtractedFile[] = [];
   const filesByDep = new Map<string, Set<string>>();
+  const failedGrammars = new Set<string>();
   const ctx = { deps, workspaceRoot };
 
   for (const file of files) {
@@ -75,6 +79,13 @@ export async function extractUsage(options: ExtractUsageOptions): Promise<Extrac
     try {
       result = await mod.extractFile(source, file, ctx);
     } catch (err) {
+      // A grammar-load failure is a whole-language outage, not a per-file
+      // parse error — record it separately so the step doesn't claim full
+      // AST coverage for a language whose grammar never loaded.
+      if (err instanceof LanguageLoadError) {
+        failedGrammars.add(err.wasmFile);
+        continue;
+      }
       onFileError?.(file, err as Error);
       continue;
     }
@@ -91,5 +102,5 @@ export async function extractUsage(options: ExtractUsageOptions): Promise<Extrac
   const filesImportingByDep: Record<string, number> = {};
   for (const [dep, set] of filesByDep) filesImportingByDep[dep] = set.size;
 
-  return { files: extracted, filesImportingByDep };
+  return { files: extracted, filesImportingByDep, failedGrammars: [...failedGrammars] };
 }

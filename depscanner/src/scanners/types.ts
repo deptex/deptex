@@ -78,6 +78,9 @@ export interface SkippedImage {
     | 'private_registry_unsupported_at_v1'
     | 'no_dockerfile'
     | 'parse_failed'
+    // FROM ${VAR} where VAR has no observable ARG default — distinct from a
+    // generic parse miss so the UI can explain the image was build-arg pinned.
+    | 'unresolved_arg'
     // v2 — populated by container-scan substep failures (M8). Each maps 1:1
     // to a tag in classifyContainerScanError so the reason a row is skipped is
     // recoverable from extraction_step_errors alone, no log-grep required.

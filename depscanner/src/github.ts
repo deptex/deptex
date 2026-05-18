@@ -63,6 +63,7 @@ export async function getInstallationAccount(
         Accept: 'application/vnd.github+json',
         'User-Agent': 'Deptex-Extraction-Worker',
       },
+      signal: AbortSignal.timeout(15000),
     }
   );
   if (!response.ok) return null;
@@ -82,6 +83,7 @@ export async function createInstallationToken(installationId: string): Promise<s
         Accept: 'application/vnd.github+json',
         'User-Agent': 'Deptex-Extraction-Worker',
       },
+      signal: AbortSignal.timeout(15000),
     }
   );
   if (!response.ok) {
@@ -97,11 +99,7 @@ export async function cloneRepository(
   repoFullName: string,
   branch: string
 ): Promise<string> {
-  const tempDir = path.join(
-    os.tmpdir(),
-    `deptex-extract-${Date.now()}-${Math.random().toString(36).substring(7)}`
-  );
-  fs.mkdirSync(tempDir, { recursive: true });
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-extract-'));
   try {
     const token = await createInstallationToken(installationId);
     const repoUrl = `https://x-access-token:${token}@github.com/${repoFullName}.git`;

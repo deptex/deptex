@@ -24,6 +24,15 @@ export type ExtractionJobMeta = {
   commit_message?: string;
   branch?: string;
   commit_author?: { username?: string; avatar_url?: string };
+  /**
+   * Phase 33: optional per-scan AI cost cap (USD). When set, the depscanner
+   * worker aborts the next AI call once scan_jobs.ai_total_cost_usd plus the
+   * projected next-call cost would exceed it, emits an ai_cost_cap_exceeded
+   * extraction_step_errors row, and lets the offending step degrade to its
+   * deterministic-only fallback. NULL/undefined = no per-scan cap (org-level
+   * monthly cap still applies via organization_reachability_settings).
+   */
+  ai_cost_cap_usd?: number | null;
 };
 
 /**
@@ -96,14 +105,25 @@ export async function queueExtractionJob(
       if (meta.commit_author) payload.commit_author = meta.commit_author;
     }
 
-    const { error: insertError } = await supabase.from('scan_jobs').insert({
+    // Phase 33: surface the optional per-scan AI cost cap onto the
+    // scan_jobs row so the depscanner worker reads it directly via the
+    // ai_cost_cap_usd column. We DON'T also stash it inside payload; the
+    // top-level column is the canonical place (the worker's
+    // checkScanJobCostCap helper reads it).
+    const row: Record<string, unknown> = {
       project_id: projectId,
       organization_id: organizationId,
       type: 'extraction',
       status: 'queued',
       run_id: runId,
       payload,
-    });
+    };
+    if (meta?.ai_cost_cap_usd != null && Number.isFinite(meta.ai_cost_cap_usd) && meta.ai_cost_cap_usd > 0) {
+      // Cap to a sane ceiling so an operator typo (e.g. $10000) can't disable
+      // the cap entirely — anything above $1000/scan is treated as 1000.
+      row.ai_cost_cap_usd = Math.min(1000, Number(meta.ai_cost_cap_usd));
+    }
+    const { error: insertError } = await supabase.from('scan_jobs').insert(row);
 
     if (insertError) {
       console.error('[EXTRACT] Failed to insert extraction job:', insertError);

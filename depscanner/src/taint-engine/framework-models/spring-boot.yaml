@@ -119,6 +119,37 @@ sinks:
     argument_indices: [0]
     description: RestTemplate.exchange
 
+  # ---------- SpEL parser + property binding (CVE-2022-22965 Spring4Shell family) ----------
+  # The Qwen fixture for Spring4Shell writes
+  #   `new BeanWrapperImpl(target).setPropertyValue(key, value)`
+  # where `key` carries the attacker's `class.module.classLoader…` payload.
+  # Today no spring-boot or java-stdlib YAML matches. Aligned with log4j.yaml's
+  # `code_injection` mapping for "runtime evaluates attacker bytes".
+  - pattern: "SpelExpressionParser.parseExpression(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: SpEL parser entry — tainted expression string evaluated as Spring EL (CVE-2022-22965 family)
+  - pattern: "*.parseExpression(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: SpelExpressionParser.parseExpression (instance receiver)
+  - pattern: "*.getValue(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Spring Expression.getValue — root-object eval surface
+  - pattern: "*.setPropertyValue(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: BeanWrapperImpl.setPropertyValue — Spring4Shell path-binding sink (class.module.classLoader…)
+  - pattern: "*.setPropertyValues(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: BeanWrapperImpl.setPropertyValues — bulk binder, CVE-2022-22965 canonical sink
+  - pattern: "*.bind(*)"
+    vuln_class: code_injection
+    argument_indices: [0]
+    description: org.springframework.validation.DataBinder.bind — CVE-2022-22965 entry
+
 sanitizers:
   - pattern: "HtmlUtils.htmlEscape(*)"
     vuln_classes: [xss]

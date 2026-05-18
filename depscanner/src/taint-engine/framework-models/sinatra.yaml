@@ -95,6 +95,39 @@ sources:
     taint_kind: http_input
     description: request.body.read()
 
+  # ---------- Rack middleware sources ----------
+  # Many gem-ecosystem CVEs ship Rack-shaped fixtures: `class App; def
+  # call(env); ... end; end`. The `env` Rack environment is the entry-point
+  # input, but it arrives as a method parameter (not a property access) so
+  # the property-style `env[*]` source above only fires when the handler
+  # touches `env` directly. The call-shape sources below let taint enter
+  # via Rack::Request#new and Rack::Utils.parse_query — the two idioms a
+  # middleware uses to read request data without touching `env` itself.
+  - pattern: Rack.Request.new(*)
+    taint_kind: http_input
+    description: Rack::Request.new(env) — wraps tainted Rack environment
+  - pattern: Rack.Utils.parse_query(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_query — parses tainted query string
+  - pattern: Rack.Utils.parse_nested_query(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_nested_query
+  - pattern: Rack.Utils.parse_cookies(*)
+    taint_kind: http_input
+    description: Rack::Utils.parse_cookies
+  - pattern: Rack.MediaType.params(*)
+    taint_kind: http_input
+    description: Rack::MediaType.params — parses tainted Content-Type
+  - pattern: "*.get_header(*)"
+    taint_kind: http_input
+    description: Rack::Request#get_header
+  - pattern: "*.fetch_header(*)"
+    taint_kind: http_input
+    description: Rack::Request#fetch_header
+  - pattern: "*.get_header"
+    taint_kind: http_input
+    description: bare get_header reference
+
 sinks:
   # ---------- SQL injection ----------
   - pattern: "*.where(*)"
@@ -429,6 +462,36 @@ sinks:
     vuln_class: redos
     argument_indices: [0]
     description: Regexp.compile
+  - pattern: Rack.MediaType.type(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Rack::MediaType.type — CVE-2024-25126 catastrophic backtracking
+  - pattern: Rack.Utils.parse_query(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Rack::Utils.parse_query — historical ReDoS family
+
+  # ---------- ActiveSupport SafeBuffer mutation (CVE-2023-28120) ----------
+  # Mirrored from rails.yaml — gem-ecosystem stdlib sinks are duplicated
+  # across both Ruby framework specs by convention.
+  - pattern: "*.bytesplice(*)"
+    vuln_class: xss
+    argument_indices: [1]
+    description: ActiveSupport::SafeBuffer#bytesplice — mutates buffer past the safe-flag check (CVE-2023-28120)
+  - pattern: "*.replace(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: SafeBuffer#replace — mutation that drops the html_safe flag
+
+  # ---------- git gem command injection (CVE-2024-32465) ----------
+  - pattern: Git.clone(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: ruby-git Git.clone — repo URL routed into argv-less git clone (CVE-2024-32465)
+  - pattern: Git.ls_remote(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: ruby-git Git.ls_remote — URL routed into git ls-remote
 
 sanitizers:
   # ---------- SQL ----------

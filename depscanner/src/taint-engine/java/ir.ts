@@ -277,6 +277,26 @@ function walkExpressionAsAssign(
   }
   // Method invocation
   if (t === 'method_invocation') {
+    // Method-chain support: when the receiver (`object`) is itself a method
+    // invocation or constructor call (e.g. `req.getQueryString().toLowerCase()`,
+    // `new Foo().bar()`), lower the inner call as its own Step first so its
+    // sink/source/sanitizer matching fires. Without this, the outer
+    // makeCalleeRef builds a calleeText like `req.getQueryString().toLowerCase`
+    // that matches no spec pattern, and the inner source call disappears.
+    // Mirrors the JS lowerer at ir.ts:393-407.
+    //
+    // The chain pre-walk depends on `Paths.get(*)` NOT being a path_traversal
+    // sink — otherwise `Paths.get(name).getFileName()` over-fires before the
+    // downstream `*.getFileName(*)` sanitizer can clean the receiver. Both
+    // changes ship in the same commit.
+    const objectField = expr.childForFieldName('object');
+    if (
+      objectField &&
+      (objectField.type === 'method_invocation' || objectField.type === 'object_creation_expression')
+    ) {
+      const innerTmp = `<chain@${steps.length}>`;
+      walkExpressionAsAssign(objectField, innerTmp, steps, wc);
+    }
     const argsNode = expr.childForFieldName('arguments');
     const argList: Node[] = [];
     if (argsNode) {
@@ -438,9 +458,34 @@ function extractVarFromArg(arg: Node, source: string): LocalVar | null {
 function makeCalleeRef(node: Node, wc: WalkCtx): CalleeRef {
   const objectField = node.childForFieldName('object');
   const nameField = node.childForFieldName('name');
-  const fullText = node.childForFieldName('object')
-    ? `${textOf(objectField, wc.fileIndex.source)}.${textOf(nameField, wc.fileIndex.source)}`
-    : textOf(nameField, wc.fileIndex.source);
+  const methodName = nameField ? textOf(nameField, wc.fileIndex.source) : '<unknown>';
+
+  // Receiver-type resolution: when the receiver is a bare identifier whose
+  // declared type is known (from collected parameter / local / field types),
+  // rewrite the calleeText to use the type name. So `wrapper.setPropertyValue`
+  // becomes `BeanWrapper.setPropertyValue`, matching `BeanWrapper.setPropertyValue(*)`
+  // sink patterns AI rule-generation emits for Spring + Jackson + others.
+  //
+  // Mirrors the JS lowerer's localOrigins (ir.ts:284-291) but binds on
+  // DECLARED type rather than initializer literal. Java doesn't infer types
+  // from inits in our lowerer, but Java declarations carry the type
+  // explicitly (`BeanWrapper wrapper = ...`), so this is cheap to plumb.
+  //
+  // Only rewrites when the receiver is a single identifier — `this.field`,
+  // chains, casts, and complex expressions keep their verbatim text so
+  // chain pre-walk / `*.method(*)` wildcards still work as before.
+  let receiverText: string | null = null;
+  if (objectField) {
+    const objText = textOf(objectField, wc.fileIndex.source);
+    if (objectField.type === 'identifier' || /^[A-Za-z_][A-Za-z0-9_]*$/.test(objText)) {
+      const resolvedType = wc.localTypes.get(objText) ?? wc.fieldTypes.get(objText);
+      receiverText = resolvedType ?? objText;
+    } else {
+      receiverText = objText;
+    }
+  }
+
+  const fullText = receiverText ? `${receiverText}.${methodName}` : methodName;
 
   // Resolve through the same logic as callgraph pass-2.
   const resolved = resolveStaticInvocationToFunctionId(node, wc);
@@ -531,6 +576,35 @@ function resolveSuperFqn(classNode: Node, wc: WalkCtx): string | null {
   return wc.fileIndex.imports.get(simple) ?? wc.ctx.classFqnBySimpleName.get(simple) ?? null;
 }
 
+// Annotation simple-names that mark a controller/handler parameter as
+// HTTP-tainted. Must stay in sync with the `@<Name>` source patterns in
+// the framework-models/*.yaml files (spring-boot, quarkus, micronaut). The
+// IR matches by simple name only, so JAX-RS and javax.ws.rs.* both flow
+// through the same entry — no per-package distinction needed.
+const HTTP_INPUT_ANNOTATIONS: ReadonlySet<string> = new Set<string>([
+  // Spring MVC / Spring Boot
+  'RequestParam',
+  'PathVariable',
+  'RequestBody',
+  'RequestHeader',
+  'CookieValue',
+  'ModelAttribute',
+  // JAX-RS / RESTEasy / Quarkus REST
+  'QueryParam',
+  'PathParam',
+  'FormParam',
+  'HeaderParam',
+  'CookieParam',
+  'MatrixParam',
+  'BeanParam',
+  // Micronaut HTTP
+  'QueryValue',
+  'Header',
+  'Body',
+  'Part',
+  'RequestBean',
+]);
+
 function sourceAnnotationOnParam(paramNode: Node, source: string): string | null {
   const modifiers = paramNode.namedChild(0);
   if (!modifiers || modifiers.type !== 'modifiers') return null;
@@ -540,14 +614,7 @@ function sourceAnnotationOnParam(paramNode: Node, source: string): string | null
     const nameNode = c.childForFieldName('name') ?? c.namedChild(0);
     if (!nameNode) continue;
     const name = textOf(nameNode, source);
-    if (
-      name === 'RequestParam' ||
-      name === 'PathVariable' ||
-      name === 'RequestBody' ||
-      name === 'RequestHeader' ||
-      name === 'CookieValue' ||
-      name === 'ModelAttribute'
-    ) {
+    if (HTTP_INPUT_ANNOTATIONS.has(name)) {
       return `@${name}`;
     }
   }

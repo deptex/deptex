@@ -32,6 +32,10 @@ function createChain() {
       const v = supabaseResolves.shift() ?? { data: null, error: null };
       return Promise.resolve(v);
     }),
+    maybeSingle: jest.fn().mockImplementation(() => {
+      const v = supabaseResolves.shift() ?? { data: null, error: null };
+      return Promise.resolve(v);
+    }),
   };
   (chain as any).then = function (resolve: (v: unknown) => void) {
     const v = supabaseResolves.shift() ?? { data: [], error: null };
@@ -171,7 +175,7 @@ describe('runPipeline', () => {
     await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/SBOM/);
   }, 25000);
 
-  it('clone + SBOM succeed but SBOM has 0 deps -> pipeline throws, "No dependencies found"', async () => {
+  it('clone + SBOM succeed but SBOM has 0 deps -> pipeline warns and continues (semgrep/trufflehog still produce value)', async () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockReturnValue(undefined);
@@ -188,7 +192,14 @@ describe('runPipeline', () => {
     };
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
-    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/No dependencies found/);
+    const result = await runPipeline(baseJob, mockLog);
+    expect(result.finalizeSummary).toBeDefined();
+    // The sbom step should have warned about 0 deps; previously this case
+    // hard-failed (false-positive on legitimate zero-dep libraries).
+    const sbomWarns = mockLog.warn.mock.calls.filter(
+      (c) => c[0] === 'sbom' && /No dependencies parsed/.test(c[1] ?? ''),
+    );
+    expect(sbomWarns.length).toBeGreaterThan(0);
   });
 
   it('dep-scan not installed (ENOENT) -> pipeline does NOT throw, logs warning', async () => {
@@ -208,7 +219,9 @@ describe('runPipeline', () => {
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeUndefined();
+    // runPipeline now returns { finalizeSummary } on success; the test only
+    // cares that the pipeline doesn't throw on this missing-dep-scan path.
+    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
     expect(mockLog.warn).toHaveBeenCalledWith('vuln_scan', expect.stringContaining('dep-scan not installed'));
   });
 
@@ -241,12 +254,17 @@ describe('runPipeline', () => {
       });
       return child;
     });
-    fsExistsSync = () => true;
+    // semgrep.json is absent — an OOM-killed semgrep wrote no output, so the
+    // step rethrows and the OOM-specific onError branch fires. (When a partial
+    // output file exists the step instead swallows the error and keeps it.)
+    fsExistsSync = (p: string) => !String(p).endsWith('semgrep.json');
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeUndefined();
+    // runPipeline now returns { finalizeSummary } on success; the test only
+    // cares that the pipeline doesn't throw on this semgrep-OOM path.
+    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
     expect(mockLog.warn).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
   });
 });

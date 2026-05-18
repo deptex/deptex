@@ -474,18 +474,26 @@ export const api = {
     });
   },
 
-  async getInvitation(invitationId: string): Promise<{ id: string; email: string; role: string; organization_id: string; organization_name: string; expires_at: string }> {
-    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-    const response = await fetch(`${API_BASE_URL}/api/organizations/invitations/${invitationId}`);
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
-    }
-    return response.json();
+  async getInvitation(invitationId: string): Promise<{
+    id: string;
+    email: string;
+    role: string;
+    role_display_name: string | null;
+    role_color: string | null;
+    organization_id: string;
+    organization_name: string;
+    organization_avatar_url: string | null;
+    expires_at: string;
+  }> {
+    return fetchWithAuth(`/api/organizations/invitations/${invitationId}`);
   },
 
   async acceptInvitation(organizationId: string, invitationId: string): Promise<{ message: string; organization_id: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/accept`, { method: 'POST' });
+  },
+
+  async declineInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/decline`, { method: 'POST' });
   },
 
   async cancelInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {
@@ -3277,8 +3285,19 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/vulnerability-timeline${q}`);
   },
 
-  async triggerProjectSync(orgId: string, projectId: string): Promise<{ job_id: string; status: string }> {
-    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, { method: 'POST' });
+  async triggerProjectSync(
+    orgId: string,
+    projectId: string,
+    opts?: { aiCostCapUsd?: number | null },
+  ): Promise<{ job_id: string; status: string }> {
+    const body =
+      opts?.aiCostCapUsd != null && Number.isFinite(opts.aiCostCapUsd) && opts.aiCostCapUsd > 0
+        ? { ai_cost_cap_usd: opts.aiCostCapUsd }
+        : undefined;
+    return fetchWithAuth(`/api/organizations/${orgId}/projects/${projectId}/sync`, {
+      method: 'POST',
+      ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
   },
 
   async getOrgStats(orgId: string): Promise<OrgStats> {
@@ -4148,7 +4167,7 @@ export interface ProjectVulnerability {
   contextual_depscore?: number | null;
   /** EPD entry-point classification. Drives the Public/Authenticated/Background badge. */
   entry_point_classification?: EpdEntryPointClassification | null;
-  /** EPD scoring lifecycle state (ai_verified / byok_missing / fallback_no_ai / ai_error_fallback / budget_exceeded). */
+  /** EPD scoring lifecycle state (ai_verified / fallback_no_ai / ai_error_fallback / budget_exceeded). */
   epd_status?: EpdStatus | null;
   /** SLA status (on_track, warning, breached, met, resolved_late, exempt). */
   sla_status?: string | null;
@@ -5321,7 +5340,6 @@ export type EpdEntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'O
 export type EpdStatus =
   // legacy (Phase 4)
   | 'ai_verified'
-  | 'byok_missing'
   | 'fallback_no_ai'
   | 'ai_error_fallback'
   | 'budget_exceeded'

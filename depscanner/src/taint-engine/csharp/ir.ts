@@ -434,6 +434,19 @@ function walkExpressionAsAssign(
 
   // Method invocation
   if (t === 'invocation_expression') {
+    // Method-chain pre-walk: when the function field is a member_access
+    // whose expression is itself an invocation_expression or
+    // object_creation_expression (chain like `Foo.Create().Bar()`,
+    // `new Foo().Bar()`), lower the inner call first so its sink/source
+    // matching fires. Mirrors JS, Java, Ruby, Python, PHP, Go.
+    const fnNode = expr.childForFieldName('function');
+    if (fnNode && fnNode.type === 'member_access_expression') {
+      const inner = fnNode.childForFieldName('expression') ?? fnNode.namedChild(0);
+      if (inner && (inner.type === 'invocation_expression' || inner.type === 'object_creation_expression')) {
+        const innerTmp = `<chain@${steps.length}>`;
+        walkExpressionAsAssign(inner, innerTmp, steps, wc);
+      }
+    }
     const argsNode = expr.childForFieldName('arguments');
     const argList: Node[] = [];
     if (argsNode) {

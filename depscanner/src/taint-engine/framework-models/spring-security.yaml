@@ -1,0 +1,35 @@
+# Spring Security framework spec — Deptex cross-file taint engine.
+#
+# CVE-2022-22978 — `RegexRequestMatcher.matches(request)` evaluated the
+# request URI against a regex without `Pattern.DOTALL`, so a `%0a` in the
+# path could bypass the authorization rule (newline-in-URI splits the
+# regex's `.` anchor). The pre-fix sink is the matches() call itself —
+# any attacker-controlled URI string flowing in triggers the bypass.
+#
+# vuln_class=redos matches the AI rule generator's emitted shape on
+# passing trials (the underlying issue is regex-engine semantics rather
+# than ReDoS proper, but `redos` is the closest existing enum entry for
+# "tainted data through a regex matcher in an unsafe way"). The
+# auth_bypass nature is captured in the description.
+
+framework: spring-security
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  - pattern: RegexRequestMatcher.matches(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: Spring Security RegexRequestMatcher.matches — URI evaluated without Pattern.DOTALL allows newline bypass (CVE-2022-22978)
+  - pattern: "*.matches(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: <matcher>.matches — instance-form (RegexRequestMatcher / AntPathRequestMatcher)
+  - pattern: "new RegexRequestMatcher"
+    vuln_class: redos
+    argument_indices: [0]
+    description: RegexRequestMatcher constructor — attacker-influenced pattern string
+
+sanitizers: []

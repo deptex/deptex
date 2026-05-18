@@ -205,6 +205,87 @@ describe('spawnExternal — scan_timeout', () => {
   });
 });
 
+describe('spawnExternal — Windows tree-kill via taskkill', () => {
+  // The Linux path uses `process.kill(-pid, sig)` to group-kill. On Windows
+  // there's no process group; child.kill() alone leaves descendants running
+  // (e.g. ZAP-spawned Java + Firefox after we abort the parent). We shell out
+  // to `taskkill /F /T /PID` to walk the tree. Verify it gets dispatched.
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+  afterEach(() => {
+    if (realPlatform) Object.defineProperty(process, 'platform', realPlatform);
+  });
+
+  function setPlatformWin32(): void {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  }
+
+  it('spawns `taskkill /F /T /PID <pid>` on win32 when abort() fires', async () => {
+    setPlatformWin32();
+    mockProcessKill();
+    const child = makeFakeChild();
+    const taskkill = makeFakeChild();
+    taskkill.pid = 4242;
+
+    const spawnCalls: Array<{ command: string; args: readonly string[] }> = [];
+    const spawnImpl = ((command: string, args: readonly string[]) => {
+      spawnCalls.push({ command, args });
+      return command === 'taskkill' ? taskkill : child;
+    }) as unknown as typeof import('child_process').spawn;
+
+    const handle = spawnExternal({
+      command: 'C:\\zap\\zap.bat',
+      args: [],
+      timeoutMs: 60_000,
+      spawnImpl,
+    });
+
+    handle.abort('cancellation_requested');
+    setImmediate(() => {
+      taskkill.finishWith(0);
+      child.finishWith(null, 'SIGTERM');
+    });
+    const result = await handle.done;
+
+    expect(result.aborted).toBe(true);
+    expect(child.killCalls).toContain('SIGTERM');
+    const tk = spawnCalls.find((c) => c.command === 'taskkill');
+    expect(tk).toBeDefined();
+    expect(tk!.args).toEqual(['/F', '/T', '/PID', String(child.pid)]);
+  });
+
+  it('survives a taskkill spawn ENOENT (taskkill missing on PATH)', async () => {
+    setPlatformWin32();
+    mockProcessKill();
+    const child = makeFakeChild();
+    const failingTaskkill = makeFakeChild();
+
+    const spawnImpl = ((command: string) => {
+      if (command === 'taskkill') {
+        // Defer the error to next tick so spawnExternal can attach its
+        // 'error' handler before the event fires.
+        setImmediate(() => failingTaskkill.emit('error', new Error('ENOENT')));
+        return failingTaskkill;
+      }
+      return child;
+    }) as unknown as typeof import('child_process').spawn;
+
+    const handle = spawnExternal({
+      command: 'C:\\zap\\zap.bat',
+      args: [],
+      timeoutMs: 60_000,
+      spawnImpl,
+    });
+
+    handle.abort('cancellation_requested');
+    setImmediate(() => child.finishWith(null, 'SIGTERM'));
+    const result = await handle.done;
+    expect(result.aborted).toBe(true);
+    // child.kill() best-effort still happens.
+    expect(child.killCalls).toContain('SIGTERM');
+  });
+});
+
 describe('spawnExternal — SIGTERM grace constant', () => {
   it('SIGTERM_GRACE_MS is 10 seconds (per plan §Task 7)', () => {
     expect(SIGTERM_GRACE_MS).toBe(10_000);

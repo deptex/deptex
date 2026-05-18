@@ -1,0 +1,33 @@
+# Moment.js framework spec — Deptex cross-file taint engine.
+#
+# moment is sink-only (no sources). Request-style sources come from
+# express.yaml / fastify.yaml / nestjs.yaml — cross-spec stitching matches
+# `req.query.date` flowing into `moment(*)` here.
+#
+# Models CVE-2022-31129: moment's string-parsing path is super-linear /
+# catastrophic on attacker-controlled date strings. Any moment(*) call
+# whose first argument is a tainted string is treated as a ReDoS sink.
+
+framework: moment
+version: "*"
+language: js
+
+sources: []
+
+sinks:
+  # ---------- ReDoS via moment date-string parser ----------
+  # CVE-2022-31129 — super-linear time on crafted date strings
+  - pattern: moment(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: moment(input) — super-linear parser on attacker-controlled strings (CVE-2022-31129)
+  - pattern: moment.parseZone(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: moment.parseZone — same string-parser path as moment()
+  - pattern: moment.utc(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: moment.utc — same string-parser path as moment()
+
+sanitizers: []

@@ -44,7 +44,9 @@ export type VulnClass =
   | 'file_upload'
   | 'open_redirect'
   | 'log_injection'
-  | 'code_injection';
+  | 'code_injection'
+  | 'weak_crypto'
+  | 'auth_bypass';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -59,4 +61,6 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'open_redirect',
   'log_injection',
   'code_injection',
+  'weak_crypto',
+  'auth_bypass',
 ];

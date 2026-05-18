@@ -18,7 +18,10 @@ const EXTS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'];
 // case `child_process` appears verbatim in the file source) or uses the
 // Bun runtime's globally-scoped `Bun.spawn(...)`.
 const RX_SPAWNS = /\b(child_process)\b|require\((['"])child_process\2\)|from\s+(['"])child_process\3|\bBun\.spawn\s*\(/;
-const RX_NETWORK = /\bfetch\s*\(|require\((['"])(?:http|https|node-fetch|axios|got|request|undici)\1\)|from\s+['"](?:axios|node-fetch|got|undici)['"]|\b(?:XMLHttpRequest|http\.request|https\.request|http\.get|https\.get)\b/;
+// Network I/O — bare `fetch(` was dropped: it fires on nearly every
+// package (test helpers, polyfills, comments). Real network use either
+// imports an HTTP module by name or uses a node http/https request API.
+const RX_NETWORK = /require\((['"])(?:http|https|node-fetch|axios|got|request|undici)\1\)|from\s+['"](?:http|https|axios|node-fetch|got|request|undici)['"]|\b(?:XMLHttpRequest|http\.request|https\.request|http\.get|https\.get)\b/;
 const RX_EVAL = /\beval\s*\(|new\s+Function\s*\(|\bvm\.(?:runIn|compile)|require\((['"])vm\1\)/;
 const RX_NATIVE = /require\((['"])[^'"]*\.node\1\)|\bprocess\.dlopen\s*\(|require\((['"])bindings\2\)|require\((['"])node-gyp-build\3\)/;
 const RX_FS_WRITE = /\bfs\.(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|truncate|truncateSync|copyFile|copyFileSync|rename|renameSync|unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|mkdir|mkdirSync)\b|\bfs\/promises\b|\bfsPromises\.(?:writeFile|appendFile|copyFile|rename|unlink|rm|mkdir)\b/;

@@ -47,8 +47,7 @@ describe('encryption helper (backend)', () => {
       process.env.AI_ENCRYPTION_KEY_VERSION = '1';
     });
 
-    it('walks both organization_ai_providers AND organization_registry_credentials', async () => {
-      const aiCipher = encryptApiKey('ai-secret', 1).encrypted;
+    it('walks organization_registry_credentials (BYOK ai providers retired in phase29)', async () => {
       const credCipher = encryptApiKey('cred-secret', 1).encrypted;
 
       // Switch to v2; v1 key becomes the "previous" key for decryption fallback.
@@ -56,10 +55,6 @@ describe('encryption helper (backend)', () => {
       process.env.AI_ENCRYPTION_KEY_PREV = FIXTURE.key_hex;
       process.env.AI_ENCRYPTION_KEY_VERSION = '2';
 
-      setTableResponse('organization_ai_providers', 'then', {
-        data: [{ id: 'ai-1', encrypted_api_key: aiCipher, encryption_key_version: 1 }],
-        error: null,
-      });
       setTableResponse('organization_registry_credentials', 'then', {
         data: [{ id: 'cred-1', encrypted_credentials: credCipher, encryption_key_version: 1 }],
         error: null,
@@ -67,14 +62,13 @@ describe('encryption helper (backend)', () => {
 
       const result = await rotateEncryptionKeys();
 
-      expect(result).toEqual({ rotated: 2, failed: 0 });
+      expect(result).toEqual({ rotated: 1, failed: 0 });
     });
 
-    it('returns zero counts when neither table has stale rows', async () => {
+    it('returns zero counts when the registry creds table has no stale rows', async () => {
       process.env.AI_ENCRYPTION_KEY = NEW_KEY;
       process.env.AI_ENCRYPTION_KEY_VERSION = '2';
 
-      setTableResponse('organization_ai_providers', 'then', { data: [], error: null });
       setTableResponse('organization_registry_credentials', 'then', { data: [], error: null });
 
       const result = await rotateEncryptionKeys();
@@ -90,10 +84,6 @@ describe('encryption helper (backend)', () => {
       // Right format, wrong key → auth-tag mismatch in decryptApiKey.
       const garbage = 'AQIDBAUGBwgJCgsM:Dhd21MVkwCKYnc/sHI5mfhz/xw==:aJFHZa2oQqQPpdmMcH1qXg==';
 
-      setTableResponse('organization_ai_providers', 'then', {
-        data: [{ id: 'ai-broken', encrypted_api_key: garbage, encryption_key_version: 1 }],
-        error: null,
-      });
       setTableResponse('organization_registry_credentials', 'then', {
         data: [{ id: 'cred-broken', encrypted_credentials: garbage, encryption_key_version: 1 }],
         error: null,
@@ -103,7 +93,7 @@ describe('encryption helper (backend)', () => {
       const result = await rotateEncryptionKeys();
       errSpy.mockRestore();
 
-      expect(result).toEqual({ rotated: 0, failed: 2 });
+      expect(result).toEqual({ rotated: 0, failed: 1 });
     });
   });
 });

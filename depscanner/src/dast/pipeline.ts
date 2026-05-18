@@ -42,7 +42,9 @@ import * as path from 'path';
 import {
   decryptCredential,
   isDastEncryptionConfigured,
+  DastCredentialFormatError,
 } from './encryption';
+import { validateScanTimeHost } from '../scanners/host-guard';
 import type { Storage } from '../storage';
 import type { ExtractionJobRow } from '../job-db';
 import { isJobCancelled, sendHeartbeat } from '../job-db';
@@ -54,6 +56,7 @@ import {
 } from './yaml-builder';
 import {
   buildAuthForStrategy,
+  InvalidCredentialCharacterError,
   type CredentialPayload,
   type DastAuthStrategy,
 } from './auth-config';
@@ -127,6 +130,16 @@ interface ProjectRow {
   organization_id: string;
 }
 
+// Stored scope_config shape (DB JSONB). Validated route-side via
+// validateScopeConfig — keys are include_patterns / exclude_patterns /
+// header_rules (NOT camelCase). The yaml-builder takes the camelCase shape;
+// loadScopeConfig() does the rename on the way through the pipeline.
+interface StoredScopeConfig {
+  include_patterns?: unknown;
+  exclude_patterns?: unknown;
+  header_rules?: unknown;
+}
+
 interface DastFindingInsert {
   project_id: string;
   organization_id: string;
@@ -159,6 +172,7 @@ export type DastErrorCategory =
   | 'dast_credential_key_missing'
   | 'dast_credential_key_stale'
   | 'dast_credential_rotated'
+  | 'ssrf_blocked'
   | 'auth_failed'
   | 'timeout'
   | 'engine_crash'
@@ -394,6 +408,17 @@ async function loadCredentialOrAbort(
   try {
     plaintext = decryptCredential(credRow.encrypted_payload, credRow.encryption_key_version);
   } catch (e) {
+    if (e instanceof DastCredentialFormatError) {
+      // Structurally corrupt credential / misconfigured key — NOT a stale-key
+      // rotation problem. Report it as a distinct engine_crash so the operator
+      // doesn't waste time rotating keys that are actually fine.
+      console.error('[dast-pipeline] credential decrypt format error:', e.message);
+      throw new DastPipelineAbortError(
+        'engine_crash',
+        { stage: 'credential_decrypt', key_version_attempted: credRow.encryption_key_version },
+        'DAST credential could not be decrypted (corrupt credential or misconfigured key)',
+      );
+    }
     throw new DastPipelineAbortError(
       'dast_credential_key_stale',
       { key_version_attempted: credRow.encryption_key_version },
@@ -420,6 +445,124 @@ async function loadCredentialOrAbort(
   }
 
   return { credentialRow: credRow, payload };
+}
+
+// ---------------------------------------------------------------------------
+// Scope config load (project_dast_config.scope_config → ScopeConfig)
+// ---------------------------------------------------------------------------
+
+// Heuristic ReDoS guard. safe-regex2 is a backend dependency but not a
+// depscanner one, so we replicate its core check: reject a pattern with
+// nested quantifiers (a quantified group/char-class that is itself inside
+// another quantifier), which is the catastrophic-backtracking shape. Also
+// rejects patterns that fail to compile and absurdly long patterns. This is
+// defense-in-depth — the route layer already runs full safe-regex2.
+const REDOS_NESTED_QUANTIFIER = /(\([^)]*[+*][^)]*\)|\[[^\]]*\][^)]*)[+*]/;
+function isRegexScanSafe(pattern: string): boolean {
+  if (pattern.length > 512) return false;
+  try {
+    // eslint-disable-next-line no-new
+    new RegExp(pattern);
+  } catch {
+    return false;
+  }
+  // Count repetition operators; a pattern with a quantified group followed by
+  // another quantifier is the dangerous nested-repetition case.
+  if (REDOS_NESTED_QUANTIFIER.test(pattern)) return false;
+  // Reject more than 3 unbounded quantifiers — a crude star-height proxy.
+  const quantifiers = (pattern.match(/[+*]|\{\d*,?\d*\}/g) || []).length;
+  if (quantifiers > 8) return false;
+  return true;
+}
+
+// Returns true if the include pattern can only ever match URLs within
+// `baseUrl`'s origin — i.e. the pattern cannot widen scope past the target.
+// We require the pattern to literally begin with the (regex-escaped) origin.
+function includePatternStaysInOrigin(pattern: string, escapedOrigin: string): boolean {
+  return pattern.startsWith(escapedOrigin) || pattern.startsWith(`^${escapedOrigin}`);
+}
+
+async function loadScopeConfig(
+  supabase: Storage,
+  projectId: string,
+  targetUrl: string,
+): Promise<ScopeConfig | undefined> {
+  const { data, error } = await supabase
+    .from('project_dast_config')
+    .select('scope_config')
+    .eq('project_id', projectId)
+    .maybeSingle();
+  if (error || !data) return undefined;
+  const raw = (data as { scope_config?: StoredScopeConfig | null }).scope_config;
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  let origin: string;
+  try {
+    origin = new URL(targetUrl).origin;
+  } catch {
+    // Malformed target URL — drop all include patterns rather than risk a
+    // widened scope. The SSRF revalidation step will abort the run anyway.
+    return undefined;
+  }
+  const escapedOrigin = origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const out: ScopeConfig = {};
+
+  // include / exclude patterns: route layer already enforces string[], cap of
+  // 32, ReDoS-safe (safe-regex2). Defense-in-depth: drop non-strings and cap
+  // here too in case a row was inserted via raw SQL or a stale migration.
+  // Also re-run a ReDoS heuristic and assert include patterns can only narrow
+  // scope (must stay within the target origin), never widen it.
+  if (Array.isArray(raw.include_patterns)) {
+    const arr = raw.include_patterns
+      .filter((v): v is string => typeof v === 'string')
+      .slice(0, 32)
+      .filter((p) => {
+        if (!isRegexScanSafe(p)) {
+          console.warn(`[dast-pipeline] dropped unsafe include pattern (ReDoS risk)`);
+          return false;
+        }
+        if (!includePatternStaysInOrigin(p, escapedOrigin)) {
+          console.warn(`[dast-pipeline] dropped include pattern that widens scope past target origin`);
+          return false;
+        }
+        return true;
+      });
+    if (arr.length > 0) out.includePaths = arr;
+  }
+  if (Array.isArray(raw.exclude_patterns)) {
+    const arr = raw.exclude_patterns
+      .filter((v): v is string => typeof v === 'string')
+      .slice(0, 32)
+      .filter((p) => {
+        if (!isRegexScanSafe(p)) {
+          console.warn(`[dast-pipeline] dropped unsafe exclude pattern (ReDoS risk)`);
+          return false;
+        }
+        // Exclude patterns can only narrow reach, so no origin assertion.
+        return true;
+      });
+    if (arr.length > 0) out.excludePaths = arr;
+  }
+  if (Array.isArray(raw.header_rules)) {
+    const rules: NonNullable<ScopeConfig['headerRules']> = [];
+    for (const r of raw.header_rules.slice(0, 16)) {
+      if (
+        r != null &&
+        typeof r === 'object' &&
+        typeof (r as { name?: unknown }).name === 'string' &&
+        typeof (r as { value?: unknown }).value === 'string'
+      ) {
+        const rec = r as { name: string; value: string; scope?: unknown };
+        const scope: 'all' | 'requests' | 'responses' =
+          rec.scope === 'requests' || rec.scope === 'responses' ? rec.scope : 'all';
+        rules.push({ name: rec.name, value: rec.value, scope });
+      }
+    }
+    if (rules.length > 0) out.headerRules = rules;
+  }
+
+  return out.includePaths || out.excludePaths || out.headerRules ? out : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,23 +603,41 @@ async function runZapWithControlPlane(
     pollIntervalMs: number;
   },
 ): Promise<ZapRunOutputs> {
-  const yamlText = buildAutomationYaml({
-    targetUrl: inputs.targetUrl,
-    scanProfile: inputs.scanProfile,
-    detectedRuntime: inputs.detectedRuntime,
-    reportRelativePath: 'zap-report.json',
-    scope: inputs.scope,
-    authStrategy: inputs.authStrategy,
-    authPayload: inputs.authPayload,
-    loggedInIndicator: inputs.loggedInIndicator,
-    loggedOutIndicator: inputs.loggedOutIndicator,
-    scanTimeoutMinutes: inputs.scanTimeoutMinutes,
-  });
+  let yamlText: string;
+  try {
+    yamlText = buildAutomationYaml({
+      targetUrl: inputs.targetUrl,
+      scanProfile: inputs.scanProfile,
+      detectedRuntime: inputs.detectedRuntime,
+      reportRelativePath: 'zap-report.json',
+      scope: inputs.scope,
+      authStrategy: inputs.authStrategy,
+      authPayload: inputs.authPayload,
+      loggedInIndicator: inputs.loggedInIndicator,
+      loggedOutIndicator: inputs.loggedOutIndicator,
+      scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+    });
+  } catch (e) {
+    if (e instanceof InvalidCredentialCharacterError) {
+      // A crafted credential (CR/LF/control char in a cookie, bad-alphabet
+      // JWT) could inject headers into every ZAP request. Fail the job
+      // cleanly with a generic, categorized error.
+      console.error(`[dast-pipeline] credential rejected: ${e.message}`);
+      throw new DastPipelineAbortError(
+        'auth_failed',
+        { stage: 'build_auth_yaml', reason: 'invalid_credential_characters' },
+        'DAST credential contains invalid characters',
+      );
+    }
+    throw e;
+  }
 
   const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
   const yamlPath = path.join(tmpDir, 'automation.yaml');
   const reportPath = path.join(tmpDir, 'zap-report.json');
-  fs.writeFileSync(yamlPath, yamlText, 'utf-8');
+  // automation.yaml embeds plaintext form/JWT/cookie credentials — write it
+  // owner-read/write only so it is never world-readable on disk.
+  fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
 
   const watcher = createAuthLostWatcher({
     onThresholdReached: () => {
@@ -546,70 +707,94 @@ async function runZapWithControlPlane(
     }
   }
 
-  // ZAP exit codes 0/1/2 are normal completions (with or without findings).
-  // 3+, null (signal-killed), or any abort with no clean exit are runner-level
-  // failures. An auth-lost-triggered abort is not a runner failure — pipeline
-  // upstream marks the job as auth_failed and we still parse partial findings.
-  if (
-    !result.aborted &&
-    result.exitCode !== 0 &&
-    result.exitCode !== 1 &&
-    result.exitCode !== 2
-  ) {
-    const tail = result.stderr.slice(-2_000);
-    throw new DastPipelineAbortError(
-      'engine_crash',
-      { exit_code: result.exitCode, signal: result.signal },
-      `ZAP AF exited with code ${result.exitCode}. stderr tail: ${redactCredentials(tail)}`,
-    );
-  }
-
-  // Cancellation aborts always surface up — never collect findings.
-  if (result.aborted && result.abortReason === 'cancellation_requested') {
-    throw new DastPipelineAbortError(
-      'unknown',
-      { aborted_reason: 'cancellation_requested' },
-      'DAST scan cancelled by user',
-    );
-  }
-  if (result.aborted && result.abortReason === 'scan_timeout') {
-    throw new DastPipelineAbortError(
-      'timeout',
-      { aborted_reason: 'scan_timeout', timeout_minutes: inputs.scanTimeoutMinutes },
-      `DAST scan exceeded scan_timeout_minutes=${inputs.scanTimeoutMinutes}`,
-    );
-  }
-
-  // Auth-lost abort: still parse the partial report so findings collected
-  // before the trip ship.
-  let findings: DastFindingRaw[] = [];
-  if (fs.existsSync(reportPath)) {
-    try {
-      const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
-      findings = parseZapReport(report);
-    } catch {
-      // Partial report — surface zero findings rather than crash the pipeline.
-    }
-    try {
-      fs.unlinkSync(reportPath);
-    } catch {
-      /* noop */
-    }
-  }
+  // The temp dir (YAML already unlinked, but the partial report and the dir
+  // itself remain) must be removed on EVERY exit path — including the abort
+  // throws below, which previously leaked it. A single finally covers all.
   try {
-    fs.rmdirSync(tmpDir);
-  } catch {
-    /* noop */
-  }
+    // ZAP exit codes 0/1/2 are normal completions (with or without findings).
+    // 3+, null (signal-killed), or any abort with no clean exit are runner-level
+    // failures. An auth-lost-triggered abort is not a runner failure — pipeline
+    // upstream marks the job as auth_failed and we still parse partial findings.
+    if (
+      !result.aborted &&
+      result.exitCode !== 0 &&
+      result.exitCode !== 1 &&
+      result.exitCode !== 2
+    ) {
+      // The ZAP stderr tail can carry credentials that pattern-based redaction
+      // misses. Per project rule "never surface raw backend errors to users",
+      // log the (redacted) tail to console only and store a generic message in
+      // the UI-visible scan_jobs.error column.
+      const tail = result.stderr.slice(-2_000);
+      console.error(
+        `[dast-pipeline] ZAP AF crashed (exit=${result.exitCode}, signal=${result.signal}). stderr tail: ${redactCredentials(tail)}`,
+      );
+      throw new DastPipelineAbortError(
+        'engine_crash',
+        { exit_code: result.exitCode, signal: result.signal },
+        'DAST engine crashed during the scan',
+      );
+    }
 
-  return {
-    findings,
-    durationMs: result.durationMs,
-    exitCode: result.exitCode,
-    aborted: result.aborted,
-    authLostState: watcher.state(),
-    attachAbort: () => undefined,
-  };
+    // Cancellation aborts always surface up — never collect findings.
+    if (result.aborted && result.abortReason === 'cancellation_requested') {
+      throw new DastPipelineAbortError(
+        'unknown',
+        { aborted_reason: 'cancellation_requested' },
+        'DAST scan cancelled by user',
+      );
+    }
+    if (result.aborted && result.abortReason === 'scan_timeout') {
+      throw new DastPipelineAbortError(
+        'timeout',
+        { aborted_reason: 'scan_timeout', timeout_minutes: inputs.scanTimeoutMinutes },
+        `DAST scan exceeded scan_timeout_minutes=${inputs.scanTimeoutMinutes}`,
+      );
+    }
+
+    // Auth-lost abort: still parse the partial report so findings collected
+    // before the trip ship.
+    let findings: DastFindingRaw[] = [];
+    if (fs.existsSync(reportPath)) {
+      const reportText = fs.readFileSync(reportPath, 'utf-8');
+      if (reportText.trim().length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let report: any;
+        try {
+          report = JSON.parse(reportText);
+        } catch (e) {
+          // A non-empty but unparseable report means ZAP wrote a truncated /
+          // corrupt file. Silently shipping findings_count=0 would be
+          // indistinguishable from a clean target — fail the job instead.
+          console.error(
+            `[dast-pipeline] ZAP report JSON is corrupt/truncated: ${(e as Error).message}`,
+          );
+          throw new DastPipelineAbortError(
+            'engine_crash',
+            { stage: 'parse_report', reason: 'corrupt_report_json' },
+            'DAST engine produced a corrupt report',
+          );
+        }
+        findings = parseZapReport(report);
+      }
+      // An empty report file is a legitimate clean-target / zero-findings
+      // result, so we leave `findings` as [].
+    }
+
+    return {
+      findings,
+      durationMs: result.durationMs,
+      exitCode: result.exitCode,
+      aborted: result.aborted,
+      authLostState: watcher.state(),
+      attachAbort: () => undefined,
+    };
+  } finally {
+    // Remove the whole temp dir (partial report + dir) on success AND on every
+    // throw path above. force:true so a missing dir/file doesn't mask the
+    // original error.
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +922,14 @@ export async function runDastPipeline(
     throw e;
   }
 
-  // Step 3: cross-link prerequisites. Loaded BEFORE the scan so we don't add
+  // Step 3a: load project_dast_config.scope_config and convert to ScopeConfig.
+  // The route layer (PUT /dast/config) already validated this shape — we
+  // re-shape DB-side snake_case to the yaml-builder's camelCase here. Without
+  // this load, every customer's include/exclude paths and header rules were
+  // silently ignored (regression caught in v2.1a critical review).
+  const scope = await loadScopeConfig(supabase, job.project_id, target.target_url);
+
+  // Step 3b: cross-link prerequisites. Loaded BEFORE the scan so we don't add
   // wallclock to the credentialed window.
   const extractionRunId = await getActiveExtractionRunId(supabase, job.project_id);
   let entryPoints: EntryPointRow[] = [];
@@ -754,6 +946,38 @@ export async function runDastPipeline(
     console.warn(`${tag} no active_extraction_run_id — skipping cross-link`);
   }
 
+  // Step 3c: scan-time SSRF revalidation. The route layer SSRF-checked
+  // target_url at create time, but a hostname that resolved to a benign
+  // public IP then can DNS-rebind to 169.254.169.254 / RFC1918 / Fly 6PN by
+  // the time the worker actually scans it. Re-resolve and re-check the host
+  // here, immediately before spawning ZAP, the same way the container
+  // scanner does. Abort with a distinct `ssrf_blocked` category on failure.
+  let scanHostname: string;
+  try {
+    scanHostname = new URL(target.target_url).hostname;
+  } catch {
+    const abort = new DastPipelineAbortError(
+      'ssrf_blocked',
+      { stage: 'parse_target_url' },
+      'DAST target URL is malformed',
+    );
+    console.error(`${tag} aborted: target_url not a valid URL`);
+    await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+    throw abort;
+  }
+  const hostCheck = await validateScanTimeHost(scanHostname, 'host');
+  if (!hostCheck.valid) {
+    const abort = new DastPipelineAbortError(
+      'ssrf_blocked',
+      { stage: 'scan_time_host_revalidation' },
+      'DAST target host failed scan-time SSRF revalidation',
+    );
+    // Log the specific reason for ops; never put it in scan_jobs.error.
+    console.error(`${tag} aborted: scan-time SSRF revalidation failed: ${hostCheck.reason}`);
+    await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+    throw abort;
+  }
+
   // Step 4: spawn ZAP via control-plane. The plaintext buffer is alive until
   // buildAutomationYaml runs INSIDE runZapWithControlPlane → write to disk →
   // we wipe immediately after.
@@ -765,6 +989,7 @@ export async function runDastPipeline(
         targetUrl: target.target_url,
         scanProfile: afProfile,
         detectedRuntime: target.detected_runtime,
+        scope,
         authStrategy: cred?.credentialRow.auth_strategy,
         authPayload: cred?.payload,
         loggedInIndicator: cred?.credentialRow.logged_in_indicator ?? undefined,
@@ -908,3 +1133,4 @@ export { crossLinkFinding } from './cross-link';
 // Internal exports used by the pipeline test harness in Task 9.
 export { loadTenantGuardRows as __test_loadTenantGuardRows };
 export { loadCredentialOrAbort as __test_loadCredentialOrAbort };
+export { loadScopeConfig as __test_loadScopeConfig };

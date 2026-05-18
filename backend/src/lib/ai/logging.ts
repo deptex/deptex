@@ -4,6 +4,8 @@ export interface AIUsageLogEntry {
   organizationId: string;
   userId: string;
   feature: string;
+  // 'byok' retained as a legacy enum value for historical rows only;
+  // new writes are always 'platform' after phase29_drop_byok.
   tier: 'platform' | 'byok';
   provider: string;
   model: string;
@@ -65,9 +67,8 @@ export async function getAIUsageSummary(
     .eq('success', true)
     .gte('created_at', since.toISOString());
 
-  // Cap is the platform default until per-org cap UI lands. The
-  // organization_ai_providers table is dormant on the platform-default
-  // path and may not exist in every environment.
+  // Cap is the platform default. (BYOK / organization_ai_providers was
+  // retired in phase29_drop_byok; this is now the only knob.)
   const monthlyCostCap = 100;
   const rows = logs || [];
 

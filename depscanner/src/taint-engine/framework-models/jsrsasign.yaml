@@ -1,0 +1,93 @@
+# jsrsasign framework spec — Deptex cross-file taint engine.
+#
+# jsrsasign exposes RSA / ECDSA / HMAC signature + encryption surfaces
+# through `KJUR.crypto.Signature` and `KEYUTIL` / `RSAKey` classes. The
+# AI-generated fixture in `bench-iterate/v_base/2026-05-12T17-41-24/
+# report.json` for CVE-2024-21484 routes a tainted ciphertext into a
+# decrypt call:
+#
+#   app.post('/decrypt', (req, res) => {
+#     const key = KEYUTIL.getKey(privateKeyPem);
+#     const ciphertext = req.body.ciphertext;
+#     const plaintext = key.decrypt(ciphertext);
+#     res.json({ plaintext });
+#   });
+#
+# CVE-2024-21484 is a signature-validation bypass — the library's verify
+# routine accepts crafted signatures that pass the check without
+# corresponding to the supplied key. Both `*.verify*(*)` (signature side)
+# and `*.decrypt(*)` (the AI's preferred fixture shape) are modelled as
+# sinks: attacker-controlled bytes through either surface compromise the
+# cryptographic guarantee.
+#
+# vuln_class mapping rationale.
+#   `weak_crypto` was added to the enum in phase28c precisely for sinks
+#   where tainted data influences a cryptographic primitive in a way that
+#   breaks its security guarantees. CVE-2022-23541 (jsonwebtoken `kid`)
+#   is cited in spec.ts as the canonical example — jsrsasign's
+#   verify/decrypt family falls into the same bucket. `auth_bypass` would
+#   be the alternative for the verify-specific case, but `weak_crypto`
+#   captures both decrypt + verify uniformly.
+#
+# Sources NOT redeclared — Express/Fastify/NestJS request sources are
+# pre-tainted by the per-framework specs; the AI fixture relies on
+# express.yaml's `req.body.*`.
+
+framework: jsrsasign
+version: "*"
+language: js
+
+sources: []
+
+sinks:
+  # ---------- Weak crypto — signature verification family ----------
+  # CVE-2024-21484 et al. — KJUR.crypto.Signature verify accepts crafted
+  # signatures from attacker input. Wildcard receiver covers both the
+  # canonical `sig.verifySignature(...)` and the destructured shape.
+  - pattern: "*.verify(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign KJUR.crypto.Signature.verify — tainted signature accepted (CVE-2024-21484 family)
+  - pattern: "*.verifyHexSignatureForMessage(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign verifyHexSignatureForMessage — tainted signature material
+  - pattern: "*.verifySignature(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign verifySignature — tainted signature material
+  - pattern: "*.verifyJWT(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign KJUR.jws.JWS.verifyJWT — tainted JWT
+  - pattern: "*.verifyJWS(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign KJUR.jws.JWS.verifyJWS — tainted JWS
+  - pattern: "KJUR.jws.JWS.verify(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign KJUR.jws.JWS.verify — namespaced
+  - pattern: "KJUR.jws.JWS.verifyJWT(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign KJUR.jws.JWS.verifyJWT — namespaced
+
+  # ---------- Weak crypto — decrypt family ----------
+  # The AI fixture for CVE-2024-21484 uses `key.decrypt(ciphertext)`.
+  # Wildcard receiver matches the `RSAKey.decrypt` / `KEYUTIL.getKey(...).
+  # decrypt` instance call.
+  - pattern: "*.decrypt(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign RSAKey.decrypt / instance decrypt — tainted ciphertext routed into RSA decryption (CVE-2024-21484 canonical AI shape)
+  - pattern: "*.decryptOAEP(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign RSAKey.decryptOAEP — tainted ciphertext through OAEP
+  - pattern: "*.decryptPKCS1(*)"
+    vuln_class: weak_crypto
+    argument_indices: []
+    description: jsrsasign RSAKey.decryptPKCS1 — tainted ciphertext through PKCS1
+
+sanitizers: []
