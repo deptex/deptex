@@ -371,27 +371,6 @@ function rollup(rows: Array<{ severity: string | null; status: string }>): Sever
   return out;
 }
 
-interface ReachabilityRollup {
-  module: number;
-  unreachable: number;
-  unclassified: number;
-}
-
-/** Roll container findings up by Phase 2 reachability verdict. A null level
- *  ('unclassified') is a language package or an image the classifier could
- *  not analyze — distinct from 'unreachable', which is a positive verdict. */
-function reachabilityRollup(
-  rows: Array<{ reachability_level: string | null }>
-): ReachabilityRollup {
-  const out: ReachabilityRollup = { module: 0, unreachable: 0, unclassified: 0 };
-  for (const r of rows) {
-    if (r.reachability_level === 'module') out.module += 1;
-    else if (r.reachability_level === 'unreachable') out.unreachable += 1;
-    else out.unclassified += 1;
-  }
-  return out;
-}
-
 router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -430,7 +409,6 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
       return res.json({
         iac: emptyRollup(),
         container: emptyRollup(),
-        container_reachability: { module: 0, unreachable: 0, unclassified: 0 },
         infra_types: infraTypes,
         last_scan_at: lastScanAt,
         skipped_images: [],
@@ -445,7 +423,7 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
         .eq('extraction_run_id', activeRunId),
       supabase
         .from('project_container_findings')
-        .select('severity, status, reachability_level')
+        .select('severity, status')
         .eq('project_id', projectId)
         .eq('extraction_run_id', activeRunId),
     ]);
@@ -455,7 +433,6 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
     res.json({
       iac: rollup((iacRes.data ?? []) as any),
       container: rollup((containerRes.data ?? []) as any),
-      container_reachability: reachabilityRollup((containerRes.data ?? []) as any),
       infra_types: infraTypes,
       last_scan_at: lastScanAt,
       // skipped_images: deferred to v1.5 — needs to be persisted by the

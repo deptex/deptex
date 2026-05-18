@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { api, frameworkLabel, type ScannerSummary, type BaseImageRecommendation } from '../../lib/api';
+import { api, frameworkLabel, type ScannerSummary } from '../../lib/api';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import RegistryCredentialsSection from './RegistryCredentialsSection';
 import ConfiguredImagesSection from './ConfiguredImagesSection';
-import BaseImageRecommendationCard from './BaseImageRecommendationCard';
 
 interface Props {
   organizationId: string;
@@ -34,7 +33,6 @@ export default function ScannersPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
-  const [recommendations, setRecommendations] = useState<BaseImageRecommendation[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,23 +51,6 @@ export default function ScannersPanel({
       .finally(() => {
         if (cancelled) return;
         setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [organizationId, projectId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    // Recommendations are a best-effort enhancement — a failure here must not
-    // surface as an error on the scanner panel.
-    api
-      .getBaseImageRecommendations(organizationId, projectId)
-      .then((r) => {
-        if (!cancelled) setRecommendations(r.recommendations ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setRecommendations([]);
       });
     return () => {
       cancelled = true;
@@ -131,21 +112,6 @@ export default function ScannersPanel({
                     Container Findings
                   </div>
                   <RollupChips rollup={summary.container} />
-                  {summary.container_reachability &&
-                    summary.container_reachability.module +
-                      summary.container_reachability.unreachable >
-                      0 && (
-                      <div className="mt-1.5 text-[11px] text-foreground-secondary">
-                        <span className="text-orange-400 font-medium tabular-nums">
-                          {summary.container_reachability.module}
-                        </span>{' '}
-                        loaded ·{' '}
-                        <span className="text-green-400 font-medium tabular-nums">
-                          {summary.container_reachability.unreachable}
-                        </span>{' '}
-                        unreachable
-                      </div>
-                    )}
                 </div>
               </div>
 
@@ -184,35 +150,6 @@ export default function ScannersPanel({
           ) : null}
         </div>
       </div>
-
-      {recommendations.length > 0 && (
-        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-          <div className="p-6">
-            <h3 className="text-base font-semibold text-foreground mb-1">
-              Base-image recommendations
-            </h3>
-            <p className="text-sm text-foreground-secondary mb-4">
-              Lower-CVE base images for the Dockerfiles in this project, each with a
-              shell-compatibility verdict so you can tell a drop-in swap from one that
-              needs verification.
-            </p>
-            <div className="space-y-3">
-              {recommendations.map((rec) => (
-                <BaseImageRecommendationCard
-                  key={rec.id}
-                  organizationId={organizationId}
-                  projectId={projectId}
-                  recommendation={rec}
-                  canManage={canManage}
-                  onDismissed={(id) =>
-                    setRecommendations((prev) => prev.filter((r) => r.id !== id))
-                  }
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       <RegistryCredentialsSection organizationId={organizationId} canManage={canManage} />
       <ConfiguredImagesSection organizationId={organizationId} projectId={projectId} canManage={canManage} />
