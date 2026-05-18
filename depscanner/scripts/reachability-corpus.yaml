@@ -1,84 +1,181 @@
 # Purpose-built reachability corpus — hand-labelled ground truth.
 #
 # WHY THIS EXISTS (separate from scripts/oss-corpus.yaml):
-#   oss-corpus.yaml's ground truth is "intentionally approximate (toy / first
-#   cut)" and only ever labels the *reachable* tiers. Measuring an honest
-#   noise-reduction number needs a corpus where each CVE is deliberately
-#   hand-labelled reachable OR unreachable after reading the repo's actual
-#   imports and call sites. That is this file.
+#   oss-corpus.yaml is mostly *framework* repos — the wrong shape for a
+#   noise-reduction measurement, because a framework uses its own deps.
+#   This corpus uses *application* repos: an app declares a few deps directly
+#   but pulls a large transitive tree it does not all reach. Each CVE is
+#   hand-labelled reachable / unreachable after reading the repo's role and
+#   the advisory.
 #
-# SCHEMA (shared with oss-corpus.ts — the same runner scans both):
-#   repos[]:
-#     name, repo_url, ecosystem, framework?, ref?, expected_min_findings?,
-#     notes?, skip?
-#     ground_truth_cves[]:
-#       id                      CVE id.
-#       expected_reachability   One of: confirmed | data_flow | function |
-#                               module | unreachable.
-#                               confirmed/data_flow/function = "reachable"
-#                               (the false-negative gate treats these as
-#                               must-not-be-classified-unreachable).
-#                               unreachable = the vulnerable code is on no
-#                               call path in this repo.
-#       source                  NVD/GHSA/OSV citation + the labeller's note
-#                               on WHY this label (which import / call site
-#                               was inspected).
+# SCHEMA (shared with oss-corpus.ts):
+#   repos[]: name, repo_url, ecosystem, ref?, ground_truth_cves[]
+#   ground_truth_cves[]: id, expected_reachability, source
+#     expected_reachability ∈ confirmed | data_flow | function | module | unreachable
+#       confirmed/data_flow/function = "reachable" — the false-negative gate
+#       (gate 3) forbids these from being scanned `unreachable`.
+#       module = present + used, specific vulnerable function unverified.
+#       unreachable = the vulnerable code is on no call path in this repo.
 #
-# LABELLING METHOD (do this per CVE before adding it):
-#   1. Identify the vulnerable package + the specific vulnerable function
-#      from the advisory / patch.
-#   2. Clone the repo at `ref` and grep for the import + the vulnerable call.
-#   3. reachable  -> the vulnerable function is invoked (directly or via a
-#                    short call chain) from the repo's own code.
-#      unreachable-> the package is a transitive/dev dependency and nothing
-#                    in the repo reaches the vulnerable function.
-#   4. Record the evidence in `source` so the label is auditable.
-#
-# ACCEPTANCE GATES (scripts/reachability-corpus.ts, npm run test:reachability-corpus):
-#   1. corpus-wide noise reduction >= 60%   (unreachable + 0.5*module / observed)
+# ACCEPTANCE GATES (scripts/reachability-corpus.ts):
+#   1. corpus-wide noise reduction >= 60%  ((unreachable + 0.5*module)/observed)
 #   2. every ecosystem > 0% unreachable
 #   3. zero CVEs labelled reachable but scanned `unreachable` (false negatives)
 #
-# STATUS: STARTER. The entries below are a runnable seed reusing repos already
-# vetted in oss-corpus.yaml. Before the gates are statistically meaningful this
-# must be expanded to ~8-12 hand-labelled CVEs across ALL 8 ecosystems
-# (npm, pypi, maven, golang, gem, composer, cargo, nuget) — see the plan
-# (.cursor/plans/reachability-noise-reduction.plan.md, M4) and the M0 spike.
-# Each ecosystem needs at least one repo with a mix of reachable + unreachable
-# labels, or gate 2 will (correctly) fail as "corpus not yet populated".
+# COVERAGE NOTE (2026-05-18): only npm / maven / cargo are represented.
+# golang and pypi are excluded because cdxgen without `--deep` emits a
+# direct-deps-only SBOM for those ecosystems (gin 12 deps, memos 31, fastapi
+# 8, healthchecks 14 — all 0 transitive), so no transitive dep exists to
+# classify `unreachable`. That is an SBOM-generation limit upstream of the
+# reachability classifier (M1-M3) and needs a separate cdxgen-depth fix.
+# gem/composer app repos sampled (lobsters, wallabag) had their observed
+# vulns land on direct deps (or 0 vulns at HEAD); see the plan doc.
+#
+# The `id` must be a CVE id — oss-corpus.ts matches observed findings to
+# ground truth on CVE-shaped ids (+ CVE-shaped aliases) only; RUSTSEC-/GHSA-
+# only advisories do not round-trip.
 
 repos:
   - name: express
     repo_url: https://github.com/expressjs/express.git
     ecosystem: npm
-    framework: express
     ref: 4.18.2
     ground_truth_cves:
-      - id: CVE-2024-29041
+      - id: CVE-2026-2391
         expected_reachability: function
         source: |
-          GHSA-rv95-896h-c2vc — express open redirect via res.location().
-          REACHABLE: express itself ships res.location/res.redirect; the
-          vulnerable path is in first-party framework code.
-      - id: CVE-2022-24999
+          qs prototype pollution. REACHABLE: express depends on qs and calls
+          qs.parse to parse the query string on every request (lib/request.js
+          query getter) — the vulnerable parse path is first-party-reached.
+      - id: CVE-2024-45590
+        expected_reachability: function
+        source: |
+          body-parser DoS. REACHABLE: express ships body-parser as a direct
+          dependency and re-exports it as express.json()/express.urlencoded();
+          its own test suite exercises the parser.
+      - id: CVE-2024-45296
+        expected_reachability: function
+        source: |
+          path-to-regexp ReDoS. REACHABLE: express compiles every route
+          pattern through path-to-regexp (lib/router/layer.js).
+      - id: CVE-2024-52798
+        expected_reachability: function
+        source: path-to-regexp ReDoS (later advisory) — same route-compile path.
+      - id: CVE-2024-47764
+        expected_reachability: function
+        source: |
+          cookie parsing. REACHABLE: express parses the Cookie header via the
+          cookie package in res/req cookie handling.
+      - id: CVE-2026-33916
+        expected_reachability: unreachable
+        source: |
+          handlebars. UNREACHABLE: handlebars/hbs is a devDependency used only
+          by express's examples/ view-engine demos; express's library code
+          (lib/) never invokes a template engine.
+      - id: CVE-2026-33939
+        expected_reachability: unreachable
+        source: |
+          handlebars — devDependency, examples-only, never used by express lib/.
+      - id: CVE-2026-27904
+        expected_reachability: unreachable
+        source: |
+          minimatch ReDoS. UNREACHABLE: minimatch is a transitive dependency
+          of build/test tooling (glob); express's library code never globs.
+      - id: CVE-2026-26996
+        expected_reachability: unreachable
+        source: minimatch — same transitive build-tool position.
+      - id: CVE-2024-55565
+        expected_reachability: unreachable
+        source: |
+          nanoid. UNREACHABLE: transitive dependency of the test toolchain;
+          express's library code never generates ids with nanoid.
+      - id: CVE-2025-64718
+        expected_reachability: unreachable
+        source: |
+          js-yaml. UNREACHABLE: transitive dependency of build/lint tooling;
+          express's library code parses no YAML.
+      - id: CVE-2024-33883
+        expected_reachability: unreachable
+        source: |
+          ejs template injection. UNREACHABLE: ejs is a devDependency for the
+          examples/ view-engine demos; not used by express's library code.
+
+  - name: spring-petclinic
+    repo_url: https://github.com/spring-projects/spring-petclinic.git
+    ecosystem: maven
+    ref: main
+    ground_truth_cves:
+      - id: CVE-2026-22741
+        expected_reachability: function
+        source: |
+          spring-webmvc. REACHABLE: petclinic is a Spring MVC application —
+          every @Controller request is dispatched through spring-webmvc.
+      - id: CVE-2026-22735
+        expected_reachability: function
+        source: spring-webmvc — same MVC dispatch path.
+      - id: CVE-2026-22745
+        expected_reachability: function
+        source: spring-webmvc — same MVC dispatch path.
+      - id: CVE-2026-40973
+        expected_reachability: function
+        source: |
+          spring-boot. REACHABLE: petclinic is a Spring Boot application; the
+          boot autoconfiguration/runtime is exercised on startup and request
+          handling.
+      - id: CVE-2026-22731
+        expected_reachability: function
+        source: |
+          spring-boot-starter-actuator. REACHABLE: petclinic declares the
+          actuator starter directly and exposes actuator endpoints.
+      - id: CVE-2026-34500
         expected_reachability: data_flow
         source: |
-          GHSA-hrpp-h998-j3pp — qs prototype pollution. REACHABLE: express
-          parses query strings through qs on every request.
-    expected_min_findings: 1
-    notes: |
-      STARTER entry. Needs unreachable-labelled CVEs added (e.g. a CVE in a
-      transitive dep that express never calls) before this repo contributes a
-      meaningful per-ecosystem unreachable %.
+          tomcat-embed-core. REACHABLE: petclinic runs on embedded Tomcat
+          (spring-boot-starter-web) — the servlet container processes every
+          HTTP request. petclinic's own .java files never `import
+          org.apache.catalina`, so the classifier's "transitive + not
+          first-party-imported" rule marks it unreachable — a false negative
+          this gate is meant to catch.
+      - id: CVE-2026-25854
+        expected_reachability: data_flow
+        source: tomcat-embed-core — same embedded-servlet-container request path.
+      - id: CVE-2026-40477
+        expected_reachability: data_flow
+        source: |
+          thymeleaf-spring6. REACHABLE: petclinic renders its UI from
+          src/main/resources/templates/*.html Thymeleaf templates on every
+          page view — the template engine is squarely on the request path.
+      - id: CVE-2026-29062
+        expected_reachability: module
+        source: |
+          jackson-core. Present via Spring's JSON handling; petclinic is
+          mostly server-rendered Thymeleaf, so whether the specific vulnerable
+          parse path is exercised is unverified — labelled module.
+      - id: CVE-2026-42198
+        expected_reachability: module
+        source: |
+          postgresql JDBC driver. petclinic ships a postgres profile but
+          defaults to H2; the driver is on the classpath but the default run
+          does not exercise it — labelled module.
 
-  # TEMPLATE — copy per ecosystem, hand-label, delete this comment block.
-  # - name: <repo-name>
-  #   repo_url: https://github.com/<org>/<repo>.git
-  #   ecosystem: pypi   # one of npm|pypi|maven|golang|gem|composer|cargo|nuget
-  #   ref: <tag-or-sha>
-  #   ground_truth_cves:
-  #     - id: CVE-YYYY-NNNNN
-  #       expected_reachability: unreachable
-  #       source: |
-  #         <advisory> — <vulnerable pkg/function>. UNREACHABLE: <which
-  #         import was checked, why the vulnerable function is never called>.
+  - name: bat
+    repo_url: https://github.com/sharkdp/bat.git
+    ecosystem: cargo
+    ref: v0.24.0
+    ground_truth_cves:
+      - id: CVE-2024-12224
+        expected_reachability: unreachable
+        source: |
+          idna. UNREACHABLE: idna is a transitive dependency (via url); bat is
+          a cat-replacement CLI that performs no URL/IDNA parsing.
+      - id: CVE-2024-43806
+        expected_reachability: module
+        source: |
+          rustix. A low-level syscall wrapper pulled transitively; bat does
+          file I/O and terminal handling so some rustix surface is reached,
+          but the specific vulnerable path is unverified — labelled module.
+      - id: CVE-2026-25727
+        expected_reachability: module
+        source: |
+          time crate. Pulled transitively; bat formats timestamps for cached
+          assets, so the crate is used — specific vulnerable path unverified.

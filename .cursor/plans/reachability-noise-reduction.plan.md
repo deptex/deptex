@@ -329,27 +329,91 @@ job).
 - Branch fresh off `main` per `feedback_one_branch_no_new_branches` /
   `feedback_sync_main_often`.
 
-## M4 Execution — REMAINING (the actual validation, not just the harness)
+## M4 Execution — STATUS (2026-05-18)
 
-M1–M3 code + the M4 harness are committed on `worktree-reachability-noise-reduction`
-(4 commits off main, tsc clean, 928 unit tests pass). NOT DONE: the corpus run +
-measured result. **Do not `/push-changes` until the gates produce a real number.**
+### Scan-infra fixes (committed `3952cd8`)
+Real-repo scans could not complete at all. Three pre-existing blockers, all fixed:
+- **dep-scan VDB not cached** — the image ships no VDB and `/data` was not a
+  persistent mount, so every scan cold-downloaded + extracted the ~34 GB database.
+  `bin/deptex-scan` now mounts a persistent VDB cache at `/data`
+  (`DEPTEX_VDB_CACHE`, default `~/.deptex/vdb`).
+- **malicious-package step hangs** — GuardDog fans a per-dependency semgrep run;
+  13+ min on a real repo. New `DEPTEX_SKIP_OPTIONAL_SCANS` gate in `pipeline.ts`
+  skips IaC / malicious / SAST / secrets (none affect reachability).
+- **VDB stub** — a killed early scan left an 8 KB stub + `vdb.meta`; dep-scan then
+  skipped rebuild. Cleared; a clean uninterrupted scan rebuilt the real 34 GB VDB.
 
-1. Rebuild the Docker image from this branch: `cd depscanner && npm run docker:build`.
-2. **Directional run first** — scan the 0%-ecosystem repos via the existing
-   `scripts/oss-corpus.yaml` (gin/golang, fastapi/pypi, sinatra/gem) plus a baseline
-   (express/npm, spring/maven). Compare the `reachability_level` distribution against
-   main. Confirm M1's `is_direct` recovery actually moves gin/sinatra/fastapi off 0%
-   unreachable. If it doesn't, debug M1 before continuing.
-3. Populate `scripts/reachability-corpus.yaml` — one real repo per ecosystem (8 total),
-   hand-label ~8–12 CVEs each reachable/unreachable per the YAML header's method.
-4. Run `npm run test:reachability-corpus`; record the 3-gate result.
-5. Iterate M1/M2 thresholds against the corpus until the gates pass — the M2
-   symbol-absent→unreachable branch is the documented tunable knob.
-6. Then `/push-changes`.
+With these, a full express scan completes in ~50 s (was an indefinite hang).
 
-Also pending: `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on the
-python/java/go fixtures, so their snapshots need regenerating + committing.
+### Directional run (5 ecosystems, real measured)
+| repo | ecosystem | vulns | unreachable / module / function | noise-reduction |
+|------|-----------|-------|----------------------------------|-----------------|
+| express 4.18.2 | npm | 31 | 14 / 13 / 4 | **66.1%** |
+| spring-petclinic | maven | 22 | 13 / 1 / 8 | **61.4%** |
+| gin v1.9.1 | golang | 9 | 0 / 9 / 0 | 50.0% |
+| fastapi 0.109.2 | pypi | 2 | 0 / 2 / 0 | 50.0% |
+| sinatra v4.0.0 | gem | 5 | 0 / 5 / 0 | 50.0% |
+
+**Finding:** M1+M2 work — the structural 0%-unreachable bug is fixed (express 14,
+spring-petclinic 13 `unreachable`; both clear the 60% gate). gin/fastapi/sinatra at
+0% unreachable is **correct, not a bug**: every observed vuln there sits on a
+*direct, imported* dep (fastapi→starlette in 36 files; sinatra→sinatra+nokogiri).
+Framework repos use their own deps. The genuinely-unreachable cases live in
+**application** repos with unused transitive deps — `oss-corpus.yaml` is mostly
+framework repos, the wrong shape. (Aside: cdxgen without `--deep` also gives
+golang/pypi shallow SBOMs — gin 12 deps, fastapi 8.)
+
+### Decision: app-repo corpus (Henry, 2026-05-18)
+`reachability-corpus.yaml` is rebuilt around **application** repos. Reuse the two
+already-scanned app-shaped repos; add five application repos:
+- npm — `expressjs/express` 4.18.2 (scanned: 66.1%)
+- maven — `spring-projects/spring-petclinic` (scanned: 61.4%)
+- golang — `usememos/memos` (note: agent flagged `v0.21.0` unverified — `git ls-remote --tags` first)
+- pypi — `healthchecks/healthchecks` v3.4
+- gem — `lobsters/lobsters` @ `dccdb349f0c28d7c7e96fdaab49d289cce3b9820`
+- composer — `wallabag/wallabag` 2.6.10
+- cargo — `sharkdp/bat` v0.24.0
+
+### App-repo scan results (2026-05-18)
+Scanned 5 application repos. Only cargo joined npm/maven as a working ecosystem:
+| repo | ecosystem | deps (transitive) | vulns | unreachable | note |
+|------|-----------|-------------------|-------|-------------|------|
+| bat v0.24.0 | cargo | 172 (134) | 19 | 14 | works — full Cargo.lock tree |
+| memos v0.21.0 | golang | 31 (0) | 15 | 0 | cdxgen shallow SBOM |
+| healthchecks v3.4 | pypi | 14 (0) | 0 | 0 | cdxgen shallow SBOM + 0 vulns |
+| lobsters HEAD | gem | 182 (122) | 0 | 0 | full tree but HEAD too current (patched) |
+| wallabag 2.6.10 | composer | 244 (130) | 25 | 0 | full tree; 25 vulns all `module` |
+
+So the gated corpus is **npm + maven + cargo** (express, spring-petclinic, bat).
+
+### Corpus gate result (2026-05-18, `oss-corpus-runs/corpus-run`)
+25 hand-labelled CVEs observed. **Gate 1 PASS · Gate 2 PASS · Gate 3 FAIL.**
+- Gate 1 — corpus-wide noise reduction **64%** (≥60% ✓). (unreachable=12, module=8, function=5)
+- Gate 2 — every ecosystem >0% unreachable ✓ (npm 50%, maven 40%, cargo 67%).
+- Gate 3 — **3 false negatives**, all spring-petclinic: CVE-2026-34500 + CVE-2026-25854
+  (`tomcat-embed-core`) and CVE-2026-40477 (`thymeleaf-spring6`), each hand-labelled
+  reachable but scanned `unreachable`.
+
+**Gate 3 root cause:** the classifier's Path-A heuristic (`reachability.ts` ~L883:
+transitive + `files_importing_count===0` + name not in usage → `unreachable`) has a
+false-negative class — **framework-embedded runtime components**. Spring Boot wires
+the embedded Tomcat servlet container and the Thymeleaf template engine into the
+app; petclinic's own `.java` files never `import org.apache.catalina` /
+`org.thymeleaf`, so the heuristic marks them `unreachable` — but Tomcat is on every
+request path and petclinic renders Thymeleaf views on every page. M1 (correct
+`is_direct`) didn't introduce this heuristic, but it made it *fire* by giving it a
+trustworthy transitive split. Mitigations: never emit `unreachable` for deps pulled
+by a framework "starter"/runtime bundle, or floor at `module` when the only
+evidence is `files_importing_count===0`.
+
+### Remaining
+1. Decide the Gate-3 fix (framework-embedded false negatives) — see root cause above.
+2. golang/pypi: blocked on cdxgen shallow SBOM — needs a `--deep`-equivalent or a
+   manifest-driven transitive expansion. gem: needs an older app ref with vulnerable
+   gems (harness can't `--branch <SHA>` — extend it, or pick a tagged old app).
+3. `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on python/java/go
+   fixture snapshots.
+4. Then `/push-changes`.
 
 ## Success Criteria
 All three gates pass on the M4 purpose-built corpus:
