@@ -31,6 +31,28 @@ describe('userIdentity helpers', () => {
       expect(getDisplayName(user)).toBe('OAuth Name');
     });
 
+    it('falls through to identities[0].identity_data.full_name when user_metadata is empty', () => {
+      const user = makeUser({
+        email: 'henry@example.com',
+        user_metadata: {},
+        identities: [
+          { identity_data: { full_name: 'Identity Name' } },
+        ] as unknown as User['identities'],
+      });
+      expect(getDisplayName(user)).toBe('Identity Name');
+    });
+
+    it('falls through to identities[0].identity_data.name when full_name is absent', () => {
+      const user = makeUser({
+        email: 'henry@example.com',
+        user_metadata: {},
+        identities: [
+          { identity_data: { name: 'Identity Short Name' } },
+        ] as unknown as User['identities'],
+      });
+      expect(getDisplayName(user)).toBe('Identity Short Name');
+    });
+
     it('falls through to email when no name is set', () => {
       const user = makeUser({ email: 'henry@example.com', user_metadata: {} });
       expect(getDisplayName(user)).toBe('henry@example.com');
@@ -50,6 +72,16 @@ describe('userIdentity helpers', () => {
     it('returns custom_full_name when present', () => {
       const user = makeUser({ user_metadata: { custom_full_name: 'Henry' } });
       expect(getDisplayNameOrNull(user)).toBe('Henry');
+    });
+
+    it('falls through to identities[0].identity_data before returning null', () => {
+      const user = makeUser({
+        user_metadata: {},
+        identities: [
+          { identity_data: { full_name: 'Identity Name' } },
+        ] as unknown as User['identities'],
+      });
+      expect(getDisplayNameOrNull(user)).toBe('Identity Name');
     });
 
     it('returns null for null user', () => {
@@ -81,6 +113,26 @@ describe('userIdentity helpers', () => {
         user_metadata: { avatar_url: 'https://avatars.githubusercontent.com/u/1' },
       });
       expect(getAvatarUrl(user)).toBe('https://avatars.githubusercontent.com/u/1');
+    });
+
+    it('falls through to identities[0].identity_data.picture when user_metadata is empty', () => {
+      const user = makeUser({
+        user_metadata: {},
+        identities: [
+          { identity_data: { picture: 'https://lh3.googleusercontent.com/a/identity' } },
+        ] as unknown as User['identities'],
+      });
+      expect(getAvatarUrl(user)).toBe('https://lh3.googleusercontent.com/a/identity');
+    });
+
+    it('falls through to identities[0].identity_data.avatar_url when picture is absent', () => {
+      const user = makeUser({
+        user_metadata: {},
+        identities: [
+          { identity_data: { avatar_url: 'https://avatars.githubusercontent.com/u/identity' } },
+        ] as unknown as User['identities'],
+      });
+      expect(getAvatarUrl(user)).toBe('https://avatars.githubusercontent.com/u/identity');
     });
 
     it('returns the blank placeholder when nothing is set', () => {

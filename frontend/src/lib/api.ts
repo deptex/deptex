@@ -474,18 +474,26 @@ export const api = {
     });
   },
 
-  async getInvitation(invitationId: string): Promise<{ id: string; email: string; role: string; organization_id: string; organization_name: string; expires_at: string }> {
-    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-    const response = await fetch(`${API_BASE_URL}/api/organizations/invitations/${invitationId}`);
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
-    }
-    return response.json();
+  async getInvitation(invitationId: string): Promise<{
+    id: string;
+    email: string;
+    role: string;
+    role_display_name: string | null;
+    role_color: string | null;
+    organization_id: string;
+    organization_name: string;
+    organization_avatar_url: string | null;
+    expires_at: string;
+  }> {
+    return fetchWithAuth(`/api/organizations/invitations/${invitationId}`);
   },
 
   async acceptInvitation(organizationId: string, invitationId: string): Promise<{ message: string; organization_id: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/accept`, { method: 'POST' });
+  },
+
+  async declineInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/decline`, { method: 'POST' });
   },
 
   async cancelInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {

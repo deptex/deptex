@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
 import { api, Organization, OrganizationInvitation } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Toaster } from '../../components/ui/toaster';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
+import { OrgAvatar } from '../../components/Avatar';
 
 /**
  * Landing at /organizations: redirects to default org or shows empty state.
@@ -24,6 +23,7 @@ export default function OrganizationsLanding() {
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [decliningId, setDecliningId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -101,6 +101,7 @@ export default function OrganizationsLanding() {
   };
 
   const handleAcceptInvitation = async (inv: OrganizationInvitation) => {
+    if (acceptingId || decliningId) return;
     setAcceptingId(inv.id);
     try {
       const result = await api.acceptInvitation(inv.organization_id, inv.id);
@@ -111,8 +112,24 @@ export default function OrganizationsLanding() {
         description: err.message || 'Failed to accept invitation',
         variant: 'destructive',
       });
-    } finally {
       setAcceptingId(null);
+    }
+  };
+
+  const handleDeclineInvitation = async (inv: OrganizationInvitation) => {
+    if (decliningId || acceptingId) return;
+    setDecliningId(inv.id);
+    try {
+      await api.declineInvitation(inv.organization_id, inv.id);
+      setInvitations((prev) => prev.filter((i) => i.id !== inv.id));
+    } catch (err: any) {
+      toast({
+        title: 'Failed to decline invitation',
+        description: err.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDecliningId(null);
     }
   };
 
@@ -147,91 +164,114 @@ export default function OrganizationsLanding() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-md space-y-6">
-        {/* Create organization card — org-settings style */}
-        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-          <div className="px-4 py-3 bg-background-card-header">
+        {/* Create organization card — matches CreateOrganizationModal two-tone */}
+        <div className="rounded-xl border border-border bg-background-card-header overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
             <h1 className="text-base font-semibold text-foreground">
               Create your first organization
             </h1>
-            <p className="text-sm text-foreground-secondary mt-0.5">
+            <p className="text-sm text-foreground-secondary mt-1">
               Organizations help you manage projects, teams, and security in one place.
             </p>
           </div>
           <form onSubmit={handleCreate}>
-            <div className="p-6">
-              <div>
-                <label htmlFor="org-name" className="block text-sm font-medium text-foreground mb-1.5">
-                  Name
-                </label>
-                <Input
-                  id="org-name"
-                  type="text"
-                  value={createName}
-                  onChange={(e) => {
-                    setCreateName(e.target.value);
-                    setCreateError(null);
-                  }}
-                  className="bg-background border-border text-foreground placeholder:text-foreground-secondary"
-                  autoFocus
-                  disabled={creating}
-                />
-              </div>
+            <div className="px-6 py-4">
+              <label htmlFor="org-name" className="block text-sm font-medium text-foreground mb-2">
+                Organization Name
+              </label>
+              <input
+                id="org-name"
+                type="text"
+                value={createName}
+                onChange={(e) => {
+                  setCreateName(e.target.value);
+                  setCreateError(null);
+                }}
+                maxLength={32}
+                className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-ring transition-colors"
+                autoFocus
+                disabled={creating}
+              />
               {createError && (
                 <p className="text-sm text-error mt-2">{createError}</p>
               )}
             </div>
-            <div className="px-4 py-3 border-t border-border bg-black/20 flex justify-end">
+            <div className="px-6 py-4 bg-background border-t border-border flex items-center justify-end">
               <Button
                 type="submit"
+                variant="green"
                 disabled={creating || !createName.trim()}
-                size="sm"
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20"
               >
                 {creating ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                ) : null}
-                Create organization
+                  <>
+                    <span className="invisible">Create organization</span>
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </span>
+                  </>
+                ) : (
+                  'Create organization'
+                )}
               </Button>
             </div>
           </form>
         </div>
 
-        {/* Invitations card — separate, with org avatars */}
+        {/* Invitations card */}
         {pendingInvites.length > 0 && (
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border bg-background-card-header">
-              <h2 className="text-base font-semibold text-foreground">
-                You&apos;ve also been invited to
+          <div className="rounded-xl border border-border bg-background-card-header overflow-hidden">
+            <div className="px-6 py-4 bg-background border-b border-border">
+              <h2 className="text-sm font-semibold text-foreground">
+                Pending invitations
               </h2>
-              <p className="text-sm text-foreground-secondary mt-0.5">
-                Accept to join these organizations
-              </p>
             </div>
             <ul className="divide-y divide-border">
               {pendingInvites.map((inv) => (
                 <li
                   key={inv.id}
-                  className="flex items-center gap-3 px-4 py-3 bg-background-card"
+                  className="flex items-center gap-3 px-6 py-3"
                 >
-                  <Avatar className="h-9 w-9 shrink-0 overflow-hidden rounded-full border-0 bg-transparent">
-                    <AvatarImage src={inv.organization_avatar_url ?? undefined} alt="" />
-                    <AvatarFallback className="text-xs text-foreground-secondary bg-background-subtle/20">
-                      {(inv.organization_name || 'O').slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="text-sm text-foreground flex-1 min-w-0 truncate">
-                    {inv.organization_name || 'Organization'}
-                  </span>
-                  <Button
-                    size="sm"
-                    className="flex-shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20"
-                    disabled={acceptingId !== null}
-                    onClick={() => handleAcceptInvitation(inv)}
+                  <OrgAvatar
+                    src={inv.organization_avatar_url}
+                    className="h-8 w-8 rounded-full object-cover bg-transparent flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-foreground truncate">
+                      {inv.organization_name || 'Organization'}
+                    </div>
+                    <div className="text-xs text-foreground-secondary capitalize">
+                      Invited as {inv.role}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeclineInvitation(inv)}
+                    disabled={decliningId === inv.id || acceptingId !== null}
+                    aria-label="Decline invitation"
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-foreground/15 text-foreground-secondary hover:text-foreground hover:bg-background-subtle/85 transition-colors disabled:opacity-50 flex-shrink-0"
                   >
-                    {acceptingId === inv.id && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                    {decliningId === inv.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <X className="h-3.5 w-3.5" />
                     )}
-                    Accept
+                  </button>
+                  <Button
+                    variant="green"
+                    onClick={() => handleAcceptInvitation(inv)}
+                    disabled={acceptingId !== null || decliningId !== null}
+                    className="!h-7 !px-2.5 !text-xs flex-shrink-0"
+                  >
+                    {acceptingId === inv.id ? (
+                      <>
+                        <span className="invisible">Accept</span>
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        </span>
+                      </>
+                    ) : (
+                      'Accept'
+                    )}
                   </Button>
                 </li>
               ))}
