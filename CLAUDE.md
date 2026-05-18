@@ -76,14 +76,16 @@ frontend/src/
 
 ## RBAC & Permissions
 
-**Organization roles** (`organization_roles.permissions` JSONB):
-- `manage_teams_and_projects`, `view_all_teams_and_projects`, `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `view_activities`
+**Roles are permission bundles, not a fixed ladder.** Each role is a row in `organization_roles` (org-scoped) carrying a `permissions` JSONB; `organization_members.role` stores the role *name*. `owner` is the only structural role — all permissions, cannot be removed. Org creation seeds exactly two default roles, `owner` and `member`; **there is no built-in `admin` role**, and orgs add/rename/delete their own roles freely. Authorize by checking the relevant permission key in the role's `permissions` JSONB (`owner` always passes) — never by matching a role *name* (`role === 'admin'` is a legacy bug: a non-existent role name).
+
+**Organization permission keys** (`organization_roles.permissions` JSONB):
+- `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `manage_teams_and_projects`, `view_all_teams_and_projects`, `view_settings`, `view_activity`, `view_members`, `add_members`, `kick_members`, `edit_roles`, `edit_permissions`
 - AI & Aegis: `interact_with_aegis`, `manage_aegis`, `trigger_fix`, `view_ai_spending`, `manage_incidents`
 
 **Team roles** (`team_roles.permissions` JSONB):
 - `manage_projects`, `manage_members`, `manage_settings`, `manage_integrations`, `manage_notifications`
 
-**Defaults:** Owner (all), Admin (all except transfer), Member (view only)
+Note: `owner` is the only role guaranteed by name. The org-identity edits in General settings (name / avatar / transfer / delete) are owner-only.
 
 ---
 
