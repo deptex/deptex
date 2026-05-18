@@ -459,7 +459,7 @@ export async function updateReachabilityLevels(
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, osv_id')
+    .select('id, project_dependency_id, osv_id, aliases')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
@@ -728,10 +728,27 @@ export async function updateReachabilityLevels(
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
     if (!dependencyId) continue;
 
+    // A PDV's primary osv_id may be a GHSA advisory while the taint engine
+    // and CVE-targeted specs key on the CVE id. Match on the primary id plus
+    // every alias so a GHSA-primary PDV still resolves its CVE-keyed flow.
+    const candidateOsvIds: string[] = [];
+    if (pdv.osv_id) candidateOsvIds.push(pdv.osv_id);
+    if (Array.isArray(pdv.aliases)) {
+      for (const a of pdv.aliases) {
+        if (typeof a === 'string' && a && !candidateOsvIds.includes(a)) candidateOsvIds.push(a);
+      }
+    }
+
     const matchingFlows = flowsByDep.get(dependencyId) ?? [];
-    const taintMatches = pdv.osv_id
-      ? taintByDepOsv.get(`${dependencyId}|${pdv.osv_id}`) ?? []
-      : [];
+    const taintMatches: StoredFlow[] = [];
+    {
+      const seen = new Set<StoredFlow>();
+      for (const osv of candidateOsvIds) {
+        for (const f of taintByDepOsv.get(`${dependencyId}|${osv}`) ?? []) {
+          if (!seen.has(f)) { seen.add(f); taintMatches.push(f); }
+        }
+      }
+    }
 
     let level: string = 'module';
     let details: any = null;
@@ -780,7 +797,13 @@ export async function updateReachabilityLevels(
       // FrameworkSpec sink loaded for this PDV's CVE, we know the *specific*
       // vulnerable call pattern — verify it is on a call path instead of the
       // weaker "package name appears somewhere" heuristic below.
-      const sinkPatterns = pdv.osv_id ? options.cveSinkPatterns?.get(pdv.osv_id) : undefined;
+      let sinkPatterns: string[] | undefined;
+      if (options.cveSinkPatterns) {
+        for (const osv of candidateOsvIds) {
+          const p = options.cveSinkPatterns.get(osv);
+          if (p && p.length > 0) { sinkPatterns = p; break; }
+        }
+      }
       const symbolTokens = [...new Set((sinkPatterns ?? []).flatMap(extractSymbolTokens))];
       let symbolClassified = false;
       if (symbolTokens.length > 0) {

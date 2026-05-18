@@ -218,15 +218,23 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
             if (!eco) continue;
             const purl = buildPurl(eco, pd.name, pd.version);
             if (!purl) continue;
-            // First write wins: a single CVE on multiple PDs
-            // (rare, e.g. a monorepo with two copies of a vulnerable
-            // dep) will resolve to the first dep we see. Acceptable
-            // for v1; M5 may add per-PD disambiguation.
-            if (!depsByOsvId.has(r.osv_id)) {
-              depsByOsvId.set(r.osv_id, {
-                purl,
-                dependencyId: pd.dependency_id,
-              });
+            const resolved: ResolvedDep = { purl, dependencyId: pd.dependency_id };
+            // Key the resolver under the PDV's primary osv_id AND every
+            // CVE-shaped alias. CVE-targeted FrameworkSpecs are generated and
+            // keyed by CVE id, so the engine emits flows with osv_id=CVE-xxxx.
+            // When a PDV's primary id is a GHSA advisory (log4shell etc.) a
+            // CVE-only lookup would miss and the flow would be written with a
+            // null dependency_id — which the classifier can never promote to
+            // `confirmed`. First write wins on a key collision (a single CVE
+            // across two PDs — rare, e.g. a monorepo with duplicate deps).
+            const osvKeys = [r.osv_id];
+            if (Array.isArray(r.aliases)) {
+              for (const a of r.aliases) {
+                if (typeof a === 'string' && a.startsWith('CVE-')) osvKeys.push(a);
+              }
+            }
+            for (const k of osvKeys) {
+              if (!depsByOsvId.has(k)) depsByOsvId.set(k, resolved);
             }
           }
         }
