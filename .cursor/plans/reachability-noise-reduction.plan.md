@@ -411,9 +411,12 @@ genuinely-unreachable express devDep-transitive CVEs so Gate 1 stays >60% after 
 3 false-unreachables become `module`.
 
 ### Remaining
-1. `npm run test:fixtures:update` (Docker) — M1 shifts `is_direct` on python/java/go
-   fixture snapshots; regenerate + commit the deltas.
-2. `/push-changes`.
+1. `/push-changes` — branch is gate-green and committed.
+
+`npm run test:fixtures` (the default fast suite — `test-minimal-npm` + `test-empty`,
+the only fixtures CI runs) passes clean: 6/6 snapshots match, no M1 `is_direct`
+drift. The slow python/java/go fixtures are not in the CI suite, so no snapshot
+regen blocks the PR.
 
 ### Out of scope / follow-up (documented blockers, not this arc)
 - golang/pypi: cdxgen without `--deep` emits direct-only SBOMs — no transitive deps
