@@ -2746,10 +2746,7 @@ export default function OrganizationSettingsPage() {
                       </div>
                     </div>
                     {isOrgOwner ? (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between gap-4 flex-wrap">
-                        <p className="text-xs text-foreground-secondary">
-                          Please use 32 characters at maximum. Select an image to change the avatar.
-                        </p>
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                         <Button
                           onClick={handleSaveOrganizationDetails}
                           disabled={isSavingOrgName || isUploadingAvatar || (orgName === organization?.name && !pendingAvatarFile)}
