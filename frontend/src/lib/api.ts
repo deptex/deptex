@@ -2326,6 +2326,41 @@ export const api = {
   },
 
   // ============================================================
+  // Base-image recommendations (Phase 2 — Item J)
+  // ============================================================
+
+  async getBaseImageRecommendations(
+    organizationId: string,
+    projectId: string
+  ): Promise<{ recommendations: BaseImageRecommendation[] }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations`
+    );
+  },
+
+  async dismissBaseImageRecommendation(
+    organizationId: string,
+    projectId: string,
+    recommendationId: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations/${recommendationId}/dismiss`,
+      { method: 'POST', body: JSON.stringify({}) }
+    );
+  },
+
+  async suggestBaseImage(
+    organizationId: string,
+    projectId: string,
+    sourceImage: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-suggestions`,
+      { method: 'POST', body: JSON.stringify({ source_image: sourceImage }) }
+    );
+  },
+
+  // ============================================================
   // Registry credentials (org-scoped) + configured images (project-scoped)
   // Backend routes mounted in src/routes/registry-credentials.ts and
   // src/routes/configured-images.ts. The encrypted credential blob is never
@@ -4813,9 +4848,35 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  /** Phase 2 — container findings rolled up by static reachability verdict.
+   *  Absent on responses from a backend that predates Phase 2. */
+  container_reachability?: { module: number; unreachable: number; unclassified: number };
   infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
+}
+
+/** Phase 2 base-image upgrade recommendation — one card per Dockerfile. */
+export interface BaseImageRecommendation {
+  id: string;
+  dockerfile_path: string;
+  current_image: string;
+  current_image_digest: string | null;
+  current_image_cve_count: number | null;
+  recommended_image: string | null;
+  recommended_image_cve_count: number | null;
+  cve_delta: number | null;
+  alternatives: Array<{
+    image: string;
+    provider: 'chainguard' | 'distroless' | 'dhi' | 'official_slim' | 'wolfi';
+    cve_count: number | null;
+    drop_in_score: number;
+  }>;
+  shell_compat_verdict: 'shell_required' | 'no_shell_required' | 'unknown';
+  shell_compat_evidence: Record<string, unknown>;
+  drop_in_score: number;
+  is_dismissed: boolean;
+  created_at: string;
 }
 
 export type RegistryType =
