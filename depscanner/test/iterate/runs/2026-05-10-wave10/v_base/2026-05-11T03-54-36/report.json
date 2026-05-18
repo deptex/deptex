@@ -1,0 +1,3673 @@
+{
+  "variant": {
+    "name": "v_base",
+    "version": "base-framework-spec-v1"
+  },
+  "provider": "openai",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+  "baseUrl": "https://api.deepinfra.com/v1/openai",
+  "startedAt": "2026-05-11T03:54:36.884Z",
+  "finishedAt": "2026-05-11T04:14:03.624Z",
+  "totalDurationMs": 1166740,
+  "candidates": 88,
+  "validated": 31,
+  "byStatus": {
+    "failed_validation": 47,
+    "validated": 31,
+    "vuln_class_out_of_scope": 9,
+    "parse_failed": 1
+  },
+  "funnel": {
+    "schemaPass": 78,
+    "fixturePre": 31,
+    "fixtureSafe": 78,
+    "patchPostClean": 52,
+    "final": 31
+  },
+  "totalCostUsd": 0.30240651499999993,
+  "perCve": [
+    {
+      "cveId": "CVE-2025-62718",
+      "packagePurl": "pkg:npm/axios@0.21.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006565921999999999,
+      "inputTokens": 89582,
+      "outputTokens": 2056,
+      "durationMs": 160090,
+      "attempts": 4,
+      "vulnerableFixture": "const axios = require('axios');\nconst http = require('http');\n\nhttp.createServer((req, res) => {\n  res.end('proxied');\n}).listen(5300, () => {\n  process.env.HTTP_PROXY = 'http://127.0.0.1:5300';\n  process.env.NO_PROXY = 'localhost';\n\n  axios.get('http://localhost.:8080/');\n});",
+      "safeFixture": "const axios = require('axios');\nconst http = require('http');\n\nhttp.createServer((req, res) => {\n  res.end('proxied');\n}).listen(5300, () => {\n  process.env.HTTP_PROXY = 'http://127.0.0.1:5300';\n  process.env.NO_PROXY = 'localhost';\n\n  axios.get('http://localhost:8080/');\n});",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 3495,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib/core/dispatchRequest.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/specs/headers.spec.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/unit/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-40175",
+      "packagePurl": "pkg:npm/axios@0.21.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006421585999999999,
+      "inputTokens": 88566,
+      "outputTokens": 1334,
+      "durationMs": 128367,
+      "attempts": 4,
+      "vulnerableFixture": "const axios = require('axios');\n\nObject.prototype['x-test'] = ' ok\\r\\nInjected: yes\\t';\n\naxios('/foo');\n",
+      "safeFixture": "const axios = require('axios');\n\naxios('/foo', {\n  headers: {\n    'x-test': ' ok\\r\\nInjected: yes\\t'\n  }\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 3388,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib/core/dispatchRequest.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/specs/headers.spec.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/unit/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-4800",
+      "packagePurl": "pkg:npm/lodash@4.17.20",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.005760374999999999,
+      "inputTokens": 79125,
+      "outputTokens": 1425,
+      "durationMs": 134313,
+      "attempts": 4,
+      "vulnerableFixture": "const _ = require('lodash');\nconst userControlledKey = req.query.key;\nconst options = { 'imports': { [userControlledKey]: () => {} } };\n_.template('', options);",
+      "safeFixture": "const _ = require('lodash');\nconst options = { 'imports': { 'safeKey': () => {} } };\n_.template('', options);",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 2070,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lodash.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-28500",
+      "packagePurl": "pkg:npm/lodash@4.17.20",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0017255109999999999,
+      "inputTokens": 23341,
+      "outputTokens": 683,
+      "durationMs": 48012,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.get('/trim', (req, res) => {\n  const input = req.query.s;\n  const result = _.trim(input);\n  res.send(result);\n});\n\napp.get('/trimEnd', (req, res) => {\n  const input = req.query.s;\n  const result = _.trimEnd(input);\n  res.send(result);\n});\n\napp.get('/toNumber', (req, res) => {\n  const input = req.query.s;\n  const result = _.toNumber(input);\n  res.send(result.toString());\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.get('/trim', (req, res) => {\n  const result = _.trim('  hello  ');\n  res.send(result);\n});\n\napp.get('/trimEnd', (req, res) => {\n  const result = _.trimEnd('  hello  ');\n  res.send(result);\n});\n\napp.get('/toNumber', (req, res) => {\n  const result = _.toNumber('42');\n  res.send(result.toString());\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 3,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 3242,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "core.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lodash.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "parseInt.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "template.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-23539",
+      "packagePurl": "pkg:npm/jsonwebtoken@8.5.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.008139446999999998,
+      "inputTokens": 111757,
+      "outputTokens": 2047,
+      "durationMs": 151468,
+      "attempts": 4,
+      "vulnerableFixture": "const jwt = require('jsonwebtoken');\nconst fs = require('fs');\nconst privateKey = fs.readFileSync('test/dsa-private.pem');\n\nconst token = jwt.sign({ foo: 'bar' }, privateKey, { algorithm: 'RS256' });\n",
+      "safeFixture": "const jwt = require('jsonwebtoken');\nconst fs = require('fs');\nconst privateKey = fs.readFileSync('test/dsa-private.pem');\n\nconst token = jwt.sign({ foo: 'bar' }, privateKey, { algorithm: 'RS256', allowInvalidAsymmetricKeyTypes: true });\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 1275,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "sign.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-23540",
+      "packagePurl": "pkg:npm/jsonwebtoken@8.5.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.004004733999999999,
+      "inputTokens": 55054,
+      "outputTokens": 959,
+      "durationMs": 73663,
+      "attempts": 2,
+      "vulnerableFixture": "const jwt = require('jsonwebtoken');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/verify', (req, res) => {\n  const token = req.body;\n  const decoded = jwt.verify(token, 'secret');\n  res.json(decoded);\n});\n",
+      "safeFixture": "const jwt = require('jsonwebtoken');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/verify', (req, res) => {\n  const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIiLCJpYXQiOjE2NDAyODIyMjB9.6dY3XK6jZ6iZ6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6';\n  const decoded = jwt.verify(token, 'secret');\n  res.json(decoded);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 1246,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "sign.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-23541",
+      "packagePurl": "pkg:npm/jsonwebtoken@8.5.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0019865889999999995,
+      "inputTokens": 27159,
+      "outputTokens": 583,
+      "durationMs": 66755,
+      "attempts": 1,
+      "vulnerableFixture": "const jwt = require('jsonwebtoken');\nconst express = require('express');\nconst app = express();\n\nconst publicKey = '-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...';\n\napp.get('/verify', (req, res) => {\n  const token = req.query.token;\n  try {\n    const decoded = jwt.verify(token, publicKey);\n    res.json({ valid: true, decoded });\n  } catch (err) {\n    res.json({ valid: false, error: err.message });\n  }\n});\n",
+      "safeFixture": "const jwt = require('jsonwebtoken');\nconst express = require('express');\nconst app = express();\n\nconst publicKey = '-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...';\n\napp.get('/verify', (req, res) => {\n  try {\n    const decoded = jwt.verify('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', publicKey);\n    res.json({ valid: true, decoded });\n  } catch (err) {\n    res.json({ valid: false, error: err.message });\n  }\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 1230,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "sign.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-3517",
+      "packagePurl": "pkg:npm/minimatch@3.0.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0014823649999999998,
+      "inputTokens": 20315,
+      "outputTokens": 400,
+      "durationMs": 58572,
+      "attempts": 1,
+      "vulnerableFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  const pattern = req.query.pattern;\n  minimatch.braceExpand(pattern);\n  res.send('Done');\n});\n",
+      "safeFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  minimatch.braceExpand('a{b,c}d');\n  res.send('Done');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 3870,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "minimatch.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/basic.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/brace-expand.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/defaults.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/patterns.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-11831",
+      "packagePurl": "pkg:npm/serialize-javascript@6.0.0",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0009564129999999999,
+      "inputTokens": 12903,
+      "outputTokens": 403,
+      "durationMs": 21507,
+      "attempts": 1,
+      "vulnerableFixture": "const serialize = require('serialize-javascript');\nconst express = require('express');\nconst app = express();\n\napp.get('/xss', (req, res) => {\n  const userInput = req.query.input;\n  const serialized = serialize(userInput);\n  res.send(`<script>${serialized}</script>`);\n});\n",
+      "safeFixture": "const serialize = require('serialize-javascript');\nconst express = require('express');\nconst app = express();\n\napp.get('/xss', (req, res) => {\n  const safeValue = 'safe constant';\n  const serialized = serialize(safeValue);\n  res.send(`<script>${serialized}</script>`);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 1957,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "index.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/unit/serialize.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-55565",
+      "packagePurl": "pkg:npm/nanoid@3.2.0",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0008119699999999999,
+      "inputTokens": 10870,
+      "outputTokens": 402,
+      "durationMs": 39850,
+      "attempts": 1,
+      "vulnerableFixture": "const { nanoid } = require('nanoid');\n\nclass IDGenerator {\n  generate(req, res) {\n    const size = req.query.size;\n    res.send(nanoid(size));\n  }\n}",
+      "safeFixture": "const { nanoid } = require('nanoid');\n\nclass IDGenerator {\n  generate(req, res) {\n    res.send(nanoid(21));\n  }\n}",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 588,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2025-13465",
+      "packagePurl": "pkg:npm/lodash@4.17.20",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0017094599999999997,
+      "inputTokens": 23360,
+      "outputTokens": 509,
+      "durationMs": 39947,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const obj = {};\n  const path = req.body.path;\n  _.unset(obj, path);\n  res.send(Object.prototype.hasOwnProperty('polluted') ? 'vulnerable' : 'safe');\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const obj = {};\n  _.unset(obj, 'fixed.property');\n  res.send('safe');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 2086,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "core.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lodash.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2025-27152",
+      "packagePurl": "pkg:npm/axios@0.21.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0028107469999999997,
+      "inputTokens": 38957,
+      "outputTokens": 448,
+      "durationMs": 33313,
+      "attempts": 1,
+      "vulnerableFixture": "const axios = require('axios');\n\nasync function fetchData(req, res) {\n  const targetUrl = req.query.url;\n  try {\n    const response = await axios(targetUrl);\n    res.send(response.data);\n  } catch (error) {\n    res.status(500).send(error.message);\n  }\n}\n",
+      "safeFixture": "const axios = require('axios');\n\nasync function fetchData(req, res) {\n  try {\n    const response = await axios('https://api.example.com/data');\n    res.send(response.data);\n  } catch (error) {\n    res.status(500).send(error.message);\n  }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 4800,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "dist/axios.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "dist/browser/axios.cjs",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "dist/esm/axios.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "dist/node/axios.cjs",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib/env/data.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2025-64718",
+      "packagePurl": "pkg:npm/js-yaml@4.1.0",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0013075799999999996,
+      "inputTokens": 17880,
+      "outputTokens": 381,
+      "durationMs": 33823,
+      "attempts": 1,
+      "vulnerableFixture": "const yaml = require('js-yaml');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/parse', (req, res) => {\n  const payload = req.body;\n  const result = yaml.load(payload);\n  res.json(result);\n});\n",
+      "safeFixture": "const yaml = require('js-yaml');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/parse', (req, res) => {\n  const result = yaml.load('{}');\n  res.json(result);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 1880,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/loader.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/issues/0164.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-25639",
+      "packagePurl": "pkg:npm/axios@0.21.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.005192766,
+      "inputTokens": 71046,
+      "outputTokens": 1485,
+      "durationMs": 111057,
+      "attempts": 4,
+      "vulnerableFixture": "const axios = require('axios');\nfunction handler(req, res) {\n  const malicious = JSON.parse('{\"__proto__\": {\"polluted\": \"yes\"}}');\n  const result = axios.utils.merge({}, malicious);\n  res.end(Object.prototype.polluted);\n}",
+      "safeFixture": "const axios = require('axios');\nfunction handler(req, res) {\n  const safe = { url: '/safe' };\n  const result = axios.utils.merge({}, safe);\n  res.end('done');\n}",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 1865,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/core/mergeConfig.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib/utils.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-26996",
+      "packagePurl": "pkg:npm/minimatch@3.0.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0035819759999999993,
+      "inputTokens": 49856,
+      "outputTokens": 422,
+      "durationMs": 25680,
+      "attempts": 1,
+      "vulnerableFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  const pattern = req.query.pattern;\n  const result = minimatch('test', pattern);\n  res.json({ result });\n});\n",
+      "safeFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  const result = minimatch('test', '*.js');\n  res.json({ result });\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 4534,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/ast.ts",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/index.ts",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tap-snapshots/test/basic.js.test.cjs",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tap-snapshots/test/escape-has-magic.js.test.cjs",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tap-snapshots/test/optimization-level-0.ts.test.cjs",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tap-snapshots/test/optimization-level-2.ts.test.cjs",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-27903",
+      "packagePurl": "pkg:npm/minimatch@3.0.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0008909639999999998,
+      "inputTokens": 11384,
+      "outputTokens": 827,
+      "durationMs": 47364,
+      "attempts": 2,
+      "vulnerableFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  const pattern = req.query.pattern;\n  const result = minimatch('file/path/test.js', pattern);\n  res.json({ matches: result });\n});\n",
+      "safeFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  const result = minimatch('file/path/test.js', '**/*.js');\n  res.json({ matches: result });\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 599,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-27904",
+      "packagePurl": "pkg:npm/minimatch@3.0.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0004060179999999999,
+      "inputTokens": 5158,
+      "outputTokens": 398,
+      "durationMs": 27560,
+      "attempts": 1,
+      "vulnerableFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/match', (req, res) => {\n  const pattern = req.query.pattern;\n  const input = req.query.input;\n  const result = minimatch(input, pattern);\n  res.json({ matched: result });\n});\n",
+      "safeFixture": "const minimatch = require('minimatch');\nconst express = require('express');\nconst app = express();\n\napp.get('/match', (req, res) => {\n  const result = minimatch('fixed-input', 'fixed-pattern');\n  res.json({ matched: result });\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 646,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2026-34043",
+      "packagePurl": "pkg:npm/serialize-javascript@6.0.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004196322,
+      "inputTokens": 56482,
+      "outputTokens": 1861,
+      "durationMs": 110840,
+      "attempts": 4,
+      "vulnerableFixture": "const serialize = require('serialize-javascript');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/serialize', (req, res) => {\n  const malicious = Object.create(Array.prototype);\n  malicious[Symbol.toStringTag] = 'Array';\n  Object.defineProperty(malicious, 'length', { value: Number.MAX_SAFE_INTEGER });\n  const result = serialize(malicious);\n  res.send(result);\n});\n",
+      "safeFixture": "const serialize = require('serialize-javascript');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/serialize', (req, res) => {\n  const benign = [1, 2, 3];\n  const result = serialize(benign);\n  res.send(result);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 2009,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "index.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/unit/serialize.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2021-23337",
+      "packagePurl": "pkg:npm/lodash@4.17.20",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0016951549999999996,
+      "inputTokens": 23305,
+      "outputTokens": 405,
+      "durationMs": 26738,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.get('/render', (req, res) => {\n  const userTemplate = req.query.template;\n  const compiled = _.template(userTemplate);\n  res.send(compiled({}));\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.get('/render', (req, res) => {\n  const compiled = _.template('Hello, <%= name %>!');\n  res.send(compiled({ name: 'World' }));\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 3145,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "core.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lodash.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "parseInt.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "template.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2018-3721",
+      "packagePurl": "pkg:npm/lodash@4.17.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0013877829999999999,
+      "inputTokens": 18773,
+      "outputTokens": 549,
+      "durationMs": 38392,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/merge', (req, res) => {\n  const source = req.body;\n  const target = {};\n  _.merge(target, source);\n  res.send('Merged');\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/merge', (req, res) => {\n  const source = { a: 1 };\n  const target = {};\n  _.merge(target, source);\n  res.send('Merged');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 2219,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lodash.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2019-10744",
+      "packagePurl": "pkg:npm/lodash@4.17.11",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0012208969999999999,
+      "inputTokens": 16407,
+      "outputTokens": 560,
+      "durationMs": 41168,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const payload = req.body;\n  _.merge({}, payload);\n  res.send(Object.prototype.hasOwnProperty('polluted') ? 'Vulnerable' : 'Not Vulnerable');\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const safe = { a: 1 };\n  _.merge({}, safe);\n  res.send('Safe');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 4260,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "_baseClone.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_baseMerge.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_createRound.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_safeGet.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "core.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "debounce.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-8203",
+      "packagePurl": "pkg:npm/lodash@4.17.15",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.001320045,
+      "inputTokens": 17895,
+      "outputTokens": 495,
+      "durationMs": 33759,
+      "attempts": 1,
+      "vulnerableFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/update', (req, res) => {\n  const user = {};\n  const path = req.body.path;\n  const value = req.body.value;\n  _.set(user, path, value);\n  res.json(user);\n});\n",
+      "safeFixture": "const _ = require('lodash');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/update', (req, res) => {\n  const user = {};\n  _.set(user, 'name', 'alice');\n  res.json(user);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 5046,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "_baseClone.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_baseOrderBy.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_baseSet.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_baseSortedIndexBy.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_equalArrays.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "_equalObjects.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "core.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-16137",
+      "packagePurl": "pkg:npm/debug@2.6.8",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.003787622999999999,
+      "inputTokens": 51213,
+      "outputTokens": 1515,
+      "durationMs": 112294,
+      "attempts": 4,
+      "vulnerableFixture": "const debug = require('debug')('test');\nconst express = require('express');\nconst app = express();\n\napp.get('/ping', (req, res) => {\n  const userInput = req.query.input;\n  debug('%o', userInput);\n  res.send('OK');\n});\n",
+      "safeFixture": "const debug = require('debug')('test');\nconst express = require('express');\nconst app = express();\n\napp.get('/ping', (req, res) => {\n  debug('%o', 'fixed string');\n  res.send('OK');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 629,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-16138",
+      "packagePurl": "pkg:npm/mime@1.4.0",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.00033233099999999995,
+      "inputTokens": 4161,
+      "outputTokens": 369,
+      "durationMs": 20097,
+      "attempts": 1,
+      "vulnerableFixture": "const mime = require('mime');\nconst express = require('express');\nconst app = express();\n\napp.get('/file', (req, res) => {\n  const userInput = req.query.path;\n  const type = mime.lookup(userInput);\n  res.send(type);\n});\n",
+      "safeFixture": "const mime = require('mime');\nconst express = require('express');\nconst app = express();\n\napp.get('/file', (req, res) => {\n  const type = mime.lookup('example.txt');\n  res.send(type);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 601,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-24999",
+      "packagePurl": "pkg:npm/qs@6.5.2",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0009943059999999997,
+      "inputTokens": 13486,
+      "outputTokens": 368,
+      "durationMs": 20511,
+      "attempts": 1,
+      "vulnerableFixture": "const qs = require('qs');\nconst express = require('express');\nconst app = express();\n\napp.get('/pollute', (req, res) => {\n  const query = req.query;\n  const parsed = qs.parse(query);\n  res.send('Done');\n});\n",
+      "safeFixture": "const qs = require('qs');\nconst express = require('express');\nconst app = express();\n\napp.get('/pollute', (req, res) => {\n  const parsed = qs.parse('a=1&b=2');\n  res.send('Done');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 597,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-25883",
+      "packagePurl": "pkg:npm/semver@7.3.7",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.007920140999999999,
+      "inputTokens": 109371,
+      "outputTokens": 1548,
+      "durationMs": 111859,
+      "attempts": 4,
+      "vulnerableFixture": "const Range = require('semver/classes/range');\nconst express = require('express');\nconst app = express();\n\napp.get('/range', (req, res) => {\n  const range = req.query.range;\n  const r = new Range(range);\n  res.send('OK');\n});\n",
+      "safeFixture": "const Range = require('semver/classes/range');\nconst express = require('express');\nconst app = express();\n\napp.get('/range', (req, res) => {\n  const r = new Range('1.2.3');\n  res.send('OK');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 4300,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "classes/comparator.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "classes/range.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "classes/semver.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "functions/coerce.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "internal/re.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/internal/re.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-46175",
+      "packagePurl": "pkg:npm/json5@2.2.0",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0005209069999999999,
+      "inputTokens": 6717,
+      "outputTokens": 440,
+      "durationMs": 26413,
+      "attempts": 1,
+      "vulnerableFixture": "const JSON5 = require('json5');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/parse', (req, res) => {\n  const payload = req.body;\n  const parsed = JSON5.parse(payload);\n  res.json(parsed);\n});\n",
+      "safeFixture": "const JSON5 = require('json5');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/parse', (req, res) => {\n  const parsed = JSON5.parse('{\"name\": \"safe\"}');\n  res.json(parsed);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 656,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-37601",
+      "packagePurl": "pkg:npm/loader-utils@2.0.3",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0009996019999999998,
+      "inputTokens": 13562,
+      "outputTokens": 367,
+      "durationMs": 22524,
+      "attempts": 1,
+      "vulnerableFixture": "const { parseQuery } = require('loader-utils');\nconst express = require('express');\nconst app = express();\n\napp.get('/test', (req, res) => {\n  const query = req.query.q;\n  const result = parseQuery(query);\n  res.json(result);\n});\n",
+      "safeFixture": "const { parseQuery } = require('loader-utils');\nconst express = require('express');\nconst app = express();\n\napp.get('/test', (req, res) => {\n  const result = parseQuery('?valid=param');\n  res.json(result);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 637,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-7720",
+      "packagePurl": "pkg:npm/node-forge@0.9.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0017578349999999997,
+      "inputTokens": 23485,
+      "outputTokens": 904,
+      "durationMs": 65376,
+      "attempts": 2,
+      "vulnerableFixture": "const forge = require('node-forge');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const obj = {};\n  const path = req.body.path;\n  const value = req.body.value;\n  forge.util.setPath(obj, path, value);\n  res.send('Done');\n});\n",
+      "safeFixture": "const forge = require('node-forge');\nconst express = require('express');\nconst app = express();\n\napp.use(express.json());\n\napp.post('/pollute', (req, res) => {\n  const obj = {};\n  const value = req.body.value;\n  forge.util.setPath(obj, 'fixed.property', value);\n  res.send('Done');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 617,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-31129",
+      "packagePurl": "pkg:npm/moment@2.29.3",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.002796241999999999,
+      "inputTokens": 37102,
+      "outputTokens": 1620,
+      "durationMs": 122526,
+      "attempts": 4,
+      "vulnerableFixture": "const moment = require('moment');\nconst express = require('express');\nconst app = express();\n\napp.get('/date', (req, res) => {\n  const userInput = req.query.date;\n  const parsed = moment(userInput);\n  res.json({ valid: parsed.isValid() });\n});\n",
+      "safeFixture": "const moment = require('moment');\nconst express = require('express');\nconst app = express();\n\napp.get('/date', (req, res) => {\n  const parsed = moment('2022-01-01');\n  res.json({ valid: parsed.isValid() });\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 1292,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/lib/create/from-string.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-26115",
+      "packagePurl": "pkg:npm/word-wrap@1.2.3",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0006481979999999999,
+      "inputTokens": 8638,
+      "outputTokens": 349,
+      "durationMs": 23286,
+      "attempts": 1,
+      "vulnerableFixture": "const wrap = require('word-wrap');\nconst express = require('express');\nconst app = express();\n\napp.use(express.text());\n\napp.post('/wrap', (req, res) => {\n  const text = req.body;\n  const result = wrap(text);\n  res.send(result);\n});\n",
+      "safeFixture": "const wrap = require('word-wrap');\nconst express = require('express');\nconst app = express();\n\napp.post('/wrap', (req, res) => {\n  const result = wrap('safe constant string');\n  res.send(result);\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 643,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-21484",
+      "packagePurl": "pkg:npm/jsrsasign@10.5.27",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.015778593999999996,
+      "inputTokens": 219714,
+      "outputTokens": 1789,
+      "durationMs": 131820,
+      "attempts": 4,
+      "vulnerableFixture": "const { RSAKey } = require('jsrsasign');\nconst key = new RSAKey();\n\nfunction decryptHandler(ciphertext) {\n  return key.decrypt(ciphertext);\n}\n\nfunction decryptOAEPHandler(ciphertext) {\n  return key.decryptOAEP(ciphertext);\n}\n",
+      "safeFixture": "const { RSAKey } = require('jsrsasign');\nconst key = new RSAKey();\n\nfunction decryptHandler(ciphertext) {\n  return key.decrypt('safe_literal');\n}\n\nfunction decryptOAEPHandler(ciphertext) {\n  return key.decryptOAEP('safe_literal');\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 770,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-28849",
+      "packagePurl": "pkg:npm/follow-redirects@1.15.4",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0043957729999999995,
+      "inputTokens": 58563,
+      "outputTokens": 2378,
+      "durationMs": 184916,
+      "attempts": 4,
+      "vulnerableFixture": "const http = require('follow-redirects').http;\nconst express = require('express');\nconst app = express();\n\napp.get('/redirect', (req, res) => {\n  const target = req.query.url;\n  const options = {\n    hostname: new URL(target).hostname,\n    port: 80,\n    path: '/final',\n    headers: {\n      'Proxy-Authorization': 'secret-token',\n    },\n  };\n  http.get(options, (response) => {\n    response.pipe(res);\n  }).on('error', () => res.status(500).end());\n});\n",
+      "safeFixture": "const http = require('follow-redirects').http;\nconst express = require('express');\nconst app = express();\n\napp.get('/redirect', (req, res) => {\n  const options = {\n    hostname: 'example.com',\n    port: 80,\n    path: '/final',\n    headers: {\n      'Proxy-Authorization': 'secret-token',\n    },\n  };\n  http.get(options, (response) => {\n    response.pipe(res);\n  }).on('error', () => res.status(500).end());\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 2384,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "index.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-29041",
+      "packagePurl": "pkg:npm/express@4.18.2",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0036116889999999995,
+      "inputTokens": 48559,
+      "outputTokens": 1640,
+      "durationMs": 129634,
+      "attempts": 4,
+      "vulnerableFixture": "const express = require('express');\nconst app = express();\n\napp.use((req, res) => {\n  const url = req.query.redirect;\n  res.location(url).end();\n});\n\nmodule.exports = app;",
+      "safeFixture": "const express = require('express');\nconst app = express();\n\napp.use((req, res) => {\n  res.location('https://example.com').end();\n});\n\nmodule.exports = app;",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 2256,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/response.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/res.location.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-14343",
+      "packagePurl": "pkg:pypi/pyyaml@5.3.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0019323089999999997,
+      "inputTokens": 26579,
+      "outputTokens": 452,
+      "durationMs": 21006,
+      "attempts": 1,
+      "vulnerableFixture": "from flask import Flask, request\nimport yaml\n\napp = Flask(__name__)\n\n@app.route('/load')\ndef load():\n    data = request.args.get('data')\n    result = yaml.full_load(data)\n    return str(result)\n",
+      "safeFixture": "from flask import Flask, request\nimport yaml\n\napp = Flask(__name__)\n\n@app.route('/load')\ndef load():\n    result = yaml.full_load('key: value')\n    return str(result)\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 100,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/yaml/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib3/yaml/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "setup.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-18342",
+      "packagePurl": "pkg:pypi/pyyaml@3.12",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0019429899999999997,
+      "inputTokens": 26890,
+      "outputTokens": 338,
+      "durationMs": 12914,
+      "attempts": 1,
+      "vulnerableFixture": "import yaml\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.route(\"/config\", methods=[\"POST\"])\ndef apply_config():\n    raw = request.get_data(as_text=True)\n    return yaml.load(raw)\n",
+      "safeFixture": "import yaml\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.route(\"/config\", methods=[\"POST\"])\ndef apply_config():\n    raw = request.get_data(as_text=True)\n    return yaml.safe_load(raw)\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 79,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/yaml/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib3/yaml/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "setup.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2018-18074",
+      "packagePurl": "pkg:pypi/requests@2.18.4",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0010316449999999999,
+      "inputTokens": 13795,
+      "outputTokens": 522,
+      "durationMs": 49473,
+      "attempts": 1,
+      "vulnerableFixture": "from flask import Flask, request\nimport requests\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    target = request.args.get('url')\n    response = requests.get(target, auth=('admin', 'secret'))\n    return response.text\n",
+      "safeFixture": "from flask import Flask, request\nimport requests\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    response = requests.get('https://api.internal/status', auth=('admin', 'secret'))\n    return response.text\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 170,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "requests/sessions.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/test_requests.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-32681",
+      "packagePurl": "pkg:pypi/requests@2.30.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004177936,
+      "inputTokens": 56016,
+      "outputTokens": 2008,
+      "durationMs": 164609,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport requests\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    target = request.args.get('url')\n    session = requests.Session()\n    proxies = {'http': 'http://user:pass@proxy.local:8080'}\n    prep = requests.Request('GET', target).prepare()\n    session.rebuild_proxies(prep, proxies)\n    return str('Proxy-Authorization' in prep.headers)",
+      "safeFixture": "from flask import Flask, request\nimport requests\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    target = 'https://api.internal/status'\n    session = requests.Session()\n    proxies = {'http': 'http://user:pass@proxy.local:8080'}\n    prep = requests.Request('GET', target).prepare()\n    session.rebuild_proxies(prep, proxies)\n    return str('Proxy-Authorization' in prep.headers)",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 162,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "requests/sessions.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/test_requests.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-35195",
+      "packagePurl": "pkg:pypi/requests@2.31.0",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'insecure_default'; framework_spec.sinks.1.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'insecure_default'; framework_spec.sinks.2.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'insecure_default'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 38165,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2020-26137",
+      "packagePurl": "pkg:pypi/urllib3@1.25.8",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'crlf_injection'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 20696,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2023-43804",
+      "packagePurl": "pkg:pypi/urllib3@2.0.5",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.008618744999999999,
+      "inputTokens": 118595,
+      "outputTokens": 1985,
+      "durationMs": 138271,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    target = request.args.get('url')\n    http = urllib3.PoolManager()\n    r = http.request('GET', target, headers={'Cookie': 'session=secret'})\n    return r.data",
+      "safeFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    http = urllib3.PoolManager()\n    r = http.request('GET', 'https://internal/api/status', headers={'Cookie': 'session=secret'})\n    return r.data",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 114,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/urllib3/util/retry.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test_retry.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test_retry_deprecated.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/with_dummyserver/test_poolmanager.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-45803",
+      "packagePurl": "pkg:pypi/urllib3@2.0.6",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0019326449999999998,
+      "inputTokens": 26395,
+      "outputTokens": 586,
+      "durationMs": 34804,
+      "attempts": 1,
+      "vulnerableFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/submit', methods=['POST'])\ndef submit():\n    target = request.args.get('url')\n    data = request.get_json()\n    response = urllib3.request('POST', target, body=data, headers={'Content-Type': 'application/json'})\n    return response.data\n",
+      "safeFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/submit', methods=['POST'])\ndef submit():\n    data = request.get_json()\n    response = urllib3.request('POST', 'https://internal.api/submit', body=data, headers={'Content-Type': 'application/json'})\n    return response.data\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 216,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "dummyserver/handlers.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/urllib3/_collections.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/urllib3/_version.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/urllib3/connectionpool.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/urllib3/poolmanager.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/with_dummyserver/test_connectionpool.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-37891",
+      "packagePurl": "pkg:pypi/urllib3@2.2.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0018220369999999997,
+      "inputTokens": 24947,
+      "outputTokens": 508,
+      "durationMs": 43314,
+      "attempts": 1,
+      "vulnerableFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    target = request.args.get('url')\n    response = urllib3.request('GET', target, headers={'Proxy-Authorization': 'secret'})\n    return response.data\n",
+      "safeFixture": "from flask import Flask, request\nimport urllib3\n\napp = Flask(__name__)\n\n\n@app.route('/fetch')\ndef fetch():\n    response = urllib3.request('GET', 'https://api.internal/status', headers={'Proxy-Authorization': 'secret'})\n    return response.data\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 121,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/urllib3/util/retry.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/test_retry.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/with_dummyserver/test_poolmanager.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-26130",
+      "packagePurl": "pkg:pypi/cryptography@42.0.4",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004608490999999999,
+      "inputTokens": 61221,
+      "outputTokens": 2618,
+      "durationMs": 171268,
+      "attempts": 4,
+      "vulnerableFixture": "from cryptography.hazmat.primitives import serialization\nfrom cryptography.hazmat.primitives.asymmetric import ec\nfrom cryptography.hazmat.primitives.serialization.pkcs12 import serialize_key_and_certificates\nimport hashlib\n\ndef _load_ca():\n    key = ec.generate_private_key(ec.SECP256R1())\n    cert = key.public_key().public_bytes(\n        encoding=serialization.Encoding.PEM,\n        format=serialization.PublicFormat.SubjectPublicKeyInfo\n    )\n    return cert, key\n\ncacert, _ = _load_ca()\nkey = ec.generate_private_key(ec.SECP256R1())\nencryption = serialization.PrivateFormat.PKCS12.encryption_builder().hmac_hash(hashlib.sha256).build(b\"password\")\nserialize_key_and_certificates(b\"name\", key, cacert, [], encryption)",
+      "safeFixture": "from cryptography.hazmat.primitives import serialization\nfrom cryptography.hazmat.primitives.asymmetric import ec\nfrom cryptography.hazmat.primitives.serialization.pkcs12 import serialize_key_and_certificates\nimport hashlib\n\ndef _load_ca():\n    key = ec.generate_private_key(ec.SECP256R1())\n    cert = key.public_key().public_bytes(\n        encoding=serialization.Encoding.PEM,\n        format=serialization.PublicFormat.SubjectPublicKeyInfo\n    )\n    return cert, key\n\ncacert, key = _load_ca()\nencryption = serialization.PrivateFormat.PKCS12.encryption_builder().hmac_hash(hashlib.sha256).build(b\"password\")\nserialize_key_and_certificates(b\"name\", key, cacert, [], encryption)",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 92,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/cryptography/hazmat/backends/openssl/backend.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/hazmat/primitives/test_pkcs12.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-49083",
+      "packagePurl": "pkg:pypi/cryptography@41.0.5",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0070185629999999985,
+      "inputTokens": 95753,
+      "outputTokens": 2201,
+      "durationMs": 133820,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport cryptography.hazmat.primitives.serialization.pkcs7 as pkcs7\n\napp = Flask(__name__)\n\n@app.route('/verify', methods=['POST'])\ndef verify():\n    data = request.get_data()\n    certificates = pkcs7.load_der_pkcs7_certificates(data)\n    return str(len(certificates))\n",
+      "safeFixture": "from flask import Flask, request\nimport cryptography.hazmat.primitives.serialization.pkcs7 as pkcs7\n\napp = Flask(__name__)\n\n@app.route('/verify', methods=['POST'])\ndef verify():\n    certificates = pkcs7.load_der_pkcs7_certificates(b'\\x30\\x0B\\x06\\x09\\x2A\\x86\\x48\\x86\\xF7\\x0D\\x01\\x07\\x02')\n    return str(len(certificates))\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 177,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/cryptography/__about__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "src/cryptography/hazmat/backends/openssl/backend.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/hazmat/primitives/test_pkcs7.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "vectors/cryptography_vectors/__about__.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-22195",
+      "packagePurl": "pkg:pypi/jinja2@3.1.2",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0033172359999999994,
+      "inputTokens": 44216,
+      "outputTokens": 1779,
+      "durationMs": 97104,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport jinja2\n\napp = Flask(__name__)\n\n@app.route('/render')\ndef render():\n    attrs = request.args.get('attrs')\n    template = jinja2.Template('<div{{ attrs|xmlattr }}></div>')\n    return template.render(attrs=attrs)",
+      "safeFixture": "from flask import Flask, request\nimport jinja2\n\napp = Flask(__name__)\n\n@app.route('/render')\ndef render():\n    template = jinja2.Template('<div{{ attrs|xmlattr }}></div>')\n    return template.render(attrs={'class': 'safe'})",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 14,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/jinja2/__init__.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-34064",
+      "packagePurl": "pkg:pypi/jinja2@3.1.3",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006481403999999999,
+      "inputTokens": 89024,
+      "outputTokens": 1607,
+      "durationMs": 103693,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate = \"<div{{ attrs|xmlattr }}></div>\"\nenv = jinja2.Environment()\n\napp = Flask(__name__)\n\n\n@app.route('/render')\ndef render():\n    attrs = request.args.to_dict()\n    tmpl = env.from_string(template)\n    return tmpl.render(attrs=attrs)\n",
+      "safeFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate = \"<div{{ attrs|xmlattr }}></div>\"\nenv = jinja2.Environment()\n\napp = Flask(__name__)\n\n\n@app.route('/render')\ndef render():\n    attrs = {'class': 'safe'}\n    tmpl = env.from_string(template)\n    return tmpl.render(attrs=attrs)\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 130,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/jinja2/filters.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/test_filters.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2019-10906",
+      "packagePurl": "pkg:pypi/jinja2@2.10",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0036790139999999995,
+      "inputTokens": 49334,
+      "outputTokens": 1763,
+      "durationMs": 87658,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate = \"{{ data.format_map({'__class__': {'__init__': 'ignored'}}) }}\"\nenv = jinja2.SandboxedEnvironment()\n\napp = Flask(__name__)\n\n@app.route('/render')\ndef render():\n    data = request.args.get('data')\n    tmpl = env.from_string(template)\n    return tmpl.render(data=data)\n",
+      "safeFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate = \"{{ data.format_map({'__class__': {'__init__': 'ignored'}}) }}\"\nenv = jinja2.SandboxedEnvironment()\n\napp = Flask(__name__)\n\n@app.route('/render')\ndef render():\n    data = 'fixed_string'\n    tmpl = env.from_string(template)\n    return tmpl.render(data=data)\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 34,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "jinja2/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "setup.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-28493",
+      "packagePurl": "pkg:pypi/jinja2@2.11.2",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0032200709999999993,
+      "inputTokens": 43301,
+      "outputTokens": 1457,
+      "durationMs": 71340,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate_str = '{{ user_input | urlize }}'\nenv = jinja2.Environment()\n\ndef render_template():\n    user_input = request.args.get('text')\n    template = env.from_string(template_str)\n    return template.render(user_input=user_input)\n",
+      "safeFixture": "from flask import Flask, request\nimport jinja2\n\ntemplate_str = '{{ \"example.com\" | urlize }}'\nenv = jinja2.Environment()\n\ndef render_template():\n    template = env.from_string(template_str)\n    return template.render()\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 35,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/jinja2/__init__.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-22817",
+      "packagePurl": "pkg:pypi/pillow@9.0.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.001323725,
+      "inputTokens": 16575,
+      "outputTokens": 1469,
+      "durationMs": 68208,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nfrom PIL import ImageMath\n\napp = Flask(__name__)\n\n@app.route('/process')\ndef process_image():\n    expr = request.args.get('expr')\n    result = ImageMath.eval(expr)\n    return str(result)\n",
+      "safeFixture": "from flask import Flask, request\nfrom PIL import ImageMath\n\napp = Flask(__name__)\n\n@app.route('/process')\ndef process_image():\n    result = ImageMath.eval('1 + 1')\n    return str(result)\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 14,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/PIL/_version.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2021-25287",
+      "packagePurl": "pkg:pypi/pillow@8.1.2",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'out_of_bounds_read'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 23677,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2023-30861",
+      "packagePurl": "pkg:pypi/flask@2.2.4",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'session_fixation'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 25747,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2024-3651",
+      "packagePurl": "pkg:pypi/idna@3.6",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.00063576,
+      "inputTokens": 8460,
+      "outputTokens": 351,
+      "durationMs": 15069,
+      "attempts": 1,
+      "vulnerableFixture": "from flask import Flask, request\nimport idna\n\napp = Flask(__name__)\n\n\n@app.route('/domain')\ndef domain():\n    user_input = request.args.get('domain')\n    return idna.encode(user_input)\n",
+      "safeFixture": "from flask import Flask, request\nimport idna\n\napp = Flask(__name__)\n\n\n@app.route('/domain')\ndef domain():\n    return idna.encode('example.com')\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 13,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "idna/package_data.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-29217",
+      "packagePurl": "pkg:pypi/pyjwt@2.3.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006786096999999999,
+      "inputTokens": 93307,
+      "outputTokens": 1613,
+      "durationMs": 88259,
+      "attempts": 4,
+      "vulnerableFixture": "import jwt\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.route('/verify', methods=['POST'])\ndef verify():\n    token = request.json.get('token')\n    key = request.json.get('key')\n    return jwt.decode(token, key, algorithms=jwt.algorithms.get_default_algorithms())\n",
+      "safeFixture": "import jwt\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.route('/verify', methods=['POST'])\ndef verify():\n    token = request.json.get('token')\n    key = 'secret'\n    return jwt.decode(token, key, algorithms=['HS256'])\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 131,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "jwt/__init__.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "jwt/algorithms.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "jwt/utils.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/test_algorithms.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-21503",
+      "packagePurl": "pkg:pypi/black@23.12.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.0044232839999999995,
+      "inputTokens": 60704,
+      "outputTokens": 1133,
+      "durationMs": 64018,
+      "attempts": 3,
+      "vulnerableFixture": "from flask import Flask, request\nimport black.strings\n\napp = Flask(__name__)\n\n\n@app.route('/format', methods=['POST'])\ndef format_code():\n    code = request.get_data(as_text=True)\n    return '\\n'.join(black.strings.lines_with_leading_tabs_expanded(code))\n",
+      "safeFixture": "from flask import Flask, request\nimport black.strings\n\napp = Flask(__name__)\n\n\n@app.route('/format', methods=['POST'])\ndef format_code():\n    code = '    def hello(): pass'\n    return '\\n'.join(black.strings.lines_with_leading_tabs_expanded(code))\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 171,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/black/strings.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "tests/test_black.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-37920",
+      "packagePurl": "pkg:pypi/certifi@2023.7.22",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.008514014999999998,
+      "inputTokens": 117565,
+      "outputTokens": 1669,
+      "durationMs": 93423,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport certifi\nimport ssl\n\napp = Flask(__name__)\n\n@app.route('/connect')\ndef connect():\n    ca_bundle = certifi.where()\n    context = ssl.create_default_context()\n    context.load_verify_locations(ca_bundle)\n    return 'Loaded'\n",
+      "safeFixture": "from flask import Flask, request\nimport ssl\n\napp = Flask(__name__)\n\n@app.route('/connect')\ndef connect():\n    context = ssl.create_default_context()\n    context.load_verify_locations('/tmp/certifi-trusted-certs.pem')\n    return 'Loaded'\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 15,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "certifi/__init__.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-6345",
+      "packagePurl": "pkg:pypi/setuptools@69.5.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.005706626999999999,
+      "inputTokens": 78237,
+      "outputTokens": 1518,
+      "durationMs": 85048,
+      "attempts": 4,
+      "vulnerableFixture": "from flask import Flask, request\nimport setuptools.package_index\n\napp = Flask(__name__)\n\n\n@app.route('/install')\ndef install():\n    url = request.args.get('url')\n    index = setuptools.package_index.PackageIndex()\n    return index.download(url, '/tmp')",
+      "safeFixture": "from flask import Flask, request\nimport setuptools.package_index\n\napp = Flask(__name__)\n\n\n@app.route('/install')\ndef install():\n    index = setuptools.package_index.PackageIndex()\n    return index.download('https://pypi.org/simple/safe-package', '/tmp')",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 91,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "setuptools/package_index.py",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "setuptools/tests/test_packageindex.py",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2021-44228",
+      "packagePurl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.009835529999999999,
+      "inputTokens": 133930,
+      "outputTokens": 3265,
+      "durationMs": 158256,
+      "attempts": 4,
+      "vulnerableFixture": "import org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\nimport org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger(UserController.class);\n\n    @GetMapping(\"/profile\")\n    public String getProfile(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(userAgent);\n        return \"profile\";\n    }\n}\n",
+      "safeFixture": "import org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\nimport org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger(UserController.class);\n\n    @GetMapping(\"/profile\")\n    public String getProfile(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(\"User accessed profile\");\n        return \"profile\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2021-45046",
+      "packagePurl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.15.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.010070701999999999,
+      "inputTokens": 137362,
+      "outputTokens": 3180,
+      "durationMs": 154725,
+      "attempts": 4,
+      "vulnerableFixture": "import org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\nimport org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger(UserController.class);\n\n    @PostMapping(\"/user\")\n    public String handleUser(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(userAgent);\n        return \"OK\";\n    }\n}\n",
+      "safeFixture": "import org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\nimport org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger(UserController.class);\n\n    @PostMapping(\"/user\")\n    public String handleUser(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(\"User request processed\");\n        return \"OK\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2021-44832",
+      "packagePurl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.16.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.009664855999999998,
+      "inputTokens": 133036,
+      "outputTokens": 2193,
+      "durationMs": 101689,
+      "attempts": 4,
+      "vulnerableFixture": "import org.apache.logging.log4j.core.appender.jdbc.JdbcAppender;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    @PostMapping(\"/user\")\n    public String createUser(@RequestHeader(\"User-Agent\") String userAgent) {\n        JdbcAppender jdbcAppender = JdbcAppender.newBuilder()\n            .setDataSourceName(userAgent)\n            .build();\n        return \"created\";\n    }\n}\n",
+      "safeFixture": "import org.apache.logging.log4j.core.appender.jdbc.JdbcAppender;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    @PostMapping(\"/user\")\n    public String createUser(@RequestHeader(\"User-Agent\") String userAgent) {\n        JdbcAppender jdbcAppender = JdbcAppender.newBuilder()\n            .setDataSourceName(\"java:ldap://safe.internal/\")\n            .build();\n        return \"created\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-5645",
+      "packagePurl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.8.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0041264909999999995,
+      "inputTokens": 55121,
+      "outputTokens": 2129,
+      "durationMs": 91017,
+      "attempts": 4,
+      "vulnerableFixture": "import org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger();\n\n    @PostMapping(\"/login\")\n    public String login(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(userAgent);\n        return \"success\";\n    }\n}\n",
+      "safeFixture": "import org.apache.logging.log4j.Logger;\nimport org.apache.logging.log4j.LogManager;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = LogManager.getLogger();\n\n    @PostMapping(\"/login\")\n    public String login(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(\"User-Agent logged\");\n        return \"success\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 13,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2019-12384",
+      "packagePurl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.8",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.002478922999999999,
+      "inputTokens": 31213,
+      "outputTokens": 2628,
+      "durationMs": 104321,
+      "attempts": 4,
+      "vulnerableFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(body, Object.class);\n    }\n}\n",
+      "safeFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    private static final String FIXED_JSON = \"{\\\"status\\\":\\\"ok\\\"}\";\n\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(FIXED_JSON, Object.class);\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 16,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2019-14439",
+      "packagePurl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.9",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0025761639999999997,
+      "inputTokens": 32584,
+      "outputTokens": 2627,
+      "durationMs": 101909,
+      "attempts": 4,
+      "vulnerableFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(body, Object.class);\n    }\n}\n",
+      "safeFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    private static final String FIXED_JSON = \"{\\\"status\\\":\\\"ok\\\"}\";\n\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(FIXED_JSON, Object.class);\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 18,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "src/main/java/com/fasterxml/jackson/databind/jsontype/impl/SubTypeValidator.java",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2020-9548",
+      "packagePurl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.10.3",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.002368028,
+      "inputTokens": 29668,
+      "outputTokens": 2616,
+      "durationMs": 88861,
+      "attempts": 4,
+      "vulnerableFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(body, Object.class);\n    }\n}\n",
+      "safeFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    private static final String FIXED_JSON = \"{\\\"status\\\":\\\"ok\\\"}\";\n\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(FIXED_JSON, Object.class);\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-7525",
+      "packagePurl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.8",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0024205629999999997,
+      "inputTokens": 30653,
+      "outputTokens": 2442,
+      "durationMs": 81269,
+      "attempts": 4,
+      "vulnerableFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass VulnerableController {\n    private final ObjectMapper mapper = new ObjectMapper();\n\n    public VulnerableController() {\n        mapper.enableDefaultTyping();\n    }\n\n    @PostMapping(\"/read\")\n    String read(@RequestBody String body) throws Exception {\n        Object result = mapper.readValue(body, Object.class);\n        return result.toString();\n    }\n}",
+      "safeFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass SafeController {\n    private final ObjectMapper mapper = new ObjectMapper();\n\n    @PostMapping(\"/read\")\n    String read(@RequestBody String body) throws Exception {\n        Object result = mapper.readValue(\"{\\\"name\\\":\\\"test\\\"}\", Object.class);\n        return result.toString();\n    }\n}",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2018-7489",
+      "packagePurl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.9.4",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0024008809999999997,
+      "inputTokens": 30211,
+      "outputTokens": 2559,
+      "durationMs": 84776,
+      "attempts": 4,
+      "vulnerableFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(body, Object.class);\n    }\n}\n",
+      "safeFixture": "import com.fasterxml.jackson.databind.ObjectMapper;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class IngestController {\n    private static final String FIXED_JSON = \"{\\\"status\\\":\\\"ok\\\"}\";\n\n    @PostMapping(\"/ingest\")\n    public Object ingest(@RequestBody String body) throws Exception {\n        ObjectMapper mapper = new ObjectMapper();\n        mapper.enableDefaultTyping();\n        return mapper.readValue(FIXED_JSON, Object.class);\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 13,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-42889",
+      "packagePurl": "pkg:maven/org.apache.commons/commons-text@1.9",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.009645794,
+      "inputTokens": 133314,
+      "outputTokens": 1805,
+      "durationMs": 63183,
+      "attempts": 4,
+      "vulnerableFixture": "import org.apache.commons.text.StringSubstitutor;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class TemplateController {\n    @PostMapping(\"/render\")\n    public String render(@RequestBody String template) {\n        return new StringSubstitutor().replace(template);\n    }\n}\n",
+      "safeFixture": "import org.apache.commons.text.StringSubstitutor;\nimport org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class TemplateController {\n    @PostMapping(\"/render\")\n    public String render(@RequestBody String template) {\n        return new StringSubstitutor().replace(\"Hello, World!\");\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 13,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-22965",
+      "packagePurl": "pkg:maven/org.springframework/spring-beans@5.3.17",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0014623349999999997,
+      "inputTokens": 17285,
+      "outputTokens": 2351,
+      "durationMs": 86640,
+      "attempts": 4,
+      "vulnerableFixture": "import org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\nimport org.springframework.beans.BeanWrapperImpl;\n\n@RestController\npublic class UserController {\n\n    @PostMapping(\"/update\")\n    public String updateUser(@RequestBody User user) {\n        BeanWrapperImpl wrapper = new BeanWrapperImpl(user);\n        wrapper.setPropertyValue(\"name\", \"hacked\");\n        return \"Updated: \" + user.getName();\n    }\n\n    static class User {\n        private String name;\n        public String getName() { return name; }\n        public void setName(String name) { this.name = name; }\n    }\n}\n",
+      "safeFixture": "import org.springframework.web.bind.annotation.PostMapping;\nimport org.springframework.web.bind.annotation.RequestBody;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n\n    @PostMapping(\"/update\")\n    public String updateUser() {\n        User user = new User();\n        user.setName(\"default\");\n        return \"Updated: \" + user.getName();\n    }\n\n    static class User {\n        private String name;\n        public String getName() { return name; }\n        public void setName(String name) { this.name = name; }\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 12,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-22978",
+      "packagePurl": "pkg:maven/org.springframework.security/spring-security-web@5.6.3",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0015154209999999997,
+      "inputTokens": 18551,
+      "outputTokens": 1983,
+      "durationMs": 72309,
+      "attempts": 4,
+      "vulnerableFixture": "import org.springframework.security.web.util.matcher.RegexRequestMatcher;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\nimport javax.servlet.http.HttpServletRequest;\n\n@RestController\npublic class AdminController {\n    private final RegexRequestMatcher matcher = new RegexRequestMatcher(\".*\", null);\n\n    @GetMapping(\"/admin\")\n    public String admin(HttpServletRequest request) {\n        if (matcher.matches(request)) {\n            return \"admin page\";\n        }\n        return \"unauthorized\";\n    }\n}\n",
+      "safeFixture": "import org.springframework.security.web.util.matcher.RegexRequestMatcher;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\nimport javax.servlet.http.HttpServletRequest;\n\n@RestController\npublic class AdminController {\n    private final RegexRequestMatcher matcher = new RegexRequestMatcher(\"/admin\", null);\n\n    @GetMapping(\"/admin\")\n    public String admin(HttpServletRequest request) {\n        if (matcher.matches(request)) {\n            return \"admin page\";\n        }\n        return \"unauthorized\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-34053",
+      "packagePurl": "pkg:maven/org.springframework.boot/spring-boot@3.1.6",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'dos'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 18926,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2023-44483",
+      "packagePurl": "pkg:maven/org.apache.santuario/xmlsec@3.0.2",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0026945039999999995,
+      "inputTokens": 34324,
+      "outputTokens": 2575,
+      "durationMs": 120445,
+      "attempts": 4,
+      "vulnerableFixture": "import org.apache.jcp.xml.dsig.internal.dom.DOMXMLSignatureFactory;\nimport org.apache.xml.security.signature.XMLSignature;\nimport org.w3c.dom.Element;\nimport javax.xml.crypto.dsig.XMLSignContext;\nimport javax.xml.crypto.dsig.keyinfo.KeyInfo;\nimport java.security.Key;\nimport java.util.logging.Logger;\n\npublic class SignatureHandler {\n    private static final Logger log = Logger.getLogger(SignatureHandler.class.getName());\n    private DOMXMLSignatureFactory factory = new DOMXMLSignatureFactory();\n\n    public void handleSignature(Element domElement, Key signingKey, KeyInfo keyInfo) throws Exception {\n        XMLSignContext context = factory.newXMLSignContext(null, domElement);\n        XMLSignature signature = factory.newXMLSignature(null, keyInfo);\n        signature.sign(context); // signingKey used implicitly, may be logged\n    }\n}\n",
+      "safeFixture": "import org.apache.jcp.xml.dsig.internal.dom.DOMXMLSignatureFactory;\nimport org.apache.xml.security.signature.XMLSignature;\nimport org.w3c.dom.Element;\nimport javax.xml.crypto.dsig.XMLSignContext;\nimport javax.xml.crypto.dsig.keyinfo.KeyInfo;\nimport java.util.logging.Logger;\n\npublic class SignatureHandler {\n    private static final Logger log = Logger.getLogger(SignatureHandler.class.getName());\n    private DOMXMLSignatureFactory factory = new DOMXMLSignatureFactory();\n\n    public void handleSignature(Element domElement, KeyInfo keyInfo) throws Exception {\n        XMLSignContext context = factory.newXMLSignContext(null, domElement);\n        XMLSignature signature = factory.newXMLSignature(null, keyInfo);\n        signature.sign(context); // No signing key passed, so no key can be leaked\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 14,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-26464",
+      "packagePurl": "pkg:maven/log4j/log4j@1.2.17",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0015422379999999998,
+      "inputTokens": 17978,
+      "outputTokens": 2658,
+      "durationMs": 123144,
+      "attempts": 4,
+      "vulnerableFixture": "import org.apache.log4j.Logger;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RequestHeader;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = Logger.getLogger(UserController.class);\n\n    @GetMapping(\"/user\")\n    public String getUser(@RequestHeader(\"User-Agent\") String userAgent) {\n        logger.info(userAgent);\n        return \"OK\";\n    }\n}\n",
+      "safeFixture": "import org.apache.log4j.Logger;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\npublic class UserController {\n    private static final Logger logger = Logger.getLogger(UserController.class);\n\n    @GetMapping(\"/user\")\n    public String getUser() {\n        logger.info(\"User accessed endpoint\");\n        return \"OK\";\n    }\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 12,
+        "patch_validation_skipped_reason": "no_changed_files_provided",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2017-12626",
+      "packagePurl": "pkg:maven/org.apache.poi/poi@3.15",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'denial_of_service'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 32554,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2022-32149",
+      "packagePurl": "pkg:golang/golang.org/x/text@0.3.7",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004902909999999999,
+      "inputTokens": 66110,
+      "outputTokens": 2091,
+      "durationMs": 102105,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"golang.org/x/text/language\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\taccept := r.Header.Get(\"Accept-Language\")\n\ttags, _, err := language.ParseAcceptLanguage(accept)\n\tif err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusBadRequest)\n\t\treturn\n\t}\n\t// process tags\n\tw.WriteHeader(http.StatusOK)\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/\", handler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n",
+      "safeFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"golang.org/x/text/language\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\ttags, _, err := language.ParseAcceptLanguage(\"en-US,en;q=0.9\")\n\tif err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusBadRequest)\n\t\treturn\n\t}\n\t// process tags\n\tw.WriteHeader(http.StatusOK)\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/\", handler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 23,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "language/parse.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "language/parse_test.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-27664",
+      "packagePurl": "pkg:golang/golang.org/x/net@0.0.0-20220906165146-f3363e06e74c",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'denial_of_service'; framework_spec.sinks.1.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'denial_of_service'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 29390,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2023-3978",
+      "packagePurl": "pkg:golang/golang.org/x/net@0.10.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.003779243999999999,
+      "inputTokens": 50464,
+      "outputTokens": 1963,
+      "durationMs": 92725,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"bytes\"\n\t\"golang.org/x/net/html\"\n)\n\nfunc handler() {\n\tdoc := `<html><body><script>&lt;script&gt;alert(1)&lt;/script&gt;</script></body></html>`\n\tn, err := html.Parse(bytes.NewReader([]byte(doc)))\n\tif err != nil {\n\t\treturn\n\t}\n\tvar buf bytes.Buffer\n\thtml.Render(&buf, n)\n}\n",
+      "safeFixture": "package main\n\nimport (\n\t\"bytes\"\n\t\"golang.org/x/net/html\"\n)\n\nfunc handler() {\n\tdoc := `<html><body><div>&lt;script&gt;alert(1)&lt;/script&gt;</div></body></html>`\n\tn, err := html.Parse(bytes.NewReader([]byte(doc)))\n\tif err != nil {\n\t\treturn\n\t}\n\tvar buf bytes.Buffer\n\thtml.Render(&buf, n)\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 27,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "html/render.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "html/render_test.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-44487",
+      "packagePurl": "pkg:golang/golang.org/x/net@0.16.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006721103999999999,
+      "inputTokens": 91524,
+      "outputTokens": 2229,
+      "durationMs": 104200,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"golang.org/x/net/http2\"\n\t\"net/http\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\thttp2Server := http2.Server{}\n\thttp2Server.ServeConn(r.Body, &http2.ServeConnOpts{})\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/\", handler)\n\thttp.ListenAndServeTLS(\":8443\", \"cert.pem\", \"key.pem\", nil)\n}",
+      "safeFixture": "package main\n\nimport (\n\t\"golang.org/x/net/http2\"\n\t\"net/http\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\tbuilder := http2.NewFramer()\n\tbuilder.Decoder().(*http2.decoder).SetMaxRstFramesPerWindow(200, 30)\n\thttp2Server := http2.Server{Framer: builder}\n\thttp2Server.ServeConn(r.Body, &http2.ServeConnOpts{})\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/\", handler)\n\thttp.ListenAndServeTLS(\":8443\", \"cert.pem\", \"key.pem\", nil)\n}",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-45337",
+      "packagePurl": "pkg:golang/golang.org/x/crypto@0.30.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004727350999999999,
+      "inputTokens": 63481,
+      "outputTokens": 2202,
+      "durationMs": 95690,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"golang.org/x/crypto/ssh\"\n\t\"net\"\n)\n\nfunc handler(conn net.Conn) {\n\tvar lastSeenKey ssh.PublicKey\n\n\tserverConf := &ssh.ServerConfig{\n\t\tPublicKeyCallback: func(connMeta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {\n\t\t\tlastSeenKey = key\n\t\t\treturn nil, nil\n\t\t},\n\t}\n\tserverConf.AddHostKey(testSigner)\n\n\t_, _, _, _ := ssh.NewServerConn(conn, serverConf)\n}\n",
+      "safeFixture": "package main\n\nimport (\n\t\"golang.org/x/crypto/ssh\"\n\t\"net\"\n)\n\nfunc handler(conn net.Conn) {\n\tserverConf := &ssh.ServerConfig{\n\t\tPublicKeyCallback: func(connMeta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {\n\t\t\treturn nil, nil\n\t\t},\n\t}\n\tserverConf.AddHostKey(testSigner)\n\n\t_, _, _, _ := ssh.NewServerConn(conn, serverConf)\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 39,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "ssh/server.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "ssh/server_test.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-21626",
+      "packagePurl": "pkg:golang/github.com/opencontainers/runc@1.1.11",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.010729448999999999,
+      "inputTokens": 148619,
+      "outputTokens": 1775,
+      "durationMs": 96114,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"os\"\n\t\"github.com/opencontainers/runc/libcontainer\"\n)\n\nfunc main() {\n\tconfig := &libcontainer.Config{Cwd: \"/host/path\"}\n\tprocess := &libcontainer.Process{Init: true}\n\tcontainer, _ := libcontainer.New(\"container1\", \"/run/container1\", config)\n\tcontainer.Start(process)\n}",
+      "safeFixture": "package main\n\nimport (\n\t\"os\"\n\t\"github.com/opencontainers/runc/libcontainer\"\n)\n\nfunc main() {\n\tconfig := &libcontainer.Config{Cwd: \"/safe/container/root\"}\n\tprocess := &libcontainer.Process{Init: true}\n\tcontainer, _ := libcontainer.New(\"container1\", \"/run/container1\", config)\n\tcontainer.Start(process)\n}",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 116,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "libcontainer/cgroups/file.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/container_linux.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/init_linux.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/integration/seccomp_test.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/setns_init_linux.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/standard_init_linux.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "libcontainer/utils/utils_unix.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-28180",
+      "packagePurl": "pkg:golang/github.com/go-jose/go-jose/v4@4.0.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.005230543999999999,
+      "inputTokens": 70264,
+      "outputTokens": 2418,
+      "durationMs": 137754,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"github.com/go-jose/go-jose/v4\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\tencrypted := r.FormValue(\"jwe\")\n\tjwe, err := jose.ParseEncrypted(encrypted)\n\tif err != nil {\n\t\treturn\n\t}\n\tplaintext, err := jwe.Decrypt(nil)\n\tif err != nil {\n\t\treturn\n\t}\n\t_, _ = w.Write(plaintext)\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/decrypt\", handler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n",
+      "safeFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"github.com/go-jose/go-jose/v4\"\n)\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\tencrypted := \"{\\\"protected\\\":\\\"...\\\",\\\"encrypted\\\":\\\"...\\\"}\"\n\tjwe, err := jose.ParseEncrypted(encrypted)\n\tif err != nil {\n\t\treturn\n\t}\n\tplaintext, err := jwe.Decrypt(nil)\n\tif err != nil {\n\t\treturn\n\t}\n\t_, _ = w.Write(plaintext)\n}\n\nfunc main() {\n\thttp.HandleFunc(\"/decrypt\", handler)\n\thttp.ListenAndServe(\":8080\", nil)\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 40,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "crypter.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "encoding.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "encoding_test.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-21698",
+      "packagePurl": "pkg:golang/github.com/prometheus/client_golang@1.11.0",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'uncontrolled_resource_consumption'; framework_spec.sinks.1.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'uncontrolled_resource_consumption'; framework_spec.sinks.2.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'uncontrolled_resource_consumption'; framework_spec.sinks.3.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'uncontrolled_resource_consumption'; framework_spec.sinks.4.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'uncontrolled_resource_consumption'"
+      ],
+      "costUsd": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "durationMs": 48090,
+      "attempts": 1
+    },
+    {
+      "cveId": "CVE-2022-29153",
+      "packagePurl": "pkg:golang/github.com/hashicorp/consul@1.11.4",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006777300999999999,
+      "inputTokens": 93031,
+      "outputTokens": 1721,
+      "durationMs": 93374,
+      "attempts": 4,
+      "vulnerableFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/url\"\n\t\"github.com/hashicorp/consul/agent/checks\"\n)\n\nfunc main() {\n\tu, _ := url.Parse(\"http://attacker.com/redirect\")\n\treq := &http.Request{URL: u}\n\tclient := &http.Client{}\n\tclient.Do(req)\n}\n",
+      "safeFixture": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/url\"\n\t\"github.com/hashicorp/consul/agent/checks\"\n)\n\nfunc main() {\n\tu, _ := url.Parse(\"http://localhost:8500/health\")\n\treq := &http.Request{URL: u}\n\tclient := &http.Client{}\n\tclient.Do(req)\n}\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 33,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "vendor/golang.org/x/sys/cpu/cpu.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "vendor/golang.org/x/sys/cpu/cpu_aix.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "vendor/golang.org/x/sys/cpu/cpu_gccgo_x86.go",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "vendor/golang.org/x/sys/cpu/cpu_x86.go",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-23633",
+      "packagePurl": "pkg:gem/actionpack@7.0.0",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.0017805,
+      "inputTokens": 23100,
+      "outputTokens": 1404,
+      "durationMs": 60888,
+      "attempts": 4,
+      "vulnerableFixture": "class ApplicationController < ActionController::Base\n  def index\n    response.body = request.query_parameters['data']\n    ActionDispatch::Executor.run!\n  end\nend\n",
+      "safeFixture": "class ApplicationController < ActionController::Base\n  def index\n    ActionDispatch::Executor.run!\n  end\nend\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 18,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "activesupport/lib/active_support/reloader.rb",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2023-28120",
+      "packagePurl": "pkg:gem/activesupport@7.0.4.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.004588169999999999,
+      "inputTokens": 62470,
+      "outputTokens": 1528,
+      "durationMs": 93765,
+      "attempts": 4,
+      "vulnerableFixture": "require 'active_support/core_ext/string/output_safety'\n\nstring = \"hello\".html_safe\nuser_input = \"<script>alert(1)</script>\"\nstring.bytesplice(1, 0, user_input)\n",
+      "safeFixture": "require 'active_support/core_ext/string/output_safety'\n\nstring = \"hello\".html_safe\nsafe_input = \"<b>\".html_safe\nstring.bytesplice(1, 0, safe_input)\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 141,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "activesupport/lib/active_support/core_ext/string/output_safety.rb",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "activesupport/test/core_ext/string_ext_test.rb",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-26143",
+      "packagePurl": "pkg:gem/actionpack@7.1.3",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.000994458,
+      "inputTokens": 13398,
+      "outputTokens": 432,
+      "durationMs": 26586,
+      "attempts": 1,
+      "vulnerableFixture": "class ApplicationController < ActionController::Base\n  def index\n    user_input = params[:message]\n    translation = t('greeting', default: [\"<script>#{user_input}</script>\"])\n    render inline: \"<%= translation %>\"\n  end\nend\n",
+      "safeFixture": "class ApplicationController < ActionController::Base\n  def index\n    translation = t('greeting', default: [\"<script>alert('safe')</script>\"])\n    render inline: \"<%= translation %>\"\n  end\nend\n",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 34,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "actionpack/lib/abstract_controller/translation.rb",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "actionpack/test/abstract/translation_test.rb",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2024-25126",
+      "packagePurl": "pkg:gem/sinatra@3.1.0",
+      "status": "parse_failed",
+      "errors": [
+        "Provider response did not contain a JSON object. Raw[0..240]={ \"framework_spec\": { \"framework\": \"rack\", \"version\": \"<3.0.9.1\", \"language\": \"ruby\", \"sources\": [], \"sinks\": [ { \"pattern\": \"Rack::MediaType.type(*)\", \"vuln_class\": \"redos\", \"argument_ind"
+      ],
+      "costUsd": 0.0012742259999999998,
+      "inputTokens": 15906,
+      "outputTokens": 1449,
+      "durationMs": 98081,
+      "attempts": 4
+    },
+    {
+      "cveId": "CVE-2024-32465",
+      "packagePurl": "pkg:gem/git@1.19.1",
+      "status": "validated",
+      "errors": [],
+      "costUsd": 0.00185244,
+      "inputTokens": 25240,
+      "outputTokens": 604,
+      "durationMs": 43918,
+      "attempts": 2,
+      "vulnerableFixture": "require 'git'\n\nrepo_url = params[:url]\nGit.clone(repo_url)",
+      "safeFixture": "require 'git'\n\nGit.clone('/safe/local/path')",
+      "validationLog": {
+        "fixture_pre_matches": 1,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": null,
+        "patch_post_matches": null,
+        "semgrep_stderr_excerpt": null,
+        "errors": [],
+        "took_ms": 11,
+        "patch_validation_skipped_reason": "no_applicable_changed_files",
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": true,
+          "fixture_safe_clean": true,
+          "patch_pre_match": null,
+          "patch_post_clean": null,
+          "semgrep_parse_error": null
+        }
+      }
+    },
+    {
+      "cveId": "CVE-2022-23837",
+      "packagePurl": "pkg:gem/rack@2.2.3",
+      "status": "vuln_class_out_of_scope",
+      "errors": [
+        "Generated payload uses an unrecognised vuln_class — likely a non-taint-modelable CVE class (DoS, XML expansion, HTTP/2 reset, etc.): framework_spec.sinks.0.vuln_class=Invalid enum value. Expected 'sql_injection' | 'ssrf' | 'xss' | 'path_traversal' | 'command_injection' | 'prototype_pollution' | 'deserialization' | 'redos' | 'file_upload' | 'open_redirect' | 'log_injection' | 'code_injection', received 'dos'"
+      ],
+      "costUsd": 0.0019559279999999996,
+      "inputTokens": 26968,
+      "outputTokens": 412,
+      "durationMs": 46203,
+      "attempts": 2
+    }
+  ]
+}

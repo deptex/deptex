@@ -12,8 +12,8 @@
  * Tests 41-43: Depscore Update
  */
 
-import { parsePurl, type ParsedPurl } from '../../depscanner/src/purl';
-import { calculateDepscore, type DepscoreContext, type AssetTier } from '../../depscanner/src/depscore';
+import { parsePurl, type ParsedPurl } from '../../../depscanner/src/purl';
+import { calculateDepscore, type DepscoreContext, type AssetTier } from '../../../depscanner/src/depscore';
 
 // =====================================================================
 // Tests 7-11: PURL Resolution

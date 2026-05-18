@@ -20,9 +20,9 @@ jobs:
         with:
           filters: |
             depscanner:
-              - 'backend/depscanner/**'
+              - 'depscanner/**'
             fix:
-              - 'backend/fix-worker/**'
+              - 'fix-worker/**'
 
   deploy-depscanner:
     name: Deploy depscanner
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy --remote-only
-        working-directory: backend/depscanner
+        working-directory: depscanner
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -52,6 +52,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy --remote-only
-        working-directory: backend/fix-worker
+        working-directory: fix-worker
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

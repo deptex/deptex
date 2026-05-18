@@ -1,5 +1,7 @@
 # Aegis v2 — Implementation Plan
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Overview
 
 Nuke the existing Aegis implementation (33 backend lib files, 5 frontend components, 10+ aegis DB tables, Aider worker, Slack bot, automations, incidents, learning, memory, sprint orchestrator) and rebuild a tight MVP: a dedicated `/organizations/:id/aegis` page with per-user chat threads, streaming Vercel AI SDK responses, ~12 read-only tools, collapsed tool-call cards with expand, and full GFM markdown. Authed via Gemini Flash platform key. Gated behind `interact_with_aegis`. No writes, no memory, no Aider, no Slack — those come in later milestones.

@@ -1,0 +1,149 @@
+import type { Storage } from './storage';
+
+const SECRET_PATTERNS = [
+  /ghp_[A-Za-z0-9]{36}/g,
+  /gho_[A-Za-z0-9]{36}/g,
+  /github_pat_[A-Za-z0-9_]{82}/g,
+  /glpat-[A-Za-z0-9_-]{20,}/g,
+  /Bearer [A-Za-z0-9._-]+/g,
+  /oauth2:[^@\s]+@/g,
+  /x-token-auth:[^@\s]+@/g,
+  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g,
+  // AI provider keys — depscanner reads ANTHROPIC_API_KEY / OPENAI_API_KEY /
+  // GOOGLE_AI_API_KEY from its env. Defense in depth in case any future
+  // code path concatenates a key into an error message or log line.
+  /sk-ant-api03-[A-Za-z0-9_-]{20,}/g,
+  /sk-[A-Za-z0-9]{32,}/g,
+  /AIza[A-Za-z0-9_-]{35}/g,
+];
+
+function sanitize(message: string): string {
+  let result = message;
+  for (const pattern of SECRET_PATTERNS) {
+    result = result.replace(pattern, '[REDACTED]');
+  }
+  return result;
+}
+
+export type LogStep =
+  | 'cloning'
+  | 'clone'
+  | 'sbom'
+  | 'deps_sync'
+  | 'vuln_scan'
+  | 'depscan'
+  | 'reachability'
+  | 'reachability_rules'
+  | 'epd'
+  | 'semgrep'
+  | 'trufflehog'
+  | 'uploading'
+  | 'finalize'
+  | 'complete'
+  | 'usage_extraction'
+  | 'framework_detection'
+  | 'taint_engine'
+  | 'populate'
+  | 'api';
+
+export type LogLevel = 'info' | 'success' | 'warning' | 'error';
+
+/**
+ * Display labels — CLI mode only. Keeps LogStep enum (DB + frontend filters)
+ * stable while giving the terminal the words users expect from scanners.
+ */
+const CLI_STEP_LABELS: Record<string, string> = {
+  semgrep: 'sast',
+  trufflehog: 'secrets',
+  vuln_scan: 'vulns',
+  depscan: 'vulns',
+  usage_extraction: 'imports',
+  framework_detection: 'frameworks',
+  taint_engine: 'taint',
+  deps_sync: 'deps',
+  clone: 'clone',
+  cloning: 'clone',
+};
+
+export interface ConsoleSink {
+  (line: string, level: LogLevel, step: LogStep): void;
+}
+
+export class ExtractionLogger {
+  private supabase: Storage;
+  private projectId: string;
+  private runId: string;
+  private cliMode: boolean;
+  private sink: ConsoleSink | null;
+
+  constructor(
+    supabase: Storage,
+    projectId: string,
+    runId: string,
+    options: { cliMode?: boolean; sink?: ConsoleSink | null } = {}
+  ) {
+    this.supabase = supabase;
+    this.projectId = projectId;
+    this.runId = runId;
+    this.cliMode = options.cliMode ?? false;
+    this.sink = options.sink ?? null;
+  }
+
+  async info(step: LogStep, message: string, metadata?: Record<string, unknown>): Promise<void> {
+    await this.log(step, 'info', message, undefined, metadata);
+  }
+
+  async success(step: LogStep, message: string, durationMs?: number, metadata?: Record<string, unknown>): Promise<void> {
+    await this.log(step, 'success', message, durationMs, metadata);
+  }
+
+  async warn(step: LogStep, message: string, metadata?: Record<string, unknown>): Promise<void> {
+    await this.log(step, 'warning', message, undefined, metadata);
+  }
+
+  async error(step: LogStep, message: string, error?: unknown, metadata?: Record<string, unknown>): Promise<void> {
+    const errorMeta: Record<string, unknown> = { ...metadata };
+    if (error instanceof Error) {
+      errorMeta.error_message = sanitize(error.message);
+      errorMeta.error_stack = sanitize(error.stack ?? '');
+    } else if (error) {
+      errorMeta.error_message = sanitize(String(error));
+    }
+    await this.log(step, 'error', message, undefined, errorMeta);
+  }
+
+  private async log(
+    step: LogStep,
+    level: LogLevel,
+    message: string,
+    durationMs?: number,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    const sanitizedMessage = sanitize(message);
+
+    if (this.cliMode) {
+      if (this.sink) {
+        this.sink(sanitizedMessage, level, step);
+      } else {
+        const displayStep = CLI_STEP_LABELS[step] ?? step;
+        console.log(`[${displayStep}] [${level}] ${sanitizedMessage}`);
+      }
+    } else {
+      console.log(`[EXTRACT] [${step}] [${level}] ${sanitizedMessage}`);
+    }
+
+    try {
+      await this.supabase.from('extraction_logs').insert({
+        project_id: this.projectId,
+        run_id: this.runId,
+        step,
+        level,
+        message: sanitizedMessage,
+        duration_ms: durationMs ?? null,
+        metadata: metadata ? JSON.parse(JSON.stringify(metadata)) : null,
+      });
+    } catch {
+      // Fire-and-forget: logging failure must never crash the pipeline
+    }
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+test-npm-results
+test-npm-docker-results
+extraction-results
+*.log
+*.stackdump
+.env
+.env.*
+.git
+bench-iterate
+oss-corpus-runs
+.local-scan-output
+.test-results
+.pglite-buckets

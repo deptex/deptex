@@ -1,0 +1,260 @@
+# Cross-framework Java stdlib sinks + sanitizers — shared across every Java
+# framework spec the engine loads.
+#
+# Convention: this file declares NO sources of its own; sources are
+# framework-specific and live in the per-framework yamls. The engine loads
+# every yaml and matches sources from any spec against sinks from any spec,
+# so a request body identified in spring-boot.yaml flows just fine through a
+# Runtime.exec sink declared here.
+
+framework: java-stdlib
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- SQL injection ----------
+  # JDBC: pattern matches any receiver (Statement, PreparedStatement,
+  # connection, etc.) calling executeQuery/executeUpdate/execute. The
+  # `*.<name>(*)` form matches `stmt.executeQuery(...)`,
+  # `connection.prepareStatement(...)`, etc.
+  - pattern: "*.executeQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JDBC Statement/PreparedStatement.executeQuery
+  - pattern: "*.executeUpdate(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JDBC Statement.executeUpdate
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JDBC Statement.execute (string overload)
+  - pattern: "*.executeLargeUpdate(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JDBC Statement.executeLargeUpdate
+  - pattern: "*.prepareStatement(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Connection.prepareStatement (when concatenated, not parameterized)
+  - pattern: "*.prepareCall(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Connection.prepareCall
+  - pattern: "*.createNativeQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JPA EntityManager.createNativeQuery
+  - pattern: "*.createQuery(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: JPA/Hibernate createQuery
+  # Spring JdbcTemplate sinks
+  - pattern: "*.queryForObject(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Spring JdbcTemplate.queryForObject
+  - pattern: "*.queryForList(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Spring JdbcTemplate.queryForList
+  - pattern: "*.update(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Spring JdbcTemplate.update
+
+  # ---------- Command injection ----------
+  - pattern: "Runtime.exec(*)"
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Runtime.exec — direct shell invocation
+  - pattern: "*.exec(*)"
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: Runtime.exec (instance receiver)
+  - pattern: "new ProcessBuilder"
+    vuln_class: command_injection
+    argument_indices: []
+    description: ProcessBuilder constructor with attacker-controlled command
+  - pattern: "*.command(*)"
+    vuln_class: command_injection
+    argument_indices: []
+    description: ProcessBuilder.command(...)
+
+  # ---------- Path traversal ----------
+  - pattern: "new File"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: java.io.File constructor with attacker-controlled path
+  - pattern: "new FileInputStream"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: FileInputStream constructor
+  - pattern: "new FileOutputStream"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: FileOutputStream constructor
+  - pattern: "new FileReader"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: FileReader constructor
+  - pattern: "new FileWriter"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: FileWriter constructor
+  # Paths.get(*) is intentionally NOT a sink — calling `Paths.get(userInput)`
+  # alone produces an inert Path object. The dangerous step is the downstream
+  # filesystem read/write (Files.readAllBytes, new FileInputStream, etc.),
+  # which already fires below. Listing Paths.get here as a sink double-counts
+  # the CVE and breaks chained-sanitizer fixtures (`Paths.get(name).getFileName()`).
+  - pattern: "Files.readAllBytes(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: java.nio.file.Files.readAllBytes
+  - pattern: "Files.readString(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Files.readString
+  - pattern: "Files.write(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Files.write
+  - pattern: "Files.newInputStream(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Files.newInputStream
+  - pattern: "Files.newOutputStream(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Files.newOutputStream
+
+  # ---------- Deserialization ----------
+  - pattern: "*.readObject(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: ObjectInputStream.readObject — unrestricted Java deserialization
+  - pattern: "*.readUnshared(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: ObjectInputStream.readUnshared
+  - pattern: "new ObjectInputStream"
+    vuln_class: deserialization
+    argument_indices: []
+    description: ObjectInputStream constructor (precedes readObject)
+  - pattern: "*.readValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readValue (unsafe with default typing)
+  - pattern: "*.readTree(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readTree
+  - pattern: "*.fromJson(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Gson.fromJson
+  - pattern: "*.parse(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: SnakeYAML / generic parse (unsafe load)
+  - pattern: "*.load(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: SnakeYAML Yaml.load — unsafe variant
+  - pattern: "*.loadAll(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: SnakeYAML Yaml.loadAll
+  - pattern: "XMLDecoder.readObject(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: XMLDecoder.readObject — known RCE primitive
+
+  # ---------- SSRF ----------
+  - pattern: "new URL"
+    vuln_class: ssrf
+    argument_indices: []
+    description: java.net.URL constructor with attacker-controlled URL
+  - pattern: "*.openConnection(*)"
+    vuln_class: ssrf
+    argument_indices: []
+    description: URL.openConnection
+  - pattern: "*.openStream(*)"
+    vuln_class: ssrf
+    argument_indices: []
+    description: URL.openStream
+  - pattern: "HttpClient.send(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: java.net.http.HttpClient.send
+  - pattern: "*.send(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HttpClient.send (instance receiver)
+
+  # ---------- XSS via raw output ----------
+  - pattern: "*.write(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: PrintWriter.write — generic raw response write
+
+  # ---------- ReDoS ----------
+  - pattern: "Pattern.compile(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: Pattern.compile with untrusted regex source
+  - pattern: "*.matches(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    description: String.matches (re-compiles each call)
+
+  # ---------- Log injection ----------
+  # Note: SLF4J / Log4j / Logback `Logger.<level>(...)` sinks live in
+  # log4j.yaml as `code_injection` (Log4Shell-shaped) so the per-level
+  # call patterns aren't duplicated here. The stdlib file intentionally
+  # ships no log_injection sink because the log call shape is framework-
+  # owned, not language-stdlib.
+
+sanitizers:
+  # ---------- Path traversal ----------
+  - pattern: "*.normalize(*)"
+    vuln_classes: [path_traversal]
+    description: Path.normalize — collapses ../
+  - pattern: "Paths.get(*).normalize(*)"
+    vuln_classes: [path_traversal]
+    description: Paths.get(...).normalize chain
+  - pattern: "FilenameUtils.getName(*)"
+    vuln_classes: [path_traversal]
+    description: Apache Commons IO FilenameUtils.getName
+  - pattern: "*.getFileName(*)"
+    vuln_classes: [path_traversal]
+    description: java.nio.file.Path.getFileName — strips directory components, leaves only the filename
+
+  # ---------- Command injection ----------
+  - pattern: "*.quote(*)"
+    vuln_classes: [command_injection]
+    description: Generic quote helper
+
+  # ---------- SQL ----------
+  - pattern: "*.setString(*)"
+    vuln_classes: [sql_injection]
+    description: PreparedStatement.setString — parameterized binding
+  - pattern: "*.setInt(*)"
+    vuln_classes: [sql_injection]
+    description: PreparedStatement.setInt
+  - pattern: "*.setLong(*)"
+    vuln_classes: [sql_injection]
+    description: PreparedStatement.setLong
+
+  # ---------- Cross-class ----------
+  - pattern: "Integer.parseInt(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Integer.parseInt — numeric coercion gate
+  - pattern: "Long.parseLong(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: Long.parseLong
+  - pattern: "UUID.fromString(*)"
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: UUID.fromString — strict UUID validation

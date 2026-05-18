@@ -1,5 +1,7 @@
 # Feature Brief: IaC + Container Scanning (v1 — Foundation)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Feature Name & One-liner
 **IaC + Container Scanning v1.** Bundle Trivy + Checkov into the extraction worker so Deptex scans Terraform / Kubernetes / Helm / CloudFormation / ARM / Bicep / Serverless / SAM / CDK / Dockerfile files for misconfigurations and pulls container images (Dockerfile-derived + registry-configured) for OS-package CVE scanning, surfacing all findings in a unified security table.
 

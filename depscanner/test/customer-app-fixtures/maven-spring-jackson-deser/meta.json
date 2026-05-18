@@ -1,0 +1,10 @@
+{
+  "language": "java",
+  "framework": "spring",
+  "expected_osv_id": "CVE-2017-7525",
+  "expected_vuln_class": "deserialization",
+  "expected_vuln_flows_min": 1,
+  "expected_safe_flows_max": 0,
+  "package": "com.fasterxml.jackson.core:jackson-databind",
+  "description": "Customer-shaped Spring REST controller hands a @RequestParam payload through a service into ObjectMapper.readValue — CVE-2017-7525 family (Jackson unsafe deserialization). Safe side parses the same payload via readTree + an explicit allow-listed UserDto deserializer, never crossing the readValue sink with a tainted value."
+}

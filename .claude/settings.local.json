@@ -22,7 +22,7 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(grep -r \"atom\\\\|Atom\" /c/Coding/Deptex/docs /c/Coding/Deptex/README*)",
-      "Bash(grep -r \"reachables\\\\|atom\" /c/Coding/Deptex/backend/extraction-worker/src/*.ts)",
+      "Bash(grep -r \"reachables\\\\|atom\" /c/Coding/Deptex/depscanner/src/*.ts)",
       "WebSearch",
       "WebFetch(domain:depscan.readthedocs.io)",
       "Bash(flyctl machines:*)",

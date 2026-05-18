@@ -151,7 +151,7 @@ describe('Reachability Settings Routes', () => {
 
     it('returns 403 without manage_organization_settings — view_ai_spending is NOT enough', async () => {
       // Critical: monthly_budget_usd is the only thing standing between us
-      // and a runaway BYOK bill. View permission alone must not allow PATCH.
+      // and a runaway platform AI bill. View permission alone must not allow PATCH.
       setPerm({ view_ai_spending: true, manage_organization_settings: false });
 
       const res = await request(app)

@@ -1,0 +1,29 @@
+{
+  "purpose": "Phase 1.0 — variance probe baseline. 3 sequential 88-CVE iterates on engine tip 413ef48 (probe run on plan-prep commit bf4066a, engine code unchanged).",
+  "commit": "bf4066a",
+  "engineCommit": "413ef48",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+  "provider": "openai",
+  "baseUrl": "https://api.deepinfra.com/v1/openai",
+  "concurrency": 2,
+  "trials": [
+    { "trial": 1, "validated": 47, "candidates": 88, "passRate": 0.5341, "costUsd": 0.2624, "durationMs": 4182994, "report": "trial-1/v_base/2026-05-13T14-49-38/report.json" },
+    { "trial": 2, "validated": 48, "candidates": 88, "passRate": 0.5455, "costUsd": 0.2673, "durationMs": 3488000, "report": "trial-2/v_base/2026-05-13T15-59-22/report.json" },
+    { "trial": 3, "validated": 53, "candidates": 88, "passRate": 0.6023, "costUsd": 0.2213, "durationMs": 4440000, "report": "trial-3/v_base/2026-05-13T16-57-29/report.json" }
+  ],
+  "stats": {
+    "meanPct": 56.06,
+    "stddevPp": 2.98,
+    "rangePp": 6.82,
+    "min": 53.41,
+    "max": 60.23
+  },
+  "totalCostUsd": 0.751,
+  "totalDurationMin": 201.9,
+  "decisions": [
+    "Single-trial measurements can swing ±3pp. The 59.1% 'baseline' from prior iterate was a lucky Trial-3-equivalent draw — true mean is 56.1%.",
+    "Variance 2.98pp sits just under the plan's 3pp threshold for 'update plan if variance >3pp'. Phase 1.1 (3-trial averaging in runner.ts) is justified to keep recall comparisons meaningful.",
+    "Phase 2 / 3 milestones target a ≥+10pp lift; with stddev=3pp, any candidate change must clear ≥6pp on a single trial OR ≥3pp on a 3-trial average to be considered a real signal.",
+    "Decision rule for follow-on phases: prefer 3-trial averaging for any change claiming <6pp lift; single-trial OK only for changes that move recall ≥6pp."
+  ]
+}

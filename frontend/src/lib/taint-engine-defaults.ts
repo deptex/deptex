@@ -17,7 +17,7 @@ export const DEFAULT_GENERATOR_MONTHLY_BUDGET_USD = 30;
 /**
  * Closed taxonomy of vulnerability classes the engine + generator understand.
  * Mirrors `backend/src/lib/taint-engine-defaults.ts:ALL_VULN_CLASSES`, which
- * itself mirrors `backend/depscanner/src/taint-engine/spec.ts`. The byte-
+ * itself mirrors `depscanner/src/taint-engine/spec.ts`. The byte-
  * equality test in backend/src/__tests__/taint-engine-defaults.test.ts pins
  * all three.
  *
@@ -37,7 +37,9 @@ export type VulnClass =
   | 'file_upload'
   | 'open_redirect'
   | 'log_injection'
-  | 'code_injection';
+  | 'code_injection'
+  | 'weak_crypto'
+  | 'auth_bypass';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -52,4 +54,6 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'open_redirect',
   'log_injection',
   'code_injection',
+  'weak_crypto',
+  'auth_bypass',
 ];

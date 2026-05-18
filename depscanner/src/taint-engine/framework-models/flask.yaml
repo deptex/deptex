@@ -1,0 +1,492 @@
+# Flask framework spec — Deptex cross-file taint engine.
+#
+# Flask exposes request data through the `flask.request` proxy. Sources
+# cover args (query string), form, json, cookies, headers, files, values,
+# data, get_json(). Sinks cover XSS via render_template_string + Markup,
+# SQL injection via raw cursor.execute, command injection (subprocess),
+# path traversal (open, send_from_directory), SSRF (requests / urllib),
+# deserialization (pickle / yaml.load), open redirect (redirect).
+#
+# Generic Python-stdlib sinks are duplicated across the three Python
+# framework yamls so a workspace using only one of them still detects
+# stdlib-targeting flows.
+
+framework: flask
+language: python
+version: "*"
+
+sources:
+  # MultiDict-style accessors — `.args` / `.form` / `.json` / `.values`
+  - pattern: request.args.*
+    taint_kind: http_input
+    description: Flask request.args (query string)
+  - pattern: request.form.*
+    taint_kind: http_input
+    description: Flask request.form (form body)
+  - pattern: request.values.*
+    taint_kind: http_input
+    description: Flask request.values (args + form combined)
+  - pattern: request.json
+    taint_kind: http_input
+    description: Flask request.json (parsed JSON body)
+  - pattern: request.json.*
+    taint_kind: http_input
+    description: Flask request.json[] / request.json.field
+  - pattern: request.cookies.*
+    taint_kind: http_input
+    description: Flask request.cookies
+  - pattern: request.headers.*
+    taint_kind: http_input
+    description: Flask request.headers
+  - pattern: request.files.*
+    taint_kind: http_input
+    description: Flask request.files
+  - pattern: request.data
+    taint_kind: http_input
+    description: Flask raw request.data
+  - pattern: request.url
+    taint_kind: http_input
+    description: Flask request.url
+  - pattern: request.path
+    taint_kind: http_input
+    description: Flask request.path
+  - pattern: request.full_path
+    taint_kind: http_input
+    description: Flask request.full_path
+  - pattern: request.query_string
+    taint_kind: http_input
+    description: Flask request.query_string
+  - pattern: request.host
+    taint_kind: http_input
+    description: Flask request.host
+  - pattern: request.referrer
+    taint_kind: http_input
+    description: Flask request.referrer
+  - pattern: request.user_agent
+    taint_kind: http_input
+    description: Flask request.user_agent
+  - pattern: request.environ.*
+    taint_kind: http_input
+    description: Flask request.environ (WSGI env)
+
+  # URL rule kwargs — Flask passes route variables as keyword args.
+  - pattern: kwargs.*
+    taint_kind: http_input
+    description: Flask URL rule kwargs
+
+  # Call-shape sources
+  - pattern: request.args.get(*)
+    taint_kind: http_input
+    description: request.args.get()
+  - pattern: request.form.get(*)
+    taint_kind: http_input
+    description: request.form.get()
+  - pattern: request.values.get(*)
+    taint_kind: http_input
+    description: request.values.get()
+  - pattern: request.cookies.get(*)
+    taint_kind: http_input
+    description: request.cookies.get()
+  - pattern: request.headers.get(*)
+    taint_kind: http_input
+    description: request.headers.get()
+  - pattern: request.get_json(*)
+    taint_kind: http_input
+    description: request.get_json()
+  - pattern: request.get_data(*)
+    taint_kind: http_input
+    description: request.get_data()
+
+sinks:
+  # ---------- SQL injection ----------
+  - pattern: cursor.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: DBAPI cursor.execute()
+  - pattern: cursor.executemany(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: DBAPI cursor.executemany()
+  - pattern: "*.execute(*)"
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Generic execute (cursor / connection / engine)
+  - pattern: db.session.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy session.execute (string / text)
+  - pattern: text(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy text() with attacker-controlled string
+  - pattern: engine.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy engine.execute()
+  - pattern: connection.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: SQLAlchemy connection.execute()
+  - pattern: db.engine.execute(*)
+    vuln_class: sql_injection
+    argument_indices: [0]
+    description: Flask-SQLAlchemy db.engine.execute
+
+  # ---------- XSS ----------
+  - pattern: render_template_string(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Flask render_template_string — Jinja template from user input is RCE-class
+  - pattern: Markup(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: markupsafe.Markup — bypasses autoescape
+  - pattern: jinja2.Template(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: jinja2.Template constructor with user input
+  - pattern: Template(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: bare Template constructor (Jinja import alias)
+  - pattern: make_response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Flask make_response — body
+  - pattern: flask.Response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: Flask Response — body
+  - pattern: Response(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: bare Response constructor
+
+  # ---------- Path traversal ----------
+  - pattern: open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: builtin open()
+  - pattern: io.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: io.open
+  - pattern: os.open(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.open
+  - pattern: send_file(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Flask send_file
+  - pattern: send_from_directory(*)
+    vuln_class: path_traversal
+    argument_indices: [1]
+    description: Flask send_from_directory — filename arg
+  - pattern: pathlib.Path(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: pathlib.Path with user input
+  - pattern: Path(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: pathlib.Path bare import
+  - pattern: shutil.copy(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copy
+  - pattern: shutil.copyfile(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: shutil.copyfile
+  - pattern: os.remove(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.remove
+  - pattern: os.unlink(*)
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: os.unlink
+
+  # ---------- Command injection ----------
+  - pattern: os.system(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.system
+  - pattern: os.popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: os.popen
+  - pattern: subprocess.call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.call
+  - pattern: subprocess.run(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.run
+  - pattern: subprocess.Popen(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.Popen
+  - pattern: subprocess.check_call(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_call
+  - pattern: subprocess.check_output(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.check_output
+  - pattern: subprocess.getoutput(*)
+    vuln_class: command_injection
+    argument_indices: [0]
+    description: subprocess.getoutput
+
+  # ---------- SSRF ----------
+  # The `verify=False` kwarg is asserted via the Phase F4 non-taint detector
+  # (CVE-2024-35195 / weak-crypto): a call site like
+  # `requests.get(url, verify=False)` fires a non-taint finding for disabled
+  # cert verification independent of whether `url` is tainted.
+  - pattern: requests.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.get
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.post
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.put
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.delete
+  - pattern: requests.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.request(method, url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: urllib.request.urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: urllib.request.urlopen
+  - pattern: urlopen(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: bare urlopen
+  - pattern: httpx.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.get
+  - pattern: httpx.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: httpx.post
+
+  # ---------- Deserialization ----------
+  - pattern: pickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.loads
+  - pattern: pickle.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: pickle.load
+  - pattern: cPickle.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: cPickle.loads
+  - pattern: yaml.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.load (unsafe)
+  - pattern: yaml.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: yaml.unsafe_load
+  - pattern: marshal.loads(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: marshal.loads
+  - pattern: eval(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin eval
+  - pattern: exec(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: builtin exec
+  - pattern: compile(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: compile()
+
+  # ---------- Cookie security (Phase F4 sanitizer-absence) ----------
+  # Flask response.set_cookie(name, value, ..., secure=False) ships session
+  # tokens / CSRF cookies over plaintext HTTP. Detected via the non-taint
+  # detector regime (CVE-2023-30861-class shape — Flask session cookies
+  # without secure/HttpOnly). Modeled as weak_crypto because the underlying
+  # failure mode is omitting a hardening flag, not a data-flow vulnerability.
+  # argument_indices: [99] is a sentinel — set_cookie's taint contract is
+  # not interesting (its name/value pair is server-generated), and we don't
+  # want the propagator to emit weak_crypto flows on legitimate session
+  # tokens passing through. The non-taint detector still fires from
+  # `required_arguments` below.
+  - pattern: response.set_cookie(*)
+    vuln_class: weak_crypto
+    argument_indices: [99]
+    description: Flask response.set_cookie without secure=True / httponly=True
+    required_arguments:
+      - name: secure
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+      - name: httponly
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+
+  # ---------- Open redirect ----------
+  - pattern: redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Flask redirect
+  - pattern: flask.redirect(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: flask.redirect (qualified)
+
+  # ---------- ReDoS ----------
+  - pattern: re.compile(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.compile
+  - pattern: re.match(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.match
+  - pattern: re.search(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: re.search
+
+  # ---------- Log injection ----------
+  - pattern: logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.info
+  - pattern: logger.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.error
+  - pattern: logger.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.warning
+  - pattern: logger.debug(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logger.debug
+  - pattern: logging.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.info
+  - pattern: logging.error(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.error
+  - pattern: logging.warning(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: logging.warning
+  - pattern: app.logger.info(*)
+    vuln_class: log_injection
+    argument_indices: [0]
+    description: Flask app.logger.info
+
+sanitizers:
+  # ---------- XSS ----------
+  - pattern: markupsafe.escape(*)
+    vuln_classes: [xss]
+    description: markupsafe.escape (qualified)
+  - pattern: escape(*)
+    vuln_classes: [xss]
+    description: bare escape — markupsafe.escape / Jinja escape (rare collision OK)
+  - pattern: html.escape(*)
+    vuln_classes: [xss]
+    description: stdlib html.escape
+  - pattern: bleach.clean(*)
+    vuln_classes: [xss]
+    description: bleach.clean
+
+  # ---------- Path traversal ----------
+  - pattern: os.path.basename(*)
+    vuln_classes: [path_traversal]
+    description: os.path.basename
+  - pattern: os.path.normpath(*)
+    vuln_classes: [path_traversal]
+    description: os.path.normpath
+  - pattern: secure_filename(*)
+    vuln_classes: [path_traversal, file_upload]
+    description: werkzeug.utils.secure_filename
+  - pattern: werkzeug.utils.secure_filename(*)
+    vuln_classes: [path_traversal, file_upload]
+    description: werkzeug.utils.secure_filename (qualified)
+
+  # ---------- Command injection ----------
+  - pattern: shlex.quote(*)
+    vuln_classes: [command_injection]
+    description: shlex.quote
+  - pattern: shlex.split(*)
+    vuln_classes: [command_injection]
+    description: shlex.split
+  - pattern: pipes.quote(*)
+    vuln_classes: [command_injection]
+    description: pipes.quote
+
+  # ---------- SSRF / open redirect ----------
+  - pattern: is_safe_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: is_safe_url helper
+  - pattern: url_has_allowed_host_and_scheme(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: Django/werkzeug url_has_allowed_host_and_scheme
+  - pattern: validate_url(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: validate_url helper
+
+  # ---------- Deserialization ----------
+  - pattern: yaml.safe_load(*)
+    vuln_classes: [deserialization]
+    description: yaml.safe_load
+  - pattern: json.loads(*)
+    vuln_classes: [deserialization]
+    description: json.loads — well-defined data-only deserializer
+
+  # ---------- ReDoS ----------
+  - pattern: re.escape(*)
+    vuln_classes: [redos]
+    description: re.escape
+
+  # ---------- Cross-class numeric coercion ----------
+  - pattern: int(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: int() coercion
+  - pattern: float(*)
+    vuln_classes: [sql_injection, command_injection, path_traversal]
+    description: float() coercion

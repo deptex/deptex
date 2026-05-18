@@ -321,4 +321,4 @@ describe('Strategy Constants', () => {
 
 // Token Parsing tests retired with the aider-worker. The Aegis Fix Agent
 // tracks tokens directly via the AI SDK's usage object — see
-// backend/fix-worker/src/executor.ts.
+// fix-worker/src/executor.ts.

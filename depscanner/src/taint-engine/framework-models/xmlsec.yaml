@@ -1,0 +1,78 @@
+# Apache Santuario (xmlsec) framework spec — Deptex cross-file taint engine.
+#
+# Targets the XML-signature processing surface in `org.apache.santuario:xmlsec`
+# that appears in the 88-CVE iterate corpus (CVE-2023-44483 — XML Signature
+# wrapping bypass that lets attacker-controlled bytes flow into the signing
+# / verification routines). The Qwen-generated fixture in
+# `bench-iterate/v_base/2026-05-12T17-41-24/report.json` is the canonical shape:
+#
+#   @PostMapping("/sign")
+#   public String signDocument(@RequestBody String keyData) throws Exception {
+#       XMLSignature signature = new XMLSignature(null, "http://example.com");
+#       signature.sign(keyData.getBytes());
+#       return "signed";
+#   }
+#
+# Source (`@RequestBody String keyData`) is already declared by `spring-boot.yaml`
+# so the engine sees `sourcesFound=1` for this fixture. Without a sink declared
+# here, `sinksHit=0` and zero flows are emitted — the failure mode the triage
+# table labelled `no_flows_source_present`.
+#
+# vuln_class mapping rationale.
+#   The engine enum (spec.ts:44) does not include `xxe` / `xml_signature_wrapping`.
+#   `deserialization` is the closest fit — both regimes consume attacker-shaped
+#   serialised bytes through a library API and reach security-sensitive code
+#   paths (gadget chain for jackson, signature/key handling for xmlsec). The
+#   `code_injection` bucket is a worse fit because the attacker bytes are
+#   parsed as XML, not executed as a runtime program.
+#
+# "Any tainted argument is a sink" stance.
+#   `XMLSignature.sign(...)` / `.checkSignatureValue(...)` / `.addDocument(...)`
+#   accept attacker bytes at different positions across overloads. Following
+#   the Wave 10 precedent set by jackson.yaml + log4j.yaml + commons-text.yaml,
+#   we declare `argument_indices: []` for the bytes-consuming sinks — any
+#   tainted argument fires. fp-filter gates at scan time. The
+#   `XMLSignature(...)` constructor is also a sink (some PoCs pass tainted
+#   key URIs directly into it).
+#
+# Sources are NOT redeclared here — Spring's `@RequestBody` / `@RequestParam`,
+# JAX-RS / Quarkus / Micronaut parameter annotations, and
+# `HttpServletRequest.getParameter*` are all pre-tainted by the per-framework
+# specs.
+
+framework: xmlsec
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # Core signing / verification surface. CVE-2023-44483's wrapping bypass is
+  # exploited by feeding the library a crafted XML doc through these entry
+  # points. Any tainted argument fires.
+  - pattern: "*.sign(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Apache Santuario XMLSignature.sign — tainted bytes/key passed to signature generation (CVE-2023-44483 wrapping bypass surface)
+  - pattern: "*.checkSignatureValue(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Apache Santuario XMLSignature.checkSignatureValue — verifying attacker-supplied signature material
+  - pattern: "*.addDocument(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Apache Santuario XMLSignature.addDocument — registers attacker-controlled reference URI in the signed manifest
+  - pattern: "*.signElement(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Apache Santuario XMLSignature.signElement — tainted element passed to signature generation
+
+  # Library-level XML init / canonicalisation entry points that some PoCs hit
+  # directly. The canonicaliser flavour is what CVE-2023-44483 ultimately
+  # tricks; modelling it as a sink covers the rarer direct-call shape.
+  - pattern: "Canonicalizer.canonicalize(*)"
+    vuln_class: deserialization
+    argument_indices: []
+    description: Apache Santuario Canonicalizer.canonicalize — tainted XML canonicalisation input
+
+sanitizers: []

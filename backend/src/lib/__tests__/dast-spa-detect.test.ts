@@ -1,6 +1,6 @@
 // Backend-lib copy of the SPA detector unit tests.
 //
-// Mirrors backend/depscanner/src/__tests__/dast-spa-detect.test.ts. The
+// Mirrors depscanner/src/__tests__/dast-spa-detect.test.ts. The
 // implementations live in two files (depscanner copy + backend lib copy)
 // pending a v2.1b shared-lib hoist, so they need parallel test coverage.
 //

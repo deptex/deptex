@@ -159,6 +159,32 @@ describe('GHSA per-ecosystem fan-out', () => {
     expect(pypiRow!.package_name).toBe('django'); // canonicalized, NOT 'Django'
   });
 
+  it('beats the heartbeat mid-run so the watchdog 5-min stale window does not fire', async () => {
+    // Feed-sync runs of the npm OSV bulk archive routinely take >5 min;
+    // the watchdog declares any `state='running'` row stuck after 5 min
+    // without an `updated_at` bump. The fix wires a setInterval timer that
+    // fires every 60s while the run is in flight. We exercise the heartbeat
+    // path via the test-only export so the assertion doesn't depend on
+    // wall-clock advancement past the cadence.
+    const updateSpy = queryBuilder.update as jest.Mock;
+    updateSpy.mockClear();
+
+    global.fetch = jest.fn(async () => emptyGhsaPage()) as any;
+    const result = await runMaliciousFeedSync('ghsa');
+    expect(result.state).toBe('completed');
+
+    // Drive a heartbeat directly to assert the bump path emits a
+    // single-key `{ updated_at }` update payload — the watchdog's
+    // freshness signal.
+    const { __test_only_bumpHeartbeat } = await import('../malicious/feed-sync');
+    await __test_only_bumpHeartbeat('run-1');
+
+    const heartbeatPayloads = updateSpy.mock.calls
+      .map((c: any[]) => c[0])
+      .filter((p: any) => p && Object.keys(p).length === 1 && 'updated_at' in p);
+    expect(heartbeatPayloads.length).toBeGreaterThan(0);
+  });
+
   it('retries on 429 with backoff and recovers the page', async () => {
     let call = 0;
     const sleepSpy = jest

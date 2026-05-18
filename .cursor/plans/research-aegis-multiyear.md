@@ -1,5 +1,7 @@
 # Research: Aegis — Multi-Year Roadmap to a Billion-Dollar Autonomous Security Engineer
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 > **Status:** Research brief. Not a plan. Output of a 15-agent parallel research spike April 2026. Drives the next `/interview` → `/plan-feature` cycle.
 > **Horizon:** 2–3 years, ~14 phases, designed to be parallelizable across multiple concurrent worktrees.
 > **Frame:** Aegis today is a chat. This doc is the argument for what Aegis must become to anchor an open-core ASPM platform that credibly competes with Snyk/Endor/GitHub Advanced Security/Cycode/Jit, while building moat that none of them can copy.

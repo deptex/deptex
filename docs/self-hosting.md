@@ -222,8 +222,9 @@ GitHub is receiving back.
 **`Invalid or missing worker secret` in logs.** `EXTRACTION_WORKER_SECRET`
 mismatch between backend and extraction-worker. Set the same value in both.
 
-**`AI_ENCRYPTION_KEY not set` warning on boot.** Required for BYOK AI
-features. `openssl rand -hex 32` and put it in `.env`.
+**`AI_ENCRYPTION_KEY not set` warning on boot.** Required to encrypt
+IaC v2 registry credentials (`organization_registry_credentials`). Run
+`openssl rand -hex 32` and put it in `.env`.
 
 ---
 

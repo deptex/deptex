@@ -1,0 +1,164 @@
+# Micronaut framework spec — Deptex cross-file taint engine.
+#
+# Micronaut is the third major JVM web framework alongside Spring + Quarkus,
+# popular for serverless / GraalVM native deployments. Its REST layer uses
+# its own annotation set under io.micronaut.http.annotation.* — distinct
+# from JAX-RS and Spring MVC — so a dedicated spec is needed even though
+# the underlying sinks (JDBC, Runtime.exec, Jackson, ObjectInputStream)
+# share java-stdlib.yaml.
+#
+# Pre-tainting: the Java IR lowerer (java/ir.ts `sourceAnnotationOnParam`)
+# matches simple-name annotations on formal_parameter nodes. The set is
+# currently hard-coded at 6 names (RequestParam / PathVariable /
+# RequestBody / RequestHeader / CookieValue / ModelAttribute) — Micronaut's
+# QueryValue, PathVariable (same name, different package), Header,
+# CookieValue (same name), Body, Part fall outside that hard-coded set.
+#
+# To get Micronaut routing pre-taint working today, the IR lowerer's name
+# allowlist needs to expand. Until then this spec contributes:
+#   1. Source annotation patterns (matched if the lowerer extends to
+#      include `QueryValue`, `Header`, `Body`, `Part`).
+#   2. HttpRequest accessors (no annotation dep) — these match TODAY via
+#      `*.<method>(*)` call-shape patterns even before any IR change.
+#   3. SSE / response sinks specific to Micronaut.
+#
+# Cross-pack invariant: this file MUST coexist with java-stdlib.yaml;
+# stdlib carries the SQL / RCE / deser / file / SSRF sinks that this spec
+# does not redeclare.
+
+framework: micronaut
+language: java
+version: "*"
+
+sources:
+  # io.micronaut.http.annotation.* — controller parameter annotations.
+  # `@PathVariable` and `@CookieValue` overlap in name with Spring's set
+  # (Java IR lowerer keys on the simple name) so they're already covered;
+  # `@QueryValue`, `@Header`, `@Body`, `@Part` are Micronaut-specific.
+  - pattern: "@QueryValue"
+    taint_kind: http_input
+    description: Micronaut @QueryValue (query string param)
+  - pattern: "@PathVariable"
+    taint_kind: http_input
+    description: Micronaut @PathVariable (URL path segment)
+  - pattern: "@Header"
+    taint_kind: http_input
+    description: Micronaut @Header (HTTP request header)
+  - pattern: "@CookieValue"
+    taint_kind: http_input
+    description: Micronaut @CookieValue (HTTP cookie)
+  - pattern: "@Body"
+    taint_kind: http_input
+    description: Micronaut @Body (request body POJO)
+  - pattern: "@Part"
+    taint_kind: http_input
+    description: Micronaut @Part (multipart upload part)
+  - pattern: "@RequestBean"
+    taint_kind: http_input
+    description: Micronaut @RequestBean (composite request fields)
+
+  # io.micronaut.http.HttpRequest accessors — call-shape, work without IR
+  # annotation extension because they're standard method invocations.
+  - pattern: "*.getBody(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getBody
+  - pattern: "*.getParameters(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getParameters
+  - pattern: "*.getHeaders(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getHeaders
+  - pattern: "*.getCookies(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getCookies
+  - pattern: "*.getUri(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getUri
+  - pattern: "*.getPath(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getPath
+  - pattern: "*.getRemoteAddress(*)"
+    taint_kind: http_input
+    description: Micronaut HttpRequest.getRemoteAddress
+  # MutableHttpRequest mutation entry points — body() returns the bound
+  # value, parameters().get(...) yields the raw param.
+  - pattern: "*.body(*)"
+    taint_kind: http_input
+    description: Micronaut MutableHttpRequest.body accessor
+
+sinks:
+  # XSS via Micronaut HttpResponse / writable body emit.
+  - pattern: "HttpResponse.ok(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Micronaut HttpResponse.ok — payload returned to client
+  - pattern: "HttpResponse.created(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Micronaut HttpResponse.created
+  - pattern: "*.body(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Micronaut MutableHttpResponse.body — raw payload set
+  - pattern: "*.contentType(*)"
+    vuln_class: xss
+    argument_indices: [0]
+    description: Micronaut MutableHttpResponse.contentType (echoed in headers)
+
+  # Open redirect — HttpResponse.redirect / .seeOther.
+  - pattern: "HttpResponse.redirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Micronaut HttpResponse.redirect
+  - pattern: "HttpResponse.seeOther(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Micronaut HttpResponse.seeOther
+  - pattern: "HttpResponse.temporaryRedirect(*)"
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: Micronaut HttpResponse.temporaryRedirect
+
+  # SSRF — Micronaut declarative HTTP client (`@Client`) routes through
+  # io.micronaut.http.client.HttpClient.exchange / retrieve. Stdlib SSRF
+  # sinks (URL ctor, openConnection, HttpClient.send) catch the underlying
+  # transport; these names cover the higher-level helpers.
+  - pattern: "*.exchange(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Micronaut HttpClient.exchange
+  - pattern: "*.retrieve(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Micronaut HttpClient.retrieve
+  - pattern: "*.toBlocking(*)"
+    vuln_class: ssrf
+    argument_indices: []
+    description: Micronaut HttpClient.toBlocking — implicit transport gate
+
+  # Path traversal — Micronaut StreamedFile + classpath resource resolution.
+  - pattern: "new StreamedFile"
+    vuln_class: path_traversal
+    argument_indices: []
+    description: Micronaut StreamedFile constructor
+  - pattern: "*.systemFile(*)"
+    vuln_class: path_traversal
+    argument_indices: [0]
+    description: Micronaut SystemFile factory
+
+sanitizers:
+  # Micronaut does not ship its own HTML escaper; the OWASP / Apache Commons
+  # helpers cover. Listed verbatim so cross-language filter doesn't require
+  # spring-boot.yaml to be loaded.
+  - pattern: "Encode.forHtml(*)"
+    vuln_classes: [xss]
+    description: OWASP Java Encoder Encode.forHtml
+  - pattern: "Encode.forUriComponent(*)"
+    vuln_classes: [xss, open_redirect]
+    description: OWASP Java Encoder Encode.forUriComponent
+  - pattern: "StringEscapeUtils.escapeHtml4(*)"
+    vuln_classes: [xss]
+    description: Apache Commons StringEscapeUtils.escapeHtml4
+  - pattern: "URLEncoder.encode(*)"
+    vuln_classes: [open_redirect, ssrf]
+    description: java.net.URLEncoder.encode — applies for redirect locations

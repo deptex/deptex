@@ -1,6 +1,0 @@
-node_modules
-dist
-test-npm-results
-test-npm-docker-results
-extraction-results
-*.log

@@ -77,13 +77,12 @@ export default function AegisContent() {
         </p>
       </div>
 
-      {/* BYOK and AI Configuration */}
+      {/* AI Configuration */}
       <div>
         <h2 className="text-lg font-semibold text-foreground mb-3">AI Configuration</h2>
         <p className="text-foreground/90 leading-relaxed">
-          Aegis uses your organization&apos;s AI provider under <strong className="text-foreground">Settings &rarr; AI &amp; Automation &rarr; AI Configuration</strong>.
-          Connect OpenAI, Anthropic, or Google; keys are encrypted. Without a configured provider, Aegis chat and fix features are unavailable.
-          Usage is logged; optional monthly cost caps and per-task budgets help control spend.
+          Aegis runs on Deptex-managed platform AI keys. Pick which models are enabled for your org under <strong className="text-foreground">Settings &rarr; AI &amp; Automation &rarr; AI Configuration</strong>.
+          Usage is logged; per-org monthly cost caps help control spend.
         </p>
       </div>
 

@@ -1,0 +1,85 @@
+{
+  "variant": {
+    "name": "v_base",
+    "version": "base-framework-spec-v1"
+  },
+  "provider": "openai",
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+  "baseUrl": "https://api.deepinfra.com/v1/openai",
+  "startedAt": "2026-05-11T03:52:23.596Z",
+  "finishedAt": "2026-05-11T03:54:26.484Z",
+  "totalDurationMs": 122888,
+  "candidates": 1,
+  "validated": 0,
+  "byStatus": {
+    "failed_validation": 1
+  },
+  "funnel": {
+    "schemaPass": 1,
+    "fixturePre": 0,
+    "fixtureSafe": 1,
+    "patchPostClean": 1,
+    "final": 0
+  },
+  "totalCostUsd": 0.006542111999999998,
+  "perCve": [
+    {
+      "cveId": "CVE-2025-62718",
+      "packagePurl": "pkg:npm/axios@0.21.1",
+      "status": "failed_validation",
+      "errors": [
+        "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+      ],
+      "costUsd": 0.006542111999999998,
+      "inputTokens": 89572,
+      "outputTokens": 1825,
+      "durationMs": 122886,
+      "attempts": 4,
+      "vulnerableFixture": "const axios = require('axios');\nconst http = require('http');\n\nprocess.env.NO_PROXY = 'localhost';\n\nhttp.createServer((req, res) => {\n  res.writeHead(200);\n  res.end('proxied');\n}).listen(5000, () => {\n  axios.get('http://localhost.:5000/');\n});\n",
+      "safeFixture": "const axios = require('axios');\nconst http = require('http');\n\nprocess.env.NO_PROXY = 'localhost';\n\nhttp.createServer((req, res) => {\n  res.writeHead(200);\n  res.end('proxied');\n}).listen(5000, () => {\n  axios.get('http://localhost/');\n});\n",
+      "validationLog": {
+        "fixture_pre_matches": 0,
+        "fixture_post_matches": 0,
+        "patch_pre_matches": 0,
+        "patch_post_matches": 0,
+        "semgrep_stderr_excerpt": null,
+        "errors": [
+          "fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)"
+        ],
+        "took_ms": 4293,
+        "patch_validation_skipped_reason": "patch_pre_match_zero_advisory",
+        "patch_per_file": [
+          {
+            "path": "lib/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "lib/core/dispatchRequest.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/specs/headers.spec.js",
+            "pre": 0,
+            "post": 0
+          },
+          {
+            "path": "test/unit/adapters/http.js",
+            "pre": 0,
+            "post": 0
+          }
+        ],
+        "validation_breakdown": {
+          "schema_pass": true,
+          "pattern_compile_pass": true,
+          "fixture_pre_match": false,
+          "fixture_safe_clean": true,
+          "patch_pre_match": false,
+          "patch_post_clean": true,
+          "semgrep_parse_error": null
+        }
+      }
+    }
+  ]
+}

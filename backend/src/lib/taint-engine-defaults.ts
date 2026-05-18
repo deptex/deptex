@@ -23,7 +23,7 @@ export const COST_CAP_MAX_USD = 1000;
 
 /**
  * Closed taxonomy of vulnerability classes the taint engine + generator
- * understand. Mirrors `backend/depscanner/src/taint-engine/spec.ts`'s
+ * understand. Mirrors `depscanner/src/taint-engine/spec.ts`'s
  * `ALL_VULN_CLASSES` byte-for-byte; the depscanner is its own tsc package
  * (rootDir=./src), so production code in backend/src can't import from
  * depscanner — we duplicate and pin equality with a unit test.
@@ -44,7 +44,9 @@ export type VulnClass =
   | 'file_upload'
   | 'open_redirect'
   | 'log_injection'
-  | 'code_injection';
+  | 'code_injection'
+  | 'weak_crypto'
+  | 'auth_bypass';
 
 export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'sql_injection',
@@ -59,4 +61,6 @@ export const ALL_VULN_CLASSES: readonly VulnClass[] = [
   'open_redirect',
   'log_injection',
   'code_injection',
+  'weak_crypto',
+  'auth_bypass',
 ];

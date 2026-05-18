@@ -1,0 +1,180 @@
+# Apache Log4j 2 framework spec — Deptex cross-file taint engine.
+#
+# Targets the Log4Shell CVE family (CVE-2021-44228, CVE-2021-45046,
+# CVE-2021-45105, CVE-2021-44832). The shared root cause is that Log4j 2.x
+# (< 2.17.1) evaluates `${jndi:...}` lookups in any logged message string,
+# so when attacker-controlled bytes (typically a request header — User-Agent,
+# X-Forwarded-For, Referer — or a request param) reach `Logger.<level>(msg)`,
+# Log4j performs an LDAP / RMI / DNS fetch and (pre-2.16) loads a remote
+# class. That's a remote code execution primitive, not a log-injection one.
+#
+# vuln_class mapping rationale.
+#   Closed enum lives at depscanner/src/taint-engine/spec.ts and is mirrored
+#   in backend/src/lib/taint-engine-defaults.ts + the frontend mirror; adding
+#   a `jndi_injection` value would touch a phase34 migration's
+#   vuln_classes_enabled CHECK list across three sites. We instead reuse the
+#   existing `code_injection` class — added in phase28b precisely for
+#   "tainted data interpreted as code by the runtime" (Spring SpEL eval,
+#   server-side template injection, etc.). JNDI-as-code-loader fits this
+#   bucket cleanly: the runtime resolves the LDAP URL and executes the
+#   returned bytecode. The benchmark report at
+#   docs/88-cve-benchmark-2026-05-10.md recommends the same mapping.
+#
+# Coexists with java-stdlib.yaml.
+#   java-stdlib previously owned `*.info(*)` / `*.warn(*)` as `log_injection`
+#   sinks. That mapping was retired — the SLF4J / Log4j / Logback Logger
+#   surface is framework-owned, not language-stdlib, so its per-level call
+#   patterns live exclusively here as `code_injection` sinks. The propagator's
+#   matchSinkPattern returns the first matching sink across all loaded specs
+#   in directory order; without the retired stdlib entries, log4j.yaml is the
+#   unambiguous owner of the Logger call shapes. Other log_injection coverage
+#   (django/flask/fastapi/rails/actix-web/etc.) is unaffected.
+#
+# --------------------------------------------------------------------------
+# Wave 10 relaxation (2026-05-10): "any tainted Logger argument is a sink".
+# --------------------------------------------------------------------------
+# Background. Wave 8 added these per-level Logger sinks already, but the
+# Wave 9 88-CVE rerun showed all 5/5 Log4j family CVEs still failing at
+# `fixture_round_trip_failed`. Root cause: the Qwen fixtures for
+# CVE-2021-44228 routinely write
+#
+#     logger.error("User input: {}", "${jndi:ldap://" + userInput + "/a}");
+#
+# — i.e. the format string is at arg 0 (untainted) and the JNDI payload is
+# at arg 1 (tainted via `userInput`). Wave 8 declared `argument_indices: [0]`
+# on every per-level sink, so arg-1 taint never fired.
+#
+# The Wave 10 stance: declare `argument_indices: []` on every Logger sink so
+# **any** tainted argument fires the sink. This subsumes the previous arg-0
+# behavior AND catches the parameterised-message shape Qwen's fixtures use.
+#
+# Spec-format gap accepted (precondition-free sinks).
+#   The engine's pattern grammar matches by call-expression text, not by
+#   argument content. We cannot express "the message argument contains a
+#   `${jndi:` substring" as a precondition — every Logger.<level>(*) call
+#   that receives tainted data at ANY position triggers the sink, even
+#   when the actual string is safe ("user=" + userId, with no `${...}`
+#   interpolation). The fp-filter LLM stage downstream prunes those false
+#   positives at scan time. This trade-off matches how java-stdlib models
+#   other "any tainted arg is unsafe" sinks (Runtime.exec,
+#   ObjectInputStream.readObject). The FP risk is now load-bearing on the
+#   fp-filter — see follow-up note at end of file.
+#
+# Sources are NOT redeclared here — Spring's @RequestHeader / @RequestParam,
+# Quarkus's @HeaderParam, and HttpServletRequest.getHeader are all already
+# pre-tainted by the per-framework specs (spring-boot.yaml, quarkus.yaml,
+# micronaut.yaml). The cross-spec load order means a Log4Shell flow from a
+# Spring controller's `@RequestHeader("User-Agent")` parameter through into
+# `logger.info(ua)` resolves with no additional source wiring.
+#
+# Follow-up — fp-filter audit.
+#   Wave 10 makes the fp-filter load-bearing for Log4j. Recommended audit:
+#   ensure fp-filter.ts's prompt knows to look for `${jndi:` /
+#   `${lower:jndi:` / `${env:...}` lookup substrings in the surrounding
+#   source before approving a Log4Shell flow, and to recognise that
+#   Log4j 2.16+ default config (`formatMsgNoLookups=true`) defangs the
+#   lookup. Without that, recall lift here translates 1:1 into FP burden.
+
+framework: log4j
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # SLF4J / Log4j 2.x Logger API — every level. The receiver wildcard `*.`
+  # matches any logger reference shape (static field, injected, looked-up
+  # via LogManager.getLogger().<level>(...) — the call-expression text of
+  # the chained form still ends in `.info(...)` and the engine matches by
+  # the trailing call site).
+  #
+  # `argument_indices: []` means ANY tainted argument fires the sink. This
+  # catches both the simple shape `logger.info(taintedString)` AND the
+  # parameterised shape `logger.error("User input: {}", taintedString)`,
+  # which is how Qwen most commonly writes Log4Shell fixtures.
+  - pattern: "*.info(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.info — any tainted argument treated as JNDI-substitution sink (FP risk accepted, fp-filter gates)
+  - pattern: "*.warn(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.warn — any tainted argument treated as JNDI-substitution sink
+  - pattern: "*.error(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.error — any tainted argument treated as JNDI-substitution sink
+  - pattern: "*.debug(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.debug — any tainted argument treated as JNDI-substitution sink
+  - pattern: "*.trace(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.trace — any tainted argument treated as JNDI-substitution sink
+  - pattern: "*.fatal(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.fatal — any tainted argument treated as JNDI-substitution sink
+  # Generic Logger.log(Level, message[, throwable]) overloads. Wave 10 broadens
+  # this to ANY tainted argument: the Level arg is normally untainted but the
+  # message + throwable args are common payload carriers. `[]` collapses the
+  # arg-indices machinery for this surface.
+  - pattern: "*.log(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.log(Level, message, ...) — any tainted argument treated as JNDI substitution
+  # ParameterizedMessage / printf-shaped helpers. Same JNDI-substitution
+  # path: Log4j formats the message AFTER lookup expansion. ANY tainted arg
+  # fires (the format string OR the parameters).
+  - pattern: "*.printf(*)"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 Logger.printf — any tainted argument treated as JNDI substitution
+  # Direct MessageFactory / ParameterizedMessage construction with tainted
+  # bytes also triggers the lookup once the message is rendered.
+  - pattern: "new ParameterizedMessage"
+    vuln_class: code_injection
+    argument_indices: []
+    description: Log4j 2 ParameterizedMessage constructor — any tainted argument treated as JNDI substitution
+
+  # ---------- log4j 1.x SocketAppender / Chainsaw deserialization (CVE-2023-26464) ----------
+  # Log4j 1.x SocketServer / SocketAppender / Chainsaw deserialise
+  # LoggingEvent objects from attacker-controlled sockets. The AI rule
+  # generator emits these as deserialization sinks with empty argi (any
+  # tainted construction or method call counts). Bundled here so the
+  # CVE-2023-26464 fixture round-trips deterministically.
+  - pattern: "SocketAppender.*"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x SocketAppender — deserialises LoggingEvent from socket (CVE-2023-26464)
+  - pattern: "Chainsaw.*"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x Chainsaw — deserialises LoggingEvent from socket (CVE-2023-26464)
+  - pattern: "new SocketAppender"
+    vuln_class: deserialization
+    argument_indices: []
+    description: SocketAppender constructor with attacker-controlled host
+  - pattern: "new SocketServer"
+    vuln_class: deserialization
+    argument_indices: []
+    description: log4j 1.x SocketServer — deserialises LoggingEvent
+
+# The canonical fix is the Log4j 2.16+ default of `log4j2.formatMsgNoLookups=true`
+# or upgrade past 2.17.1 — both are config-level, not API-level, so the
+# engine cannot model them as sanitizers.
+#
+# NOTE: an earlier wave modelled `StringSubstitutor.replace(*)` as a log4j
+# sanitizer on the theory that pre-resolving lookups defangs `${jndi:...}`
+# before the logger sees it. That entry was removed when commons-text.yaml
+# landed because (a) the same call is itself the Text4Shell
+# (CVE-2022-42889) sink on commons-text 1.5–1.9, where the default lookup
+# set re-introduces a code-injection primitive via
+# `${script:javascript:...}`, and (b) the matchSanitizerPattern check in
+# propagate-core runs before matchSinkPattern, so the sanitizer entry was
+# suppressing the Text4Shell sink. Treating `StringSubstitutor.replace` as
+# a sanitizer for log4j only would require per-spec gating the engine
+# doesn't model today; the safer default is to drop the log4j entry and
+# let commons-text.yaml own the call shape.
+sanitizers: []

@@ -71,6 +71,8 @@ todos:
 isProject: false
 ---
 
+> **Historical context (2026-05-09):** This roadmap was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, Tier-2 BYOK economics, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). The Tier-1/Tier-2 split, BYOK cost-cap dashboard, BYOK-paid-by-org cost figures, and `organization_ai_providers` schema entries no longer reflect production. `AI_ENCRYPTION_KEY` itself is still required, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 # Deptex Projects - Master Roadmap
 
 ## Architecture Overview

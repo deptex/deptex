@@ -34,7 +34,7 @@ Spawn a single **Explore** subagent with thoroughness "very thorough":
 > 2. **Backend routes** — every route handler the frontend calls (grep for `fetch('/api/<prefix>/...')` in the frontend files)
 > 3. **Lib code** — every module under `backend/src/lib/` that the routes import (follow imports transitively, but stop at shared infra like `supabase`, `logger`)
 > 4. **Database** — every table the routes query, every migration that touches those tables (grep `backend/database/` for CREATE/ALTER on matched table names)
-> 5. **Workers** — any worker (`backend/extraction-worker/`, `parser-worker/`, `watchtower-worker/`, `watchtower-poller/`, `aider-worker/`) that reads/writes the same tables
+> 5. **Workers** — any worker (`depscanner/`, `parser-worker/`, `watchtower-worker/`, `watchtower-poller/`, `aider-worker/`) that reads/writes the same tables
 > 6. **Cron / QStash** — any cron or QStash dispatch that triggers code paths in scope
 > 7. **Tests** — every test file that covers any of the above (`__tests__/`, `.test.ts`, `.spec.ts`)
 > 8. **Docs** — sections of `CLAUDE.md`, `DEVELOPERS.md`, `.cursor/plans/`, or inline comments that describe this feature

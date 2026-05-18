@@ -56,6 +56,29 @@ const OSV_ECOSYSTEMS: Array<{ raw: string; canonical: string }> = [
   { raw: 'GitHub Actions', canonical: 'github-actions' },
 ];
 
+// Heartbeat cadence for the in-flight `state='running'` row. The watchdog
+// flags rows where `now() - updated_at > 5 min` as stuck, so we must touch
+// `updated_at` strictly more often than that. A real npm-OSV sync downloads
+// ~200k MAL-* advisories and easily exceeds the 5-min budget; without a
+// mid-run heartbeat the watchdog emits a false-positive `feed_sync_stale`
+// critical event every cron cycle.
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+async function bumpHeartbeat(runId: string): Promise<void> {
+  try {
+    await supabase
+      .from('malicious_feed_sync_runs')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', runId);
+  } catch {
+    // Heartbeat best-effort — a failed UPDATE just delays the next bump.
+    // The watchdog already tolerates a single missed beat (5min window).
+  }
+}
+
+/** Test-only export — drives the heartbeat path deterministically. */
+export const __test_only_bumpHeartbeat = bumpHeartbeat;
+
 export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise<FeedSyncResult> {
   const { data: runRow, error: runError } = await supabase
     .from('malicious_feed_sync_runs')
@@ -67,6 +90,14 @@ export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise
     throw new Error(`feed-sync: failed to start run row: ${runError?.message ?? 'no row'}`);
   }
   const runId = runRow.id;
+
+  // Drive the heartbeat from a setInterval timer rather than threading a
+  // callback through every page-fetch loop — keeps the hot path (`syncOsv`,
+  // `syncGhsa`) free of state-management noise. `unref()` so the timer
+  // can't keep the worker process alive past completion if the caller
+  // forgot to drain it.
+  const heartbeat = setInterval(() => { void bumpHeartbeat(runId); }, HEARTBEAT_INTERVAL_MS);
+  if (typeof heartbeat.unref === 'function') heartbeat.unref();
 
   try {
     const result = source === 'osv'
@@ -110,6 +141,8 @@ export async function runMaliciousFeedSync(source: MaliciousFeedSource): Promise
       error_message: err?.message ?? String(err),
       run_id: runId,
     };
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -376,7 +409,13 @@ async function advisoryToEntries(
         a.vulnerableVersionRange,
         cache,
       );
-      if (resolved && resolved.length > 0) versions = resolved.slice(0, 200);
+      if (resolved && resolved.length > 0) {
+        // If the resolved set is too large to store as discrete rows,
+        // collapse to a single `version=null` flag-all row. Truncating
+        // to an arbitrary subset would silently drop malicious versions
+        // beyond the cap → false negatives.
+        versions = resolved.length > RESOLVED_VERSION_CAP ? [null] : resolved;
+      }
     }
 
     // 3. Fallback: one row with version=null = matches every installed version.
@@ -398,9 +437,18 @@ async function advisoryToEntries(
   return entries;
 }
 
+// Max discrete versions stored as individual rows for one (package,
+// advisory). Beyond this we write a single `version=null` flag-all row
+// rather than an arbitrary truncated subset, so no malicious version is
+// silently dropped.
+const RESOLVED_VERSION_CAP = 200;
+
 function pickVersions(affected: any): Array<string | null> | null {
   if (Array.isArray(affected?.versions) && affected.versions.length > 0) {
-    return affected.versions.slice(0, 50);
+    // Too many explicit versions to store discretely → flag-all row.
+    return affected.versions.length > RESOLVED_VERSION_CAP
+      ? [null]
+      : affected.versions;
   }
   return null;
 }
