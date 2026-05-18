@@ -48,6 +48,7 @@
     "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
     "docker:prepare": "node -e \"const fs=require('fs');fs.mkdirSync('.schema',{recursive:true});fs.copyFileSync('../backend/database/schema.sql','.schema/schema.sql')\" && tsx ../scripts/sync-encryption.ts",
     "docker:build": "npm run docker:prepare && docker build -t deptex-cli:local .",
+    "e2e:container-reachability": "npm run docker:build && docker run --rm deptex-cli:local node dist/scanners/container-reachability-e2e.js",
     "scan": "./bin/deptex-scan",
     "scan:oss-corpus": "tsx scripts/oss-corpus.ts",
     "test:fixtures": "tsx test/snapshot.ts",
