@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -2991,15 +2991,15 @@ export default function OrganizationSettingsPage() {
                           </p>
                           <Button
                             onClick={handleTransferOwnership}
-                            variant="white"
+                            variant="green"
                             disabled={!selectedTransferMemberId || isTransferringOwnership}
                           >
-                            {isTransferringOwnership ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                            ) : (
-                              <UserPlus className="h-3.5 w-3.5 mr-2" />
+                            <span className={isTransferringOwnership ? 'invisible' : ''}>Transfer</span>
+                            {isTransferringOwnership && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
                             )}
-                            Transfer
                           </Button>
                         </div>
                       )}
