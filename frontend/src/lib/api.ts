@@ -2084,7 +2084,7 @@ export const api = {
 
   async triggerDastScan(
     projectId: string,
-    body: { target_id: string },
+    body: { target_id: string; engine?: 'zap' | 'nuclei' },
   ): Promise<DastScanTriggerResponse> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
       method: 'POST',

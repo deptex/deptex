@@ -1253,6 +1253,15 @@ export async function runDastPipeline(
       dastRunId,
     );
     runtimeConfirmedCount = confirmResult.confirmed_count;
+    if (confirmResult.rpc_failed) {
+      // The scan itself succeeded and findings are committed; only the
+      // enrichment failed. Surface it distinctly so a genuine RPC failure is
+      // not mistaken for a clean "0 confirmed" run when reading worker logs.
+      console.warn(
+        `${tag} runtime-confirmation RPC failed — ${cveSignalCount} CVE-bearing ` +
+          `finding(s) were NOT cross-linked to SCA reachability`,
+      );
+    }
   }
 
   // Step 7: finalize. Auth-lost trip → record as a JOB STATE (not a synthetic

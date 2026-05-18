@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     const { storage } = fakeStorage({ data: [], error: null });
     const result = await confirmPdvsFromDastRun(storage, 'org-1', 'proj-1', 'dast_run_empty');
     assert(result.confirmed_count === 0 && result.flips.length === 0, `[2] empty data → zero result`);
+    assert(result.rpc_failed === false, `[2] clean no-match → rpc_failed false`);
   }
 
   console.log('\n[3] RPC error — returns zero result, never throws');
@@ -88,6 +89,10 @@ async function main(): Promise<void> {
       result != null && result.confirmed_count === 0 && result.flips.length === 0,
       `[3] RPC error → zero result`,
     );
+    assert(
+      result != null && result.rpc_failed === true,
+      `[3] RPC error → rpc_failed true (distinct from a clean no-match)`,
+    );
   }
 
   console.log('\n[4] null data with no error — treated as zero, not a crash');
@@ -95,6 +100,7 @@ async function main(): Promise<void> {
     const { storage } = fakeStorage({ data: null, error: null });
     const result = await confirmPdvsFromDastRun(storage, 'org-1', 'proj-1', 'dast_run_null');
     assert(result.confirmed_count === 0, `[4] null data → confirmed_count 0`);
+    assert(result.rpc_failed === false, `[4] null data with no error → rpc_failed false`);
   }
 
   console.log(

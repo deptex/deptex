@@ -356,8 +356,17 @@ export async function runNuclei(
     if (credDir) {
       try {
         fs.rmSync(credDir, { recursive: true, force: true });
-      } catch {
-        /* best-effort — sweepStaleDastTmpDirs is the backstop */
+      } catch (e) {
+        // A failed cleanup leaves a 0600 file holding plaintext auth headers
+        // on disk. sweepStaleDastTmpDirs clears it at the next worker boot,
+        // but a reused machine could carry it across scans — log so the
+        // failure is observable rather than silently swallowed.
+        console.error(
+          JSON.stringify({
+            event: 'dast.nuclei_cred_cleanup_failed',
+            error: (e as Error)?.message ?? 'unknown',
+          }),
+        );
       }
     }
   }

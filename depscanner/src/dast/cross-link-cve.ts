@@ -22,11 +22,19 @@ export interface RuntimeConfirmFlip {
 export interface ConfirmPdvsResult {
   confirmed_count: number;
   flips: RuntimeConfirmFlip[];
+  /**
+   * True when the RPC itself errored. Distinguishes a genuine failure (DB
+   * error, migration drift) from a clean run that legitimately matched no
+   * PDVs — both otherwise return confirmed_count=0. The caller logs the
+   * failure distinctly rather than reporting a misleading "0 confirmed".
+   */
+  rpc_failed: boolean;
 }
 
 /**
  * Invoke confirm_pdvs_from_dast_run for a completed Nuclei run. Never throws —
- * on RPC error it logs a structured line and returns a zero result.
+ * on RPC error it logs a structured line and returns a zero result with
+ * `rpc_failed: true`.
  */
 export async function confirmPdvsFromDastRun(
   supabase: Storage,
@@ -49,7 +57,7 @@ export async function confirmPdvsFromDastRun(
         error: error.message,
       }),
     );
-    return { confirmed_count: 0, flips: [] };
+    return { confirmed_count: 0, flips: [], rpc_failed: true };
   }
 
   const flips = (Array.isArray(data) ? data : []) as RuntimeConfirmFlip[];
@@ -63,5 +71,5 @@ export async function confirmPdvsFromDastRun(
       flipped_count: flips.length,
     }),
   );
-  return { confirmed_count: flips.length, flips };
+  return { confirmed_count: flips.length, flips, rpc_failed: false };
 }
