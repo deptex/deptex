@@ -160,24 +160,35 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
   switch (section) {
     case 'general':
       return (
-        <div className="space-y-6">
-          <div>
-            <div className={`h-8 w-48 ${pulse}`} />
-          </div>
+        <div className="space-y-6 pt-8">
+          {/* Organization details card — name input + avatar + Save footer */}
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="p-6">
-              <div className={`h-4 w-40 ${pulse} mb-2`} />
-              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
-              <div className={`h-10 w-full max-w-md ${pulse}`} />
+              <div className={`h-5 w-44 ${pulse} mb-4`} />
+              <div className="flex flex-col sm:flex-row items-start gap-6">
+                <div className="flex-1 w-full sm:w-auto">
+                  <div className={`h-[42px] w-full max-w-md ${pulse}`} />
+                </div>
+                <div className="h-20 w-20 rounded-full bg-muted animate-pulse flex-shrink-0" />
+              </div>
+            </div>
+            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+              <div className={`h-8 w-20 ${pulse}`} />
             </div>
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="p-6 flex items-start gap-6">
-              <div className="flex-1">
-                <div className={`h-4 w-36 ${pulse} mb-2`} />
-                <div className={`h-3 w-full max-w-sm ${pulse}`} />
+          {/* Danger Zone card */}
+          <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+            <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+              <div className={`h-4 w-28 ${pulse}`} />
+            </div>
+            <div className="p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 space-y-2">
+                  <div className={`h-5 w-48 ${pulse}`} />
+                  <div className={`h-3 w-full max-w-xl ${pulse}`} />
+                </div>
+                <div className={`h-8 w-20 ${pulse} flex-shrink-0`} />
               </div>
-              <div className="h-20 w-20 rounded-full bg-muted animate-pulse" />
             </div>
           </div>
         </div>
