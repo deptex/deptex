@@ -31,6 +31,9 @@ For each milestone in the active plan:
 - `feedback_apply_migrations_via_mcp.md` — MCP apply, not manual SQL
 - `feedback_solo_user_prelaunch.md` — direct rewrites, no compat shims
 - `feedback_assume_infra_built.md` — don't ask "do you have X configured?"
+- `feedback_always_e2e.md` — every feature ends with a real e2e test, never unit tests alone
+- `feedback_docker_vs_source_e2e.md` — run the actual Docker image, not just source-tree/PGLite
+- `feedback_live_api_probe_value.md` — hit the real external API once before declaring it done
 
 ## Inputs
 
@@ -125,9 +128,37 @@ Before declaring the feature done:
 1. **Full plan review** — go through every section of the plan and verify each requirement was implemented
 2. **Walk the user flow** — mentally trace the user's journey through the feature. Does it make sense end-to-end?
 3. **Check the success criteria** — does the implementation meet the success criteria defined in the plan?
-4. **Present a summary** — tell the user what was built, what works, and any deviations from the plan
+4. **End-to-end verification** — see the mandatory section below. A green unit suite is NOT enough.
+5. **Present a summary** — tell the user what was built, what works, and any deviations from the plan
+
+## End-to-End Verification (mandatory — never skip)
+
+Unit tests with mocked or injected dependencies prove your *logic*, not that
+the feature works. A green unit suite against fake runners / mocked DB calls /
+stubbed APIs is **not** evidence the real thing runs. Every feature ends with a
+real end-to-end test before it is declared done — this step is not optional and
+is not satisfied by the unit suite passing.
+
+For each external surface the feature touches, there must be an e2e that
+exercises the REAL thing:
+
+| Surface the feature touches | The mandatory e2e |
+|---|---|
+| Subprocess binaries (scanners, crane, readelf, tar, git) | Run the real binary — inside the depscanner Docker image if that is where it is deployed. Injected fake runners do not count. |
+| Database / migrations | Run against real Postgres (Supabase) or the PGLite smoke — never in-memory chain mocks. |
+| An external API (GitHub, registry, AI provider) | Hit the real API once with a throwaway script (`feedback_live_api_probe_value`). |
+| A Docker-image-only tool | Build the image and run the feature inside it (`feedback_docker_vs_source_e2e`). |
+| A user-facing UI | Browser sign-off — flag it for Henry explicitly. |
+
+Deliver the e2e as a **committed, repeatable artifact** — a `test/` or
+`*-e2e.ts` harness plus an `npm run e2e:<feature>` script — not a one-off you
+ran once and discarded. If it cannot run on the dev box (needs Linux / Docker /
+network), write it anyway, wire the npm script, and flag clearly that Henry
+must run it. A feature is NOT done until its e2e exists and has either passed
+or been handed to Henry to run.
 
 ## Rules
+- **Never declare a feature done on unit tests alone** — every feature ships with a real e2e (see "End-to-End Verification"). Mocked tests pass against the shape you imagined, not reality.
 - Don't over-engineer — build what the plan says, nothing more
 - Don't add console.logs that shouldn't ship
 - Don't skip empty states — they're the first thing new users see
