@@ -48,6 +48,14 @@ import type { PipelineContext } from '../pipeline-types';
 export interface TaintEngineOutput {
   validOsvIds: Set<string>;
   fpFilterCostUsd: number;
+  /**
+   * osv_id → the vulnerable call patterns (FrameworkSink.pattern) of every
+   * CVE-targeted spec sink that loaded this run. The reachability classifier
+   * uses these to verify whether a CVE's *specific vulnerable symbol* is on a
+   * call path before assigning the `function` tier — see
+   * `updateReachabilityLevels`. Empty when no CVE-targeted specs loaded.
+   */
+  cveSinkPatterns: Map<string, string[]>;
 }
 
 export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOutput> {
@@ -58,6 +66,9 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   // updateReachabilityLevels call below can validate that every promoted
   // confirmed-tier flow has an osv_id matching a real loaded spec.
   const validOsvIds = new Set<string>();
+  // osv_id → vulnerable call patterns from CVE-targeted spec sinks; consumed
+  // by the reachability classifier for function-tier symbol verification.
+  const cveSinkPatterns = new Map<string, string[]>();
   let fpFilterCostUsd = 0;
 
   const stepStart = Date.now();
@@ -73,7 +84,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: 'rollout_gate',
     });
-    return { validOsvIds, fpFilterCostUsd };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
   }
 
   const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
@@ -90,7 +101,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: breaker.blockedReason ?? 'circuit_breaker',
     });
-    return { validOsvIds, fpFilterCostUsd };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
   }
 
   // Mark the run as 'running' first so a crash mid-engine still
@@ -241,7 +252,13 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   // (defense-in-depth for the JSONB CHECK + server-side substitution).
   for (const spec of cveSpecResult.specs) {
     for (const sink of spec.sinks) {
-      if (sink.osv_id) validOsvIds.add(sink.osv_id);
+      if (!sink.osv_id) continue;
+      validOsvIds.add(sink.osv_id);
+      // Collect the vulnerable call pattern so the classifier can check
+      // whether this CVE's specific symbol is actually on a call path.
+      const patterns = cveSinkPatterns.get(sink.osv_id) ?? [];
+      if (sink.pattern && !patterns.includes(sink.pattern)) patterns.push(sink.pattern);
+      cveSinkPatterns.set(sink.osv_id, patterns);
     }
   }
   try {
@@ -404,5 +421,5 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
     throw err;
   }
 
-  return { validOsvIds, fpFilterCostUsd };
+  return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
 }

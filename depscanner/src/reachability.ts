@@ -417,6 +417,36 @@ export interface UpdateReachabilityOptions {
    * floors at `module`. Defaults to true so legacy callers keep prior behavior.
    */
   graphTrusted?: boolean;
+  /**
+   * osv_id → the vulnerable call patterns of every CVE-targeted FrameworkSpec
+   * sink that loaded this run (from the taint-engine step). When a PDV's
+   * osv_id has an entry, the classifier verifies whether the CVE's *specific*
+   * vulnerable symbol is on a call path — rather than the weaker "package name
+   * appears somewhere" heuristic. Absent / empty for legacy callers and for
+   * CVEs with no generated spec, which keep the package-name `function` tier.
+   */
+  cveSinkPatterns?: Map<string, string[]>;
+}
+
+/**
+ * Extract substring-match tokens from a CVE-targeted FrameworkSink pattern.
+ * The pattern grammar (see taint-engine/spec.ts) is `Foo.bar`, `Foo.bar.*`,
+ * or `Foo.bar(*)`. Returns the lowercased full dotted callee plus its last
+ * segment — both matched against `project_usage_slices` strings. Segments
+ * shorter than 3 chars are dropped as too generic to match reliably.
+ */
+export function extractSymbolTokens(pattern: string): string[] {
+  let p = pattern.trim().toLowerCase();
+  p = p.replace(/\(\s*\*?\s*\)\s*$/, ''); // strip trailing (*) / ()
+  p = p.replace(/\.\*$/, '');             // strip trailing .*
+  p = p.replace(/\*+$/, '').trim();
+  if (!p) return [];
+  const tokens = new Set<string>();
+  if (p.length >= 3) tokens.add(p);
+  const segs = p.split(/[.#:/]/).filter(Boolean);
+  const last = segs[segs.length - 1];
+  if (last && last.length >= 3) tokens.add(last);
+  return [...tokens];
 }
 
 export async function updateReachabilityLevels(
@@ -703,7 +733,7 @@ export async function updateReachabilityLevels(
       ? taintByDepOsv.get(`${dependencyId}|${pdv.osv_id}`) ?? []
       : [];
 
-    let level: string;
+    let level: string = 'module';
     let details: any = null;
 
     if (taintMatches.length > 0) {
@@ -746,6 +776,41 @@ export async function updateReachabilityLevels(
         depNameCache.set(dependencyId, depName as string);
       }
 
+      // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted
+      // FrameworkSpec sink loaded for this PDV's CVE, we know the *specific*
+      // vulnerable call pattern — verify it is on a call path instead of the
+      // weaker "package name appears somewhere" heuristic below.
+      const sinkPatterns = pdv.osv_id ? options.cveSinkPatterns?.get(pdv.osv_id) : undefined;
+      const symbolTokens = [...new Set((sinkPatterns ?? []).flatMap(extractSymbolTokens))];
+      let symbolClassified = false;
+      if (symbolTokens.length > 0) {
+        const matchedToken = symbolTokens.find((tok) => allUsageStrings.some((s) => s.includes(tok)));
+        const symMeta = pdMetaMap.get(pdv.project_dependency_id);
+        if (matchedToken) {
+          // The vulnerable symbol itself is referenced — a genuine function-tier hit.
+          level = 'function';
+          details = {
+            reason: `vulnerable symbol "${matchedToken}" found in project usage`,
+            vulnerable_symbols: symbolTokens,
+          };
+          symbolClassified = true;
+        } else if (usageAnalysisProducedOutput && symMeta && symMeta.filesImporting > 0) {
+          // The package is imported, but the CVE's specific vulnerable symbol
+          // is on no call path the usage extractor could see — down-rank to
+          // `unreachable`. Tunable knob: if the M4 corpus surfaces a
+          // false-negative, demote this branch to `module` instead.
+          level = 'unreachable';
+          details = {
+            reason: `vulnerable symbol(s) ${symbolTokens.join(', ')} not found on any call path`,
+            vulnerable_symbols: symbolTokens,
+          };
+          symbolClassified = true;
+        }
+        // else: usage analysis incomplete, or the dep isn't imported at all —
+        // fall through to the heuristic ladder; never invent unreachable here.
+      }
+
+      if (!symbolClassified) {
       if (depName && isDepUsed(depName)) {
         level = 'function';
         // Populate details with matching usage data (file, line, methods called)
@@ -797,6 +862,7 @@ export async function updateReachabilityLevels(
         } else {
           level = 'module';
         }
+      }
       }
     }
 

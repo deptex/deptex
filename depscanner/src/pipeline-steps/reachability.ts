@@ -38,6 +38,7 @@ export async function doReachabilityAndEpd(
   validOsvIds: Set<string>,
   fpFilterCostUsd: number,
   scanStart: number,
+  cveSinkPatterns: Map<string, string[]>,
 ): Promise<void> {
   const {
     supabase,
@@ -61,6 +62,7 @@ export async function doReachabilityAndEpd(
     organizationId,
     astParsedSuccessfully,
     graphTrusted,
+    cveSinkPatterns,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
