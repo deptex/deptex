@@ -147,6 +147,7 @@ PR -> check runs + smart comments + policy engine + PR tracking
 | Variable | Purpose |
 |----------|---------|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | Database, auth, realtime, storage |
+| `SUPABASE_JWT_SECRET` | Project JWT secret (HS256). When set, the auth middleware verifies access tokens locally instead of calling the Supabase auth server — one fewer round trip per request. Falls back to `getUser` when unset. |
 | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` | Async job dispatch |
 | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` | Caching, job queues |
 | `FLY_API_TOKEN`, `FLY_DEPSCANNER_APP` (fallback: `FLY_EXTRACTION_APP`), `FLY_FIX_APP` | Worker machine management |

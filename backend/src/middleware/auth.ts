@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { createHash, randomBytes } from 'crypto';
+import jwt from 'jsonwebtoken';
 import { supabase } from '../lib/supabase';
 
 export interface AuthRequest extends Request {
@@ -89,6 +90,39 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
+interface VerifiedAccessToken {
+  id: string;
+  email?: string;
+  aal: string;
+  sessionId: string;
+}
+
+/**
+ * Verify a Supabase access token locally using the project JWT secret (HS256),
+ * avoiding a network round trip to the Supabase auth server on every request.
+ * Returns null for an invalid, tampered, or expired token. Never throws.
+ *
+ * Tradeoff: a token stays valid until it expires (Supabase access tokens are
+ * short-lived, ~1h), so a server-side sign-out is not seen until then — the
+ * standard cost of stateless JWT auth. Falls back to `getUser` when the secret
+ * is not configured (see `authenticateUser`).
+ */
+function verifyAccessTokenLocally(token: string, secret: string): VerifiedAccessToken | null {
+  try {
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as Record<string, unknown>;
+    const id = payload.sub;
+    if (typeof id !== 'string' || !id) return null;
+    return {
+      id,
+      email: typeof payload.email === 'string' ? payload.email : undefined,
+      aal: typeof payload.aal === 'string' ? payload.aal : 'aal1',
+      sessionId: typeof payload.session_id === 'string' ? payload.session_id : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const authenticateUser = async (
   req: AuthRequest,
   res: Response,
@@ -116,6 +150,20 @@ export const authenticateUser = async (
       return res.status(401).json({ error: 'Invalid or expired API token' });
     }
 
+    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+    if (jwtSecret) {
+      // Fast path: verify the token signature locally — no auth-server round trip.
+      const verified = verifyAccessTokenLocally(token, jwtSecret);
+      if (!verified) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+      req.user = { id: verified.id, email: verified.email };
+      req.sessionMeta = { aal: verified.aal, sessionId: verified.sessionId };
+      trackSession(req).catch(() => {});
+      return next();
+    }
+
+    // Fallback: no JWT secret configured — validate via the Supabase auth server.
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
@@ -161,20 +209,29 @@ export const optionalAuth = async (
         return next();
       }
 
-      const { data: { user }, error } = await supabase.auth.getUser(token);
+      const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+      if (jwtSecret) {
+        const verified = verifyAccessTokenLocally(token, jwtSecret);
+        if (verified) {
+          req.user = { id: verified.id, email: verified.email };
+          req.sessionMeta = { aal: verified.aal, sessionId: verified.sessionId };
+        }
+      } else {
+        const { data: { user }, error } = await supabase.auth.getUser(token);
 
-      if (!error && user) {
-        req.user = {
-          id: user.id,
-          email: user.email,
-        };
-
-        const payload = decodeJwtPayload(token);
-        if (payload) {
-          req.sessionMeta = {
-            aal: (payload.aal as string) || 'aal1',
-            sessionId: (payload.session_id as string) || '',
+        if (!error && user) {
+          req.user = {
+            id: user.id,
+            email: user.email,
           };
+
+          const payload = decodeJwtPayload(token);
+          if (payload) {
+            req.sessionMeta = {
+              aal: (payload.aal as string) || 'aal1',
+              sessionId: (payload.session_id as string) || '',
+            };
+          }
         }
       }
     }
