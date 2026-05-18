@@ -86,10 +86,10 @@ This preserves auditability and supports VEX/reporting/false-positive analysis.
 
 ## Operational Policy
 
-- BYOK-only for EPD AI verification (Anthropic key from org settings)
-- no platform-key fallback for this feature
+- platform-key Anthropic for EPD AI verification (worker reads `ANTHROPIC_API_KEY` from env)
 - per-extraction run spend cap default `$3`
 - fail-fast behavior on cap exceedance (configurable)
+- (Historical: pre-`6705149`, the operational policy was "BYOK-only, no platform-key fallback for this feature." BYOK was retired in `phase29_drop_byok.sql`; the Anthropic fallback path now uses the worker env var directly.)
 
 ## Reproducibility and Audit Fields
 
@@ -98,7 +98,7 @@ Persist:
 - model id
 - schema version
 - prompt version
-- EPD status (`ai_verified`, `fallback_no_ai`, `byok_missing`, `ai_error_fallback`, `budget_exceeded`)
+- EPD status (`ai_verified`, `fallback_no_ai`, `ai_error_fallback`, `budget_exceeded`) — `byok_missing` was removed alongside the BYOK rip-out (`6705149`); historical rows may still carry the value.
 - confidence tier
 
 ## Threats to Validity (Paper Section Draft)
@@ -132,7 +132,7 @@ Implemented:
 
 - base-no-reachability score
 - EPD factor + contextual score persistence
-- BYOK-only AI verification path with budget guardrail
+- platform-key AI verification path with budget guardrail (was BYOK-only pre-`6705149`)
 - fallback and status semantics
 
 In progress:

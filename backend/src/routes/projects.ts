@@ -11042,6 +11042,20 @@ router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
       return res.status(429).json({ error: 'Please wait before syncing again.' });
     }
 
+    // Phase 33: optional per-scan AI cost cap. Body param is intentionally
+    // OPTIONAL — the no-body form keeps the legacy "trigger sync" UX intact.
+    // Number parse + finite-positive gate happens both here (early reject)
+    // and inside queueExtractionJob (defense-in-depth + 1000-USD ceiling).
+    const rawCap = (req.body as { ai_cost_cap_usd?: unknown } | undefined)?.ai_cost_cap_usd;
+    let aiCostCapUsd: number | undefined;
+    if (rawCap !== undefined && rawCap !== null) {
+      const parsed = typeof rawCap === 'string' ? parseFloat(rawCap) : Number(rawCap);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return res.status(400).json({ error: 'ai_cost_cap_usd must be a positive number when provided' });
+      }
+      aiCostCapUsd = parsed;
+    }
+
     const result = await queueExtractionJob(projectId, organizationId, {
       repo_full_name: repo.repo_full_name,
       installation_id: repo.installation_id,
@@ -11050,7 +11064,7 @@ router.post('/:id/projects/:projectId/sync', async (req: AuthRequest, res) => {
       ecosystem: repo.ecosystem ?? 'npm',
       provider: repo.provider ?? 'github',
       integration_id: repo.integration_id,
-    }, { trigger_type: 'manual', started_by_user_id: userId });
+    }, { trigger_type: 'manual', started_by_user_id: userId, ai_cost_cap_usd: aiCostCapUsd });
 
     if (!result.success) {
       return res.status(500).json({ error: result.error ?? 'Failed to queue extraction' });

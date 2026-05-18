@@ -17,7 +17,7 @@
  * per feedback_no_raw_errors_to_users.md.
  *
  * RBAC: every mutating route is gated by checkOrgManageIntegrations
- * (lib/rbac.ts) — same gate as BYOK provider keys. Read uses checkOrgAccess.
+ * (lib/rbac.ts) — read uses checkOrgAccess.
  */
 
 import express from 'express';

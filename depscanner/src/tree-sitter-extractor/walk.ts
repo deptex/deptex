@@ -19,6 +19,9 @@ export function walkSourceFiles(root: string, supports: (filePath: string) => bo
     }
     for (const entry of entries) {
       if (entry.name.startsWith('.git')) continue;
+      // Skip symlinks entirely: a symlinked dir lets the walk escape the clone
+      // (path traversal) or loop forever on a self-referential link.
+      if (entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (IGNORE_DIRS.has(entry.name)) continue;

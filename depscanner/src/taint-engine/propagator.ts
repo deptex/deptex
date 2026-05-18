@@ -28,6 +28,7 @@ import type { Callgraph, FunctionId } from './types';
 import type { FrameworkSpec } from './spec';
 import { filterSpecsByLanguage } from './spec';
 import type { Flow } from './flow';
+import type { IrFunction } from './ir';
 import {
   buildCallersByCallee,
   runWorklistAndAggregate,
@@ -62,6 +63,19 @@ export interface PropagateResult {
   flows: Flow[];
   callgraph: Callgraph;
   stats: PropagateStats;
+  /**
+   * True when the worklist aborted mid-loop because the cancellation signal
+   * fired (the 30-min hard timeout). `flows` is then a PARTIAL set — the
+   * pipeline must not treat absent flows as a clean unreachable verdict.
+   */
+  aborted: boolean;
+  /**
+   * Phase F4 — the lowered IR for every analysed function, keyed by
+   * FunctionId. Consumers (Gate 2 in rule-generator/validate.ts) walk these
+   * to extract `CallSite[]` for the non-taint detector regime. Optional so
+   * callers that don't need it pay no marshaling cost.
+   */
+  irFunctions?: IrFunction[];
 }
 
 export async function propagate(options: PropagateOptions): Promise<PropagateResult> {
@@ -116,6 +130,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
   return {
     flows: result.flows,
     callgraph,
+    aborted: result.aborted,
     stats: {
       functionsAnalyzed: stateById.size,
       worklistIterations: result.iterations,
@@ -127,6 +142,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
     },
+    irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };
 }
 

@@ -1,5 +1,7 @@
 # Malicious Packages — Implementation Plan (v1, post-review)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 > **Revision history:** original plan reviewed by 12-persona swarm 2026-04-29; verdict REWORK (unanimous). This v1 plan applies all 14 patches from `.cursor/plans/review-malicious-packages.md` — most resolutions are scope cuts rather than fixes, dropping v1 from 4 milestones to 2.
 
 ## Overview

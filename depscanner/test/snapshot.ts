@@ -5,10 +5,19 @@
  * diffs each JSON output file against the committed snapshot under
  * `fixtures/<name>/snapshots/`. Fails with a unified-ish diff on mismatch.
  *
+ * Bootstrap behavior: a missing snapshot file (or a fixture with no
+ * `snapshots/` dir at all) is NOT treated as a failure. The runner writes
+ * the file and reports it as a bootstrap; the contributor commits it in the
+ * same PR. Subsequent runs compare against the now-committed snapshot and
+ * fail on mismatch. Matches jest's `toMatchSnapshot()` / vitest's
+ * `toMatchFileSnapshot()` UX. Only existing-snapshot mismatches fail.
+ *
  * Usage:
  *   tsx test/snapshot.ts                       run all fixtures
  *   tsx test/snapshot.ts --fixture=test-npm    run one fixture
  *   tsx test/snapshot.ts --update              regenerate snapshots
+ *   tsx test/snapshot.ts --diff-only           dry-run: print intended changes, never write
+ *   tsx test/snapshot.ts --max-diff=500        raise per-file diff truncation (0 = unlimited)
  *   tsx test/snapshot.ts --only=test-minimal-npm,test-empty   multiple
  *
  * Ignore-field policy: some fields change every run by design (timestamps,
@@ -54,6 +63,21 @@ const FIXTURES: FixtureManifest[] = [
   { name: 'test-python', expectClean: true, expectedExitCode: 0, slow: true },
   { name: 'test-java', expectClean: true, expectedExitCode: 0, slow: true },
   { name: 'test-go', expectClean: true, expectedExitCode: 0, slow: true },
+  // Per-framework reachable+unreachable fixtures. Each is a minimal real-looking
+  // codebase with one reachable and one unreachable code path; bootstraps its
+  // own snapshots on first run (commit them in the same PR as the fixture).
+  // Slow flag is set wherever the ecosystem's manifest resolver pays a real
+  // cold-build cost (Maven / NuGet / cargo).
+  { name: 'test-flask-traversal-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-django-xss-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-fastapi-sqli-pypi', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-spring-petclinic-maven', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-gin-cmdi-go', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-sinatra-xss-gem', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-laravel-sqli-php', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-rust-axum-traversal', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-csharp-aspnet-sqli', expectClean: true, expectedExitCode: 0, slow: true },
+  { name: 'test-nextjs-server-action-xss', expectClean: true, expectedExitCode: 0, slow: true },
 ];
 
 const DEFAULT_IGNORE_FIELDS = new Set([
@@ -82,31 +106,141 @@ const DEFAULT_IGNORE_FIELDS = new Set([
   'sla_due_at',
   'first_seen_at',
   'last_seen_at',
+  // Volatile vuln fields fetched live from EPSS / NVD / CISA KEV APIs in
+  // pipeline.ts. Values drift daily, so a contributor regenerating snapshots
+  // a day after they were committed would diff-fail without these in the
+  // ignore list. Stubbing via env-var was rejected — that introduces a
+  // stale-mock failure mode the snapshot suite can't catch.
+  'epss_score',
+  'cvss_score',
+  'cisa_kev',
+  'published_at',
+  // Rule generation telemetry — drifts with AI provider pricing and model
+  // rotation. The load-bearing contract (vuln_class, osv_id, rule_yaml,
+  // validation_status, validation_breakdown, confidence, generation_source)
+  // stays pinned. See `docs/snapshot-coverage-audit-2026-05-10.md` §2.8 for
+  // the full audit.
+  'generation_cost_usd',
+  'generation_model_version',
+  'generated_at',
+  'rule_id',
+  // Tool version stamps — drift on Semgrep / TruffleHog / cdxgen upgrade
+  // without a semantic change. The finding's `rule_id`, file:line, severity
+  // and `code_snippet` are what we contract on; the embedded tool version
+  // is volatile.
+  'semgrep_version',
+  'trufflehog_version',
+  'cdxgen_version',
+  // Reachable-flow timestamps — added proactively so the first reachable-
+  // flow fixture (planned per `docs/contributor-test-infra-plan.md` §2)
+  // doesn't ship with re-strip churn.
+  'flow_extracted_at',
+  'confidence_calibrated_at',
 ]);
 
-async function main() {
+/**
+ * Default per-file diff truncation cap. Bumped from 10 → 200 because real
+ * fixtures have hundreds of leaf paths (e.g. vulns.json with 26 rows × 40
+ * fields ≈ 1000 paths) and 10 was too aggressive — contributors couldn't
+ * see what was actually changing. 200 is enough to read most diffs without
+ * flooding terminal output; pathological diffs (whole-file mismatch) should
+ * use --max-diff explicitly.
+ */
+export const DEFAULT_MAX_DIFF = 200;
+
+export interface SnapshotRunnerArgs {
+  fixture: string | undefined;
+  only: string | undefined;
+  update: boolean;
+  diffOnly: boolean;
+  includeSlow: boolean;
+  /** Per-file diff line cap. 0 = unlimited. */
+  maxDiff: number;
+  help: boolean;
+}
+
+/**
+ * Parse argv for the snapshot runner. Exported for testing.
+ *
+ * Throws if `--max-diff` cannot be parsed as a non-negative integer.
+ */
+export function parseSnapshotArgs(argv: string[]): SnapshotRunnerArgs {
   const parsed = parseArgs({
-    args: process.argv.slice(2),
+    args: argv,
     options: {
       fixture: { type: 'string' },
       only: { type: 'string' },
       update: { type: 'boolean' },
+      'diff-only': { type: 'boolean' },
       'include-slow': { type: 'boolean' },
+      'max-diff': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: true,
   });
 
-  if (parsed.values.help) {
+  let maxDiff = DEFAULT_MAX_DIFF;
+  const rawMaxDiff = parsed.values['max-diff'];
+  if (rawMaxDiff !== undefined) {
+    const n = Number(rawMaxDiff);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new Error(
+        `--max-diff expects a non-negative integer, got ${JSON.stringify(rawMaxDiff)}`,
+      );
+    }
+    maxDiff = n;
+  }
+
+  return {
+    fixture: parsed.values.fixture,
+    only: parsed.values.only,
+    update: parsed.values.update ?? false,
+    diffOnly: parsed.values['diff-only'] ?? false,
+    includeSlow: parsed.values['include-slow'] ?? false,
+    maxDiff,
+    help: parsed.values.help ?? false,
+  };
+}
+
+/**
+ * Truncate a diff-line array to `maxDiff` entries, appending an
+ * "…and N more" marker when entries are dropped. `maxDiff === 0` means
+ * unlimited. Exported for testing.
+ */
+export function truncateDiffLines(lines: string[], maxDiff: number): string[] {
+  if (maxDiff === 0 || lines.length <= maxDiff) return lines.slice();
+  const head = lines.slice(0, maxDiff);
+  head.push(`…and ${lines.length - maxDiff} more`);
+  return head;
+}
+
+async function main() {
+  let args: SnapshotRunnerArgs;
+  try {
+    args = parseSnapshotArgs(process.argv.slice(2));
+  } catch (e: any) {
+    process.stderr.write(`error: ${e.message}\n`);
+    process.exit(2);
+  }
+
+  if (args.help) {
     process.stdout.write(HELP);
     process.exit(0);
   }
 
-  const includeSlow = parsed.values['include-slow'] ?? false;
-  const filter = parsed.values.fixture
-    ? new Set([parsed.values.fixture])
-    : parsed.values.only
-      ? new Set(parsed.values.only.split(',').map((s) => s.trim()))
+  // --diff-only wins over --update: dry-run is the safer choice when the
+  // contributor accidentally combined them.
+  if (args.diffOnly && args.update) {
+    console.log('NOTE: --diff-only overrides --update; no snapshots will be written.\n');
+  }
+
+  const effectiveUpdate = args.update && !args.diffOnly;
+
+  const includeSlow = args.includeSlow;
+  const filter = args.fixture
+    ? new Set([args.fixture])
+    : args.only
+      ? new Set(args.only.split(',').map((s) => s.trim()))
       : null;
 
   const targets = FIXTURES.filter((f) => {
@@ -121,9 +255,14 @@ async function main() {
   }
 
   console.log(`Running ${targets.length} fixture(s): ${targets.map((t) => t.name).join(', ')}`);
-  console.log(parsed.values.update ? 'MODE: --update (snapshots will be overwritten)\n' : '');
+  if (args.diffOnly) {
+    console.log('MODE: --diff-only (dry-run; intended changes printed, no snapshots written)\n');
+  } else if (effectiveUpdate) {
+    console.log('MODE: --update (snapshots will be overwritten)\n');
+  }
 
   let failures = 0;
+  let intendedChanges = 0;
 
   for (const fixture of targets) {
     console.log(`\n=== ${fixture.name} ===`);
@@ -203,10 +342,22 @@ async function main() {
 
     if (fixture.expectClean) {
       const result = diffSnapshots(resultDir, snapshotDir, {
-        update: parsed.values.update ?? false,
+        update: effectiveUpdate,
+        diffOnly: args.diffOnly,
+        maxDiff: args.maxDiff,
         fixtureIgnore: loadFixtureIgnore(workspacePath),
       });
-      if (!result.ok) {
+      if (args.diffOnly) {
+        // In --diff-only mode the runner prints intended changes but never
+        // counts them as failures; exit 0 unless an exit-code mismatch above
+        // already incremented `failures`.
+        if (result.intendedChanges) {
+          intendedChanges += result.intendedChanges;
+          console.log(`  WOULD CHANGE: ${result.message}`);
+        } else {
+          console.log(`  snapshots: ${result.message}`);
+        }
+      } else if (!result.ok) {
         console.error(`  FAIL: ${result.message}`);
         failures++;
       } else {
@@ -216,6 +367,18 @@ async function main() {
   }
 
   console.log('');
+  if (args.diffOnly) {
+    if (intendedChanges === 0) {
+      console.log(`PASS (${targets.length} fixture${targets.length === 1 ? '' : 's'}; no intended changes)`);
+    } else {
+      console.log(
+        `DRY-RUN (${targets.length} fixture${targets.length === 1 ? '' : 's'}; ` +
+        `${intendedChanges} intended change${intendedChanges === 1 ? '' : 's'} — ` +
+        `re-run with --update to write)`,
+      );
+    }
+    process.exit(failures === 0 ? 0 : 1);
+  }
   if (failures === 0) {
     console.log(`PASS (${targets.length} fixture${targets.length === 1 ? '' : 's'})`);
     process.exit(0);
@@ -255,17 +418,23 @@ function runCli(
   return res.status ?? 2;
 }
 
-interface DiffOptions {
+export interface DiffOptions {
   update: boolean;
+  /** When true, print intended changes but never write to snapshotDir. */
+  diffOnly: boolean;
+  /** Per-file diff truncation cap. 0 = unlimited. */
+  maxDiff: number;
   fixtureIgnore: Set<string>;
 }
 
-interface DiffResult {
+export interface DiffResult {
   ok: boolean;
   message: string;
+  /** Count of files that differ in --diff-only mode (would-be writes). */
+  intendedChanges?: number;
 }
 
-function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions): DiffResult {
+export function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions): DiffResult {
   if (!fs.existsSync(resultDir)) {
     return { ok: false, message: `no results dir at ${resultDir}` };
   }
@@ -286,14 +455,44 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
     return { ok: true, message: `updated ${outputs.length} snapshot(s)` };
   }
 
+  // Diff path (covers both default mode and --diff-only). The --diff-only
+  // caller treats `intendedChanges > 0` as informational, not a failure.
+  //
+  // Bootstrap policy (matches jest's `toMatchSnapshot()` and vitest's
+  // `toMatchFileSnapshot()`): a missing snapshot file (or missing snapshot
+  // dir entirely) on a default-mode run is NOT a failure — we write the file
+  // and report it as a bootstrap. The contributor commits the now-written
+  // snapshot in the same PR, and subsequent runs compare against it. Only
+  // mismatches against an EXISTING snapshot fail the run.
+  //
+  // --diff-only still behaves as a dry-run: bootstrap candidates are reported
+  // as `intendedChanges` and the file is not written.
   if (!fs.existsSync(snapshotDir)) {
+    if (opts.diffOnly) {
+      // Treat as "everything is new" rather than a hard fail.
+      return {
+        ok: true,
+        message: `no snapshot dir at ${snapshotDir} — would create with ${outputs.length} file(s)`,
+        intendedChanges: outputs.length,
+      };
+    }
+    // Auto-bootstrap: write every output as a snapshot and pass.
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    for (const file of outputs) {
+      const src = path.join(resultDir, file);
+      const dst = path.join(snapshotDir, file);
+      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore);
+      writeJson(dst, redacted);
+    }
     return {
-      ok: false,
-      message: `no snapshot dir at ${snapshotDir} — run with --update to create it`,
+      ok: true,
+      message: `bootstrapped ${outputs.length} snapshot(s) at ${snapshotDir} (commit them to lock the baseline)`,
     };
   }
 
   const mismatches: string[] = [];
+  const bootstrapped: string[] = [];
+  let changedFiles = 0;
   for (const file of outputs) {
     const actual = stripIgnored(
       readJson(path.join(resultDir, file)),
@@ -301,22 +500,50 @@ function diffSnapshots(resultDir: string, snapshotDir: string, opts: DiffOptions
     );
     const expectedPath = path.join(snapshotDir, file);
     if (!fs.existsSync(expectedPath)) {
-      mismatches.push(`  ${file}: new file (not in snapshot dir)`);
+      // Per-file bootstrap: missing snapshot for a fixture that already has
+      // a snapshots/ dir (e.g. a new output file was added to the pipeline).
+      // In default mode, write it and continue. In --diff-only, count it as
+      // an intended change without writing.
+      if (opts.diffOnly) {
+        mismatches.push(`  ${file}: new file (not in snapshot dir)`);
+        changedFiles++;
+      } else {
+        writeJson(expectedPath, actual);
+        bootstrapped.push(file);
+      }
       continue;
     }
     const expected = readJson(expectedPath);
     const diff = diffJson(expected, actual);
     if (diff.length > 0) {
+      changedFiles++;
       mismatches.push(`  ${file}: ${diff.length} difference(s)`);
-      for (const d of diff.slice(0, 10)) mismatches.push(`    ${d}`);
-      if (diff.length > 10) mismatches.push(`    …and ${diff.length - 10} more`);
+      for (const line of truncateDiffLines(diff, opts.maxDiff)) {
+        mismatches.push(`    ${line}`);
+      }
     }
   }
 
   if (mismatches.length > 0) {
+    if (opts.diffOnly) {
+      return {
+        ok: true,
+        message: `intended changes:\n${mismatches.join('\n')}`,
+        intendedChanges: changedFiles,
+      };
+    }
     return {
       ok: false,
       message: `snapshot mismatches:\n${mismatches.join('\n')}`,
+    };
+  }
+  if (bootstrapped.length > 0) {
+    const matched = outputs.length - bootstrapped.length;
+    return {
+      ok: true,
+      message:
+        `${matched} file(s) match snapshot; ` +
+        `bootstrapped ${bootstrapped.length} new (${bootstrapped.join(', ')}) — commit them to lock the baseline`,
     };
   }
   return { ok: true, message: `${outputs.length} file(s) match snapshot` };
@@ -398,22 +625,36 @@ Usage:
   tsx test/snapshot.ts --fixture=<name>      run one fixture
   tsx test/snapshot.ts --only=<n,n,...>      run multiple by name
   tsx test/snapshot.ts --update              regenerate snapshots
+  tsx test/snapshot.ts --diff-only           dry-run: print intended changes
+  tsx test/snapshot.ts --max-diff=<N>        per-file diff cap (default ${DEFAULT_MAX_DIFF}, 0 = unlimited)
   tsx test/snapshot.ts --include-slow        include slow fixtures by default
 
 Flags:
   --fixture=<name>      Only run one fixture (by dir name)
   --only=<names>        Comma-separated list of fixtures to run
-  --update              Regenerate snapshot files (destructive)
+  --update              Regenerate snapshot files (destructive). Wraps as
+                        \`npm run test:fixtures:update\`.
+  --diff-only           Dry-run mode. Print what \`--update\` WOULD change,
+                        but do not write. Combine with --update is safe;
+                        --diff-only wins.
+  --max-diff=<N>        Override per-file diff truncation cap (default
+                        ${DEFAULT_MAX_DIFF}). Pass 0 for unlimited. Useful when
+                        debugging large snapshot drift.
   --include-slow        Run full-ecosystem fixtures that take minutes each
   -h, --help            This text
 
 Exit codes:
-  0 = all snapshots match
-  1 = one or more snapshot mismatches
+  0 = all snapshots match (or --diff-only completed without runner error)
+  1 = one or more snapshot mismatches (default mode only)
   2 = invalid arguments / runner error
 `;
 
-main().catch((e) => {
-  console.error(`fatal: ${e?.stack ?? e?.message ?? e}`);
-  process.exit(2);
-});
+// Only run main() when invoked directly (tsx test/snapshot.ts ...). When
+// imported by tests we want the exported helpers (parseSnapshotArgs,
+// truncateDiffLines, DEFAULT_MAX_DIFF) without the side effect.
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(`fatal: ${e?.stack ?? e?.message ?? e}`);
+    process.exit(2);
+  });
+}

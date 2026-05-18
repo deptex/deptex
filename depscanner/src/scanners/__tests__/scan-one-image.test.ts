@@ -30,6 +30,12 @@ jest.mock('../trivy', () => ({
     return m[1];
   }),
   parseDockerfileFinalStage: jest.fn(),
+  parseDockerfileFinalStageDetailed: jest.fn(),
+  parseImageHost: jest.fn((s: string) => ({
+    host: s.split('/')[0] || 'docker.io',
+    path: s,
+    isImplicitDockerHub: false,
+  })),
   resolveImageDigest: jest.fn(),
   resolvePullStrategy: jest.fn(),
   RegistryUnavailableError: class RegistryUnavailableError extends Error {},
@@ -187,7 +193,9 @@ describe('scanOneImage — ghcr namespace check', () => {
     const result = await scanOneImage(baseImage, makeCtx(), env, makeSwitches(), 'acme');
     expect(result).toEqual({ findings: [] });
     expect(mockCreateInstallationToken).toHaveBeenCalledWith('install-1');
-    expect(env.authedHosts.has('ghcr.io')).toBe(true);
+    // scanOneImage strips the freshly-minted ghcr App token in its finally
+    // block (removeGhcrAppEntry) so it cannot be reused for another image.
+    expect(env.authedHosts.has('ghcr.io')).toBe(false);
   });
 
   it('skips with auth_mint_failed when token mint throws', async () => {

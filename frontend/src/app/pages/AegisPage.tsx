@@ -29,7 +29,13 @@ export default function AegisPage() {
   const { toast } = useToast();
 
   const displayName = (() => {
-    const full = user?.user_metadata?.full_name as string | undefined;
+    const meta = user?.user_metadata;
+    const id = user?.identities?.[0]?.identity_data as
+      | { full_name?: string; name?: string }
+      | undefined;
+    const full = (meta?.custom_full_name || meta?.full_name || id?.full_name || id?.name) as
+      | string
+      | undefined;
     if (full) return full.split(' ')[0];
     if (user?.email) return user.email.split('@')[0];
     return 'there';

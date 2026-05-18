@@ -43,6 +43,24 @@ export const FrameworkSourceSchema = z.object({
 }).strict();
 
 /**
+ * Phase F4 — non-taint detector regime. A sink may declare one or more named
+ * arguments (kwarg or option-object property) whose presence/absence/value
+ * indicates a sanitizer-absence vulnerability shape. See
+ * `depscanner/docs/non-taint-detector-regime.md`.
+ *
+ * Server-side validation only at present — the AI rule generator's
+ * prompt-builder is not yet extended to emit this field; hand-authored
+ * YAML specs in `taint-engine/framework-models/` populate it directly.
+ */
+export const RequiredArgumentSchema = z.object({
+  name: z.string().min(1),
+  position: z.number().int().nonnegative().optional(),
+  match_mode: z.enum(['required', 'forbidden', 'must_equal']).optional(),
+  safe_literals: z.array(z.string()).optional(),
+  unsafe_literals: z.array(z.string()).optional(),
+}).strict();
+
+/**
  * Reject sink patterns that are SO broad they would match nearly every call
  * site in the codebase (e.g. `*`, `*.*(*)`, `*.execute(*)`). A prompt-
  * injection-influenced model could emit such a pattern to make the spec fire
@@ -99,12 +117,37 @@ export const FrameworkSinkSchema = z.object({
   vuln_class: z.enum(VULN_CLASSES),
   argument_indices: z.array(z.number().int().nonnegative()),
   description: z.string().min(1),
+  required_arguments: z.array(RequiredArgumentSchema).optional(),
 }).strict();
 
 export const FrameworkSanitizerSchema = z.object({
   pattern: z.string().min(1),
   vuln_classes: z.array(z.enum(VULN_CLASSES)).min(1),
   description: z.string().min(1),
+}).strict();
+
+/**
+ * Phase 3.2 — regex literals the CVE patch flags as ReDoS-prone. Consumed
+ * by regex-literal-detector.ts in the engine. Optional; specs that don't
+ * participate in the regime omit the field entirely.
+ */
+export const UnsafeRegexPatternSchema = z.object({
+  regex: z.string().min(1),
+  description: z.string().min(1),
+}).strict();
+
+/**
+ * Phase 3.3 — call sites where a missing or forbidden-value kwarg/arg
+ * indicates a sanitizer-absence shape independent of taint. Consumed by
+ * insecure-default-detector.ts.
+ */
+export const InsecureDefaultSchema = z.object({
+  pattern: z.string().min(1),
+  description: z.string().min(1),
+  argument_name: z.string().min(1).optional(),
+  argument_position: z.number().int().nonnegative().optional(),
+  forbidden_value_shapes: z.array(z.string()).optional(),
+  vuln_class: z.enum(VULN_CLASSES).optional(),
 }).strict();
 
 /**
@@ -119,6 +162,11 @@ export const FrameworkSpecJsonSchema = z.object({
   sources: z.array(FrameworkSourceSchema),
   sinks: z.array(FrameworkSinkSchema).min(1, 'framework_spec.sinks must have at least one entry — a CVE-targeted spec with no sinks emits no flows'),
   sanitizers: z.array(FrameworkSanitizerSchema),
+  // Phase 3.0 — optional detector primitives. .strict() rejects unknown
+  // keys at the spec level; declaring these explicitly keeps the schema
+  // shape pinned while allowing AI specs to omit them entirely.
+  unsafe_regex_patterns: z.array(UnsafeRegexPatternSchema).optional(),
+  insecure_defaults: z.array(InsecureDefaultSchema).optional(),
 }).strict();
 
 export type FrameworkSpecJson = z.infer<typeof FrameworkSpecJsonSchema>;
@@ -197,5 +245,14 @@ export function withOsvIdsSubstituted(spec: FrameworkSpecJson, cveId: string): P
   };
 }
 
-/** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5). */
-export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v1';
+/** Bumped from `rulegen-v10` (Phase 5 final) → `framework-spec-v1` (Phase 6.5)
+ *  → `framework-spec-v2-rule-fixture-coherence` (2026-05-13)
+ *  → `framework-spec-v3-detector-primitives` (2026-05-14, Phase 3.0)
+ *  → `framework-spec-v3-ruby-instance-hint` (2026-05-14 PM, Ruby instance-
+ *    method guidance for CVE-2023-28120 family — REVERTED below: it
+ *    instructed the AI to emit `*.method(*)` shapes the schema's
+ *    isBroadSinkPattern correctly rejects, regressing CVE-2023-28120 from
+ *    failed_validation → invalid_schema. The instance-method matcher gap
+ *    needs an engine fix instead, not a prompt directive.)
+ *  → `framework-spec-v3-revert-ruby-hint` (2026-05-14 PM). */
+export const FRAMEWORK_SPEC_PROMPT_VERSION = 'framework-spec-v3-revert-ruby-hint';

@@ -1,10 +1,11 @@
 import type { Node } from 'web-tree-sitter';
 import * as path from 'path';
-import { loadLanguage, makeParser } from '../parser';
+import { parseSource } from '../parser';
 import { resolveComposerImport } from '../import-mapping/composer';
 import type { ExtractedFile, ImportBinding, LanguageContext, LanguageModule, UsageSlice } from './types';
 import { getDetectorsForLanguage } from '../../framework-rules/registry';
 import type { EntryPoint } from '../../framework-rules/types';
+import { recordDetectorError } from '../detector-errors';
 
 const PHP_EXTENSIONS: readonly string[] = ['.php'];
 
@@ -28,11 +29,11 @@ export const phpModule: LanguageModule = {
     return PHP_EXTENSIONS.includes(path.extname(filePath).toLowerCase());
   },
   async extractFile(source: string, filePath: string, ctx: LanguageContext): Promise<ExtractedFile> {
-    const language = await loadLanguage('tree-sitter-php.wasm');
-    const parser = await makeParser(language);
-    const tree = parser.parse(source);
-    if (!tree) return { filePath, language: 'php', imports: [], usages: [] };
-
+    const tree = await parseSource('tree-sitter-php.wasm', source);
+    if (!tree) {
+      throw new Error('tree-sitter parse produced no tree (file too large or parse aborted)');
+    }
+    try {
     const depNames = ctx.deps.map((d) => d.name);
     const imports: ImportBinding[] = [];
     const usages: UsageSlice[] = [];
@@ -183,9 +184,12 @@ export const phpModule: LanguageModule = {
         return false;
       });
       if (!triggered) continue;
-      try { entryPoints.push(...detector.detect({ source, tree, file: extracted })); } catch { /* non-fatal */ }
+      try { entryPoints.push(...detector.detect({ source, tree, file: extracted, workspaceRoot: ctx.workspaceRoot, depNames })); } catch (err) { recordDetectorError(detector.name, err); }
     }
     extracted.entryPoints = entryPoints;
     return extracted;
+    } finally {
+      tree.delete();
+    }
   },
 };

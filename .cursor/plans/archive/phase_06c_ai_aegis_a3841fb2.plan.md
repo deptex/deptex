@@ -55,6 +55,8 @@ isProject: false
 
 # Phase 6C: AI Infrastructure and Aegis Security Copilot (Revised)
 
+> **Historical context (2026-05-09):** This archived plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. The references to BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, and `AI_ENCRYPTION_KEY` for AI key envelopes are historical only — current AI runs on platform keys.
+
 **Goal:** Build the two-tier AI infrastructure (platform Gemini Flash + org BYOK), the Aegis Security Copilot panel with streaming chat, AI usage tracking, background vulnerability monitoring, and light up all the disabled AI buttons from Phase 6 Core.
 
 **Prerequisites:** Phase 6 Core complete (sidebars with disabled AI buttons, Semgrep/TruffleHog findings in DB, vulnerability detail endpoints, version candidates).

@@ -103,27 +103,27 @@ export async function sendInvitationEmail(
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Organization Invitation</title>
     </head>
-    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <div style="background: linear-gradient(135deg, #025230 0%, #4CAF50 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-        <h1 style="color: white; margin: 0; font-size: 24px;">You've been invited!</h1>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #0a0a0a; max-width: 600px; margin: 0 auto; padding: 20px; background: #fafafa;">
+      <div style="background: #047857; padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">You've been invited</h1>
       </div>
-      <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
-        <p style="font-size: 16px; margin-bottom: 20px;">
+      <div style="background: #ffffff; padding: 32px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+        <p style="font-size: 15px; margin: 0 0 16px 0; color: #0a0a0a;">
           <strong>${inviterName}</strong> has invited you to join <strong>${organizationName}</strong> as a <strong>${role}</strong>${teamName ? ` and be part of the <strong>${teamName}</strong> team` : ''}.
         </p>
-        <p style="font-size: 14px; color: #6b7280; margin-bottom: 30px;">
+        <p style="font-size: 14px; color: #525252; margin: 0 0 28px 0;">
           Click the button below to accept the invitation and join the organization${teamName ? ` and ${teamName} team` : ''}.
         </p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${inviteLink}" style="display: inline-block; background: #025230; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
-            Accept Invitation
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${inviteLink}" style="display: inline-block; background: #047857; color: #ffffff; padding: 11px 24px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">
+            Accept invitation
           </a>
         </div>
-        <p style="font-size: 12px; color: #9ca3af; margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 20px;">
+        <p style="font-size: 12px; color: #737373; margin: 28px 0 0 0; border-top: 1px solid #e5e7eb; padding-top: 20px;">
           If the button doesn't work, copy and paste this link into your browser:<br>
-          <a href="${inviteLink}" style="color: #025230; word-break: break-all;">${inviteLink}</a>
+          <a href="${inviteLink}" style="color: #047857; word-break: break-all;">${inviteLink}</a>
         </p>
-        <p style="font-size: 12px; color: #9ca3af; margin-top: 20px;">
+        <p style="font-size: 12px; color: #737373; margin: 16px 0 0 0;">
           This invitation will expire in 7 days.
         </p>
       </div>

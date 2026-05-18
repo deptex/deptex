@@ -1,5 +1,7 @@
 # Feature Brief — Reachability Phase 4: EPD Wiring + Gap Closure
 
+> **Historical context (2026-05-09):** This archived plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. The references to BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, and `AI_ENCRYPTION_KEY` for AI key envelopes are historical only — current AI runs on platform keys.
+
 ## Feature Name & One-liner
 
 **Phase 4: EPD Contextual Scoring (Wired)** — Activate the existing `applyEpdScoringFallback()` in the pipeline, plug the entry-point gaps Phase 3 left open, surface the contextual factors in the vulnerability UI, and let org admins set their own AI cost cap.

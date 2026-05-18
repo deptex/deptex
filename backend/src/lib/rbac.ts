@@ -3,12 +3,13 @@ import { supabase } from '../lib/supabase';
 /**
  * checkOrgManageIntegrations — mirrors hasManageIntegrations() in
  * routes/organizations.ts, exposed here so registry-credentials and any
- * future BYOK-style routers share a single source. Reads
+ * other secret-storing routers share a single source. Reads
  * organization_members.role then organization_roles.permissions to confirm
  * `manage_integrations: true`.
  *
- * The blast radius for registry creds (decrypted AWS / GCP / Azure secrets in
- * worker memory) matches BYOK provider keys, so they share the same gate.
+ * The blast radius for registry creds (decrypted AWS / GCP / Azure secrets
+ * in worker memory) is high, so they reuse the same `manage_integrations`
+ * gate that the rest of org integrations use.
  */
 export async function checkOrgManageIntegrations(
   userId: string,

@@ -1,0 +1,97 @@
+# node-semver framework spec — Deptex cross-file taint engine.
+#
+# semver is sink-only (no sources). Request-style sources come from
+# express.yaml / fastify.yaml / nestjs.yaml — cross-spec stitching matches
+# `req.query.range` flowing into `new semver.Range(*)` or `semver.satisfies(*)`
+# here.
+#
+# Models CVE-2022-25883 — semver's range parser uses catastrophic-backtracking
+# regexes on attacker-controlled range strings, yielding super-linear /
+# exponential time. The AI-generated fixture for this CVE in
+# `bench-iterate/v_base/2026-05-12T17-41-24/report.json` is:
+#
+#   app.get('/check', (req, res) => {
+#     const range = req.query.range;
+#     const result = new semver.Range(range);
+#     res.json({ valid: result.toString() });
+#   });
+#
+# Sink shapes covered:
+#   - `new semver.Range(*)` / `new Range(*)` — direct range parser entry
+#   - `semver.satisfies(*)` / `semver.satisfies(version, range)` — accepts range
+#   - `semver.validRange(*)` — same parser, returns canonicalised range
+#   - `semver.minVersion(*)` / `.maxSatisfying(*)` / `.minSatisfying(*)` — range arg
+#   - `semver.coerce(*)` — string parser on the version side
+#   - Generic `semver(*)` aliasing the require-default behaviour
+#
+# vuln_class mapping rationale.
+#   `redos` is the canonical class for super-linear regex matching on
+#   attacker input. Same bucket moment.yaml uses for CVE-2022-31129 and
+#   express.yaml's `RegExp(*)` sink.
+
+framework: semver
+version: "*"
+language: js
+
+sources: []
+
+sinks:
+  # ---------- ReDoS via semver range / version parsers ----------
+  # CVE-2022-25883 — exponential time on crafted range strings.
+  - pattern: semver.satisfies(*)
+    vuln_class: redos
+    argument_indices: [0, 1]
+    description: semver.satisfies — range parser exponential on attacker input (CVE-2022-25883)
+  - pattern: semver.validRange(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.validRange — same backtracking range parser
+  - pattern: semver.minVersion(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.minVersion — range parser path
+  - pattern: semver.maxSatisfying(*)
+    vuln_class: redos
+    argument_indices: [1]
+    description: semver.maxSatisfying — range arg
+  - pattern: semver.minSatisfying(*)
+    vuln_class: redos
+    argument_indices: [1]
+    description: semver.minSatisfying — range arg
+  - pattern: semver.coerce(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.coerce — string parser side
+  - pattern: semver.parse(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.parse — version string parser
+  - pattern: semver.clean(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.clean — version string parser
+  - pattern: semver(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver default call — alias for parse/satisfies depending on shape
+  # Constructor shape — the Qwen fixture uses `new semver.Range(req.query.range)`.
+  # The engine's matcher checks the call expression's callee text; `new X(...)`
+  # nodes still expose `X` as the callee in the IR lowering layer.
+  - pattern: semver.Range(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.Range constructor — range parser on attacker input (CVE-2022-25883 canonical shape)
+  - pattern: Range(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: bare Range — destructured import shape
+  - pattern: semver.SemVer(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: semver.SemVer constructor — version parser
+  - pattern: SemVer(*)
+    vuln_class: redos
+    argument_indices: [0]
+    description: bare SemVer — destructured import shape
+
+sanitizers: []

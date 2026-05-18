@@ -1,0 +1,10 @@
+{
+  "language": "ruby",
+  "framework": "sinatra",
+  "expected_osv_id": "CVE-2024-25126",
+  "expected_vuln_class": "xss",
+  "expected_vuln_flows_min": 1,
+  "expected_safe_flows_max": 0,
+  "package": "erb",
+  "description": "Customer-shaped Sinatra app: a search method pulls params[:tpl] off the request, hands it through a renderer module that constructs ERB.new with the attacker-controlled source — XSS / server-side template eval. Safe side renders a fixed ERB template and only passes the user input as bound data through CGI.escapeHTML (a registered sanitizer)."
+}

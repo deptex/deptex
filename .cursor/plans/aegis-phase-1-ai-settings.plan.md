@@ -1,5 +1,7 @@
 # Aegis Phase 1 — AI Settings Page (Provider Default + Usage)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Overview
 
 Build a new top-level **"AI"** page in Org Settings (positioned just below Roles). The page replaces the orphaned `AIConfigurationSection` dead code with a far simpler model: orgs don't set up API keys — Deptex provides platform-paid OpenAI / Anthropic / Google. Each org just picks which one Aegis uses by default, and the same page surfaces token spend, cost, daily trend, per-feature breakdown, and per-Aegis-tool execution counts.

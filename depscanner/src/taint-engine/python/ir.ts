@@ -383,27 +383,52 @@ function walkExpressionAsAssign(
       const fn = expr.childForFieldName('function');
       const argList = expr.childForFieldName('arguments');
       const calleeText = textOf(fn, ctx.opts.fileContext.source);
+      // Method-chain pre-walk: when the callee receiver is itself a call
+      // (`get_user(id).is_admin()`, `Session().get(url)`), lower the inner
+      // call as its own Step first so its sink/source/sanitizer matching
+      // fires. Mirrors the JS lowerer at ir.ts:393-407 + Java method-chain.
+      if (fn && fn.type === 'attribute') {
+        const recv = fn.childForFieldName('object') ?? fn.namedChild(0);
+        if (recv && recv.type === 'call') {
+          const innerTmp = `<chain@${steps.length}>`;
+          walkExpressionAsAssign(recv, innerTmp, steps, ctx);
+        }
+      }
       const callee = resolveCallee(calleeText, ctx);
       const args: (LocalVar | null)[] = [];
       const argTexts: string[] = [];
+      const kwargIndices: number[] = [];
+      const kwargNames: (string | null)[] = [];
+      let anyKwargName = false;
       if (argList) {
         for (let i = 0; i < argList.namedChildCount; i++) {
           const a = argList.namedChild(i);
           if (!a) continue;
           if (a.type === 'comment') continue;
-          // keyword_argument: name=value — track value's taint via temp.
+          // keyword_argument: name=value — track value's taint via temp,
+          // and record the position so the sink matcher can over-approximate
+          // when a spec's positional argument_indices wouldn't line up with
+          // a kwarg-bearing call.
           let valueNode: Node = a;
-          if (a.type === 'keyword_argument') {
+          const isKwarg = a.type === 'keyword_argument';
+          let kwName: string | null = null;
+          if (isKwarg) {
+            const nameNode = a.childForFieldName('name');
+            if (nameNode) kwName = textOf(nameNode, ctx.opts.fileContext.source);
             const v = a.childForFieldName('value');
             if (v) valueNode = v;
           }
+          const argPos = args.length;
+          if (isKwarg) kwargIndices.push(argPos);
+          kwargNames.push(kwName);
+          if (kwName !== null) anyKwargName = true;
           argTexts.push(textOf(valueNode, ctx.opts.fileContext.source));
           const direct = extractVarFromArg(valueNode, ctx.opts.fileContext.source);
           if (direct) {
             args.push(direct);
             continue;
           }
-          const tmp = `<arg${args.length}@${steps.length}>`;
+          const tmp = `<arg${argPos}@${steps.length}>`;
           walkExpressionAsAssign(valueNode, tmp, steps, ctx);
           args.push(tmp);
         }
@@ -414,6 +439,8 @@ function walkExpressionAsAssign(
         callee,
         args,
         argTexts,
+        kwargIndices: kwargIndices.length > 0 ? kwargIndices : undefined,
+        kwargNames: anyKwargName ? kwargNames : undefined,
         loc: locOf(expr, ctx),
       });
       return;
@@ -517,8 +544,19 @@ function walkExpressionAsAssign(
         const pair = expr.namedChild(i);
         if (!pair) continue;
         if (pair.type === 'pair') {
+          // Walk BOTH key and value into target — keys can carry taint
+          // through f-string interpolation, e.g.
+          //   data = {f'p{request.args.get("x")}': 'baz'}
+          // which then flows into kwarg sinks like `template.render(data=data)`.
+          // Matches the jinja2-22195 / jinja2-34064 shape in the pypi corpus.
+          const key = pair.childForFieldName('key');
+          if (key) walkExpressionAsAssign(key, target, steps, ctx);
           const value = pair.childForFieldName('value');
           if (value) walkExpressionAsAssign(value, target, steps, ctx);
+        } else if (pair.type === 'dictionary_splat') {
+          // `{**other}` — propagate taint from the splatted dict.
+          const inner = pair.namedChild(0);
+          if (inner) walkExpressionAsAssign(inner, target, steps, ctx);
         }
       }
       return;

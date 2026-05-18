@@ -1,10 +1,12 @@
 /**
  * Tier-1 platform-AI cost-cap gate.
  *
- * Tier-2 BYOK has its own per-org cap in `cost-cap.ts`. Tier-1 (platform-paid)
- * features instead share a single global wallet — `getPlatformProvider()` calls
- * are billed to Deptex, so abuse on any one feature could drain the whole
- * monthly budget.
+ * The per-org Aegis cost cap lives in `cost-cap.ts`; this module is the
+ * platform-wide wallet for the cheap Tier-1 features that share a single
+ * Deptex-paid Gemini quota. After the BYOK retirement (phase29_drop_byok)
+ * ALL AI calls bill against Deptex, but the per-org cap in `cost-cap.ts`
+ * still meters Aegis spend per organization while this module gates the
+ * lower-volume platform-only surfaces (e.g. `malicious_explainer`).
  *
  * The gate is a Redis token bucket on two keys:
  *   - `ai:platform:cost:YYYY-MM`                    — global monthly USD ceiling (cents)

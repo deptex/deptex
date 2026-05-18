@@ -1,5 +1,7 @@
 # Research: DAST (Dynamic Application Security Testing)
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Current State in Deptex
 
 **Zero DAST today.** Deptex's pipeline is entirely static: dependency parsing, SBOM, vulnerability lookup, Semgrep SAST, TruffleHog secrets, tree-sitter usage extraction, EPD reachability. None of it runs the application or sends a single HTTP request to it. Surface mentions: `ROADMAP.md` lists "DAST scanning — Nuclei-based dynamic testing, API scanning. The most-requested ASPM feature beyond SCA" under Scanner Expansion. An archived Phase 21 sketch exists in `.cursor/plans/archive/phase_20-37.plan.md` (Nuclei + authenticated DAST + API/OpenAPI fuzzing + scheduled scans + surface monitoring), but it predates the reachability/Aegis work and is not aligned to the current architecture. An older auto-memory note marked CSPM/DAST "out-of-scope" — superseded by ROADMAP.md.

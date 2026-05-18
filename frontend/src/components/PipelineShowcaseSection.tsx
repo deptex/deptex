@@ -84,7 +84,7 @@ const STEPS: Array<{
     learnMore: "/autonomous-agent",
     bullets: [
       { icon: Zap, text: "Aegis: 50+ tools, memory, tasks, and automations", description: "Chat, automate, and fix. Your autonomous security engineer." },
-      { icon: Wand2, text: "AI-powered fixes with 7 strategies across all ecosystems", description: "Version bumps, patches, and removals. Aider-powered with BYOK." },
+      { icon: Wand2, text: "AI-powered fixes with 7 strategies across all ecosystems", description: "Version bumps, patches, and removals. Aider-powered." },
       { icon: TrendingUp, text: "Outcome-based learning — gets smarter over time", description: "Tracks fix outcomes and recommends the best strategy per org." },
     ],
   },

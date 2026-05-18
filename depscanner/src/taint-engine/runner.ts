@@ -24,6 +24,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { propagate, type PropagateResult } from './propagator';
 import { propagatePython } from './python/propagate';
 import { propagateJava } from './java/propagate';
@@ -35,6 +36,9 @@ import { propagateCSharp } from './csharp/propagate';
 import { loadSpec } from './spec-loader';
 import type { FrameworkSpec, FrameworkLanguage } from './spec';
 import type { Flow } from './flow';
+import { detectSanitizerAbsence, extractCallSitesFromIr } from './non-taint-detector';
+import { detectInsecureDefaults } from './insecure-default-detector';
+import { sanitizerAbsenceToFlow, insecureDefaultToFlow } from './detector-flows';
 import {
   filterFlow,
   estimatePerFlowCostUsd,
@@ -49,6 +53,7 @@ import {
   DEFAULT_MONTHLY_AI_COST_CAP_USD,
 } from './cost-cap';
 import type { Storage } from '../storage';
+import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from '../ai-telemetry';
 
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
@@ -143,6 +148,14 @@ export interface FpFilterContext {
   apiKey?: string;
   /** Optional model override (defaults to Qwen/Qwen3-235B-A22B-Instruct-2507). */
   model?: string;
+  /**
+   * Phase 33: owning scan_jobs row id. When set, each fp-filter call
+   * rolls token + cost telemetry into scan_jobs.ai_total_* + ai_per_model
+   * and honours scan_jobs.ai_cost_cap_usd as a per-scan ceiling. Undefined
+   * in CLI mode (no scan_jobs row) — fp-filter runs without per-scan
+   * accounting in that case.
+   */
+  jobId?: string;
 }
 
 export interface AiFilterStats {
@@ -184,6 +197,17 @@ export interface RunEngineResult {
   flowsAfterFilter: Flow[] | null;
   /** AI filter telemetry; null when ran=false or filter not configured. */
   aiFilter: AiFilterStats | null;
+  /**
+   * Non-taint detector findings coerced to `Flow` shape:
+   *   - Phase F4 sanitizer-absence (`required_arguments` on sinks).
+   *   - Phase 3.3 insecure-default (`insecure_defaults` on the spec).
+   *
+   * Engine_confidence is 0.95 so these bypass the FP filter — they are
+   * deterministic AST matches and don't need an LLM re-check. The
+   * pipeline caller merges these into the write set alongside
+   * `flowsAfterFilter`.
+   */
+  detectorFlows: Flow[];
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -227,6 +251,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       propagation: null,
       flowsAfterFilter: null,
       aiFilter: null,
+      detectorFlows: [],
     };
   }
 
@@ -308,20 +333,34 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       break;
   }
 
+  // Phase F4 + 3.3 — non-taint detector regimes. Walk IR callsites once and
+  // dispatch every loaded spec at the same set. Each finding is coerced to
+  // a single-hop Flow whose engine_confidence sits just below the FP-filter
+  // threshold so it is LLM-checked alongside taint flows (an over-broad
+  // detector sink can still false-positive).
+  const detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, onWarn);
+
   // Default: filter inactive, all flows pass through.
   let flowsAfterFilter: Flow[] = propagation.flows;
+  let detectorFlows: Flow[] = detectorFlowsRaw;
   let aiFilter: AiFilterStats | null = null;
 
   if (options.fpFilter) {
+    // Run taint flows + detector flows through the SAME filter pass so
+    // detector findings get the same LLM re-check. We tag detector flow ids
+    // up front so the survivors can be split back into the two buckets the
+    // pipeline writes separately.
+    const detectorIds = new Set(detectorFlowsRaw.map((f) => f.id));
     const result = await runFpFilterStage(
-      propagation.flows,
+      [...propagation.flows, ...detectorFlowsRaw],
       options.fpFilter,
       workspaceRoot,
       specs,
       onWarn,
     );
     aiFilter = result.stats;
-    flowsAfterFilter = result.flowsAfterFilter;
+    flowsAfterFilter = result.flowsAfterFilter.filter((f) => !detectorIds.has(f.id));
+    detectorFlows = result.flowsAfterFilter.filter((f) => detectorIds.has(f.id));
   }
 
   return {
@@ -331,7 +370,55 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     propagation,
     flowsAfterFilter,
     aiFilter,
+    detectorFlows,
   };
+}
+
+function runDetectors(
+  specs: FrameworkSpec[],
+  propagation: PropagateResult,
+  language: FrameworkLanguage,
+  onWarn?: (msg: string) => void,
+): Flow[] {
+  const irFunctions = propagation.irFunctions;
+  if (!irFunctions || irFunctions.length === 0) return [];
+
+  let callsites;
+  try {
+    callsites = extractCallSitesFromIr(irFunctions, language);
+  } catch (err) {
+    onWarn?.(`detector regime: extractCallSitesFromIr failed: ${(err as Error).message}`);
+    return [];
+  }
+  if (callsites.length === 0) return [];
+
+  const out: Flow[] = [];
+  for (const spec of specs) {
+    // Use the first osv_id we find across the spec's sinks as the CVE
+    // attribution for non-taint findings from THIS spec. CVE-targeted specs
+    // (cve-specs from organization_generated_rules) ship one CVE per spec,
+    // so this is a stable choice. Bundled framework specs leave it undefined.
+    const specOsvId = spec.sinks.find((s) => s.osv_id !== undefined)?.osv_id;
+
+    try {
+      const sanitizerFindings = detectSanitizerAbsence(spec, callsites, language);
+      for (const f of sanitizerFindings) {
+        out.push(sanitizerAbsenceToFlow(f, spec.framework, specOsvId));
+      }
+    } catch (err) {
+      onWarn?.(`detector regime: detectSanitizerAbsence(${spec.framework}) failed: ${(err as Error).message}`);
+    }
+
+    try {
+      const insecureDefaultFindings = detectInsecureDefaults({ specs: [spec], callsites });
+      for (const f of insecureDefaultFindings) {
+        out.push(insecureDefaultToFlow(f, specOsvId));
+      }
+    } catch (err) {
+      onWarn?.(`detector regime: detectInsecureDefaults(${spec.framework}) failed: ${(err as Error).message}`);
+    }
+  }
+  return out;
 }
 
 interface FpFilterStageOutput {
@@ -439,8 +526,9 @@ async function runFpFilterStage(
   const surviving: Flow[] = [...above];
   let capExhausted = false;
   let capInfraFailed = false;
+  let scanCapExhausted = false;
   for (const f of below) {
-    if (capExhausted || capInfraFailed) {
+    if (capExhausted || capInfraFailed || scanCapExhausted) {
       // Once we hit the cap (or Redis is down), the remaining flows pass
       // through unfiltered — same semantics as kept_on_error so they get
       // graded by the deterministic engine alone, not silently dropped.
@@ -449,6 +537,35 @@ async function runFpFilterStage(
     }
 
     const perFlowEstimate = estimatePerFlowCostUsd(f);
+
+    // Phase 33: per-scan cap check (scan_jobs.ai_cost_cap_usd). Sits BEFORE
+    // the org-month Redis bucket so the operator's per-extraction ceiling
+    // can clamp tighter than the monthly cap. The DB read is async but
+    // cheap (~5ms); we only do it when fp.jobId is set, so CLI mode is
+    // untouched.
+    if (fp.jobId) {
+      const capCheck = await checkScanJobCostCap(fp.storage, fp.jobId, perFlowEstimate);
+      if (capCheck.wouldExceed && capCheck.cap !== null) {
+        scanCapExhausted = true;
+        baseStats.skippedReason ??= 'scan_cost_cap_exceeded';
+        onWarn?.(
+          `fp-filter per-scan cap exhausted at flow ${f.id}: $${capCheck.currentTotal.toFixed(4)} ` +
+            `+ projected $${perFlowEstimate.toFixed(4)} > cap $${capCheck.cap.toFixed(4)}`,
+        );
+        await logScanJobCostCapExceeded(fp.storage, {
+          jobId: fp.jobId,
+          projectId: fp.projectId,
+          step: 'taint_engine_fp_filter',
+          cap: capCheck.cap,
+          currentTotal: capCheck.currentTotal,
+          projectedCost: perFlowEstimate,
+          provider: 'openai',
+          model: fp.model ?? 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        });
+        surviving.push(f);
+        continue;
+      }
+    }
 
     // Atomic reservation against the per-org Redis bucket. The cap is
     // re-read inside assertWithinCostCap, so settings changes propagate.
@@ -476,16 +593,43 @@ async function runFpFilterStage(
       throw err;
     }
 
-    const result = await filterFlow(
-      { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
-      logger,
-      {
+    // The reservation above is held against the per-org Redis bucket. If
+    // filterFlow throws, the refund path below never runs and the full
+    // perFlowEstimate leaks permanently — refund it on the throw path.
+    let result;
+    try {
+      result = await filterFlow(
+        { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
+        logger,
+        {
+          organizationId: fp.organizationId,
+          userId: fp.userId,
+          projectId: fp.projectId,
+          extractionRunId: fp.extractionRunId,
+        },
+      );
+    } catch (err) {
+      await refundReservation(fp.organizationId, perFlowEstimate);
+      throw err;
+    }
+
+    // Phase 33: roll per-call telemetry into scan_jobs. No-op when fp.jobId
+    // is undefined (CLI mode). filterFlow returns costUsd on every verdict
+    // including ai_truncated / kept_on_error; we count the spend regardless.
+    // FilterErrorVerdict has cost but no tokens — record cost only in that
+    // case so the running total tracks reality.
+    if (fp.jobId && result.costUsd > 0) {
+      const hasTokens = result.verdict !== 'ai_truncated' && result.verdict !== 'kept_on_error';
+      await recordScanJobAiUsage(fp.storage, {
+        jobId: fp.jobId,
         organizationId: fp.organizationId,
-        userId: fp.userId,
-        projectId: fp.projectId,
-        extractionRunId: fp.extractionRunId,
-      },
-    );
+        provider: 'openai',
+        model: fp.model ?? 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        promptTokens: hasTokens ? (result as { inputTokens: number }).inputTokens : 0,
+        completionTokens: hasTokens ? (result as { outputTokens: number }).outputTokens : 0,
+        costUsd: result.costUsd,
+      });
+    }
     baseStats.verdicts.set(f.id, result);
 
     // Refund the difference between projected and actual so the bucket
@@ -529,16 +673,30 @@ function clampThreshold(raw: number | string | null | undefined): number {
 }
 
 /**
+ * Map an arbitrary key to a stable bucket in [0, 100). The same key always
+ * lands in the same bucket, so a given org's run/skip decision never flaps
+ * between scans (which would swing its depscore).
+ */
+function stableBucket(key: string): number {
+  const hex = createHash('sha1').update(key).digest('hex').slice(0, 8);
+  return (parseInt(hex, 16) % 10000) / 100;
+}
+
+/**
  * Staged rollout gate. Reads DEPTEX_TAINT_ENGINE_ROLLOUT_PCT (0-100); if
  * the env var is unset we default to 0 in production (engine off) and 100
  * elsewhere so the local CLI / tests always run the engine.
  *
- * The decision is randomized per-call so a single org's extractions get
- * roughly the configured percentage of engine runs over time. We bucket
- * on Math.random() rather than a deterministic hash because we want
- * variability across reruns of the same project during the canary period.
+ * The decision is bucketed on a STABLE hash of `bucketKey` (the org id) so a
+ * single org always lands on the same side of the rollout cut — re-scanning
+ * the same project never flips run↔skip, which would otherwise swing its
+ * depscore between scans. When no bucketKey is supplied (CLI / tests) we
+ * fall back to Math.random().
  */
-export function shouldRunForRollout(env: NodeJS.ProcessEnv = process.env): boolean {
+export function shouldRunForRollout(
+  env: NodeJS.ProcessEnv = process.env,
+  bucketKey?: string,
+): boolean {
   const raw = env.DEPTEX_TAINT_ENGINE_ROLLOUT_PCT;
   if (raw === undefined) {
     // Off by default in production; on otherwise.
@@ -548,7 +706,8 @@ export function shouldRunForRollout(env: NodeJS.ProcessEnv = process.env): boole
   if (Number.isNaN(pct)) return false;
   if (pct === 100) return true;
   if (pct === 0) return false;
-  return Math.random() * 100 < pct;
+  const roll = bucketKey ? stableBucket(`rollout:${bucketKey}`) : Math.random() * 100;
+  return roll < pct;
 }
 
 /**
@@ -571,16 +730,17 @@ export async function shouldRunForOrg(
       .select('rollout_pct_override')
       .eq('organization_id', organizationId)
       .maybeSingle();
-    if (error) return shouldRunForRollout(env);
+    if (error) return shouldRunForRollout(env, organizationId);
     const row = data as { rollout_pct_override?: number | null } | null;
     const override = row?.rollout_pct_override ?? null;
-    if (override === null || override === undefined) return shouldRunForRollout(env);
+    if (override === null || override === undefined) return shouldRunForRollout(env, organizationId);
     const pct = Math.max(0, Math.min(100, Number(override)));
-    if (!Number.isFinite(pct)) return shouldRunForRollout(env);
+    if (!Number.isFinite(pct)) return shouldRunForRollout(env, organizationId);
     if (pct === 100) return true;
     if (pct === 0) return false;
-    return Math.random() * 100 < pct;
+    // Stable per-org bucket so re-scans never flip run↔skip.
+    return stableBucket(`rollout:${organizationId}`) < pct;
   } catch {
-    return shouldRunForRollout(env);
+    return shouldRunForRollout(env, organizationId);
   }
 }

@@ -1,0 +1,80 @@
+# net/http (Go stdlib) — sources for plain http.HandlerFunc-style handlers,
+# where the request is passed as a *http.Request param (conventionally `r`).
+#
+# Distinct from gin / echo specs (which model their context-receiver `c`):
+# this spec uses wildcard-receiver patterns so it matches ANY local-variable
+# request name. The bench-iterate corpus shows the AI typically writes
+# `func handler(w http.ResponseWriter, r *http.Request)` and then reads
+# `r.FormValue("k")` / `r.URL.Query().Get("k")` / etc. — those flow zero
+# sources today because gin.yaml/echo.yaml require receiver `c`.
+#
+# Sinks live in go-stdlib.yaml; this file is sources-only.
+
+framework: net-http
+language: go
+version: "*"
+
+sources:
+  # Form helpers — wildcard receiver matches r.FormValue, req.FormValue, etc.
+  - pattern: "*.FormValue(*)"
+    taint_kind: http_input
+    description: net/http Request FormValue
+  - pattern: "*.PostFormValue(*)"
+    taint_kind: http_input
+    description: net/http Request PostFormValue
+  - pattern: "*.FormFile(*)"
+    taint_kind: http_input
+    description: net/http Request FormFile
+
+  # Header / Cookie
+  - pattern: "*.Header.Get(*)"
+    taint_kind: http_input
+    description: net/http Request Header.Get
+  - pattern: "*.Cookie(*)"
+    taint_kind: http_input
+    description: net/http Request Cookie — returns *http.Cookie
+
+  # URL.Query().Get(*) — three-segment chain. The Go lowerer emits the literal
+  # selector_expression text for calleeText, so the wildcard suffix matches
+  # `r.URL.Query().Get` via endsWith.
+  - pattern: "*.URL.Query().Get(*)"
+    taint_kind: http_input
+    description: net/http Request URL query Get
+  - pattern: "*.URL.Query()"
+    taint_kind: http_input
+    description: net/http Request URL query map
+  - pattern: "*.URL.Path"
+    taint_kind: http_input
+    description: net/http Request URL.Path (raw path string)
+  - pattern: "*.URL.RawQuery"
+    taint_kind: http_input
+    description: net/http Request URL.RawQuery
+  - pattern: "*.RequestURI"
+    taint_kind: http_input
+    description: net/http Request RequestURI
+
+  # JSON body decoders — Decode(&v) marks v tainted via the synth temp.
+  - pattern: "*.Body"
+    taint_kind: http_input
+    description: net/http Request.Body — raw body reader
+  - pattern: json.NewDecoder(*)
+    taint_kind: http_input
+    description: encoding/json NewDecoder over the request body
+  - pattern: io.ReadAll(*)
+    taint_kind: http_input
+    description: io.ReadAll over a request body reader
+  - pattern: ioutil.ReadAll(*)
+    taint_kind: http_input
+    description: ioutil.ReadAll over a request body reader (deprecated alias)
+
+  # ParseForm populates r.Form / r.PostForm; subsequent r.Form.Get is tainted.
+  - pattern: "*.Form.Get(*)"
+    taint_kind: http_input
+    description: net/http Request Form.Get (after ParseForm)
+  - pattern: "*.PostForm.Get(*)"
+    taint_kind: http_input
+    description: net/http Request PostForm.Get (after ParseForm)
+
+sinks: []
+
+sanitizers: []

@@ -1,0 +1,10 @@
+{
+  "language": "python",
+  "framework": "flask",
+  "expected_osv_id": "CVE-2024-22195",
+  "expected_vuln_class": "xss",
+  "expected_vuln_flows_min": 1,
+  "expected_safe_flows_max": 0,
+  "package": "jinja2",
+  "description": "Customer-shaped Flask app: a /render endpoint pulls a template string from request.args, hands it through a renderer module, and constructs a jinja2.Template(*) from it — XSS / SSTI sink (registered as xss in flask.yaml; CVE-2024-22195 xmlattr family). Safe side uses a pre-built Template literal and passes the user input only as render context after html.escape."
+}

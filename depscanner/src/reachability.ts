@@ -400,6 +400,14 @@ export interface UpdateReachabilityOptions {
   validOsvIds?: Set<string>;
   /** Organization id for audit-log writes when an `osv_id_drift_rejected` event fires. */
   organizationId?: string;
+  /**
+   * Whether the tree-sitter usage-extraction step produced output for this
+   * run (ctx.astParsedSuccessfully). When false the absence of usage slices
+   * is NOT evidence of unreachability — extraction crashed/timed-out — so the
+   * classifier must never collapse a PDV to `unreachable`; it floors at
+   * `module` instead. Defaults to true so legacy callers keep prior behavior.
+   */
+  astParsedSuccessfully?: boolean;
 }
 
 export async function updateReachabilityLevels(
@@ -612,6 +620,22 @@ export async function updateReachabilityLevels(
     throw new Error(`updateReachabilityLevels: failed to fetch usages: ${usagesErr.message}`);
   }
 
+  // Fail-open guard for the `unreachable` verdict. `unreachable` (depscore
+  // weight 0.0) is only safe to emit when usage analysis actually ran and
+  // produced output for this run. If the tree-sitter usage-extraction step
+  // crashed/timed-out (astParsedSuccessfully=false), or it produced zero
+  // slices at all, the absence of a match is not evidence of unreachability —
+  // floor every otherwise-unreachable PDV at `module` instead.
+  const astParsedSuccessfully = options.astParsedSuccessfully ?? true;
+  const usageAnalysisProducedOutput = astParsedSuccessfully && (usages?.length ?? 0) > 0;
+  if (!usageAnalysisProducedOutput) {
+    await logger.warn(
+      'reachability',
+      'Usage analysis produced no output (extraction crashed/timed-out or zero slices) — ' +
+        'flooring unreachable verdicts at module to avoid hiding real vulnerabilities',
+    );
+  }
+
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
   for (const u of usages ?? []) {
@@ -739,8 +763,13 @@ export async function updateReachabilityLevels(
         // nothing in the source imports, classify as `unreachable` (depscore
         // weight 0.0). Direct deps and deps with at least one import stay
         // `module` — we know they're touched, we just don't know the function.
+        //
+        // Fail-safe: if usage extraction did not produce output (crashed /
+        // timed-out — astParsedSuccessfully=false), the absence of slices is
+        // NOT evidence of unreachability. Never emit `unreachable` in that
+        // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
-        if (meta && !meta.isDirect && meta.filesImporting === 0) {
+        if (usageAnalysisProducedOutput && meta && !meta.isDirect && meta.filesImporting === 0) {
           level = 'unreachable';
         } else {
           level = 'module';

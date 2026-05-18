@@ -1,0 +1,19 @@
+# v_base (base-framework-spec-v1) — openai/Qwen/Qwen3-235B-A22B-Instruct-2507
+baseUrl: https://api.deepinfra.com/v1/openai
+run: 2026-05-11T03:52:23.596Z → 2026-05-11T03:54:26.484Z  (122.9s)
+
+Final validation rate: 0/1 = 0.0%
+Total cost: $0.0065
+
+Funnel:
+  schema_pass:      1/1
+  fixture_pre:      0/1
+  fixture_safe:     1/1
+  patch_post_clean: 1/1
+  validated:        0/1
+
+Status breakdown:
+  failed_validation: 1
+
+Per-CVE:
+  ✗ CVE-2025-62718     failed_validation    $0.0065 fixture_round_trip_failed: pre=0 post=0 (require pre>0 and post=0)

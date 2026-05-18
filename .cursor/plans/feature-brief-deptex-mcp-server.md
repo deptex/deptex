@@ -1,5 +1,7 @@
 # Feature Brief: Deptex MCP Server
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## 1. Feature Name & One-liner
 
 **Deptex MCP Server** (`mcp.deptex.io`) — a remote, standards-compliant Model Context Protocol server that exposes Aegis's tool surface (findings, reachability, depscore, policies, and approval-gated write actions) to any MCP client (Claude Code, Cursor, Windsurf, Codex, VS Code, OpenAI ChatGPT Desktop, etc.), so a developer in an existing Deptex org can drop Aegis into their IDE with one OAuth flow and operate on their org's real security state using their IDE's own LLM.

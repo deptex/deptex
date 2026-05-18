@@ -62,6 +62,8 @@ const EXPRESS_LIKE_SPEC: FrameworkSpec = {
   sinks: [
     { pattern: 'child_process.exec(*)', vuln_class: 'command_injection', argument_indices: [0], description: 'shell exec' },
     { pattern: 'db.query(*)', vuln_class: 'sql_injection', argument_indices: [0], description: 'sql query' },
+    { pattern: 'res.location(*)', vuln_class: 'open_redirect', argument_indices: [0], description: 'Express res.location' },
+    { pattern: '_.template(*)', vuln_class: 'code_injection', argument_indices: [0], description: 'lodash template' },
   ],
   sanitizers: [
     { pattern: 'validator.escape(*)', vuln_classes: ['xss', 'command_injection'], description: 'escape' },
@@ -256,6 +258,159 @@ async function testSpecLoader() {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+async function testMethodChainSink() {
+  console.log('\n[test] (f) method-chained inner-call sink fires');
+  // `res.location(q).end()` — the inner call is the sink-bearing position
+  // and was previously invisible because the engine only traced sinks at
+  // the terminal call. IR lowerer now pre-walks the inner call.
+  const root = makeWorkspace('method-chain', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const res: any;
+      function handler(req: any) {
+        const q = req.query.next;
+        res.location(q).end();
+      }
+      handler({ query: { next: 'x' } });
+    `,
+  });
+  const result = await propagate({ rootDir: root, specs: [EXPRESS_LIKE_SPEC] });
+  assert(result.flows.length >= 1, `method-chain sink flow emitted (got ${result.flows.length})`);
+  const f = result.flows.find((x) => x.vuln_class === 'open_redirect');
+  assert(f != null, 'flow vuln_class = open_redirect');
+  assert(f?.sink_pattern === 'res.location(*)', 'sink pattern = res.location(*)');
+
+  // Safe variant: constant key, no taint reaches inner call.
+  const safeRoot = makeWorkspace('method-chain-safe', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const res: any;
+      function handler(_req: any) {
+        res.location('/login').end();
+      }
+      handler({});
+    `,
+  });
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  assert(safeResult.flows.length === 0, `safe method-chain emits no flow (got ${safeResult.flows.length})`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(safeRoot, { recursive: true, force: true });
+}
+
+async function testComputedKeySource() {
+  console.log('\n[test] (g) computed-key assignment taints the object');
+  // `obj[req.query.x] = ...` should taint `obj` from the key expression,
+  // so a downstream `_.template(obj)` sink fires. AI-fixture shape for
+  // CVE-2026-4800 (lodash template injection).
+  const root = makeWorkspace('computed-key', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const _: any;
+      function handler(req: any) {
+        const obj: any = {};
+        obj[req.query.x] = 'y';
+        _.template(obj);
+      }
+      handler({ query: { x: 'k' } });
+    `,
+  });
+  const result = await propagate({ rootDir: root, specs: [EXPRESS_LIKE_SPEC] });
+  assert(result.flows.length >= 1, `computed-key flow emitted (got ${result.flows.length})`);
+  const f = result.flows.find((x) => x.vuln_class === 'code_injection');
+  assert(f != null, 'flow vuln_class = code_injection');
+  assert(f?.sink_pattern === '_.template(*)', 'sink pattern = _.template(*)');
+
+  // Safe variant: hard-coded key, obj never tainted.
+  const safeRoot = makeWorkspace('computed-key-safe', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      declare const _: any;
+      function handler(_req: any) {
+        const obj: any = {};
+        obj['hardcoded'] = 'y';
+        _.template(obj);
+      }
+      handler({});
+    `,
+  });
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  assert(safeResult.flows.length === 0, `safe computed-key emits no flow (got ${safeResult.flows.length})`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(safeRoot, { recursive: true, force: true });
+}
+
+async function testReceiverTaintPassThrough() {
+  console.log('\n[test] (h) receiver-taint propagation through 0-arg pass-through calls');
+  // Exercises propagate-core.ts receiver-taint pass-through rule:
+  // `req.body.cmd.toString().trim()` — both `.toString()` and `.trim()`
+  // have zero positional args. Before the rule the temps lost taint; with
+  // it the receiver's taint flows through each hop to fire the sink.
+  // Fixture lives on disk at js-vulns/receiver-taint-{vuln,safe}/ so it's
+  // independently runnable and visible to future validate-script extensions.
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'js-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'receiver-taint-vuln');
+  const safeRoot = path.join(fixturesRoot, 'receiver-taint-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [EXPRESS_LIKE_SPEC] });
+  const matching = vulnResult.flows.filter((f) => f.vuln_class === 'command_injection');
+  assert(matching.length >= 1, `vuln fixture emits at least one command_injection flow (got ${matching.length}; total flows=${vulnResult.flows.length})`);
+  const f = matching[0];
+  assert(f?.entry_point_pattern === 'req.body.*', 'vuln flow source pattern = req.body.*');
+  assert(f?.sink_pattern.startsWith('child_process.exec'), 'vuln flow sink pattern = child_process.exec');
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [EXPRESS_LIKE_SPEC] });
+  const safeMatching = safeResult.flows.filter((f) => f.vuln_class === 'command_injection');
+  assert(safeMatching.length === 0, `safe fixture emits zero command_injection flows (got ${safeMatching.length})`);
+}
+
+async function testJsonwebtokenSanitizerAbsence() {
+  console.log('\n[test] (i) Phase F4 sanitizer-absence — jsonwebtoken jwt.verify without algorithms (CVE-2022-23539 shape)');
+  // Loads jsonwebtoken.yaml (which carries the required_arguments contract)
+  // and runs propagate() on the disk fixture. Asserts via the non-taint
+  // detector on irFunctions, not via flows — `jwt.verify` is a non-taint
+  // sink (argument_indices: []).
+  const { detectSanitizerAbsence: detect, extractCallSitesFromIr: extract } = await import('../src/taint-engine/non-taint-detector');
+  const { loadSpec } = await import('../src/taint-engine');
+  const specPath = path.join(__dirname, '..', 'src', 'taint-engine', 'framework-models', 'jsonwebtoken.yaml');
+  const spec = loadSpec(specPath);
+
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'jsonwebtoken-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'auth-bypass-vuln');
+  const safeRoot = path.join(fixturesRoot, 'auth-bypass-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [spec] });
+  const vulnCallsites = vulnResult.irFunctions ? extract(vulnResult.irFunctions, 'js') : [];
+  const vulnFindings = detect(spec, vulnCallsites).filter((f) => f.vuln_class === 'auth_bypass');
+  assert(vulnFindings.length >= 1, `vuln fixture surfaces ≥1 auth_bypass sanitizer-absence finding (got ${vulnFindings.length})`);
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [spec] });
+  const safeCallsites = safeResult.irFunctions ? extract(safeResult.irFunctions, 'js') : [];
+  const safeFindings = detect(spec, safeCallsites).filter((f) => f.vuln_class === 'auth_bypass');
+  assert(safeFindings.length === 0, `safe fixture surfaces 0 auth_bypass sanitizer-absence findings (got ${safeFindings.length})`);
+}
+
+async function testFollowRedirectsSanitizerAbsence() {
+  console.log('\n[test] (j) Phase F4 sanitizer-absence — follow-redirects http.request without beforeRedirect (CVE-2024-28849 shape)');
+  const { detectSanitizerAbsence: detect, extractCallSitesFromIr: extract } = await import('../src/taint-engine/non-taint-detector');
+  const { loadSpec } = await import('../src/taint-engine');
+  const specPath = path.join(__dirname, '..', 'src', 'taint-engine', 'framework-models', 'follow-redirects.yaml');
+  const spec = loadSpec(specPath);
+
+  const fixturesRoot = path.join(__dirname, 'taint-engine', 'fixtures', 'follow-redirects-vulns');
+  const vulnRoot = path.join(fixturesRoot, 'ssrf-vuln');
+  const safeRoot = path.join(fixturesRoot, 'ssrf-safe');
+
+  const vulnResult = await propagate({ rootDir: vulnRoot, specs: [spec] });
+  const vulnCallsites = vulnResult.irFunctions ? extract(vulnResult.irFunctions, 'js') : [];
+  const vulnFindings = detect(spec, vulnCallsites).filter((f) => f.vuln_class === 'ssrf');
+  assert(vulnFindings.length >= 1, `vuln fixture surfaces ≥1 ssrf sanitizer-absence finding (got ${vulnFindings.length})`);
+
+  const safeResult = await propagate({ rootDir: safeRoot, specs: [spec] });
+  const safeCallsites = safeResult.irFunctions ? extract(safeResult.irFunctions, 'js') : [];
+  const safeFindings = detect(spec, safeCallsites).filter((f) => f.vuln_class === 'ssrf');
+  assert(safeFindings.length === 0, `safe fixture surfaces 0 ssrf sanitizer-absence findings (got ${safeFindings.length})`);
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -263,6 +418,11 @@ async function main() {
   await testSanitizerSuppresses();
   await testAwaitPromise();
   await testDeepChain();
+  await testMethodChainSink();
+  await testComputedKeySource();
+  await testReceiverTaintPassThrough();
+  await testJsonwebtokenSanitizerAbsence();
+  await testFollowRedirectsSanitizerAbsence();
   await testSpecLoader();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);

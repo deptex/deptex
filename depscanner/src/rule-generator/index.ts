@@ -97,6 +97,7 @@ export interface GenerationResult {
 /** Breakdown for results that bailed before the AI call ever ran. */
 const PRE_ATTEMPT_BREAKDOWN: ValidationBreakdown = {
   schema_pass: false,
+  pattern_compile_pass: null,
   fixture_pre_match: false,
   fixture_safe_clean: false,
   patch_pre_match: null,
@@ -254,14 +255,14 @@ export function buildAttemptFailureFeedback(args: {
     lines.push('- argument_indices points at an argument that the fixture does not reach (e.g. [1] when the fixture passes data at position 0)');
     lines.push('- the vulnerable_fixture does not actually exercise the sink, OR the framework spec has no source matching the fixture');
     lines.push('Fix: ensure (a) the vulnerable_fixture uses an HTTP-source-style entry point (req.body, request.args.get, etc. — these are the framework spec sources), AND (b) the sink pattern matches the callee text exactly.');
-    appendPatchSymbolsHint(lines, args.patchDiff);
+    appendPatchSymbolsHint(lines, args.patchDiff, nonce);
   } else if (log.fixture_pre_matches > 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your FrameworkSpec is too BROAD — both fixtures produce flows.');
     lines.push('Fix: write the safe_fixture so the sink receives a STATIC LITERAL (hard-coded constant) instead of tainted data — that breaks the source→sink flow without needing a sanitizer. If the CVE genuinely requires a sanitizer (the patch added a real validation function), declare it under `sanitizers` and call it in the safe_fixture.');
   } else if (log.fixture_pre_matches === 0 && log.fixture_post_matches > 0) {
     lines.push('Diagnosis: your spec emitted a flow on the SAFE fixture but NOT the vulnerable one. The fixtures are inverted.');
     lines.push('Fix: re-read the vulnerability description. The vulnerable_fixture must contain the unsafe form (tainted data → sink); the safe_fixture must contain the literal/sanitized form.');
-    appendPatchSymbolsHint(lines, args.patchDiff);
+    appendPatchSymbolsHint(lines, args.patchDiff, nonce);
   } else if (log.patch_post_matches !== null && log.patch_post_matches > 0) {
     lines.push('Diagnosis: spec fires on the post-fix patched code. Whatever upstream added in the patch must NOT match your spec.');
     lines.push('Fix: tighten the sink pattern so the patched code does not match — usually the patch swaps to a different (safer) callee, e.g. `yaml.load` → `yaml.safe_load`. Make sure your sink pattern names ONLY the unsafe callee.');
@@ -269,16 +270,43 @@ export function buildAttemptFailureFeedback(args: {
     lines.push(`Diagnosis: validation failed — errors=${(log.errors ?? []).join(' | ').slice(0, 240)}`);
   }
 
+  appendObservedCallsitesHint(lines, log);
+
   return lines.join('\n');
 }
 
-function appendPatchSymbolsHint(lines: string[], patchDiff: string | undefined): void {
+/**
+ * Append the engine-observed callsite list to feedback when Gate 2 failed.
+ * The model gets concrete callee texts from the vulnerable_fixture it
+ * authored — usually that's enough to flip its sink pattern from a guess
+ * (`Class.method`) to the actual emitted text (`instance.method`).
+ */
+function appendObservedCallsitesHint(lines: string[], log: ValidationLog): void {
+  const sites = log.engine_observed_callsites;
+  if (!sites || sites.length === 0) return;
+  lines.push('');
+  lines.push('-- Call sites the engine observed in your vulnerable_fixture --');
+  lines.push('Each line shows the verbatim callee text + args the engine matched against. Your sink pattern must match one of these exactly (or use a wildcard `*.method` for the same method name when receivers are bare instance vars). Lines whose method name overlaps with your declared sinks are listed first.');
+  for (const cs of sites) {
+    lines.push(`  ${cs.calleeText}(${cs.args})  @ ${cs.loc}`);
+  }
+}
+
+function appendPatchSymbolsHint(
+  lines: string[],
+  patchDiff: string | undefined,
+  nonce: string,
+): void {
   if (!patchDiff) return;
   const symbols = extractPatchAddedSymbols(patchDiff);
   if (symbols.length === 0) return;
   lines.push('');
   lines.push('-- Symbols the upstream patch ADDED (high-signal hint) --');
-  lines.push(symbols.join(', '));
+  // The symbol list is derived from the publisher-controlled patch diff, so
+  // it is attacker-influenceable — wrap it in the same nonce delimiters used
+  // for the spec / fixture blobs so a crafted identifier can't be read as an
+  // instruction.
+  lines.push(wrapBlob('patch_added_symbols', symbols.join(', '), nonce));
   lines.push('A sound spec for this CVE usually references at least one of these symbols (as the sink callee, the post-fix safe callee, or in the sanitizer pattern). If your spec uses none of them, you are likely looking at the wrong sink.');
 }
 
@@ -414,13 +442,31 @@ export async function generateRuleForCve(args: GenerateRuleForCveArgs): Promise<
             promptInjectionSuspect,
           };
         }
-        const retryable = status === 'parse_failed' || status === 'invalid_schema';
+        // `provider_error` is the catch-all for transient infrastructure
+        // failures (DeepInfra 502s, network blips, request timeouts that
+        // bubbled past the rate-limit-retry loop) — distinct from the model
+        // misbehaving. Retry within the same attempt budget with the SAME
+        // prompt and no feedback (the next call is just a fresh API attempt;
+        // feeding back "your provider failed" tells the model nothing useful).
+        // The 2026-05-15 13:18 bench showed trial 0 lost 8 CVEs to
+        // provider_error from a brief DeepInfra outage; each likely
+        // succeeds on a clean retry. Backoff for the retry happens inside
+        // callProviderAndParse's rate-limit loop (4-60s exponential).
+        const retryable = status === 'parse_failed' || status === 'invalid_schema' || status === 'provider_error';
         if (retryable && attempt < MAX_GENERATION_ATTEMPTS) {
-          revisionFeedback = buildAttemptFailureFeedback({
-            payload: null,
-            errorMessage: msg,
-            validation: null,
-          });
+          // For provider_error, skip the revision-feedback prompt and re-send
+          // the original prompt verbatim — the model didn't misbehave, the
+          // infrastructure did. Telling the model "you got a 502" pollutes
+          // the prompt and may push it to emit a defensive (wrong) spec.
+          if (status === 'provider_error') {
+            revisionFeedback = null;
+          } else {
+            revisionFeedback = buildAttemptFailureFeedback({
+              payload: null,
+              errorMessage: msg,
+              validation: null,
+            });
+          }
           continue;
         }
         return {

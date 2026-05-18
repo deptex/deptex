@@ -15,6 +15,7 @@ import {
 import { Edit2, Loader2, Trash2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Skeleton } from '../../components/ui/skeleton';
+import { UserAvatar, OrgAvatar } from '../../components/Avatar';
 
 export default function AccountSettingsPage() {
   const { pathname } = useLocation();
@@ -372,13 +373,10 @@ export default function AccountSettingsPage() {
                     />
                     <label htmlFor="avatar-upload" className={`cursor-pointer block group ${savingGeneral ? 'pointer-events-none' : ''}`}>
                       <div className="relative">
-                        <img
+                        <UserAvatar
                           src={previewUrl || avatarUrl}
                           alt={user?.email || 'User'}
                           className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
-                          onError={(e) => {
-                            e.currentTarget.src = '/images/blank_profile_image.png';
-                          }}
                         />
                         <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <Edit2 className="h-5 w-5 text-white" />
@@ -392,7 +390,7 @@ export default function AccountSettingsPage() {
                 <Button
                   onClick={handleSaveGeneral}
                   disabled={!canSave || savingGeneral}
-                  variant="white"
+                  variant="green"
                 >
                   <span className={savingGeneral ? 'invisible' : ''}>Save</span>
                   {savingGeneral && (
@@ -432,8 +430,8 @@ export default function AccountSettingsPage() {
                       {organizations?.map((org) => (
                         <SelectItem key={org.id} value={org.id}>
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <img
-                              src={org.avatar_url || '/images/org_profile.png'}
+                            <OrgAvatar
+                              src={org.avatar_url}
                               alt={org.name}
                               className="h-6 w-6 rounded-full object-cover bg-transparent flex-shrink-0"
                             />
@@ -449,7 +447,7 @@ export default function AccountSettingsPage() {
                 <Button
                   onClick={handleSaveDefaultOrg}
                   disabled={!canSaveDefaultOrg || savingDefaultOrg}
-                  variant="white"
+                  variant="green"
                 >
                   <span className={savingDefaultOrg ? 'invisible' : ''}>Save</span>
                   {savingDefaultOrg && (

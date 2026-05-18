@@ -26,7 +26,7 @@ const FEATURES = [
       { title: "Tasks & approvals", icon: ClipboardCheck, description: "Human-in-the-loop for high-impact actions. Approve from the console or in Slack." },
       { title: "Automations & memory", icon: Calendar, description: "Cron schedules, event triggers, and semantic memory so context persists." },
       { title: "Slack & PR review", icon: GitPullRequest, description: "@mention Aegis in Slack. PR security reviews with risk and policy checks." },
-      { title: "BYOK & control", icon: Key, description: "OpenAI, Anthropic, or Google. Encrypted keys, usage caps, and per-task budgets." },
+      { title: "Models & cost control", icon: Key, description: "Pick which models Aegis can use. Usage logging and monthly cost caps per org." },
     ],
     icon: Bot,
   },

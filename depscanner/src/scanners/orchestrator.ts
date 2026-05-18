@@ -13,7 +13,7 @@ import { runCheckov } from './checkov';
 import {
   extractGhcrOwner,
   normalizeDigest,
-  parseDockerfileFinalStage,
+  parseDockerfileFinalStageDetailed,
   resolveImageDigest,
   resolvePullStrategy,
   RegistryUnavailableError,
@@ -506,17 +506,28 @@ async function buildDockerConfigDir(
       authedHosts.add(planEntry.credHostname);
       // Stamp last_used_at so the UI can surface stale-credential nudges.
       // Best-effort — a failed UPDATE here must not abort envelope build.
-      ctx.supabase
-        .from('organization_registry_credentials')
-        .update({ last_used_at: new Date().toISOString() })
-        .eq('id', credId)
-        .eq('organization_id', ctx.organizationId)
+      // Wrapping in Promise.resolve() so that any transport-level rejection
+      // from supabase-js (AbortError, ENETUNREACH, etc.) doesn't bubble up
+      // as an UnhandledPromiseRejection that crashes the worker. The query
+      // builder is `PromiseLike` (no `.catch`) so we adapt it first.
+      void Promise.resolve(
+        ctx.supabase
+          .from('organization_registry_credentials')
+          .update({ last_used_at: new Date().toISOString() })
+          .eq('id', credId)
+          .eq('organization_id', ctx.organizationId)
+      )
         .then(({ error }: { error: any }) => {
           if (error) {
             ctx.logger
               .warn('container_scan.build_auth_envelope', `last_used_at update failed for ${credId}: ${error.message}`)
               .catch(() => {});
           }
+        })
+        .catch((err: any) => {
+          ctx.logger
+            .warn('container_scan.build_auth_envelope', `last_used_at update threw for ${credId}: ${err?.message ?? err}`)
+            .catch(() => {});
         });
     } catch (e: any) {
       // Per Patch 8 — per-cred failure doesn't abort envelope build; the
@@ -560,7 +571,43 @@ async function shredAndRemoveDir(dir: string): Promise<void> {
 // Per-image scan — owns its substep taxonomy + try/catch. NEVER rethrows.
 // ---------------------------------------------------------------------------
 
+/**
+ * Remove the on-demand ghcr.io App-token entry from the envelope and rewrite
+ * config.json. The App token is minted per-image scoped to a single owner;
+ * leaving it in the shared config.json would let every subsequent pull in the
+ * plan (other registries, other ghcr owners) run with that live token.
+ */
+async function removeGhcrAppEntry(envelope: AuthEnvelopeContext): Promise<void> {
+  if (!envelope.authedHosts.has('ghcr.io')) return;
+  envelope.entries = envelope.entries.filter(([host]) => host !== 'ghcr.io');
+  envelope.authedHosts.delete('ghcr.io');
+  await writeConfigJson(envelope.dockerConfigDir, envelope.entries);
+}
+
 async function scanOneImage(
+  image: ImagePlanEntry,
+  ctx: ScannerStepContext,
+  envelope: AuthEnvelopeContext,
+  switches: KillSwitchContext,
+  installationLogin: string | null
+): Promise<{ findings: ContainerFinding[] } | { skipped: SkippedImage }> {
+  try {
+    return await scanOneImageInner(image, ctx, envelope, switches, installationLogin);
+  } finally {
+    // Always strip a freshly-minted ghcr App token after this image so it
+    // can never be reused for another owner / registry. No-op when this
+    // image didn't take the App-fallback path.
+    try {
+      await removeGhcrAppEntry(envelope);
+    } catch (e: any) {
+      ctx.logger
+        .warn('container_scan.cleanup', `ghcr token cleanup failed: ${e?.message ?? e}`)
+        .catch(() => {});
+    }
+  }
+}
+
+async function scanOneImageInner(
   image: ImagePlanEntry,
   ctx: ScannerStepContext,
   envelope: AuthEnvelopeContext,
@@ -645,22 +692,55 @@ async function scanOneImage(
     }
   }
 
-  if (probedDigest) {
+  // trivy_db_version_day is null when Trivy's --version output lacks the
+  // Vulnerability DB block — caching is disabled for the whole scan in that
+  // case so a stale DB can't serve fresh CVEs (or vice versa).
+  const dbVersionDay = await trivyDbVersionDay();
+
+  if (probedDigest && dbVersionDay) {
     try {
       const hit = await lookupContainerScanCache(ctx.supabase, {
         image_digest: probedDigest,
         scanner: 'trivy',
         scanner_version: `trivy@${await trivyVersion()}`,
-        trivy_db_version_day: await trivyDbVersionDay(),
+        trivy_db_version_day: dbVersionDay,
       });
       if (hit) {
-        // Rewrite image_reference on every cached row so cross-org cache
-        // hits don't leak the original org's pull string.
-        const rewritten = hit.findings.map((f) => ({
-          ...f,
-          image_reference: image.imageRef,
-        }));
-        return { findings: rewritten };
+        // Re-validate the cached findings' digest against the crane-probed
+        // digest. The cache keys on the probe digest, but stored rows carry
+        // Trivy's RepoDigest-derived digest; if they disagree the row is for
+        // a different image and serving it would attribute the wrong CVEs.
+        let digestDrift = false;
+        for (const f of hit.findings) {
+          if (!f.image_digest) continue;
+          let normalized: string;
+          try {
+            normalized = normalizeDigest(f.image_digest);
+          } catch {
+            digestDrift = true;
+            break;
+          }
+          if (normalized !== probedDigest) {
+            digestDrift = true;
+            break;
+          }
+        }
+        if (digestDrift) {
+          ctx.logger
+            .warn(
+              'container_scan.cache_lookup',
+              `cache_digest_drift for ${image.imageRef}: probe=${probedDigest} — treating as miss`
+            )
+            .catch(() => {});
+        } else {
+          // Rewrite image_reference on every cached row so cross-org cache
+          // hits don't leak the original org's pull string.
+          const rewritten = hit.findings.map((f) => ({
+            ...f,
+            image_reference: image.imageRef,
+          }));
+          return { findings: rewritten };
+        }
       }
     } catch (e: any) {
       ctx.logger
@@ -721,7 +801,9 @@ async function scanOneImage(
   }
 
   // ---- cache_upsert ---------------------------------------------------
-  if (cacheWriteAllowed && !switches.digestCacheKilled && parsedDigest) {
+  // dbVersionDay null → Trivy DB version unknown; skip the write so a row
+  // can't be keyed on an unverifiable CVE-DB day.
+  if (cacheWriteAllowed && !switches.digestCacheKilled && parsedDigest && dbVersionDay) {
     try {
       await upsertContainerScanCache(
         ctx.supabase,
@@ -729,7 +811,7 @@ async function scanOneImage(
           image_digest: parsedDigest,
           scanner: 'trivy',
           scanner_version: trivyResult.version,
-          trivy_db_version_day: await trivyDbVersionDay(),
+          trivy_db_version_day: dbVersionDay,
         },
         trivyResult.findings,
         ctx.organizationId,
@@ -787,12 +869,12 @@ async function scanContainerImages(
   const dockerfilePaths = findDockerfiles(ctx.repoPath);
   const dockerfileImageRefs: string[] = [];
   for (const dp of dockerfilePaths) {
-    const stage = parseDockerfileFinalStage(dp);
-    if (!stage) {
-      skipped.push({ image: dp, reason: 'parse_failed' });
+    const parsed = parseDockerfileFinalStageDetailed(dp);
+    if (parsed.kind === 'skip') {
+      skipped.push({ image: dp, reason: parsed.reason });
       continue;
     }
-    dockerfileImageRefs.push(stage.imageRef);
+    dockerfileImageRefs.push(parsed.stage.imageRef);
   }
 
   let creds: CredentialMetadataRow[] = [];

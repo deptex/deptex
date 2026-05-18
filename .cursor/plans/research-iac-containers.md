@@ -1,5 +1,7 @@
 # Research: IaC + Container Scanning
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Current State in Deptex
 
 **Not implemented.** Zero IaC scanning, zero container scanning. The only artifact in the codebase is a placeholder string in `backend/extraction-worker/src/cli/index.ts:254` that reserves a future pipeline step name `iac_container` — no scanner is invoked, no tables exist, no UI surfaces. `frontend/src/components/framework-icon.tsx` covers app frameworks but has no docker / terraform / kubernetes / cloudformation / helm icons. The reachability-analysis plan (`.cursor/plans/reachability-analysis.plan.md`) describes Phase 10 as a 1–1.5 week "Checkov + Trivy bolt-on" and is the only existing spec — it predates the 2026 competitive landscape and badly underweights the opportunity. New tables planned: `project_iac_findings`, `project_container_findings`. New column: `projects.infra_types TEXT[]`. None applied yet.

@@ -21,8 +21,19 @@ function shouldSkipDir(name: string): boolean {
   return SKIP_DIRS.has(name) || name.startsWith('.cache');
 }
 
-function* walk(root: string, depth = 0, maxDepth = 8): Generator<string> {
+// Hard ceiling on files yielded by a single walk. A malicious repo can't be
+// allowed to make the worker enumerate an unbounded tree; 200k comfortably
+// covers any legitimate repo.
+const MAX_WALK_FILES = 200_000;
+
+function* walk(
+  root: string,
+  depth = 0,
+  maxDepth = 8,
+  counter: { n: number } = { n: 0 }
+): Generator<string> {
   if (depth > maxDepth) return;
+  if (counter.n >= MAX_WALK_FILES) return;
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
@@ -30,11 +41,17 @@ function* walk(root: string, depth = 0, maxDepth = 8): Generator<string> {
     return;
   }
   for (const entry of entries) {
+    if (counter.n >= MAX_WALK_FILES) return;
     const full = path.join(root, entry.name);
     if (entry.isDirectory()) {
+      // Never descend into symlinked directories — following them is a
+      // path-traversal read primitive on a malicious repo (e.g. a symlink
+      // pointing at `/` or `/etc`).
+      if (entry.isSymbolicLink()) continue;
       if (shouldSkipDir(entry.name)) continue;
-      yield* walk(full, depth + 1, maxDepth);
+      yield* walk(full, depth + 1, maxDepth, counter);
     } else if (entry.isFile()) {
+      counter.n++;
       yield full;
     }
   }

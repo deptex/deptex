@@ -1,5 +1,7 @@
 # Reachability Phase 5b — Rule Quality Iteration
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Overview
 
 Phase 5 shipped a working AI rule generation pipeline (autogrep-style per-org Semgrep taint rules). Live E2E with Anthropic confirmed every stage runs — OSV fetch, AI provider call, schema validation, fixture round-trip, patch round-trip, persistence, telemetry — but **0% of generated rules graduate to `validated: true`**. This phase fixes the two distinct quality gaps surfaced by E2E: (a) the patch round-trip's whole-repo Semgrep run is structurally mismatched against application-level rules; replace it with diff-targeted validation against the changed files only, matching autogrep's published methodology. (b) the prompt lacks few-shot examples; the AI is producing rules that match safe code (FP) or fail to match the actual fix's changed lines. Adopt 3 ecosystem-matched hand-authored rules from `reachability-rules/` as inline examples.

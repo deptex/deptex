@@ -3,9 +3,9 @@
  *
  * Each fixture pair (vuln + safe) lives under
  * `test/taint-engine/fixtures/go-vulns/`. We load the bundled YAML specs
- * (gin / echo / go-stdlib) and run propagateGo() against each fixture
- * directory, asserting that vulns emit ≥1 flow with the expected
- * vuln_class and safe fixtures emit zero.
+ * (gin / echo / go-stdlib / net-http / go-jose) and run propagateGo()
+ * against each fixture directory, asserting that vulns emit ≥1 flow with
+ * the expected vuln_class and safe fixtures emit zero.
  *
  * Run: npx tsx test/taint-engine-go.test.ts
  */
@@ -32,7 +32,7 @@ const FIXTURE_ROOT = path.resolve(__dirname, 'taint-engine/fixtures/go-vulns');
 const FRAMEWORK_MODELS = path.resolve(__dirname, '../src/taint-engine/framework-models');
 
 function loadGoSpecs(): FrameworkSpec[] {
-  const names = ['gin.yaml', 'echo.yaml', 'go-stdlib.yaml'];
+  const names = ['gin.yaml', 'echo.yaml', 'go-stdlib.yaml', 'net-http.yaml', 'go-jose.yaml'];
   return names.map((n) => loadSpec(path.join(FRAMEWORK_MODELS, n)));
 }
 
@@ -72,6 +72,16 @@ const CASES: FixtureCase[] = [
     fixture: 'gin-path-traversal-safe',
     expectVulnClass: null,
     description: 'Gin handler strips path components via filepath.Base before read',
+  },
+  {
+    fixture: 'go-jose-deserialization-vuln',
+    expectVulnClass: 'deserialization',
+    description: 'net/http handler flows tainted JWE into go-jose Parse + Decrypt (CVE-2024-28180)',
+  },
+  {
+    fixture: 'go-jose-deserialization-safe',
+    expectVulnClass: null,
+    description: 'net/http handler uses hardcoded JWE input — no taint reaches Parse',
   },
 ];
 

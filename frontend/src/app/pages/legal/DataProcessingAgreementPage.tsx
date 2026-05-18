@@ -39,7 +39,7 @@ export default function DataProcessingAgreementPage() {
           <ul className="list-disc pl-6 space-y-1">
             <li>Encryption at rest (AES-256) and in transit (TLS 1.2+)</li>
             <li>Row-level security on all database tables</li>
-            <li>BYOK API keys encrypted with AES-256-GCM</li>
+            <li>Customer-supplied secrets (registry credentials, etc.) encrypted with AES-256-GCM</li>
             <li>Automated vulnerability scanning of our own dependencies</li>
             <li>Access controls with role-based permissions</li>
           </ul>

@@ -47,6 +47,7 @@ Options:
   --verbose             Show info-level step chatter
   --quiet               Suppress everything except warnings + errors
   --no-color            Disable ANSI color output (NO_COLOR env also respected)
+  --allow-outside-cwd   Permit a workspace path outside the current directory
   -h, --help            Print this help
 
 Exit codes:
@@ -87,6 +88,7 @@ async function main(argv: string[]): Promise<number> {
         quiet: { type: 'boolean' },
         verbose: { type: 'boolean' },
         'no-color': { type: 'boolean' },
+        'allow-outside-cwd': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
       allowPositionals: true,
@@ -130,6 +132,7 @@ async function main(argv: string[]): Promise<number> {
       label: parsed.values.label,
       verbose: !!parsed.values.verbose,
       quiet: !!parsed.values.quiet,
+      allowOutsideCwd: !!parsed.values['allow-outside-cwd'],
     });
 
     if (format === 'json') {

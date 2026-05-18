@@ -209,9 +209,9 @@ describe('POST /api/aegis/v3/stream', () => {
     expect([200]).toContain(res.status);
   });
 
-  it('returns 500 with a generic message when the BYOK provider loader rejects', async () => {
+  it('returns 500 with a generic message when the platform provider loader rejects', async () => {
     setOwnerWithAegisPermission();
-    mockGetLanguageModelForOrg.mockRejectedValueOnce(new Error('No BYOK key configured'));
+    mockGetLanguageModelForOrg.mockRejectedValueOnce(new Error('Platform API key for anthropic is not configured'));
 
     const res = await request(makeApp())
       .post('/api/aegis/v3/stream')
@@ -221,7 +221,7 @@ describe('POST /api/aegis/v3/stream', () => {
     // Real cause stays in server logs only — the body must never leak provider
     // / DB / supabase error text to the user-facing chat banner.
     expect(res.body.error).toBe('Something went wrong. Please try again.');
-    expect(res.body.error).not.toContain('BYOK');
+    expect(res.body.error).not.toContain('Platform API key');
   });
 });
 

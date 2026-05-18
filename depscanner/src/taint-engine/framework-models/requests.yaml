@@ -1,0 +1,193 @@
+# requests framework spec — Deptex cross-file taint engine.
+#
+# requests is a sink-only library. The flask/django/fastapi specs already
+# include the most common `requests.get/post/...` module-level sinks, but
+# this spec adds the Session-method shape and proxy/redirect helpers needed
+# to unlock:
+#
+#   - CVE-2023-32681  Proxy-Authorization header leaks across redirects.
+#                     Pre-fix fixture flows tainted URL into
+#                     `session.rebuild_proxies(prep, proxies)`.
+#   - CVE-2024-35195  `Session` re-used after `verify=False` keeps cert
+#                     verification disabled. Pre-fix fixture flows tainted
+#                     URL into `session.get(url, verify=False)`.
+#
+# Both fixtures call methods on a `requests.Session` instance, so callee
+# text resolves to `session.<method>`. The engine's `matchesCallPattern`
+# treats `*.method(*)` as a wildcard-receiver pattern that matches any
+# `<receiver>.method` callee text via `endsWith(.method)`. We therefore
+# include `*.method(*)` aliases for the requests-specific method names
+# (rebuild_proxies / resolve_redirects / prepare_request) where over-match
+# risk is bounded — generic names like `*.get(*)`, `*.post(*)`, `*.send(*)`
+# are deliberately NOT wildcard-aliased because they collide with the
+# entire `.get()`/`.send()` surface of other libraries.
+
+framework: requests
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- Session HTTP methods (SSRF surface) ----------
+  #
+  # The `verify=False` kwarg is checked on these sinks via the Phase F4
+  # non-taint detector regime (CVE-2024-35195 / weak-crypto). A call site
+  # like `session.get(url, verify=False)` fires a non-taint finding for
+  # disabled certificate verification regardless of whether `url` is
+  # tainted. The taint contract (argument_indices: [0]) still fires
+  # independently when an attacker-controlled URL flows in.
+  - pattern: requests.Session.get(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.get(url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.Session.post(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.post(url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.Session.put(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.put(url, ...)
+  - pattern: requests.Session.patch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.patch(url, ...)
+  - pattern: requests.Session.delete(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.delete(url, ...)
+  - pattern: requests.Session.head(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.head(url, ...)
+  - pattern: requests.Session.options(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.options(url, ...)
+  - pattern: requests.Session.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.Session.request(method, url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.Session.send(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.send(PreparedRequest)
+  - pattern: requests.Session.prepare_request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.Session.prepare_request
+
+  # ---------- Proxy / redirect helpers (CVE-2023-32681) ----------
+  - pattern: requests.Session.rebuild_proxies(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Session.rebuild_proxies — leaked Proxy-Authorization on redirect
+  - pattern: requests.Session.resolve_redirects(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: Session.resolve_redirects(resp, req, ...)
+  - pattern: Session.rebuild_proxies(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: rebuild_proxies (bare receiver — `session.rebuild_proxies(...)`)
+  - pattern: Session.resolve_redirects(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: resolve_redirects (bare receiver)
+  - pattern: Session.send(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: session.send (bare receiver)
+  - pattern: Session.prepare_request(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: session.prepare_request (bare receiver)
+
+  # ---------- Module-level Request / PreparedRequest constructors ----------
+  - pattern: requests.Request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.Request(method, url, ...)
+  - pattern: requests.PreparedRequest(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.PreparedRequest
+  - pattern: requests.api.request(*)
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: requests.api.request(method, url, ...)
+    required_arguments:
+      - name: verify
+        match_mode: forbidden
+        unsafe_literals: ['False', 'false', '0', 'None']
+  - pattern: requests.head(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.head(url, ...)
+  - pattern: requests.patch(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.patch(url, ...)
+  - pattern: requests.options(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.options(url, ...)
+
+  # ---------- HTTPAdapter (CVE-2024-35195 — cert-pinning disabled via mount/init) ----------
+  - pattern: requests.adapters.HTTPAdapter(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: requests.adapters.HTTPAdapter
+  - pattern: HTTPAdapter.send(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: HTTPAdapter.send(PreparedRequest)
+  - pattern: requests.Session.mount(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: Session.mount(prefix, adapter)
+  - pattern: Session.mount(*)
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: session.mount (bare receiver)
+
+  # ---------- Wildcard-receiver fallbacks for instance calls ----------
+  # The `Session.method` bare-receiver shapes above do NOT match real call
+  # sites like `session.rebuild_proxies(...)` — the engine matches by exact
+  # callee text or last-segment, and `session.rebuild_proxies` is neither
+  # equal to `Session.rebuild_proxies` nor to bare `rebuild_proxies`. The
+  # wildcards below close that gap. Method names are requests-specific
+  # enough that cross-library collision is bounded.
+  - pattern: "*.rebuild_proxies(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <session>.rebuild_proxies — leaked Proxy-Authorization on redirect (CVE-2023-32681)
+  - pattern: "*.resolve_redirects(*)"
+    vuln_class: ssrf
+    argument_indices: [1]
+    description: <session>.resolve_redirects(resp, req, ...) — redirect handler with attacker URL
+  - pattern: "*.prepare_request(*)"
+    vuln_class: ssrf
+    argument_indices: [0]
+    description: <session>.prepare_request — pre-flight PreparedRequest build
+
+# `requests.utils.requote_uri` does NOT validate URLs, only requotes.
+# `requests.utils.urldefragauth` strips fragments. Neither is a security
+# boundary on its own, so we don't model them as sanitizers. The only
+# sanitizer we honor is explicit allowlist validation, which is generic
+# across SSRF sinks and is already declared in flask.yaml / django.yaml
+# under `is_safe_url`, `validate_url`, `url_has_allowed_host_and_scheme`.
+sanitizers: []

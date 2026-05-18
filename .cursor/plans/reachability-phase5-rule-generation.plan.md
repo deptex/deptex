@@ -1,5 +1,7 @@
 # Reachability Phase 5 — Per-Org AI Rule Generation Pipeline
 
+> **Historical context (2026-05-09):** This plan was authored when AI was BYOK (per-org customer keys via `organization_ai_providers` + AES-256-GCM envelope). BYOK was retired in `phase29_drop_byok.sql` / commit `6705149`. Where this plan references BYOK, `organization_ai_providers`, `encryption.ts` for AI keys, monthly BYOK budget caps, or `AI_ENCRYPTION_KEY` for AI key envelopes, treat those as historical implementation details — current AI runs on platform keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from worker env). `AI_ENCRYPTION_KEY` itself is still in use, but only for `organization_registry_credentials` (IaC v2 Phase 1).
+
 ## Overview
 
 Phase 3 shipped 20 hand-written Semgrep reachability rules. Phase 4 added EPD contextual scoring on top. Phase 5 stops trying to scale rule coverage by hand — instead, we build an Autogrep-style pipeline that auto-generates Semgrep rules per-CVE using LLMs, owned by each org via BYOK, scoped to per-org policy, applied during the customer's own extraction.

@@ -92,15 +92,55 @@ $AbsOut = (Resolve-Path $OutputDir).Path
 
 # Mirror bin/deptex-scan env-var forwarding. DEPTEX_LOCAL_CLI=1 is the
 # gate epd.ts uses to allow ANTHROPIC_API_KEY to be picked up from the
-# environment instead of an encrypted BYOK row. ANTHROPIC_API_KEY uses
-# the `-e VAR` (no =value) form so the secret never lands on docker's
-# argv (visible via process listings and audit logs).
+# environment. Secret-bearing vars use the `-e VAR` (no =value) form so
+# the secret never lands on docker's argv (visible via process listings
+# and audit logs); non-secret config knobs use the `-e VAR=value` form.
+# This list must stay at parity with bin/deptex-scan (bash wrapper).
 $EnvFlags = @('-e', 'DEPTEX_LOCAL_CLI=1')
+
+# AI provider — Anthropic.
 if ($env:ANTHROPIC_API_KEY) { $EnvFlags += @('-e', 'ANTHROPIC_API_KEY') }
 if ($env:ANTHROPIC_MODEL) { $EnvFlags += @('-e', "ANTHROPIC_MODEL=$($env:ANTHROPIC_MODEL)") }
+
+# EPD budget knobs.
 if ($env:EPD_MAX_RUN_COST_USD) { $EnvFlags += @('-e', "EPD_MAX_RUN_COST_USD=$($env:EPD_MAX_RUN_COST_USD)") }
 if ($env:EPD_BUDGET_EXCEEDED_BEHAVIOR) { $EnvFlags += @('-e', "EPD_BUDGET_EXCEEDED_BEHAVIOR=$($env:EPD_BUDGET_EXCEEDED_BEHAVIOR)") }
 if ($env:EPD_MAX_VULNS_PER_RUN) { $EnvFlags += @('-e', "EPD_MAX_VULNS_PER_RUN=$($env:EPD_MAX_VULNS_PER_RUN)") }
+
+# Phase 5 per-org AI rule generation knobs.
+if ($env:DEPTEX_RULE_GENERATION_ENABLED) { $EnvFlags += @('-e', "DEPTEX_RULE_GENERATION_ENABLED=$($env:DEPTEX_RULE_GENERATION_ENABLED)") }
+if ($env:DEPTEX_RULE_PROVIDER) { $EnvFlags += @('-e', "DEPTEX_RULE_PROVIDER=$($env:DEPTEX_RULE_PROVIDER)") }
+if ($env:DEPTEX_RULE_MODEL) { $EnvFlags += @('-e', "DEPTEX_RULE_MODEL=$($env:DEPTEX_RULE_MODEL)") }
+if ($env:DEPTEX_RULE_BUDGET_USD) { $EnvFlags += @('-e', "DEPTEX_RULE_BUDGET_USD=$($env:DEPTEX_RULE_BUDGET_USD)") }
+if ($env:DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR) { $EnvFlags += @('-e', "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$($env:DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR)") }
+
+# OpenAI-compatible third-party hosts. DEPTEX_RULE_BASE_URL routes the
+# openai-style rule-generation call; the matching host-specific API key
+# is forwarded by name (no =value) so secrets stay off docker's argv.
+if ($env:DEPTEX_RULE_BASE_URL) { $EnvFlags += @('-e', "DEPTEX_RULE_BASE_URL=$($env:DEPTEX_RULE_BASE_URL)") }
+if ($env:DEEPINFRA_API_KEY) { $EnvFlags += @('-e', 'DEEPINFRA_API_KEY') }
+if ($env:OPENROUTER_API_KEY) { $EnvFlags += @('-e', 'OPENROUTER_API_KEY') }
+if ($env:DASHSCOPE_API_KEY) { $EnvFlags += @('-e', 'DASHSCOPE_API_KEY') }
+if ($env:OPENAI_API_KEY) { $EnvFlags += @('-e', 'OPENAI_API_KEY') }
+if ($env:GOOGLE_API_KEY) { $EnvFlags += @('-e', 'GOOGLE_API_KEY') }
+if ($env:GOOGLE_AI_API_KEY) { $EnvFlags += @('-e', 'GOOGLE_AI_API_KEY') }
+
+# GitHub token (PAT or App installation) for authenticated patch-fetch
+# rate limits. GITHUB_TOKEN is canonical; GITHUB_PAT is the fallback name.
+if ($env:GITHUB_TOKEN) { $EnvFlags += @('-e', 'GITHUB_TOKEN') }
+if ($env:GITHUB_PAT) { $EnvFlags += @('-e', 'GITHUB_PAT') }
+
+# git GIT_CONFIG_COUNT/_KEY_n/_VALUE_n passthrough so callers can inject
+# e.g. safe.directory=* to bypass git's dubious-ownership refusal.
+if ($env:GIT_CONFIG_COUNT) {
+  $EnvFlags += @('-e', "GIT_CONFIG_COUNT=$($env:GIT_CONFIG_COUNT)")
+  for ($gci = 0; $gci -lt [int]$env:GIT_CONFIG_COUNT; $gci++) {
+    $gck = "GIT_CONFIG_KEY_$gci"
+    $gcv = "GIT_CONFIG_VALUE_$gci"
+    $EnvFlags += @('-e', "$gck=$([Environment]::GetEnvironmentVariable($gck))")
+    $EnvFlags += @('-e', "$gcv=$([Environment]::GetEnvironmentVariable($gcv))")
+  }
+}
 
 docker run --rm -i `
   @EnvFlags `

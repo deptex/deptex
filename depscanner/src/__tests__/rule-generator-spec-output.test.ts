@@ -143,6 +143,27 @@ describe('rule-generator FrameworkSpec output — schema gate (Gate 1)', () => {
     expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('code_injection');
   });
 
+  test('parseAndValidate accepts the new weak_crypto vuln_class', () => {
+    // phase28c adds weak_crypto to the engine taxonomy. Confirm the zod
+    // schema now accepts it so CVE-2022-23541 (jsonwebtoken kid → weak key)
+    // and similar crypto-misuse CVEs round-trip cleanly.
+    const ok = JSON.parse(JSON.stringify(validPayload));
+    ok.framework_spec.sinks[0].vuln_class = 'weak_crypto';
+    const r = parseAndValidate(JSON.stringify(ok));
+    expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('weak_crypto');
+  });
+
+  test('parseAndValidate accepts the new auth_bypass vuln_class', () => {
+    // phase28c adds auth_bypass to the engine taxonomy. Confirm the zod
+    // schema now accepts it so CVE-2022-22978 (Spring Security regex
+    // newline bypass) and similar auth-decision-routing CVEs round-trip
+    // cleanly.
+    const ok = JSON.parse(JSON.stringify(validPayload));
+    ok.framework_spec.sinks[0].vuln_class = 'auth_bypass';
+    const r = parseAndValidate(JSON.stringify(ok));
+    expect(r.payload.framework_spec.sinks[0].vuln_class).toBe('auth_bypass');
+  });
+
   test('parseAndValidate parses well-shaped payload with promptInjectionSuspect=false', () => {
     const r = parseAndValidate(JSON.stringify(validPayload));
     expect(r.payload.framework_spec.framework).toBe('pkg');
@@ -209,8 +230,23 @@ app.get('/go', (req, res) => {
   });
 
   test('catches an obvious sink-pattern regression — pre=0 with wrong callee text', async () => {
+    // The fixture exercises a non-bundled sink (`app.proxy(target)`), and the
+    // AI rule declares a wrong pattern. The Gate 2 widening can't rescue
+    // this because no bundled JS spec models `app.proxy` for open_redirect,
+    // so the regression-detection semantic is preserved.
     const wrongPattern = JSON.parse(JSON.stringify(expressBasePayload));
     wrongPattern.framework_spec.sinks[0].pattern = 'res.thisDoesNotExist(*)';
+    wrongPattern.vulnerable_fixture = `const express = require('express');
+const app = express();
+app.get('/go', (req, res) => {
+  const target = req.query.next;
+  app.proxy(target);
+});`;
+    wrongPattern.safe_fixture = `const express = require('express');
+const app = express();
+app.get('/go', (req, res) => {
+  app.proxy('/dashboard');
+});`;
     const result = await validateRule({
       payload: wrongPattern,
       cveId: 'CVE-9999-EXPRESS',
@@ -221,6 +257,32 @@ app.get('/go', (req, res) => {
     expect(result.status).toBe('failed_validation');
     expect(result.log.fixture_pre_matches).toBe(0);
     expect(result.log.errors.join(' ')).toMatch(/fixture_round_trip_failed/);
+  });
+
+  /**
+   * Widening: when the AI rule names a wrong/unmatched sink pattern but
+   * declares a vuln_class for which a bundled framework spec already models
+   * the sink the fixture actually exercises, Gate 2 should validate — the
+   * AI's contribution is the OSV→vuln_class mapping, not net-new sink shapes.
+   * Gate 3 (patch round-trip) is the harder check for actual rule correctness.
+   */
+  test('Gate 2 widening accepts bundled-spec sinks of matching vuln_class', async () => {
+    const widened = JSON.parse(JSON.stringify(expressBasePayload));
+    // AI's named sink doesn't match the fixture, but its vuln_class
+    // (open_redirect) matches express.yaml's `res.redirect(*)` sink, which
+    // the fixture DOES exercise.
+    widened.framework_spec.sinks[0].pattern = 'someLib.weirdRedirect(*)';
+    // expressBasePayload's fixtures already use `res.redirect(target)`.
+    const result = await validateRule({
+      payload: widened,
+      cveId: 'CVE-9999-EXPRESS-WIDENED',
+      ecosystem: 'npm',
+      workDir: makeRuleGenWorkdir(),
+      runPatchValidation: false,
+    });
+    expect(result.status).toBe('validated');
+    expect(result.log.fixture_pre_matches).toBeGreaterThan(0);
+    expect(result.log.fixture_post_matches).toBe(0);
   });
 });
 
@@ -247,6 +309,7 @@ describe('buildAttemptFailureFeedback', () => {
       took_ms: 100,
       validation_breakdown: {
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: false,
         fixture_safe_clean: true,
         patch_pre_match: null,
@@ -279,6 +342,7 @@ describe('buildAttemptFailureFeedback', () => {
       took_ms: 100,
       validation_breakdown: {
         schema_pass: true,
+        pattern_compile_pass: true,
         fixture_pre_match: true,
         fixture_safe_clean: false,
         patch_pre_match: null,

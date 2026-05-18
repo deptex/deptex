@@ -63,7 +63,14 @@ export function decryptCredential(encrypted: string, storedVersion: number): str
         authTagLength: AUTH_TAG_LENGTH,
       });
       decipher.setAuthTag(authTag);
-      return decipher.update(ciphertext) + decipher.final('utf8');
+      // Concatenate buffers FIRST then decode as UTF-8 once. The previous code
+      // (`decipher.update(ciphertext) + decipher.final('utf8')`) coerces the
+      // update Buffer to a string via implicit toString(), then concatenates.
+      // If a multi-byte UTF-8 codepoint straddles the update/final boundary,
+      // each half decodes independently and yields U+FFFD replacement chars,
+      // corrupting credentials with non-ASCII passwords/cookies.
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      return plaintext.toString('utf8');
     } catch {
       // Current key failed — fall through to previous if version older.
     }
@@ -76,7 +83,8 @@ export function decryptCredential(encrypted: string, storedVersion: number): str
         authTagLength: AUTH_TAG_LENGTH,
       });
       decipher.setAuthTag(authTag);
-      return decipher.update(ciphertext) + decipher.final('utf8');
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      return plaintext.toString('utf8');
     }
   }
 

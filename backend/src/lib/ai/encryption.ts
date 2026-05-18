@@ -137,7 +137,8 @@ async function rotateEncryptedTable(
 export async function rotateEncryptionKeys(): Promise<{ rotated: number; failed: number }> {
   const { supabase } = await import('../supabase');
 
-  const ai = await rotateEncryptedTable(supabase, 'organization_ai_providers', 'encrypted_api_key');
+  // BYOK (organization_ai_providers) was dropped in phase29_drop_byok; the
+  // only remaining encrypted-at-rest table is the IaC v2 registry creds.
   const creds = await rotateEncryptedTable(
     supabase,
     'organization_registry_credentials',
@@ -145,7 +146,7 @@ export async function rotateEncryptionKeys(): Promise<{ rotated: number; failed:
   );
 
   return {
-    rotated: ai.rotated + creds.rotated,
-    failed: ai.failed + creds.failed,
+    rotated: creds.rotated,
+    failed: creds.failed,
   };
 }

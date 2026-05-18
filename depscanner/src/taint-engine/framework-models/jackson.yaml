@@ -1,0 +1,147 @@
+# Jackson (jackson-databind) framework spec — Deptex cross-file taint engine.
+#
+# Targets the polymorphic-deserialization gadget-chain CVE family that
+# dominates `com.fasterxml.jackson.core/jackson-databind` advisories. The
+# 88-CVE benchmark (docs/88-cve-benchmark-2026-05-10.md) attributed five
+# jackson-databind failures to `framework_spec_missing` — the AI rule
+# generator could not pick a Jackson sink that the engine recognises, so
+# every model-written vulnerable fixture round-tripped to zero findings.
+#
+# CVEs covered (all jackson-databind, all gadget-chain RCE triggered by
+# ObjectMapper.readValue / convertValue / treeToValue against
+# attacker-controlled JSON when polymorphic typing is enabled):
+#
+#   - CVE-2017-7525 — initial jackson-databind polymorphic deser RCE
+#   - CVE-2018-7489 — c3p0 gadget bypass of the 2017-7525 blacklist
+#   - CVE-2019-12384 — logback / jndi gadget chain
+#   - CVE-2019-14439 — logback-core via SubTypeValidator bypass
+#   - CVE-2020-9548  — br.com.anteros / Anteros-DBCP gadget
+#
+# --------------------------------------------------------------------------
+# Wave 10 relaxation (2026-05-10): "any tainted readValue is a sink".
+# --------------------------------------------------------------------------
+# Background. Wave 8 added these sinks already, but Wave 9's 88-CVE rerun
+# showed all 5/5 Jackson CVEs still failing at `fixture_round_trip_failed`.
+# Inspection of Qwen's generated fixtures (e.g. CVE-2017-7525 attempt: a
+# `public static void main(String[] args)` shim that calls
+# `mapper.readValue(args[0], Object.class)` with no `enableDefaultTyping`
+# in scope) showed the gadget-chain *precondition* is rarely present in
+# fixture-grade snippets — and the spec format has no `precondition`
+# field anyway (see "Gate gap" below).
+#
+# The Wave 10 stance: STOP modelling the gate. Any
+# `ObjectMapper.readValue(*) / readerFor(*).readValue(*) / convertValue(*)
+# / treeToValue(*) / JsonDeserializer.deserialize(*)` call with a tainted
+# argument fires the `deserialization` sink, regardless of whether
+# `enableDefaultTyping` / `activateDefaultTyping` / `@JsonTypeInfo` /
+# `@JsonTypeIdResolver` is reachable. The fp-filter LLM stage downstream
+# (`backend/src/lib/.../fp-filter.ts`) has full source-text context and is
+# expected to suppress flows where no polymorphic-target type is in scope.
+# This pushes the FP filter onto the load-bearing path — see follow-up
+# section at end of file.
+#
+# Generic Java stdlib (`java-stdlib.yaml`) already declares a coarse
+# `*.readValue(*)` deser sink. This spec retains the Jackson-specific
+# call shapes the generic pattern misses (`readerFor(...).readValue`,
+# `convertValue`, `treeToValue`, `JsonDeserializer.deserialize`) and pins
+# them to the Jackson namespace via the description text. Sources come from
+# the already-loaded Spring / JAX-RS / Quarkus / Micronaut framework specs.
+#
+# Gate gap (documented FP risk).
+#   The real-world Jackson sinks are only exploitable when one of
+#   `enableDefaultTyping(...)` / `activateDefaultTyping(...)` /
+#   `@JsonTypeInfo` / `@JsonTypeIdResolver` / a polymorphic target type is
+#   in scope. The FrameworkSpec schema (spec.ts:97-103) has no
+#   `precondition` / `enabler` field, so this spec cannot express the gate
+#   at the engine layer. As of Wave 10 we **explicitly accept the
+#   over-approximation**: the FP filter at scan time is the gate. The
+#   `enableDefaultTyping` / `activateDefaultTyping` marker entries that
+#   used to live in this spec were REMOVED in Wave 10 — they were not
+#   real sinks (the call itself takes no tainted argument in normal use)
+#   and their presence muddied the spec.
+#
+# Follow-up — fp-filter audit.
+#   Wave 10 makes the fp-filter load-bearing for Jackson. The follow-up
+#   task is to audit fp-filter.ts's prompt to ensure it knows to look for
+#   `enableDefaultTyping` / `activateDefaultTyping` / `@JsonTypeInfo` /
+#   `@JsonTypeIdResolver` / `PolymorphicTypeValidator` in the surrounding
+#   source before approving a Jackson deser flow. Without that, recall
+#   lift here translates 1:1 into FP burden at scan time.
+
+framework: jackson
+language: java
+version: "*"
+
+sources: []
+
+sinks:
+  # ---------- ObjectMapper.readValue family ----------
+  # Bare `*.readValue(*)` is already in java-stdlib.yaml; the entries below
+  # cover the call shapes java-stdlib doesn't and pin Jackson-specific
+  # attribution via the description text.
+
+  # ObjectMapper.readValue called via static-style receiver `ObjectMapper.`
+  # rather than instance receiver. Rare in app code but appears in unit-test
+  # helpers and is what some CVE PoCs paste verbatim.
+  - pattern: "ObjectMapper.readValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readValue (static-style receiver) — any tainted JSON is treated as a sink (FP risk accepted, fp-filter gates)
+
+  # ReaderFor chain: `mapper.readerFor(T.class).readValue(json)`. The chained
+  # form is the canonical "type-safe" Jackson usage but the same gadget
+  # chain triggers when defaultTyping is enabled. java-stdlib's bare
+  # `*.readValue(*)` catches the final call; this entry exists so the
+  # description attributes the flow to Jackson rather than the generic
+  # stdlib bucket and so the chained shape gets a dedicated audit line.
+  - pattern: "*.readerFor(*).readValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.readerFor(...).readValue chain — any tainted JSON is treated as a sink
+
+  # ObjectMapper.convertValue — converts a JsonNode / Map into a typed
+  # object. Same gadget surface when defaultTyping is on; the attacker
+  # supplies a Map<String,Object> that Jackson coerces into a polymorphic
+  # type. Appears in CVE-2019-12384 PoCs.
+  - pattern: "*.convertValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.convertValue — any tainted Map/JsonNode coerced to a typed object is treated as a sink
+
+  # ObjectMapper.treeToValue — same as convertValue but the input is a
+  # JsonNode parsed earlier via readTree. Same gadget surface.
+  - pattern: "*.treeToValue(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson ObjectMapper.treeToValue — any tainted JsonNode coerced to a typed object is treated as a sink
+
+  # Custom JsonDeserializer.deserialize(parser, ctx) — user-written
+  # deserializers that delegate back to the mapper inherit the same gadget
+  # surface. Argument index 0 is the JsonParser, which carries the bytes.
+  - pattern: "*.deserialize(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    description: Jackson JsonDeserializer.deserialize — custom deserializer hook
+
+  # ---------- enableDefaultTyping / activateDefaultTyping markers REMOVED ----------
+  # Wave 10: these entries were dropped. They are config-call markers, not
+  # real sinks — `enableDefaultTyping()` is typically invoked with no
+  # arguments at all, so listing it with `argument_indices: []` produced
+  # zero useful flows and only muddied the spec semantics. The
+  # documentation about "what makes Jackson exploitable" now lives in the
+  # YAML header instead, where rule-generation prompts and fp-filter
+  # prompts can pick it up.
+
+sanitizers:
+  # Jackson's first-party defence against polymorphic-deser gadgets is the
+  # PolymorphicTypeValidator (PTV). Any call that registers a PTV on the
+  # mapper neutralizes the readValue/convertValue/treeToValue sinks above
+  # for the configured type, so we treat its return value as clean for
+  # `deserialization`. Apps that wire `BasicPolymorphicTypeValidator.builder()`
+  # into `setPolymorphicTypeValidator(...)` are the canonical safe pattern.
+  - pattern: "*.setPolymorphicTypeValidator(*)"
+    vuln_classes: [deserialization]
+    description: Jackson ObjectMapper.setPolymorphicTypeValidator — restricts polymorphic deser
+  - pattern: "BasicPolymorphicTypeValidator.builder(*)"
+    vuln_classes: [deserialization]
+    description: Jackson BasicPolymorphicTypeValidator.builder — allowlist construction

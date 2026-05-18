@@ -1,5 +1,6 @@
 import { promises as dns } from 'dns';
 import ipaddr from 'ipaddr.js';
+import { parseImageHost } from './trivy';
 
 /**
  * Scan-time SSRF defense. Layered with the create-time check in
@@ -49,23 +50,13 @@ function isIpBlocked(ip: ipaddr.IPv4 | ipaddr.IPv6): { blocked: boolean; reason?
 }
 
 /**
- * Extract the registry host from an image reference. Mirrors the helper in
- * backend/src/lib/image-ref-guard.ts — kept local to depscanner so the worker
- * has no cross-package import.
+ * Extract the registry host from an image reference. Delegates to the single
+ * shared host parser in trivy.ts so case-normalization is consistent across
+ * every call site (a near-duplicate parser here previously dropped
+ * `GHCR.IO/...`).
  */
 export function extractImageRefHost(rawRef: string): string {
-  const ref = rawRef.trim();
-  const slash = ref.indexOf('/');
-  if (slash === -1) return 'docker.io';
-  const candidate = ref.slice(0, slash);
-  if (candidate === 'localhost' || candidate.includes('.') || candidate.includes(':')) {
-    const colon = candidate.lastIndexOf(':');
-    if (colon !== -1 && /^\d+$/.test(candidate.slice(colon + 1))) {
-      return candidate.slice(0, colon);
-    }
-    return candidate;
-  }
-  return 'docker.io';
+  return parseImageHost(rawRef).host;
 }
 
 export async function validateScanTimeHost(rawHostOrRef: string, mode: 'imageRef' | 'host'): Promise<HostGuardResult> {
