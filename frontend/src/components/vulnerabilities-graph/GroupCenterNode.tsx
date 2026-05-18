@@ -123,7 +123,7 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
         style={{ width: size, height: size }}
       >
         {showAvatar
-          ? <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain" style={{ borderRadius: 'inherit' }} />
+          ? <img src={avatarUrl ?? undefined} alt={title} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.src = '/images/org_profile.png'; }} className="h-full w-full object-cover" style={{ borderRadius: 'inherit' }} />
           : <Users style={{ width: size * 0.5, height: size * 0.5 }} />}
       </div>
     );
@@ -188,7 +188,7 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
               <div className="flex items-center justify-center w-14 h-14 rounded-xl flex-shrink-0 font-black text-2xl"
                 style={{ backgroundColor: `${statusColor}18`, color: statusColor, border: `1px solid ${statusColor}30` }}>
                 {showAvatar
-                  ? <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-xl" />
+                  ? <img src={avatarUrl ?? undefined} alt={title} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.src = '/images/org_profile.png'; }} className="h-full w-full object-cover rounded-xl" />
                   : initial}
               </div>
               <p className="text-xl font-semibold text-foreground truncate flex-1 min-w-0 leading-tight tracking-tight">{title}</p>
@@ -343,7 +343,7 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
           <div className="flex items-center gap-2.5">
             <div className={`flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg overflow-hidden ${showAvatar ? '' : `${iconBgClass} ${iconTextClass}`}`}>
               {showAvatar
-                ? <img src={avatarUrl ?? undefined} alt={title} className="h-full w-full object-contain rounded-lg" />
+                ? <img src={avatarUrl ?? undefined} alt={title} referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.src = '/images/org_profile.png'; }} className="h-full w-full object-contain rounded-lg" />
                 : <Users className="w-5 h-5" />}
             </div>
             <div className="min-w-0 flex-1 flex flex-col gap-1">

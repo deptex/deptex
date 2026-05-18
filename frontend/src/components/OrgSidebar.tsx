@@ -63,6 +63,7 @@ import { api, Organization, RolePermissions } from '../lib/api';
 import { aegisApi, AegisThread, FixStatusForBadge } from '../lib/aegis-api';
 import { useToast } from '../hooks/use-toast';
 import { ThreadIcon } from './aegis/ThreadIcon';
+import { UserAvatar } from './Avatar';
 import {
   buildOrgSettingsSections,
   computeEffectiveOrgPermissions,
@@ -773,13 +774,9 @@ export default function OrgSidebar({
                   aria-label="Open account menu"
                   className="w-full flex items-center gap-2.5 h-9 px-1.5 rounded-md text-sm font-medium text-foreground-secondary hover:text-foreground hover:bg-background-subtle/50 transition-colors"
                 >
-                  <img
+                  <UserAvatar
                     src={avatarUrl}
-                    alt=""
                     className="h-7 w-7 rounded-full object-cover border border-border flex-shrink-0"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <span className="truncate min-w-0 text-foreground">{displayName}</span>
                 </button>
@@ -792,13 +789,9 @@ export default function OrgSidebar({
                 sideOffset={8}
               >
                 <div className="flex items-center gap-3 px-3 py-2">
-                  <img
+                  <UserAvatar
                     src={avatarUrl}
-                    alt=""
                     className="h-10 w-10 rounded-full object-cover border border-border flex-shrink-0"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <div className="min-w-0 flex-1">
                     {fullName && (
@@ -885,7 +878,7 @@ export default function OrgSidebar({
       >
         <DialogContent
           hideClose
-          className="sm:max-w-[420px] bg-background p-0 gap-0 overflow-hidden"
+          className="sm:max-w-[420px] bg-background-card-header p-0 gap-0 overflow-hidden"
         >
           <div className="px-6 pt-6 pb-4">
             <DialogTitle>Delete chat?</DialogTitle>

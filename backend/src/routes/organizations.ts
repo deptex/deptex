@@ -191,20 +191,23 @@ router.post('/', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Organization name is required' });
     }
 
-    // Use creator's avatar for the new organization (user_profiles, then auth metadata)
-    let creatorAvatarUrl = null;
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('avatar_url')
-      .eq('user_id', userId)
-      .single();
-    if (profile?.avatar_url) {
-      creatorAvatarUrl = profile.avatar_url;
-    } else {
-      const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userId);
-      const meta = authUser?.user_metadata;
-      creatorAvatarUrl = meta?.picture ?? meta?.avatar_url ?? null;
-    }
+    // Use creator's avatar for the new organization. Identity now lives entirely
+    // on auth.users.user_metadata after the user_profiles refactor — prefer the
+    // custom-uploaded avatar over the OAuth-provided one. Fall back to the raw
+    // identity_data because Supabase doesn't always merge OAuth fields into
+    // user_metadata on the first session after sign-up.
+    const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userId);
+    const meta = authUser?.user_metadata;
+    const idData = authUser?.identities?.[0]?.identity_data as
+      | { picture?: string; avatar_url?: string }
+      | undefined;
+    const creatorAvatarUrl =
+      meta?.custom_avatar_url
+      ?? meta?.picture
+      ?? meta?.avatar_url
+      ?? idData?.picture
+      ?? idData?.avatar_url
+      ?? null;
 
     // Create organization (plan tier lives in organization_plans only)
     const { data: organization, error: orgError } = await supabase
@@ -359,6 +362,8 @@ router.post('/', async (req: AuthRequest, res) => {
       ...organization,
       plan: 'free',
       role: 'owner',
+      role_display_name: 'Owner',
+      role_color: '#f59e0b',
     });
   } catch (error: any) {
     console.error('Error creating organization:', error);
@@ -1022,6 +1027,48 @@ router.post('/:id/invitations/:invitationId/accept', async (req: AuthRequest, re
   }
 });
 
+// POST /api/organizations/:id/invitations/:invitationId/decline - Decline invitation
+// Distinct from the admin DELETE below: this validates the caller is the invitee
+// (via email match) rather than an admin/owner of the org.
+router.post('/:id/invitations/:invitationId/decline', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, invitationId } = req.params;
+
+    const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
+    if (userError || !user?.email) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const { data: invitation, error: invitationError } = await supabase
+      .from('organization_invitations')
+      .select('*')
+      .eq('id', invitationId)
+      .eq('organization_id', id)
+      .eq('email', user.email.toLowerCase())
+      .eq('status', 'pending')
+      .single();
+
+    if (invitationError || !invitation) {
+      return res.status(404).json({ error: 'Invitation not found or already used' });
+    }
+
+    const { error: deleteError } = await supabase
+      .from('organization_invitations')
+      .delete()
+      .eq('id', invitationId);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    res.json({ message: 'Invitation declined' });
+  } catch (error: any) {
+    console.error('Error declining invitation:', error);
+    res.status(500).json({ error: error.message || 'Failed to decline invitation' });
+  }
+});
+
 // DELETE /api/organizations/:id/invitations/:invitationId - Cancel invitation
 router.delete('/:id/invitations/:invitationId', async (req: AuthRequest, res) => {
   try {
@@ -1289,9 +1336,16 @@ router.get('/invitations/:invitationId', async (req, res) => {
     // Get organization name
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .eq('id', invitation.organization_id)
       .single();
+
+    const { data: roleRow } = await supabase
+      .from('organization_roles')
+      .select('display_name, color')
+      .eq('organization_id', invitation.organization_id)
+      .eq('name', invitation.role)
+      .maybeSingle();
 
     // Get teams from junction table
     const { data: invitationTeams } = await supabase
@@ -1327,8 +1381,11 @@ router.get('/invitations/:invitationId', async (req, res) => {
       id: invitation.id,
       email: invitation.email,
       role: invitation.role,
+      role_display_name: roleRow?.display_name || null,
+      role_color: roleRow?.color || null,
       organization_id: invitation.organization_id,
       organization_name: organization?.name || 'Organization',
+      organization_avatar_url: organization?.avatar_url || null,
       expires_at: invitation.expires_at,
       team_ids: teamIds,
       team_names: teamNames,
