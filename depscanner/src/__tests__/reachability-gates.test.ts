@@ -6,7 +6,11 @@
  * These tests pin the gate arithmetic without running a scan.
  */
 
-import { evaluateReachabilityGates, type CorpusReport } from '../../scripts/reachability-corpus';
+import {
+  evaluateReachabilityGates,
+  checkBaselineLock,
+  type CorpusReport,
+} from '../../scripts/reachability-corpus';
 
 function repo(name: string, ecosystem: string, matches: Array<[string, string, string]>) {
   // matches: [cve, expected_reachability, observed_reachability]
@@ -175,5 +179,48 @@ describe('evaluateReachabilityGates', () => {
     const g = evaluateReachabilityGates(report);
     expect(g.allFindingsTotal).toBe(20);
     expect(g.allFindingsNoiseReductionPct).toBe(40); // (6 + 0.5*4) / 20
+  });
+});
+
+describe('checkBaselineLock', () => {
+  const locked = {
+    'CVE-A': 'unreachable',
+    'CVE-B': 'function',
+    'CVE-C': 'module',
+  };
+
+  it('passes when every frozen label still matches the live corpus', () => {
+    const corpus = new Map([
+      ['CVE-A', 'unreachable'],
+      ['CVE-B', 'function'],
+      ['CVE-C', 'module'],
+      ['CVE-NEW', 'unreachable'], // a Layer-3 addition — not locked, allowed
+    ]);
+    const r = checkBaselineLock(corpus, locked);
+    expect(r.ok).toBe(true);
+    expect(r.violations).toEqual([]);
+  });
+
+  it('fails when a frozen label was relabelled in the corpus', () => {
+    const corpus = new Map([
+      ['CVE-A', 'module'], // was 'unreachable' — softened to flatter the metric
+      ['CVE-B', 'function'],
+      ['CVE-C', 'module'],
+    ]);
+    const r = checkBaselineLock(corpus, locked);
+    expect(r.ok).toBe(false);
+    expect(r.violations).toHaveLength(1);
+    expect(r.violations[0]).toContain('CVE-A');
+  });
+
+  it('fails when a frozen CVE was removed from the corpus', () => {
+    const corpus = new Map([
+      ['CVE-A', 'unreachable'],
+      ['CVE-C', 'module'],
+    ]);
+    const r = checkBaselineLock(corpus, locked);
+    expect(r.ok).toBe(false);
+    expect(r.violations).toHaveLength(1);
+    expect(r.violations[0]).toContain('CVE-B');
   });
 });

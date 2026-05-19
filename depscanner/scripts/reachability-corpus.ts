@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as yaml from 'js-yaml';
 
 // CVE tiers that mean "reachable" — the false-negative gate forbids any of
 // these from being observed as `unreachable`.
@@ -218,16 +219,84 @@ function die(msg: string): never {
   process.exit(2);
 }
 
+// ── Baseline lock ───────────────────────────────────────────────────────────
+// Asserts no pre-feature `expected_reachability` label was silently changed.
+// See scripts/reachability-corpus-baseline.lock.yaml for the rationale.
+
+interface CorpusCveLike {
+  id?: string;
+  expected_reachability?: string;
+}
+interface CorpusRepoLike {
+  ground_truth_cves?: CorpusCveLike[];
+}
+interface CorpusFileLike {
+  repos?: CorpusRepoLike[];
+}
+
+/** CVE id → expected_reachability across every repo in the corpus YAML. */
+export function loadCorpusCveLabels(corpusPath: string): Map<string, string> {
+  const doc = yaml.load(fs.readFileSync(corpusPath, 'utf8')) as CorpusFileLike;
+  const labels = new Map<string, string>();
+  for (const repo of doc?.repos ?? []) {
+    for (const cve of repo.ground_truth_cves ?? []) {
+      if (cve?.id && cve.expected_reachability) labels.set(cve.id, cve.expected_reachability);
+    }
+  }
+  return labels;
+}
+
+export interface BaselineLockResult {
+  ok: boolean;
+  /** Frozen CVEs whose live label changed or that were removed from the corpus. */
+  violations: string[];
+}
+
+/**
+ * Assert every frozen pre-feature label still matches the live corpus. A
+ * changed label — or a deleted CVE — is a violation: the noise-reduction
+ * number must not be flattered by quietly relabelling the baseline. Pure over
+ * its two file inputs so the gate unit test can exercise it.
+ */
+export function checkBaselineLock(corpusLabels: Map<string, string>, lockedLabels: Record<string, string>): BaselineLockResult {
+  const violations: string[] = [];
+  for (const [cve, expected] of Object.entries(lockedLabels)) {
+    const current = corpusLabels.get(cve);
+    if (current === undefined) {
+      violations.push(`${cve}: frozen label '${expected}' but the CVE is no longer in the corpus`);
+    } else if (current !== expected) {
+      violations.push(`${cve}: frozen label '${expected}' but the corpus now says '${current}'`);
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+function printBaselineResult(r: BaselineLockResult, lockedCount: number): void {
+  const mark = r.ok ? 'PASS' : 'FAIL';
+  console.log(`\nBaseline lock — ${lockedCount} frozen pre-feature labels unchanged: ${mark}`);
+  for (const v of r.violations) {
+    console.log(`         BASELINE DRIFT: ${v}`);
+  }
+}
+
 function main(): void {
   const depscannerRoot = path.resolve(__dirname, '..');
+  const corpusPath = path.join(depscannerRoot, 'scripts', 'reachability-corpus.yaml');
+  const lockPath = path.join(depscannerRoot, 'scripts', 'reachability-corpus-baseline.lock.yaml');
   const reportArg = process.argv.find((a) => a.startsWith('--report='));
+
+  // Baseline-lock check — static, independent of the scan. Runs in both the
+  // scan and the --report= path so a relabelled baseline fails fast.
+  if (!fs.existsSync(corpusPath)) die(`corpus file not found: ${corpusPath}`);
+  if (!fs.existsSync(lockPath)) die(`baseline lock not found: ${lockPath}`);
+  const lockedLabels =
+    ((yaml.load(fs.readFileSync(lockPath, 'utf8')) as { labels?: Record<string, string> })?.labels) ?? {};
+  const baseline = checkBaselineLock(loadCorpusCveLabels(corpusPath), lockedLabels);
 
   let reportPath: string;
   if (reportArg) {
     reportPath = path.resolve(reportArg.slice('--report='.length));
   } else {
-    const corpusPath = path.join(depscannerRoot, 'scripts', 'reachability-corpus.yaml');
-    if (!fs.existsSync(corpusPath)) die(`corpus file not found: ${corpusPath}`);
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reachability-corpus-'));
     console.log(`[reachability-corpus] scanning ${corpusPath} -> ${outputDir}`);
     const scan = spawnSync(
@@ -249,7 +318,9 @@ function main(): void {
 
   const gates = evaluateReachabilityGates(report);
   printGateReport(gates);
-  process.exit(gates.pass ? 0 : 1);
+  printBaselineResult(baseline, Object.keys(lockedLabels).length);
+
+  process.exit(gates.pass && baseline.ok ? 0 : 1);
 }
 
 if (require.main === module) {
