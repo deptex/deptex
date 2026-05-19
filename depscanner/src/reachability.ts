@@ -530,66 +530,6 @@ export async function updateReachabilityLevels(
     ]) ?? []
   );
 
-  // Precision-fix support: a forward closure over the dependency edge graph
-  // from every *imported* dependency (files_importing_count > 0). A production
-  // transitive that the import heuristic below would call `unreachable` is
-  // demoted to `module` when an imported ancestor reaches it — the jackson-core
-  // / rustix false-positive class (reached via Spring / std I/O, never
-  // first-party-imported). When the edge graph is unavailable (cdxgen graph
-  // unwired) the closure is empty and the heuristic-unreachable branch floors
-  // at `module` rather than guessing.
-  const importedReachable = new Set<string>();
-  let edgeGraphAvailable = false;
-  {
-    const projectVersionIds = [
-      ...new Set(
-        (pds ?? [])
-          .map((pd: any) => pd.dependency_version_id)
-          .filter((v: unknown): v is string => typeof v === 'string' && v.length > 0),
-      ),
-    ];
-    if (projectVersionIds.length > 0) {
-      const edges: Array<{ parent_version_id: string; child_version_id: string }> = [];
-      for (let i = 0; i < projectVersionIds.length; i += 200) {
-        const chunk = projectVersionIds.slice(i, i + 200);
-        const { data: edgeRows } = await supabase
-          .from('dependency_version_edges')
-          .select('parent_version_id, child_version_id')
-          .in('parent_version_id', chunk);
-        if (edgeRows) edges.push(...(edgeRows as typeof edges));
-      }
-      edgeGraphAvailable = edges.length > 0;
-      if (edgeGraphAvailable) {
-        const adjacency = new Map<string, string[]>();
-        for (const e of edges) {
-          const kids = adjacency.get(e.parent_version_id);
-          if (kids) kids.push(e.child_version_id);
-          else adjacency.set(e.parent_version_id, [e.child_version_id]);
-        }
-        const queue = [
-          ...new Set(
-            (pds ?? [])
-              .filter(
-                (pd: any) =>
-                  Number(pd.files_importing_count ?? 0) > 0 && pd.dependency_version_id,
-              )
-              .map((pd: any) => pd.dependency_version_id as string),
-          ),
-        ];
-        for (const r of queue) importedReachable.add(r);
-        while (queue.length > 0) {
-          const vid = queue.pop()!;
-          for (const child of adjacency.get(vid) ?? []) {
-            if (!importedReachable.has(child)) {
-              importedReachable.add(child);
-              queue.push(child);
-            }
-          }
-        }
-      }
-    }
-  }
-
   // Try the full phase23 column list first. On pre-migration schemas the
   // select returns `42703 undefined_column` — fall back to the pre-phase23
   // column list (which still produces atom-based module/function/data_flow
@@ -1008,31 +948,12 @@ export async function updateReachabilityLevels(
           meta.filesImporting === 0 &&
           !isFrameworkEmbeddedRuntime(depName);
         if (heuristicUnreachable) {
-          // Precision guard: a production transitive is only genuinely
-          // unreachable when no *imported* ancestor reaches it in the
-          // dependency graph. A dep reached via an imported parent (the
-          // jackson-core / rustix class — Spring, std I/O) is exercised —
-          // demote to `module`. The demotion fires only on POSITIVE
-          // evidence: a wired edge graph in which an imported ancestor
-          // reaches this version. With no edge graph there is no evidence
-          // either way, so the heuristic verdict (`unreachable`) stands —
-          // blanket-flooring at `module` would erase every genuine orphan
-          // transitive on an unwired-graph scan (an ecosystem whose only
-          // unreachable findings are prod transitives would score 0%).
-          const versionId = meta?.versionId ?? null;
-          const reachedByImport =
-            edgeGraphAvailable && versionId != null && importedReachable.has(versionId);
-          if (reachedByImport) {
-            level = 'module';
-          } else {
-            level = 'unreachable';
-            details = {
-              reason:
-                'no source file imports this transitive dependency, and no imported dependency reaches it in the graph',
-              scope: 'orphan',
-              verdict: 'orphan_transitive_unreachable',
-            };
-          }
+          level = 'unreachable';
+          details = {
+            reason: 'no source file imports this transitive dependency',
+            scope: 'orphan',
+            verdict: 'orphan_transitive_unreachable',
+          };
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a

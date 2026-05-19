@@ -282,7 +282,15 @@ export function patchDevDependencies(
   // never via a production root — is itself dev-only. Skipped when the graph
   // is untrusted (the direct-set fallback marked every dep transitive, so the
   // closure would be meaningless); direct-dev marking from pass 1 still holds.
-  if (!directSetTrusted || relationships.length === 0) return;
+  //
+  // Maven is excluded: cdxgen's maven `dependencies` graph is too shallow to
+  // compute prod-reachability — a test-scope starter (testcontainers, the
+  // *-test starters) pulls a large subtree that overlaps production
+  // (jackson, logback, micrometer), and the production-side edges several
+  // hops down are not wired, so the closure mis-marks genuine prod
+  // transitives dev-only. Maven dev-scope therefore comes from pass-1 direct
+  // `<scope>test</scope>` / `provided` deps alone.
+  if (!directSetTrusted || relationships.length === 0 || ecosystem === 'maven') return;
 
   const adjacency = new Map<string, string[]>();
   for (const rel of relationships) {
