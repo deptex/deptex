@@ -44,11 +44,17 @@ export interface RepoResultLike {
   ecosystem: string;
   status: string;
   ground_truth_matched?: GroundTruthMatchLike[];
+  /** Reachability-level counts across all observed findings (set by oss-corpus). */
+  by_reachability?: Record<string, number>;
 }
 
 export interface CorpusReport {
   results?: RepoResultLike[];
 }
+
+/** Minimum corpus recall below which Gate 1 cannot be reported as a pass —
+ *  a shrinking observed set would otherwise silently flatter the metric. */
+const RECALL_FLOOR_PCT = 90;
 
 export interface GateReport {
   observedTotal: number;
@@ -56,11 +62,25 @@ export interface GateReport {
   moduleCount: number;
   /** (unreachable + 0.5*module) / observed, as a percentage. */
   noiseReductionPct: number;
+  /** Full-weight unreachable-only rate (unreachable / observed) — the honest
+   *  number, with no `module` half-credit. Reported alongside noiseReductionPct. */
+  unreachableOnlyPct: number;
   perEcosystemUnreachablePct: Record<string, number>;
   falseNegatives: Array<{ repo: string; cve: string; expected: string }>;
+  /** Hand-labelled CVEs the scan never found — a recall gap, not a verdict. */
+  unobservedCves: Array<{ repo: string; cve: string }>;
+  /** observed ground-truth CVEs / total ground-truth CVEs, as a percentage. */
+  recallPct: number;
+  /** Noise reduction over ALL observed findings, not just the hand-labelled
+   *  allowlist. Informational, never gated — a large gap from noiseReductionPct
+   *  flags allowlist selection bias. 0 when oss-corpus emitted no by_reachability. */
+  allFindingsNoiseReductionPct: number;
+  allFindingsTotal: number;
   gate1Pass: boolean;
   gate2Pass: boolean;
   gate3Pass: boolean;
+  /** Recall >= floor AND zero unobserved CVEs — guards a shrinking denominator. */
+  recallFloorPass: boolean;
   pass: boolean;
 }
 
@@ -74,17 +94,34 @@ export function evaluateReachabilityGates(report: CorpusReport): GateReport {
   let unreachableCount = 0;
   let moduleCount = 0;
   let observedTotal = 0;
+  let groundTruthTotal = 0;
   const perEco: Record<string, { unreachable: number; total: number }> = {};
   const falseNegatives: GateReport['falseNegatives'] = [];
+  const unobservedCves: GateReport['unobservedCves'] = [];
+  let allUnreachable = 0;
+  let allModule = 0;
+  let allFindingsTotal = 0;
 
   for (const repo of report.results ?? []) {
     if (repo.status !== 'ok') continue;
     const eco = repo.ecosystem || 'unknown';
     perEco[eco] ??= { unreachable: 0, total: 0 };
+
+    // All-findings tally — every observed finding, not just the allowlist.
+    const byR = repo.by_reachability ?? {};
+    allUnreachable += byR.unreachable ?? 0;
+    allModule += byR.module ?? 0;
+    for (const n of Object.values(byR)) allFindingsTotal += n;
     for (const m of repo.ground_truth_matched ?? []) {
+      groundTruthTotal++;
       // Only CVEs the scan actually found carry an observed reachability.
-      // An unobserved CVE is a recall gap, not a reachability verdict.
-      if (!m.observed || !m.observed_reachability) continue;
+      // An unobserved CVE is a recall gap, not a reachability verdict — it
+      // is excluded from the noise-reduction math but tracked for the
+      // recall floor so a shrinking observed set cannot flatter Gate 1.
+      if (!m.observed || !m.observed_reachability) {
+        unobservedCves.push({ repo: repo.name, cve: m.cve });
+        continue;
+      }
       observedTotal++;
       perEco[eco].total++;
       const obs = m.observed_reachability;
@@ -102,6 +139,14 @@ export function evaluateReachabilityGates(report: CorpusReport): GateReport {
 
   const noiseReductionPct =
     observedTotal === 0 ? 0 : round2(((unreachableCount + 0.5 * moduleCount) / observedTotal) * 100);
+  const unreachableOnlyPct =
+    observedTotal === 0 ? 0 : round2((unreachableCount / observedTotal) * 100);
+  const recallPct =
+    groundTruthTotal === 0 ? 0 : round2((observedTotal / groundTruthTotal) * 100);
+  const allFindingsNoiseReductionPct =
+    allFindingsTotal === 0
+      ? 0
+      : round2(((allUnreachable + 0.5 * allModule) / allFindingsTotal) * 100);
 
   const perEcosystemUnreachablePct: Record<string, number> = {};
   let gate2Pass = Object.keys(perEco).length > 0;
@@ -112,18 +157,27 @@ export function evaluateReachabilityGates(report: CorpusReport): GateReport {
 
   const gate1Pass = noiseReductionPct >= 60;
   const gate3Pass = falseNegatives.length === 0;
+  // A pass is only meaningful over a corpus the scan actually found: low
+  // recall, or any unobserved hand-labelled CVE, shrinks the denominator.
+  const recallFloorPass = recallPct >= RECALL_FLOOR_PCT && unobservedCves.length === 0;
 
   return {
     observedTotal,
     unreachableCount,
     moduleCount,
     noiseReductionPct,
+    unreachableOnlyPct,
     perEcosystemUnreachablePct,
     falseNegatives,
+    unobservedCves,
+    recallPct,
+    allFindingsNoiseReductionPct,
+    allFindingsTotal,
     gate1Pass,
     gate2Pass,
     gate3Pass,
-    pass: gate1Pass && gate2Pass && gate3Pass,
+    recallFloorPass,
+    pass: gate1Pass && gate2Pass && gate3Pass && recallFloorPass,
   };
 }
 
@@ -131,7 +185,10 @@ function printGateReport(g: GateReport): void {
   const mark = (ok: boolean) => (ok ? 'PASS' : 'FAIL');
   console.log('\n=== Reachability acceptance gates ===');
   console.log(`Observed CVEs: ${g.observedTotal} (unreachable=${g.unreachableCount}, module=${g.moduleCount})`);
-  console.log(`Gate 1 — noise reduction >= 60%: ${mark(g.gate1Pass)} (${g.noiseReductionPct}%)`);
+  console.log(
+    `Gate 1 — noise reduction >= 60%: ${mark(g.gate1Pass)} ` +
+      `(${g.noiseReductionPct}% module-weighted | ${g.unreachableOnlyPct}% unreachable-only)`,
+  );
   console.log(`Gate 2 — every ecosystem > 0% unreachable: ${mark(g.gate2Pass)}`);
   for (const [eco, pct] of Object.entries(g.perEcosystemUnreachablePct)) {
     console.log(`         ${eco}: ${pct}% unreachable`);
@@ -139,6 +196,19 @@ function printGateReport(g: GateReport): void {
   console.log(`Gate 3 — zero reachable->unreachable false negatives: ${mark(g.gate3Pass)}`);
   for (const fn of g.falseNegatives) {
     console.log(`         FALSE NEGATIVE: ${fn.cve} in ${fn.repo} (labelled ${fn.expected}, scanned unreachable)`);
+  }
+  console.log(
+    `Recall floor — >= ${RECALL_FLOOR_PCT}% observed, zero unobserved: ` +
+      `${mark(g.recallFloorPass)} (${g.recallPct}% recall)`,
+  );
+  for (const u of g.unobservedCves) {
+    console.log(`         UNOBSERVED: ${u.cve} in ${u.repo} (hand-labelled but the scan never found it)`);
+  }
+  if (g.allFindingsTotal > 0) {
+    console.log(
+      `All-findings noise reduction (informational, not gated): ` +
+        `${g.allFindingsNoiseReductionPct}% over ${g.allFindingsTotal} observed findings`,
+    );
   }
   console.log(`\nResult: ${g.pass ? 'ALL GATES PASS' : 'GATES FAILED'}\n`);
 }

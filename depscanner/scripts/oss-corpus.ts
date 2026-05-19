@@ -87,6 +87,10 @@ interface RepoResult {
   scan_duration_ms?: number;
   total_findings?: number;
   reachable_findings?: number;
+  /** Reachability-level counts across ALL observed findings (not just the
+   *  hand-labelled ground-truth allowlist) — lets the gate report an
+   *  all-findings noise-reduction number that exposes allowlist selection bias. */
+  by_reachability?: Record<string, number>;
   ai_cost_usd?: number;
   ground_truth_total: number;
   ground_truth_matched: GroundTruthMatch[];
@@ -450,6 +454,11 @@ function analyse(input: AnalysisInput): RepoResult {
 
   base.total_findings = vulns.length;
   base.reachable_findings = vulns.filter((v) => v?.is_reachable).length;
+  base.by_reachability = vulns.reduce((acc: Record<string, number>, v) => {
+    const lvl = (v?.reachability_level ?? 'unknown') as string;
+    acc[lvl] = (acc[lvl] ?? 0) + 1;
+    return acc;
+  }, {});
   base.dependencies_count = deps.length;
   base.semgrep_count = semgrep.length;
   base.secrets_count = secrets.length;

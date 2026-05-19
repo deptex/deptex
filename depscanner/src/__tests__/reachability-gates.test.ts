@@ -118,4 +118,62 @@ describe('evaluateReachabilityGates', () => {
     expect(g.gate2Pass).toBe(false);
     expect(g.pass).toBe(false);
   });
+
+  it('fails the recall floor and refuses a pass when a hand-labelled CVE is unobserved', () => {
+    const report: CorpusReport = {
+      results: [
+        {
+          name: 'r-npm',
+          ecosystem: 'npm',
+          status: 'ok',
+          ground_truth_matched: [
+            { cve: 'CVE-1', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+            { cve: 'CVE-2', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+            { cve: 'CVE-3', observed: false, observed_reachability: null, expected_reachability: 'module' },
+          ],
+        },
+      ],
+    };
+    const g = evaluateReachabilityGates(report);
+    // 2/2 observed are unreachable → gate 1 clears, but 1 of 3 CVEs unobserved.
+    expect(g.recallPct).toBe(66.67);
+    expect(g.recallFloorPass).toBe(false);
+    expect(g.unobservedCves).toEqual([{ repo: 'r-npm', cve: 'CVE-3' }]);
+    expect(g.pass).toBe(false);
+  });
+
+  it('reports the full-weight unreachable-only rate alongside the module-weighted one', () => {
+    const report: CorpusReport = {
+      results: [
+        repo('r-npm', 'npm', [
+          ['CVE-1', 'unreachable', 'unreachable'],
+          ['CVE-2', 'module', 'module'],
+          ['CVE-3', 'module', 'module'],
+          ['CVE-4', 'function', 'function'],
+        ]),
+      ],
+    };
+    const g = evaluateReachabilityGates(report);
+    expect(g.noiseReductionPct).toBe(50); // (1 + 0.5*2) / 4
+    expect(g.unreachableOnlyPct).toBe(25); // 1 / 4
+  });
+
+  it('computes the informational all-findings number from by_reachability', () => {
+    const report: CorpusReport = {
+      results: [
+        {
+          name: 'r-npm',
+          ecosystem: 'npm',
+          status: 'ok',
+          ground_truth_matched: [
+            { cve: 'CVE-1', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+          ],
+          by_reachability: { unreachable: 6, module: 4, function: 10 },
+        },
+      ],
+    };
+    const g = evaluateReachabilityGates(report);
+    expect(g.allFindingsTotal).toBe(20);
+    expect(g.allFindingsNoiseReductionPct).toBe(40); // (6 + 0.5*4) / 20
+  });
 });
