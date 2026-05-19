@@ -117,6 +117,35 @@ repos:
       - id: CVE-2026-24001
         expected_reachability: unreachable
         source: diff — transitive dep of the mocha test toolchain; not in express lib/.
+      - id: CVE-2025-7339
+        expected_reachability: unreachable
+        source: |
+          on-headers. UNREACHABLE: on-headers is pulled transitively by
+          express's devDependency middleware (morgan / cookie-session /
+          express-session); express's library code never sets a response
+          header through it.
+      - id: CVE-2024-11831
+        expected_reachability: unreachable
+        source: |
+          serialize-javascript. UNREACHABLE: transitive dependency of the
+          mocha test toolchain; express's library code serializes nothing.
+      - id: CVE-2026-34043
+        expected_reachability: unreachable
+        source: serialize-javascript — same transitive mocha-toolchain position.
+      - id: CVE-2022-21681
+        expected_reachability: unreachable
+        source: |
+          marked. UNREACHABLE: marked is a devDependency used only by the
+          examples/markdown demo; express's library code parses no markdown.
+      - id: CVE-2022-21680
+        expected_reachability: unreachable
+        source: marked — devDependency, examples-only, not used by express lib/.
+      - id: CVE-2021-29469
+        expected_reachability: unreachable
+        source: |
+          redis. UNREACHABLE: redis is a transitive dependency of the
+          connect-redis devDependency (a session-store example); express's
+          library code opens no redis connection.
 
   - name: spring-petclinic
     repo_url: https://github.com/spring-projects/spring-petclinic.git
@@ -200,3 +229,74 @@ repos:
         source: |
           time crate. Pulled transitively; bat formats timestamps for cached
           assets, so the crate is used — specific vulnerable path unverified.
+
+  - name: fastify
+    repo_url: https://github.com/fastify/fastify.git
+    ecosystem: npm
+    # Pinned release tag. fastify declares 16 runtime deps but pulls a large
+    # devDependency tree (typescript-eslint, markdownlint, the release tooling)
+    # — the right application shape for measuring dev-scope noise reduction.
+    ref: v4.26.0
+    # Hand-labelled from a discovery scan: every CVE below is on a package
+    # that reaches fastify only through its devDependency tree (lint / test /
+    # release tooling), never through fastify's 16 runtime dependencies.
+    # fast-uri and fast-json-patch advisories are deliberately omitted — those
+    # packages are on fastify's production tree.
+    ground_truth_cves:
+      - id: CVE-2022-25860
+        expected_reachability: unreachable
+        source: |
+          simple-git. UNREACHABLE: simple-git reaches fastify only via the
+          branch-comparer devDependency (release tooling); fastify's library
+          code shells out to no git.
+      - id: CVE-2026-28291
+        expected_reachability: unreachable
+        source: simple-git — same branch-comparer devDependency position.
+      - id: CVE-2024-43799
+        expected_reachability: unreachable
+        source: |
+          send. UNREACHABLE: send is a direct fastify devDependency used by the
+          test suite; fastify's library code does not stream files with it.
+      - id: CVE-2026-1527
+        expected_reachability: unreachable
+        source: |
+          undici. UNREACHABLE: undici is a direct fastify devDependency (the
+          test-suite HTTP client); fastify's library code ships no HTTP client.
+      - id: CVE-2026-22036
+        expected_reachability: unreachable
+        source: undici — same direct-devDependency test-client position.
+      - id: CVE-2025-54798
+        expected_reachability: unreachable
+        source: |
+          tmp. UNREACHABLE: tmp is a transitive dependency of fastify's test
+          toolchain; fastify's library code creates no temp files.
+      - id: CVE-2026-33532
+        expected_reachability: unreachable
+        source: |
+          yaml. UNREACHABLE: yaml reaches fastify only through lint/config
+          devDependency tooling; fastify parses JSON, never YAML, at runtime.
+      - id: CVE-2024-4067
+        expected_reachability: unreachable
+        source: |
+          micromatch ReDoS. UNREACHABLE: micromatch is a transitive dependency
+          of fastify's eslint / glob devDependency tooling.
+      - id: CVE-2026-2327
+        expected_reachability: unreachable
+        source: |
+          markdown-it. UNREACHABLE: markdown-it is a transitive dependency of
+          the markdownlint-cli2 devDependency; fastify renders no markdown.
+      - id: CVE-2026-2950
+        expected_reachability: unreachable
+        source: |
+          lodash. UNREACHABLE: lodash reaches fastify only through eslint-plugin
+          devDependency tooling; fastify's library code does not depend on it.
+      - id: CVE-2026-33750
+        expected_reachability: unreachable
+        source: |
+          brace-expansion. UNREACHABLE: transitive dependency of the
+          minimatch / eslint devDependency tooling; not on fastify's runtime path.
+      - id: CVE-2025-27789
+        expected_reachability: unreachable
+        source: |
+          @babel/helpers. UNREACHABLE: Babel reaches fastify only through
+          devDependency tooling; fastify transpiles nothing at runtime.
