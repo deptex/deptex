@@ -1012,12 +1012,16 @@ export async function updateReachabilityLevels(
           // unreachable when no *imported* ancestor reaches it in the
           // dependency graph. A dep reached via an imported parent (the
           // jackson-core / rustix class — Spring, std I/O) is exercised —
-          // demote to `module`. With no edge graph we cannot tell reached
-          // from orphaned, so floor at `module` rather than risk a false
-          // `unreachable`.
+          // demote to `module`. The demotion fires only on POSITIVE
+          // evidence: a wired edge graph in which an imported ancestor
+          // reaches this version. With no edge graph there is no evidence
+          // either way, so the heuristic verdict (`unreachable`) stands —
+          // blanket-flooring at `module` would erase every genuine orphan
+          // transitive on an unwired-graph scan (an ecosystem whose only
+          // unreachable findings are prod transitives would score 0%).
           const versionId = meta?.versionId ?? null;
           const reachedByImport =
-            !edgeGraphAvailable || (versionId != null && importedReachable.has(versionId));
+            edgeGraphAvailable && versionId != null && importedReachable.has(versionId);
           if (reachedByImport) {
             level = 'module';
           } else {

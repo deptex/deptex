@@ -405,11 +405,23 @@ function collectMavenDevDeps(repoRoot: string, devNames: Set<string>): void {
   const pomPath = path.join(repoRoot, 'pom.xml');
   try {
     const content = fs.readFileSync(pomPath, 'utf8');
-    // Match dependencies with <scope>test</scope> or <scope>provided</scope>
-    const depRegex = /<dependency>\s*<groupId>([^<]+)<\/groupId>\s*<artifactId>([^<]+)<\/artifactId>[\s\S]*?<scope>(test|provided)<\/scope>[\s\S]*?<\/dependency>/g;
-    let match;
-    while ((match = depRegex.exec(content)) !== null) {
-      devNames.add(`${match[1]}:${match[2]}`);
+    // Isolate each <dependency> block, THEN check its scope. An earlier
+    // single-regex form let `[\s\S]*?` between <artifactId> and <scope> run
+    // past </dependency>, so a compile-scope dependency sitting just before
+    // the first test-scope one absorbed that test scope — on spring-petclinic
+    // that mis-flagged the very first dependency (spring-boot-starter-
+    // actuator) as test-scope, which then propagated dev-scope across its
+    // whole transitive subtree (jackson, micrometer, logback…) and produced
+    // a Gate-3 false negative. Matching the block first keeps the scope
+    // check bounded to the dependency it belongs to.
+    const blockRegex = /<dependency>([\s\S]*?)<\/dependency>/g;
+    let block;
+    while ((block = blockRegex.exec(content)) !== null) {
+      const body = block[1];
+      if (!/<scope>\s*(test|provided)\s*<\/scope>/.test(body)) continue;
+      const groupId = body.match(/<groupId>([^<]+)<\/groupId>/)?.[1]?.trim();
+      const artifactId = body.match(/<artifactId>([^<]+)<\/artifactId>/)?.[1]?.trim();
+      if (groupId && artifactId) devNames.add(`${groupId}:${artifactId}`);
     }
   } catch { /* ignore */ }
 }
