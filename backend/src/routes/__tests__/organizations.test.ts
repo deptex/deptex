@@ -181,6 +181,37 @@ describe('Organization Routes', () => {
     });
   });
 
+  describe('DELETE /api/organizations/:id', () => {
+    it('returns 403 for a non-owner', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .delete('/api/organizations/org-1')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 404 for a non-member', async () => {
+      setTableResponse('organization_members', 'single', { data: null, error: { message: 'Not found' } });
+
+      const res = await request(app)
+        .delete('/api/organizations/org-1')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 200 when the owner deletes the organization', async () => {
+      // beforeEach already sets the caller's organization_members role to owner.
+      const res = await request(app)
+        .delete('/api/organizations/org-1')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe('GET /api/organizations/:id/invitations', () => {
     it.skip('returns 200 with invitations array for org member — mock chain out of sync', async () => {
       const mockInvitations = [

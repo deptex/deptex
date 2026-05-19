@@ -10,7 +10,6 @@ import { getOpenAIClient } from '../lib/openai';
 import { getPlatformProvider } from '../lib/ai/provider';
 import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
-import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
 import { emitEvent } from '../lib/event-bus';
 import { getActiveExtractionId, getActiveExtractionIds } from '../lib/active-extraction';
 
@@ -220,64 +219,47 @@ router.post('/', async (req: AuthRequest, res) => {
       throw orgError;
     }
 
-    // Create organization_plans row (single source of truth for plan tier and billing)
-    const { error: planError } = await supabase
-      .from('organization_plans')
-      .insert({ organization_id: organization.id, plan_tier: 'free' });
+    // The plan row, owner membership, default roles, and the seed data
+    // (statuses, asset tiers, policy code) all only need organization.id and
+    // are mutually independent — insert them in one parallel batch instead of
+    // ~8 sequential round trips.
+    const defaultRolePermissions = {
+      view_settings: true,
+      manage_billing: true,
+      manage_security: true,
+      view_activity: true,
+      manage_compliance: true,
+      manage_statuses: true,
+      interact_with_aegis: true,
+      trigger_fix: true,
+      manage_aegis: true,
+      view_ai_spending: true,
+      manage_incidents: true,
+      view_members: true,
+      add_members: true,
+      edit_roles: true,
+      edit_permissions: true,
+      kick_members: true,
+      manage_teams_and_projects: true,
+      manage_integrations: true,
+      manage_notifications: true,
+      manage_organization_settings: true,
+    };
 
-    if (planError) {
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw planError;
-    }
-
-    // Add creator as owner
-    const { error: memberError } = await supabase
-      .from('organization_members')
-      .insert({
-        organization_id: organization.id,
-        user_id: userId,
-        role: 'owner',
-      });
-
-    if (memberError) {
-      // Rollback organization creation
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw memberError;
-    }
-
-    // Create default roles (owner and member)
-    const { error: rolesError } = await supabase
-      .from('organization_roles')
-      .insert([
+    const seedResults = await Promise.all([
+      supabase.from('organization_plans')
+        .insert({ organization_id: organization.id, plan_tier: 'free' }),
+      supabase.from('organization_members')
+        .insert({ organization_id: organization.id, user_id: userId, role: 'owner' }),
+      supabase.from('organization_roles').insert([
         {
           organization_id: organization.id,
           name: 'owner',
           display_name: 'Owner',
           display_order: 0,
           is_default: true,
-          color: '#f59e0b', // Amber/orange color
-          permissions: {
-            view_settings: true,
-            manage_billing: true,
-            manage_security: true,
-            view_activity: true,
-            manage_compliance: true,
-            manage_statuses: true,
-            interact_with_aegis: true,
-            trigger_fix: true,
-            manage_aegis: true,
-            view_ai_spending: true,
-            manage_incidents: true,
-            view_members: true,
-            add_members: true,
-            edit_roles: true,
-            edit_permissions: true,
-            kick_members: true,
-            manage_teams_and_projects: true,
-            manage_integrations: true,
-            manage_notifications: true,
-            manage_organization_settings: true,
-          },
+          color: '#f59e0b',
+          permissions: defaultRolePermissions,
         },
         {
           organization_id: organization.id,
@@ -285,72 +267,30 @@ router.post('/', async (req: AuthRequest, res) => {
           display_name: 'Member',
           display_order: 2,
           is_default: true,
-          permissions: {
-            view_settings: true,
-            manage_billing: true,
-            manage_security: true,
-            view_activity: true,
-            manage_compliance: true,
-            manage_statuses: true,
-            interact_with_aegis: true,
-            trigger_fix: true,
-            manage_aegis: true,
-            view_ai_spending: true,
-            manage_incidents: true,
-            view_members: true,
-            add_members: true,
-            edit_roles: true,
-            edit_permissions: true,
-            kick_members: true,
-            manage_teams_and_projects: true,
-            manage_integrations: true,
-            manage_notifications: true,
-            manage_organization_settings: true,
-          },
+          permissions: defaultRolePermissions,
         },
-      ]);
-
-    if (rolesError) {
-      // Rollback organization and member creation
-      await supabase.from('organization_members').delete().eq('organization_id', organization.id);
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw rolesError;
-    }
-
-    // Seed default statuses
-    await supabase.from('organization_statuses').insert(
-      DEFAULT_STATUSES.map(s => ({ ...s, organization_id: organization.id }))
-    );
-
-    // Seed default asset tiers
-    await supabase.from('organization_asset_tiers').insert(
-      DEFAULT_ASSET_TIERS.map(t => ({ ...t, organization_id: organization.id }))
-    );
-
-    // Seed default policy code tables
-    await Promise.all([
-      supabase.from('organization_package_policies').insert({
-        organization_id: organization.id,
-        package_policy_code: DEFAULT_PACKAGE_POLICY_CODE,
-        updated_by_id: userId,
-      }),
-      supabase.from('organization_status_codes').insert({
-        organization_id: organization.id,
-        project_status_code: DEFAULT_PROJECT_STATUS_CODE,
-        updated_by_id: userId,
-      }),
-      supabase.from('organization_pr_checks').insert({
-        organization_id: organization.id,
-        pr_check_code: DEFAULT_PR_CHECK_CODE,
-        updated_by_id: userId,
-      }),
+      ]),
+      supabase.from('organization_statuses')
+        .insert(DEFAULT_STATUSES.map((s) => ({ ...s, organization_id: organization.id }))),
+      supabase.from('organization_asset_tiers')
+        .insert(DEFAULT_ASSET_TIERS.map((t) => ({ ...t, organization_id: organization.id }))),
+      supabase.from('organization_package_policies')
+        .insert({ organization_id: organization.id, package_policy_code: DEFAULT_PACKAGE_POLICY_CODE, updated_by_id: userId }),
+      supabase.from('organization_status_codes')
+        .insert({ organization_id: organization.id, project_status_code: DEFAULT_PROJECT_STATUS_CODE, updated_by_id: userId }),
+      supabase.from('organization_pr_checks')
+        .insert({ organization_id: organization.id, pr_check_code: DEFAULT_PR_CHECK_CODE, updated_by_id: userId }),
     ]);
 
-    // Seed default statuses, asset tiers, and policy templates
-    await seedOrganizationPolicyDefaults(organization.id);
+    const seedError = seedResults.find((r) => r.error)?.error;
+    if (seedError) {
+      // Roll back — the organizations FK cascade removes whatever did insert.
+      await supabase.from('organizations').delete().eq('id', organization.id);
+      throw seedError;
+    }
 
-    // Create activity log
-    await createActivity({
+    // Activity logging is non-critical — fire it after the response.
+    void createActivity({
       organization_id: organization.id,
       user_id: userId,
       activity_type: 'created_org',
