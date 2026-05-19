@@ -279,19 +279,80 @@ function printBaselineResult(r: BaselineLockResult, lockedCount: number): void {
   }
 }
 
+// ── Independent oracle ──────────────────────────────────────────────────────
+// Cross-checks the scan against an independent production-call-path verdict.
+// See scripts/reachability-corpus-oracle.yaml for the rationale.
+
+export interface OracleVerdict {
+  id: string;
+  /** reachable | module | unreachable — the production-call-path verdict. */
+  verdict: string;
+}
+
+export interface OracleResult {
+  ok: boolean;
+  /** Oracle-`reachable` CVEs the scan observed `unreachable` — false negatives. */
+  disagreements: Array<{ cve: string; observed: string }>;
+}
+
+/** cve → observed_reachability across every ok repo in the report. */
+export function buildObservedMap(report: CorpusReport): Map<string, string> {
+  const observed = new Map<string, string>();
+  for (const repo of report.results ?? []) {
+    if (repo.status !== 'ok') continue;
+    for (const m of repo.ground_truth_matched ?? []) {
+      if (m.observed && m.observed_reachability) observed.set(m.cve, m.observed_reachability);
+    }
+  }
+  return observed;
+}
+
+/**
+ * Cross-check the independent oracle against the scan. The oracle judges each
+ * CVE on the production-call-path question alone; an oracle `reachable`
+ * verdict for a CVE the scan observed `unreachable` is a false negative — the
+ * classifier hid a vuln the oracle says runs — and fails the run. `module`
+ * verdicts never gate (a module dep observed `unreachable` is an accepted
+ * over-classification). Pure over its inputs so the gate test can exercise it.
+ */
+export function checkOracle(
+  oracleVerdicts: OracleVerdict[],
+  observed: Map<string, string>,
+): OracleResult {
+  const disagreements: OracleResult['disagreements'] = [];
+  for (const v of oracleVerdicts) {
+    if (v.verdict !== 'reachable') continue;
+    const obs = observed.get(v.id);
+    if (obs === 'unreachable') disagreements.push({ cve: v.id, observed: obs });
+  }
+  return { ok: disagreements.length === 0, disagreements };
+}
+
+function printOracleResult(r: OracleResult, verdictCount: number): void {
+  const mark = r.ok ? 'PASS' : 'FAIL';
+  console.log(`\nOracle agreement — ${verdictCount} independent verdicts, zero reachable->unreachable: ${mark}`);
+  for (const d of r.disagreements) {
+    console.log(`         ORACLE DISAGREEMENT: ${d.cve} judged reachable, scanned ${d.observed}`);
+  }
+}
+
 function main(): void {
   const depscannerRoot = path.resolve(__dirname, '..');
   const corpusPath = path.join(depscannerRoot, 'scripts', 'reachability-corpus.yaml');
   const lockPath = path.join(depscannerRoot, 'scripts', 'reachability-corpus-baseline.lock.yaml');
+  const oraclePath = path.join(depscannerRoot, 'scripts', 'reachability-corpus-oracle.yaml');
   const reportArg = process.argv.find((a) => a.startsWith('--report='));
 
   // Baseline-lock check — static, independent of the scan. Runs in both the
   // scan and the --report= path so a relabelled baseline fails fast.
   if (!fs.existsSync(corpusPath)) die(`corpus file not found: ${corpusPath}`);
   if (!fs.existsSync(lockPath)) die(`baseline lock not found: ${lockPath}`);
+  if (!fs.existsSync(oraclePath)) die(`oracle file not found: ${oraclePath}`);
   const lockedLabels =
     ((yaml.load(fs.readFileSync(lockPath, 'utf8')) as { labels?: Record<string, string> })?.labels) ?? {};
   const baseline = checkBaselineLock(loadCorpusCveLabels(corpusPath), lockedLabels);
+  const oracleVerdicts =
+    ((yaml.load(fs.readFileSync(oraclePath, 'utf8')) as { verdicts?: OracleVerdict[] })?.verdicts) ?? [];
 
   let reportPath: string;
   if (reportArg) {
@@ -317,10 +378,12 @@ function main(): void {
   }
 
   const gates = evaluateReachabilityGates(report);
+  const oracle = checkOracle(oracleVerdicts, buildObservedMap(report));
   printGateReport(gates);
   printBaselineResult(baseline, Object.keys(lockedLabels).length);
+  printOracleResult(oracle, oracleVerdicts.length);
 
-  process.exit(gates.pass && baseline.ok ? 0 : 1);
+  process.exit(gates.pass && baseline.ok && oracle.ok ? 0 : 1);
 }
 
 if (require.main === module) {

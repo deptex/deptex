@@ -9,6 +9,8 @@
 import {
   evaluateReachabilityGates,
   checkBaselineLock,
+  checkOracle,
+  buildObservedMap,
   type CorpusReport,
 } from '../../scripts/reachability-corpus';
 
@@ -222,5 +224,64 @@ describe('checkBaselineLock', () => {
     expect(r.ok).toBe(false);
     expect(r.violations).toHaveLength(1);
     expect(r.violations[0]).toContain('CVE-B');
+  });
+});
+
+describe('checkOracle', () => {
+  const verdicts = [
+    { id: 'CVE-R', verdict: 'reachable' },
+    { id: 'CVE-M', verdict: 'module' },
+    { id: 'CVE-U', verdict: 'unreachable' },
+  ];
+
+  it('passes when the scan never observes an oracle-reachable CVE as unreachable', () => {
+    const observed = new Map([
+      ['CVE-R', 'function'],
+      ['CVE-M', 'unreachable'], // module verdict — observed-unreachable is allowed
+      ['CVE-U', 'unreachable'],
+    ]);
+    const r = checkOracle(verdicts, observed);
+    expect(r.ok).toBe(true);
+    expect(r.disagreements).toEqual([]);
+  });
+
+  it('fails when an oracle-reachable CVE was scanned unreachable', () => {
+    const observed = new Map([
+      ['CVE-R', 'unreachable'], // the classifier hid a vuln the oracle says runs
+      ['CVE-M', 'module'],
+      ['CVE-U', 'unreachable'],
+    ]);
+    const r = checkOracle(verdicts, observed);
+    expect(r.ok).toBe(false);
+    expect(r.disagreements).toEqual([{ cve: 'CVE-R', observed: 'unreachable' }]);
+  });
+
+  it('does not gate on a `module` oracle verdict observed unreachable', () => {
+    const observed = new Map([['CVE-M', 'unreachable']]);
+    expect(checkOracle(verdicts, observed).ok).toBe(true);
+  });
+
+  it('buildObservedMap collapses ground-truth matches across ok repos', () => {
+    const report: CorpusReport = {
+      results: [
+        {
+          name: 'r1', ecosystem: 'npm', status: 'ok',
+          ground_truth_matched: [
+            { cve: 'CVE-1', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+            { cve: 'CVE-2', observed: false, observed_reachability: null, expected_reachability: 'module' },
+          ],
+        },
+        {
+          name: 'r2', ecosystem: 'npm', status: 'scan_failed',
+          ground_truth_matched: [
+            { cve: 'CVE-3', observed: true, observed_reachability: 'module', expected_reachability: 'module' },
+          ],
+        },
+      ],
+    };
+    const m = buildObservedMap(report);
+    expect(m.get('CVE-1')).toBe('unreachable');
+    expect(m.has('CVE-2')).toBe(false); // unobserved — no reachability
+    expect(m.has('CVE-3')).toBe(false); // non-ok repo excluded
   });
 });
