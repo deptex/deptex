@@ -340,13 +340,38 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       const { data: pdRows } = await supabase
         .from('project_dependencies')
-        .select('id, name, version')
+        .select('id, name, version, environment')
         .eq('project_id', projectId)
         .eq('last_seen_extraction_run_id', runId);
 
+      // When two rows share name@version — a package declared both as a direct
+      // devDependency and pulled as a production transitive — attach the PDV
+      // to the production-scope row. Otherwise a vuln on a real runtime dep
+      // could land on the dev row and be classed `unreachable` (a false
+      // negative once dev-scope classification lands). Prefer environment
+      // !== 'dev'; ties break on lowest id for determinism.
       const pdByNameVersion = new Map<string, string>();
+      const pdEnvByKey = new Map<string, string | null>();
       if (pdRows) {
-        for (const r of pdRows) pdByNameVersion.set(`${r.name}@${r.version}`, r.id);
+        for (const r of pdRows) {
+          const key = `${r.name}@${r.version}`;
+          const incomingEnv = (r.environment ?? null) as string | null;
+          const storedId = pdByNameVersion.get(key);
+          if (storedId === undefined) {
+            pdByNameVersion.set(key, r.id);
+            pdEnvByKey.set(key, incomingEnv);
+            continue;
+          }
+          const incomingIsProd = incomingEnv !== 'dev';
+          const storedIsProd = pdEnvByKey.get(key) !== 'dev';
+          if (
+            (incomingIsProd && !storedIsProd) ||
+            (incomingIsProd === storedIsProd && r.id < storedId)
+          ) {
+            pdByNameVersion.set(key, r.id);
+            pdEnvByKey.set(key, incomingEnv);
+          }
+        }
       }
 
       const kevCveSet = new Set<string>();

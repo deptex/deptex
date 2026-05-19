@@ -150,7 +150,16 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
           namespace: d.namespace,
           is_direct: d.is_direct,
           source: d.source,
-          environment: d.source === 'dependencies' ? 'prod' : d.source === 'devDependencies' ? 'dev' : null,
+          // `source` stays the literal SBOM origin; `environment` carries the
+          // resolved scope. A transitively-dev-only dep keeps source 'transitive'
+          // but `devScoped` flips environment to 'dev'. `environment` is not in
+          // the upsert conflict key, so this never destabilises row identity.
+          environment:
+            d.source === 'dependencies'
+              ? 'prod'
+              : d.source === 'devDependencies' || d.devScoped
+                ? 'dev'
+                : null,
           last_seen_extraction_run_id: runId,
           removed_at: null,
         };

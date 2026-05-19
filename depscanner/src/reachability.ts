@@ -475,6 +475,17 @@ export function isFrameworkEmbeddedRuntime(depName: string | undefined): boolean
   return FRAMEWORK_EMBEDDED_RUNTIME.some((p) => n.includes(p));
 }
 
+/**
+ * True when `project_dependencies.environment` marks a dependency as
+ * dev/test/build scope. A dev-scoped dependency's vulnerable code is, by
+ * definition, not on the production call path — the classifier floors it at
+ * `unreachable`. `environment` is derived from the manifest (`deps-sync.ts`)
+ * and from transitive dev-only propagation; it is the single dev-scope signal.
+ */
+export function isDevScoped(environment: string | null | undefined): boolean {
+  return environment === 'dev';
+}
+
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
@@ -496,7 +507,7 @@ export async function updateReachabilityLevels(
 
   const { data: pds, error: pdErr } = await supabase
     .from('project_dependencies')
-    .select('id, dependency_id, is_direct, files_importing_count')
+    .select('id, dependency_id, is_direct, files_importing_count, environment')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
   if (pdErr) {
@@ -504,10 +515,14 @@ export async function updateReachabilityLevels(
   }
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
-  const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number }>(
+  const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number; scope: string | null }>(
     pds?.map((pd: any) => [
       pd.id,
-      { isDirect: !!pd.is_direct, filesImporting: Number(pd.files_importing_count ?? 0) },
+      {
+        isDirect: !!pd.is_direct,
+        filesImporting: Number(pd.files_importing_count ?? 0),
+        scope: (pd.environment ?? null) as string | null,
+      },
     ]) ?? []
   );
 
@@ -808,6 +823,21 @@ export async function updateReachabilityLevels(
         tags: [...new Set(matchingFlows.map((f) => f.entry_point_tag).filter((x): x is string => !!x))],
       };
     } else {
+      // Dependency scope out-ranks the usage heuristic: a dev/test/build-scope
+      // dependency's vulnerable code is by definition not on the production
+      // call path. A genuine taint/data_flow signal (handled above) still wins;
+      // this branch only runs when no flow was found.
+      const scopeMeta = pdMetaMap.get(pdv.project_dependency_id);
+      const devScoped = !!scopeMeta && isDevScoped(scopeMeta.scope);
+      if (devScoped) {
+        level = 'unreachable';
+        details = {
+          reason: 'dependency is dev/test/build scope — not on the production call path',
+          scope: 'dev',
+          verdict: 'dev_scope_unreachable',
+        };
+      }
+
       let depName = depNameCache.get(dependencyId);
       if (depName === undefined) {
         const { data: dep } = await supabase
@@ -832,7 +862,7 @@ export async function updateReachabilityLevels(
       }
       const symbolTokens = [...new Set((sinkPatterns ?? []).flatMap(extractSymbolTokens))];
       let symbolClassified = false;
-      if (symbolTokens.length > 0) {
+      if (!devScoped && symbolTokens.length > 0) {
         const matchedToken = symbolTokens.find((tok) => allUsageStrings.some((s) => s.includes(tok)));
         const symMeta = pdMetaMap.get(pdv.project_dependency_id);
         if (matchedToken) {
@@ -859,7 +889,7 @@ export async function updateReachabilityLevels(
         // fall through to the heuristic ladder; never invent unreachable here.
       }
 
-      if (!symbolClassified) {
+      if (!devScoped && !symbolClassified) {
       if (depName && isDepUsed(depName)) {
         level = 'function';
         // Populate details with matching usage data (file, line, methods called)
@@ -915,6 +945,11 @@ export async function updateReachabilityLevels(
           !isFrameworkEmbeddedRuntime(depName)
         ) {
           level = 'unreachable';
+          details = {
+            reason: 'no source file imports this transitive dependency',
+            scope: 'orphan',
+            verdict: 'orphan_transitive_unreachable',
+          };
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a

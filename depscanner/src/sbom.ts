@@ -35,6 +35,15 @@ export interface ParsedSbomDep {
   license: string | null;
   is_direct: boolean;
   source: 'dependencies' | 'devDependencies' | 'transitive';
+  /**
+   * True when this dependency is dev/test/build scope — set by
+   * `patchDevDependencies` for direct dev deps (from the manifest) and for
+   * transitive deps reachable only via dev roots. Distinct from `source`:
+   * a transitively-dev-only dep keeps `source: 'transitive'` (the literal
+   * SBOM origin) but carries `devScoped: true`. Persisted indirectly via the
+   * `environment` column, never written back into `source`.
+   */
+  devScoped: boolean;
   bomRef: string;
 }
 
@@ -218,6 +227,7 @@ export function parseSbom(sbom: CycloneDxSbom): {
       license,
       is_direct: isDirect,
       source,
+      devScoped: false,
       bomRef: ref,
     });
   }
@@ -249,8 +259,14 @@ export function patchDevDependencies(deps: ParsedSbomDep[], repoRoot: string, ec
   if (devNames.size === 0) return;
 
   for (const dep of deps) {
-    if (dep.is_direct && devNames.has(dep.name)) {
+    if (!dep.is_direct) continue;
+    // Maven dev names are keyed `groupId:artifactId`; `dep.name` is the bare
+    // artifactId, so probe the namespaced form too. Other ecosystems key on
+    // the bare name.
+    const namespaced = dep.namespace ? `${dep.namespace}:${dep.name}` : null;
+    if (devNames.has(dep.name) || (namespaced && devNames.has(namespaced))) {
       dep.source = 'devDependencies';
+      dep.devScoped = true;
     }
   }
 }
@@ -264,9 +280,34 @@ function collectDevDependencyNames(repoRoot: string, ecosystem: string): Set<str
     collectPypiDevDeps(repoRoot, devNames);
   } else if (ecosystem === 'maven') {
     collectMavenDevDeps(repoRoot, devNames);
+  } else if (ecosystem === 'cargo') {
+    collectCargoDevDeps(repoRoot, devNames);
   }
 
   return devNames;
+}
+
+function collectCargoDevDeps(repoRoot: string, devNames: Set<string>): void {
+  const cargoPath = path.join(repoRoot, 'Cargo.toml');
+  try {
+    const content = fs.readFileSync(cargoPath, 'utf8');
+    // Crate names under [dev-dependencies] / [build-dependencies] and their
+    // target-specific variants, e.g. [target.'cfg(unix)'.dev-dependencies].
+    // Tracked line-by-line: each `[section]` header opens/closes a section.
+    let inDevSection = false;
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      const header = line.match(/^\[([^\]]+)\]$/);
+      if (header) {
+        inDevSection = /(?:^|\.)(?:dev|build)-dependencies$/.test(header[1].trim());
+        continue;
+      }
+      if (!inDevSection || !line || line.startsWith('#')) continue;
+      // `name = "1.0"`, `name = { version = "1" }`, or `name.workspace = true`
+      const m = line.match(/^([A-Za-z0-9_-]+)\s*[.=]/);
+      if (m) devNames.add(m[1]);
+    }
+  } catch { /* no Cargo.toml or parse error */ }
 }
 
 function collectNpmDevDeps(repoRoot: string, devNames: Set<string>): void {
