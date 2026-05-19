@@ -1,0 +1,527 @@
+{
+  "generated_at": "2026-05-19T15:50:54.493Z",
+  "corpus_file": "scripts\\reachability-corpus.yaml",
+  "host": {
+    "platform": "win32",
+    "node": "v22.15.0",
+    "cpus": 16
+  },
+  "aggregate": {
+    "total_repos": 4,
+    "scanned": 4,
+    "failed": 0,
+    "avg_recall_pct": 100,
+    "total_ground_truth": 49,
+    "total_matched": 49,
+    "total_noise": 10,
+    "total_ai_cost_usd": 0,
+    "total_duration_ms": 388070,
+    "per_ecosystem": {
+      "npm": {
+        "scanned": 2,
+        "recall_pct": 100,
+        "ground_truth": 36,
+        "matched": 36
+      },
+      "maven": {
+        "scanned": 1,
+        "recall_pct": 100,
+        "ground_truth": 10,
+        "matched": 10
+      },
+      "cargo": {
+        "scanned": 1,
+        "recall_pct": 100,
+        "ground_truth": 3,
+        "matched": 3
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "express",
+      "ecosystem": "npm",
+      "ref": "4.18.2",
+      "status": "ok",
+      "scan_duration_ms": 85716,
+      "ground_truth_total": 24,
+      "ground_truth_matched": [
+        {
+          "cve": "CVE-2026-2391",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "module",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2024-45590",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "module",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2024-45296",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "module",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2024-52798",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "module",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2024-47764",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "module",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2026-33916",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-33939",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-27904",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-26996",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2024-55565",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2025-64718",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2024-33883",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-33940",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-33938",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-33941",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-33937",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "critical"
+        },
+        {
+          "cve": "CVE-2026-27903",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-24001",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2025-7339",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2024-11831",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-34043",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2022-21681",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2022-21680",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2021-29469",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        }
+      ],
+      "total_findings": 31,
+      "reachable_findings": 9,
+      "by_reachability": {
+        "module": 9,
+        "unreachable": 22
+      },
+      "dependencies_count": 385,
+      "semgrep_count": 0,
+      "secrets_count": 0,
+      "ai_cost_usd": 0,
+      "missed_examples": [],
+      "recall_pct": 100,
+      "noise_count": 1,
+      "noise_examples": [
+        {
+          "osv_id": "CVE-2026-4867",
+          "package": "path-to-regexp@0.1.7",
+          "reachability_level": "module",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        }
+      ]
+    },
+    {
+      "name": "spring-petclinic",
+      "ecosystem": "maven",
+      "ref": "c7ee170434ec3e369fdc9201290ba2ea4c92b557",
+      "status": "ok",
+      "scan_duration_ms": 93297,
+      "ground_truth_total": 10,
+      "ground_truth_matched": [
+        {
+          "cve": "CVE-2026-22741",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "function",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2026-22735",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "function",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2026-22745",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "function",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-40973",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "function",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-22731",
+          "observed": true,
+          "expected_reachability": "function",
+          "observed_reachability": "function",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-34500",
+          "observed": true,
+          "expected_reachability": "data_flow",
+          "observed_reachability": "module",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-25854",
+          "observed": true,
+          "expected_reachability": "data_flow",
+          "observed_reachability": "module",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-40477",
+          "observed": true,
+          "expected_reachability": "data_flow",
+          "observed_reachability": "module",
+          "observed_severity": "critical"
+        },
+        {
+          "cve": "CVE-2026-29062",
+          "observed": true,
+          "expected_reachability": "module",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2026-42198",
+          "observed": true,
+          "expected_reachability": "module",
+          "observed_reachability": "module",
+          "observed_severity": "high"
+        }
+      ],
+      "total_findings": 22,
+      "reachable_findings": 19,
+      "by_reachability": {
+        "function": 8,
+        "module": 11,
+        "unreachable": 3
+      },
+      "dependencies_count": 164,
+      "semgrep_count": 0,
+      "secrets_count": 0,
+      "ai_cost_usd": 0,
+      "missed_examples": [],
+      "recall_pct": 100,
+      "noise_count": 8,
+      "noise_examples": [
+        {
+          "osv_id": "CVE-2026-29129",
+          "package": "tomcat-embed-core@11.0.18",
+          "reachability_level": "module",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        },
+        {
+          "osv_id": "CVE-2026-34483",
+          "package": "tomcat-embed-core@11.0.18",
+          "reachability_level": "module",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        },
+        {
+          "osv_id": "CVE-2026-34487",
+          "package": "tomcat-embed-core@11.0.18",
+          "reachability_level": "module",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        },
+        {
+          "osv_id": "CVE-2026-22733",
+          "package": "spring-boot-starter-actuator@4.0.3",
+          "reachability_level": "function",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        },
+        {
+          "osv_id": "CVE-2026-40478",
+          "package": "thymeleaf-spring6@3.1.3.RELEASE",
+          "reachability_level": "module",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        }
+      ]
+    },
+    {
+      "name": "bat",
+      "ecosystem": "cargo",
+      "ref": "v0.24.0",
+      "status": "ok",
+      "scan_duration_ms": 24413,
+      "ground_truth_total": 3,
+      "ground_truth_matched": [
+        {
+          "cve": "CVE-2024-12224",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2024-43806",
+          "observed": true,
+          "expected_reachability": "module",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-25727",
+          "observed": true,
+          "expected_reachability": "module",
+          "observed_reachability": "module",
+          "observed_severity": "medium"
+        }
+      ],
+      "total_findings": 19,
+      "reachable_findings": 5,
+      "by_reachability": {
+        "unreachable": 14,
+        "module": 5
+      },
+      "dependencies_count": 172,
+      "semgrep_count": 0,
+      "secrets_count": 0,
+      "ai_cost_usd": 0,
+      "missed_examples": [],
+      "recall_pct": 100,
+      "noise_count": 0,
+      "noise_examples": []
+    },
+    {
+      "name": "fastify",
+      "ecosystem": "npm",
+      "ref": "v4.26.0",
+      "status": "ok",
+      "scan_duration_ms": 184644,
+      "ground_truth_total": 12,
+      "ground_truth_matched": [
+        {
+          "cve": "CVE-2022-25860",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "critical"
+        },
+        {
+          "cve": "CVE-2026-28291",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "high"
+        },
+        {
+          "cve": "CVE-2024-43799",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2026-1527",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-22036",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2025-54798",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "low"
+        },
+        {
+          "cve": "CVE-2026-33532",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2024-4067",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-2327",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-2950",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2026-33750",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        },
+        {
+          "cve": "CVE-2025-27789",
+          "observed": true,
+          "expected_reachability": "unreachable",
+          "observed_reachability": "unreachable",
+          "observed_severity": "medium"
+        }
+      ],
+      "total_findings": 33,
+      "reachable_findings": 1,
+      "by_reachability": {
+        "unreachable": 32,
+        "function": 1
+      },
+      "dependencies_count": 826,
+      "semgrep_count": 0,
+      "secrets_count": 0,
+      "ai_cost_usd": 0,
+      "missed_examples": [],
+      "recall_pct": 100,
+      "noise_count": 1,
+      "noise_examples": [
+        {
+          "osv_id": "CVE-2024-37890",
+          "package": "ws@7.5.9",
+          "reachability_level": "function",
+          "reason": "reachable + high/critical but not in ground-truth allowlist"
+        }
+      ]
+    }
+  ]
+}

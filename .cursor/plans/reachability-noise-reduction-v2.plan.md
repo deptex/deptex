@@ -397,3 +397,56 @@ M1–M4 of `reachability-noise-reduction` (this branch); the cdxgen CycloneDX
    genuine `unreachable` rate ~42% → ~59%; both numbers printed by the gate.
 6. `source` is never written by this feature; `project_dependencies` row identity
    is stable across re-scans; depscanner tsc + jest + `test:fixtures` green.
+
+## STATUS — v2 shipped (2026-05-19)
+
+**Result: all three acceptance gates pass at 79.6% noise reduction**
+(69.4% full-weight `unreachable`-only) on a 49-CVE, four-repo corpus —
+clearing the ≥75% target. Per-ecosystem `unreachable`: npm 86.1%, maven 10%,
+cargo 66.7%. Recall 100%. Baseline lock (31 frozen labels) and the
+independent oracle (49 verdicts) both pass. Final scan: `v2-final`; golden
+report committed at `scripts/reachability-corpus.golden-report.json`.
+
+### Commits (on `worktree-reachability-noise-reduction`)
+Layer 0-2 + the gate hardening landed earlier (`721ed89`, `55bd23b`,
+`f1a77a9`, `8a5bf38`). Layer 3 / 4 added: dual-scope PGLite test +
+`resolveDualScopePdMap` extraction; baseline lock; two scope-bug fixes found
+by the corpus run; precision-guard revert + maven BFS disable; corpus
+expansion (express ×6, fastify ×12); the independent oracle; this close-out.
+
+### Deviations from the plan (all surfaced to Henry, approved)
+- **The task-8 precision guard was reverted, not kept.** The first Docker
+  corpus runs proved the "imported-ancestor reaches it in the graph"
+  predicate unsound on real trees — nearly every transitive has some imported
+  ancestor, so it demoted genuine orphans (bat's `idna`) to `module` and sank
+  cargo to 0% `unreachable`. Graph-reachability ≠ exercised. Reverted to the
+  M4 heuristic (a transitive nothing imports is `unreachable`). Consequence:
+  jackson-core / rustix-class production transitives read `unreachable`
+  although they are `module`-labelled — a mild over-classification, **not** a
+  Gate-3 false negative (Gate 3 only fires on the strict reachable tiers).
+  This is why the honest floor is *not* the 63% the plan projected; it is the
+  M4 ~66% behaviour, and Layer 3 lifts it to 79.6%.
+- **The Layer-2 transitive dev-only BFS is disabled for maven.** cdxgen's
+  maven `dependencies` graph is too shallow to compute prod-reachability — it
+  mis-marked jackson/logback/micrometer dev-only. Maven dev-scope now comes
+  from direct `<scope>test</scope>` deps (Layer 1) alone — exactly task 0c's
+  designed fallback. npm and cargo keep the transitive BFS.
+- **Two real bugs the corpus run caught and fixed:** `collectMavenDevDeps`
+  matched `<scope>test</scope>` with an unbounded `[\s\S]*?` that ran past
+  `</dependency>`, mis-flagging `spring-boot-starter-actuator` as test-scope
+  (a Gate-3 false negative); and the precision guard above.
+
+### Honest caveats (follow-ups)
+- **maven Gate 2 is thin.** spring-petclinic has no genuinely-`unreachable`
+  maven CVE in its ground truth; maven's 10% is jackson-core, a
+  `module`-labelled dep the heuristic reads `unreachable`. A maven app with a
+  genuinely orphaned transitive CVE would make maven Gate 2 honest.
+- **The oracle has one author.** `reachability-corpus-oracle.yaml` was written
+  by the same person as the corpus labels; genuine independence needs a
+  second reviewer. The mechanism (gate fails on oracle-`reachable` +
+  scan-`unreachable`) and the frozen artifact still guard against future
+  drift.
+- The precision problem — telling a *used* transitive (jackson, loaded by
+  Spring) from an *unused* one (idna) — is the genuine hard reachability
+  problem and remains open; the heuristic accepts the jackson-class
+  over-classification.
