@@ -128,6 +128,10 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     parseSbom(sbom);
   const bomRefMap = getBomRefToNameVersion(sbom);
 
+  // Record whether the cdxgen edge graph was wired — deps_sync keeps
+  // transitive dev-scope sticky when it wasn't (propagation skipped).
+  ctx.sbomGraphWired = directSetTrusted;
+
   // cdxgen sometimes returns an unwired CycloneDX `dependencies` graph (no
   // root node / no edges). When that happens `is_direct` on every dep is
   // meaningless, which structurally disables the `unreachable` reachability
@@ -158,9 +162,13 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     }
   }
 
-  // Patch devDependency detection by cross-referencing with manifest files
+  // Patch devDependency detection by cross-referencing with manifest files,
+  // then propagate dev-scope transitively over the dependency graph. The
+  // original `directSetTrusted` (not ctx.graphTrusted) gates propagation —
+  // it specifically reports whether the cdxgen `dependencies` graph that
+  // `relationships` is derived from is wired.
   try {
-    patchDevDependencies(dependencies, workspaceRoot, jobEcosystem);
+    patchDevDependencies(dependencies, workspaceRoot, jobEcosystem, relationships, directSetTrusted);
   } catch (e: any) {
     await log.warn('sbom', `devDependency detection failed (non-fatal): ${e.message}`);
   }

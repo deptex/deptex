@@ -254,10 +254,17 @@ function extractLicense(licenses: unknown): string | null {
  * Cross-reference parsed SBOM deps with actual manifest files to correctly identify devDependencies.
  * CycloneDX SBOMs from cdxgen don't reliably distinguish dev from prod deps.
  */
-export function patchDevDependencies(deps: ParsedSbomDep[], repoRoot: string, ecosystem: string): void {
+export function patchDevDependencies(
+  deps: ParsedSbomDep[],
+  repoRoot: string,
+  ecosystem: string,
+  relationships: ParsedSbomRelationship[] = [],
+  directSetTrusted = true,
+): void {
   const devNames = collectDevDependencyNames(repoRoot, ecosystem);
   if (devNames.size === 0) return;
 
+  // Pass 1 — direct dev marking from the manifest (always trustworthy).
   for (const dep of deps) {
     if (!dep.is_direct) continue;
     // Maven dev names are keyed `groupId:artifactId`; `dep.name` is the bare
@@ -266,6 +273,48 @@ export function patchDevDependencies(deps: ParsedSbomDep[], repoRoot: string, ec
     const namespaced = dep.namespace ? `${dep.namespace}:${dep.name}` : null;
     if (devNames.has(dep.name) || (namespaced && devNames.has(namespaced))) {
       dep.source = 'devDependencies';
+      dep.devScoped = true;
+    }
+  }
+
+  // Pass 2 — transitive dev-only propagation. A transitive dependency that is
+  // reachable in the cdxgen dependency graph only via devDependency roots —
+  // never via a production root — is itself dev-only. Skipped when the graph
+  // is untrusted (the direct-set fallback marked every dep transitive, so the
+  // closure would be meaningless); direct-dev marking from pass 1 still holds.
+  if (!directSetTrusted || relationships.length === 0) return;
+
+  const adjacency = new Map<string, string[]>();
+  for (const rel of relationships) {
+    const kids = adjacency.get(rel.parentBomRef);
+    if (kids) kids.push(rel.childBomRef);
+    else adjacency.set(rel.parentBomRef, [rel.childBomRef]);
+  }
+  const closureFrom = (rootRefs: string[]): Set<string> => {
+    const seen = new Set<string>(rootRefs);
+    const queue = [...rootRefs];
+    while (queue.length > 0) {
+      const ref = queue.pop()!;
+      for (const child of adjacency.get(ref) ?? []) {
+        if (!seen.has(child)) {
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+    }
+    return seen;
+  };
+  const prodReachable = closureFrom(
+    deps.filter((d) => d.source === 'dependencies').map((d) => d.bomRef),
+  );
+  const devReachable = closureFrom(
+    deps.filter((d) => d.source === 'devDependencies').map((d) => d.bomRef),
+  );
+  for (const dep of deps) {
+    // Only un-marked transitive deps are candidates; a dep reachable from any
+    // production root stays production-scope even if a dev root also reaches it.
+    if (dep.source !== 'transitive') continue;
+    if (devReachable.has(dep.bomRef) && !prodReachable.has(dep.bomRef)) {
       dep.devScoped = true;
     }
   }

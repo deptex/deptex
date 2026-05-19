@@ -95,7 +95,12 @@ const CVE = 'CVE-2020-14343';
  *  classifier falls through to the heuristic / symbol-match branch. */
 function seed(
   fs: FakeStorage,
-  opts: { isDirect?: boolean; filesImporting?: number; usageStrings?: string[] } = {},
+  opts: {
+    isDirect?: boolean;
+    filesImporting?: number;
+    usageStrings?: string[];
+    edges?: Array<{ parent_version_id: string; child_version_id: string }>;
+  } = {},
 ) {
   fs.set('project_dependency_vulnerabilities', [
     { id: PDV_ID, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: CVE },
@@ -106,6 +111,7 @@ function seed(
       project_id: PROJECT_ID,
       last_seen_extraction_run_id: RUN_ID,
       dependency_id: DEP_ID,
+      dependency_version_id: 'dv-1',
       is_direct: opts.isDirect ?? true,
       files_importing_count: opts.filesImporting ?? 1,
     },
@@ -113,6 +119,7 @@ function seed(
   fs.set('dependencies', [{ id: DEP_ID, name: 'js-yaml' }]);
   fs.set('project_reachable_flows', []);
   fs.set('project_reachable_flow_suppressions', []);
+  fs.set('dependency_version_edges', opts.edges ?? []);
   fs.set(
     'project_usage_slices',
     (opts.usageStrings ?? []).map((s, i) => ({
@@ -204,7 +211,14 @@ describe('updateReachabilityLevels — CVE-targeted symbol matching', () => {
 
   it('marks a transitive unused dep `unreachable` when the graph is trusted', async () => {
     const fs = new FakeStorage();
-    seed(fs, { isDirect: false, filesImporting: 0, usageStrings: ['console.log'] });
+    // A wired edge graph with no imported root reaching dv-1 — the precision
+    // fix confirms the dep is a genuine orphan, not reached via an import.
+    seed(fs, {
+      isDirect: false,
+      filesImporting: 0,
+      usageStrings: ['console.log'],
+      edges: [{ parent_version_id: 'dv-1', child_version_id: 'dv-2' }],
+    });
     await updateReachabilityLevels(PROJECT_ID, RUN_ID, fs as unknown as Storage, log as any, undefined, {
       graphTrusted: true,
     });

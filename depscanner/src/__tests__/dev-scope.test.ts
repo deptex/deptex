@@ -119,6 +119,7 @@ function seed(
       project_id: PROJECT_ID,
       last_seen_extraction_run_id: RUN_ID,
       dependency_id: DEP_ID,
+      dependency_version_id: 'dv-1',
       is_direct: opts.isDirect ?? true,
       files_importing_count: opts.filesImporting ?? 1,
       environment: opts.environment ?? null,
@@ -127,6 +128,9 @@ function seed(
   fsk.set('dependencies', [{ id: DEP_ID, name: opts.depName ?? 'mocha' }]);
   fsk.set('project_reachable_flows', []);
   fsk.set('project_reachable_flow_suppressions', []);
+  // One edge so the precision-fix closure sees a wired graph; no imported
+  // root reaches dv-1, so an orphan transitive still classifies `unreachable`.
+  fsk.set('dependency_version_edges', [{ parent_version_id: 'dv-1', child_version_id: 'dv-2' }]);
   fsk.set(
     'project_usage_slices',
     (opts.usageStrings ?? []).map((s, i) => ({
@@ -282,5 +286,48 @@ describe('updateReachabilityLevels — dependency scope', () => {
     const { level, details } = verdictOf(fsk);
     expect(level).toBe('unreachable');
     expect(details?.verdict).toBe('orphan_transitive_unreachable');
+  });
+});
+
+describe('updateReachabilityLevels — precision fix (graph-threaded ancestor closure)', () => {
+  /**
+   * Two deps: an imported parent and a never-first-party-imported transitive
+   * child reached only via that parent — the jackson-core / rustix shape. The
+   * import heuristic alone would call the child `unreachable`; the precision
+   * fix sees the imported parent reaches it and demotes to `module`.
+   */
+  it('demotes a prod transitive to `module` when an imported parent reaches it', async () => {
+    const fsk = new FakeStorage();
+    fsk.set('project_dependency_vulnerabilities', [
+      { id: PDV_ID, project_dependency_id: 'pd-child', project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: 'CVE-2024-0001' },
+    ]);
+    fsk.set('project_dependencies', [
+      {
+        id: 'pd-parent', project_id: PROJECT_ID, last_seen_extraction_run_id: RUN_ID,
+        dependency_id: 'dep-parent', dependency_version_id: 'dv-parent',
+        is_direct: true, files_importing_count: 5, environment: 'prod',
+      },
+      {
+        id: 'pd-child', project_id: PROJECT_ID, last_seen_extraction_run_id: RUN_ID,
+        dependency_id: 'dep-child', dependency_version_id: 'dv-child',
+        is_direct: false, files_importing_count: 0, environment: null,
+      },
+    ]);
+    fsk.set('dependencies', [
+      { id: 'dep-parent', name: 'spring-webmvc' },
+      { id: 'dep-child', name: 'jackson-core' },
+    ]);
+    fsk.set('project_reachable_flows', []);
+    fsk.set('project_reachable_flow_suppressions', []);
+    fsk.set('project_usage_slices', [
+      { project_id: PROJECT_ID, extraction_run_id: RUN_ID, file_path: 'src/App.java', line_number: 1, target_name: 'spring', target_type: 'spring', resolved_method: 'spring.webmvc' },
+    ]);
+    // The imported parent (dv-parent) reaches the transitive child (dv-child).
+    fsk.set('dependency_version_edges', [{ parent_version_id: 'dv-parent', child_version_id: 'dv-child' }]);
+
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log as any, undefined, {
+      graphTrusted: true,
+    });
+    expect(verdictOf(fsk).level).toBe('module');
   });
 });

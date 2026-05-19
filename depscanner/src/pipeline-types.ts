@@ -101,6 +101,16 @@ export interface PipelineContext {
    */
   graphTrusted: boolean;
 
+  /**
+   * Whether cdxgen's CycloneDX `dependencies` graph was wired this run (the
+   * original `directSetTrusted` from parseSbom, before recovery). Distinct
+   * from `graphTrusted`: recovery can rebuild the direct set without rewiring
+   * the edge graph. The SBOM step sets it. deps_sync reads it to keep
+   * transitive dev-scope marks sticky when propagation was skipped — without
+   * it a flaky cdxgen graph would flip `environment` dev↔null between scans.
+   */
+  sbomGraphWired?: boolean;
+
   // === Cross-step counters used by finalize ===
   projectDepsCount: number;
   newDepsToPopulate: Array<{ dependencyId: string; name: string }>;

@@ -507,7 +507,7 @@ export async function updateReachabilityLevels(
 
   const { data: pds, error: pdErr } = await supabase
     .from('project_dependencies')
-    .select('id, dependency_id, is_direct, files_importing_count, environment')
+    .select('id, dependency_id, is_direct, files_importing_count, environment, dependency_version_id')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
   if (pdErr) {
@@ -515,16 +515,80 @@ export async function updateReachabilityLevels(
   }
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
-  const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number; scope: string | null }>(
+  const pdMetaMap = new Map<
+    string,
+    { isDirect: boolean; filesImporting: number; scope: string | null; versionId: string | null }
+  >(
     pds?.map((pd: any) => [
       pd.id,
       {
         isDirect: !!pd.is_direct,
         filesImporting: Number(pd.files_importing_count ?? 0),
         scope: (pd.environment ?? null) as string | null,
+        versionId: (pd.dependency_version_id ?? null) as string | null,
       },
     ]) ?? []
   );
+
+  // Precision-fix support: a forward closure over the dependency edge graph
+  // from every *imported* dependency (files_importing_count > 0). A production
+  // transitive that the import heuristic below would call `unreachable` is
+  // demoted to `module` when an imported ancestor reaches it — the jackson-core
+  // / rustix false-positive class (reached via Spring / std I/O, never
+  // first-party-imported). When the edge graph is unavailable (cdxgen graph
+  // unwired) the closure is empty and the heuristic-unreachable branch floors
+  // at `module` rather than guessing.
+  const importedReachable = new Set<string>();
+  let edgeGraphAvailable = false;
+  {
+    const projectVersionIds = [
+      ...new Set(
+        (pds ?? [])
+          .map((pd: any) => pd.dependency_version_id)
+          .filter((v: unknown): v is string => typeof v === 'string' && v.length > 0),
+      ),
+    ];
+    if (projectVersionIds.length > 0) {
+      const edges: Array<{ parent_version_id: string; child_version_id: string }> = [];
+      for (let i = 0; i < projectVersionIds.length; i += 200) {
+        const chunk = projectVersionIds.slice(i, i + 200);
+        const { data: edgeRows } = await supabase
+          .from('dependency_version_edges')
+          .select('parent_version_id, child_version_id')
+          .in('parent_version_id', chunk);
+        if (edgeRows) edges.push(...(edgeRows as typeof edges));
+      }
+      edgeGraphAvailable = edges.length > 0;
+      if (edgeGraphAvailable) {
+        const adjacency = new Map<string, string[]>();
+        for (const e of edges) {
+          const kids = adjacency.get(e.parent_version_id);
+          if (kids) kids.push(e.child_version_id);
+          else adjacency.set(e.parent_version_id, [e.child_version_id]);
+        }
+        const queue = [
+          ...new Set(
+            (pds ?? [])
+              .filter(
+                (pd: any) =>
+                  Number(pd.files_importing_count ?? 0) > 0 && pd.dependency_version_id,
+              )
+              .map((pd: any) => pd.dependency_version_id as string),
+          ),
+        ];
+        for (const r of queue) importedReachable.add(r);
+        while (queue.length > 0) {
+          const vid = queue.pop()!;
+          for (const child of adjacency.get(vid) ?? []) {
+            if (!importedReachable.has(child)) {
+              importedReachable.add(child);
+              queue.push(child);
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Try the full phase23 column list first. On pre-migration schemas the
   // select returns `42703 undefined_column` — fall back to the pre-phase23
@@ -936,20 +1000,35 @@ export async function updateReachabilityLevels(
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
-        if (
+        const heuristicUnreachable =
           graphTrusted &&
           usageAnalysisProducedOutput &&
-          meta &&
+          !!meta &&
           !meta.isDirect &&
           meta.filesImporting === 0 &&
-          !isFrameworkEmbeddedRuntime(depName)
-        ) {
-          level = 'unreachable';
-          details = {
-            reason: 'no source file imports this transitive dependency',
-            scope: 'orphan',
-            verdict: 'orphan_transitive_unreachable',
-          };
+          !isFrameworkEmbeddedRuntime(depName);
+        if (heuristicUnreachable) {
+          // Precision guard: a production transitive is only genuinely
+          // unreachable when no *imported* ancestor reaches it in the
+          // dependency graph. A dep reached via an imported parent (the
+          // jackson-core / rustix class — Spring, std I/O) is exercised —
+          // demote to `module`. With no edge graph we cannot tell reached
+          // from orphaned, so floor at `module` rather than risk a false
+          // `unreachable`.
+          const versionId = meta?.versionId ?? null;
+          const reachedByImport =
+            !edgeGraphAvailable || (versionId != null && importedReachable.has(versionId));
+          if (reachedByImport) {
+            level = 'module';
+          } else {
+            level = 'unreachable';
+            details = {
+              reason:
+                'no source file imports this transitive dependency, and no imported dependency reaches it in the graph',
+              scope: 'orphan',
+              verdict: 'orphan_transitive_unreachable',
+            };
+          }
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a
