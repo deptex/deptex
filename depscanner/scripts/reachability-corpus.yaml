@@ -121,7 +121,10 @@ repos:
   - name: spring-petclinic
     repo_url: https://github.com/spring-projects/spring-petclinic.git
     ecosystem: maven
-    ref: main
+    # Pinned SHA, not `main` — a moving branch drifts the transitive dep set
+    # run-to-run and silently rots hand-labelled CVEs. Resolved from
+    # refs/heads/main 2026-05-18. Re-pin (and re-grep ground truth) deliberately.
+    ref: c7ee170434ec3e369fdc9201290ba2ea4c92b557
     ground_truth_cves:
       - id: CVE-2026-22741
         expected_reachability: function

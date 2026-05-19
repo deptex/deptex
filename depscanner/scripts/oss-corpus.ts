@@ -286,19 +286,29 @@ async function cloneRepo(
   if (fs.existsSync(workspaceDir)) {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
-  fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
 
-  // Always shallow clone. If a ref is pinned, fetch that ref specifically.
-  const args = ['clone', '--depth=1'];
-  if (repo.ref) args.push('--branch', repo.ref);
-  args.push(repo.repo_url, workspaceDir);
-
-  const res = await execCapture('git', args, { timeoutMs: 180_000 });
-  if (res.code !== 0) {
-    return {
-      ok: false,
-      reason: `git clone exited ${res.code}: ${res.stderr.split('\n').slice(-3).join(' | ')}`,
-    };
+  // Shallow-fetch the pinned ref directly. `git clone --branch` rejects
+  // commit SHAs, so we use init + fetch + checkout instead: this one path
+  // accepts a branch name, a tag, or a 40-char commit SHA, and fetches only
+  // the pinned ref (no wasteful default-branch clone first). A bare `HEAD`
+  // ref resolves to the remote's default branch. SHA fetches rely on
+  // GitHub's allowReachableSHA1InWant — fine for these public corpus repos.
+  const ref = repo.ref || 'HEAD';
+  const steps: Array<{ args: string[]; label: string }> = [
+    { args: ['init', '--quiet'], label: 'git init' },
+    { args: ['remote', 'add', 'origin', repo.repo_url], label: 'git remote add' },
+    { args: ['fetch', '--depth=1', '--quiet', 'origin', ref], label: `git fetch ${ref}` },
+    { args: ['checkout', '--quiet', 'FETCH_HEAD'], label: 'git checkout' },
+  ];
+  for (const step of steps) {
+    const res = await execCapture('git', step.args, { cwd: workspaceDir, timeoutMs: 180_000 });
+    if (res.code !== 0) {
+      return {
+        ok: false,
+        reason: `${step.label} exited ${res.code}: ${res.stderr.split('\n').slice(-3).join(' | ')}`,
+      };
+    }
   }
   return { ok: true };
 }
