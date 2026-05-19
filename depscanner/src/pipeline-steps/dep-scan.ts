@@ -138,6 +138,52 @@ export interface DepScanOutput {
   scanStart: number;
 }
 
+/** A project_dependencies row, as far as dual-scope PDV attachment cares. */
+export interface DualScopePdRow {
+  id: string;
+  name: string;
+  version: string;
+  environment: string | null;
+}
+
+/**
+ * Build the `name@version → project_dependency_id` map dep-scan uses to attach
+ * a vulnerability to a dependency row.
+ *
+ * When a package appears twice for one project — declared as a direct
+ * devDependency and also pulled in as a production transitive — the PDV must
+ * attach to the **production-scope** row. Otherwise a vuln on a genuine runtime
+ * dependency could land on the dev row and be classed `unreachable` (a Gate-3
+ * false negative once dev-scope classification lands). Preference order:
+ * `environment !== 'dev'` (covers both `'prod'` and `null`) wins; remaining ties
+ * break on lowest `id` so the choice is identical run-to-run regardless of the
+ * order Postgres returns the rows in.
+ */
+export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, string> {
+  const pdByNameVersion = new Map<string, string>();
+  const pdEnvByKey = new Map<string, string | null>();
+  for (const r of pdRows) {
+    const key = `${r.name}@${r.version}`;
+    const incomingEnv = (r.environment ?? null) as string | null;
+    const storedId = pdByNameVersion.get(key);
+    if (storedId === undefined) {
+      pdByNameVersion.set(key, r.id);
+      pdEnvByKey.set(key, incomingEnv);
+      continue;
+    }
+    const incomingIsProd = incomingEnv !== 'dev';
+    const storedIsProd = pdEnvByKey.get(key) !== 'dev';
+    if (
+      (incomingIsProd && !storedIsProd) ||
+      (incomingIsProd === storedIsProd && r.id < storedId)
+    ) {
+      pdByNameVersion.set(key, r.id);
+      pdEnvByKey.set(key, incomingEnv);
+    }
+  }
+  return pdByNameVersion;
+}
+
 export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   const { supabase, job, projectId, log, workspaceRoot, jobEcosystem, runId, heartbeat, assetTier, tierMultiplier } = ctx;
 
@@ -345,34 +391,9 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         .eq('last_seen_extraction_run_id', runId);
 
       // When two rows share name@version — a package declared both as a direct
-      // devDependency and pulled as a production transitive — attach the PDV
-      // to the production-scope row. Otherwise a vuln on a real runtime dep
-      // could land on the dev row and be classed `unreachable` (a false
-      // negative once dev-scope classification lands). Prefer environment
-      // !== 'dev'; ties break on lowest id for determinism.
-      const pdByNameVersion = new Map<string, string>();
-      const pdEnvByKey = new Map<string, string | null>();
-      if (pdRows) {
-        for (const r of pdRows) {
-          const key = `${r.name}@${r.version}`;
-          const incomingEnv = (r.environment ?? null) as string | null;
-          const storedId = pdByNameVersion.get(key);
-          if (storedId === undefined) {
-            pdByNameVersion.set(key, r.id);
-            pdEnvByKey.set(key, incomingEnv);
-            continue;
-          }
-          const incomingIsProd = incomingEnv !== 'dev';
-          const storedIsProd = pdEnvByKey.get(key) !== 'dev';
-          if (
-            (incomingIsProd && !storedIsProd) ||
-            (incomingIsProd === storedIsProd && r.id < storedId)
-          ) {
-            pdByNameVersion.set(key, r.id);
-            pdEnvByKey.set(key, incomingEnv);
-          }
-        }
-      }
+      // devDependency and pulled as a production transitive — the PDV attaches
+      // to the production-scope row (see resolveDualScopePdMap).
+      const pdByNameVersion = resolveDualScopePdMap((pdRows ?? []) as DualScopePdRow[]);
 
       const kevCveSet = new Set<string>();
       try {
