@@ -11,9 +11,10 @@
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Globe, Loader2, Radar, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Globe, Loader2, Radar, ShieldAlert, Star } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { EngineChip } from './EngineChip';
 import { api, type DastFindingDTO, type DastJobDTO, type DastSeverity } from '../../lib/api';
 
 interface DastFindingsSectionProps {
@@ -115,6 +116,7 @@ export function DastFindingsSection({ organizationId, projectId }: DastFindingsS
             <thead className="bg-background-card-header border-b border-border">
               <tr>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Severity</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Engine</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Endpoint</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Issue</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Linked</th>
@@ -221,7 +223,20 @@ function DastFindingRow({ finding }: { finding: DastFindingDTO }) {
   return (
     <tr className="hover:bg-background-subtle/50">
       <td className="px-4 py-2.5 align-middle">
-        {severityBadge(finding.severity)}
+        <div className="flex items-center gap-1.5">
+          {severityBadge(finding.severity)}
+          {finding.kev ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Star className="h-3 w-3 fill-amber-400 text-amber-400" aria-label="Known Exploited Vulnerability" />
+              </TooltipTrigger>
+              <TooltipContent>Known Exploited Vulnerability — CISA KEV catalog.</TooltipContent>
+            </Tooltip>
+          ) : null}
+        </div>
+      </td>
+      <td className="px-4 py-2.5 align-middle">
+        <EngineChip engine={finding.engine} />
       </td>
       <td className="px-4 py-2.5 align-middle text-sm text-foreground min-w-0">
         <div className="flex items-center gap-2 min-w-0">

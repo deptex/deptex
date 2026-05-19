@@ -44,7 +44,10 @@
     "epd_status": "fallback_no_ai",
     "status": "open",
     "re_review_triggered_at": null,
-    "re_review_reasons": null
+    "re_review_reasons": null,
+    "runtime_confirmed_at": null,
+    "runtime_confirmed_dast_finding_id": null,
+    "runtime_confirmed_prior_level": null
   },
   {
     "osv_id": "CVE-2026-2950",
@@ -91,7 +94,10 @@
     "epd_status": "fallback_no_ai",
     "status": "open",
     "re_review_triggered_at": null,
-    "re_review_reasons": null
+    "re_review_reasons": null,
+    "runtime_confirmed_at": null,
+    "runtime_confirmed_dast_finding_id": null,
+    "runtime_confirmed_prior_level": null
   },
   {
     "osv_id": "CVE-2025-13465",
@@ -138,7 +144,10 @@
     "epd_status": "fallback_no_ai",
     "status": "open",
     "re_review_triggered_at": null,
-    "re_review_reasons": null
+    "re_review_reasons": null,
+    "runtime_confirmed_at": null,
+    "runtime_confirmed_dast_finding_id": null,
+    "runtime_confirmed_prior_level": null
   },
   {
     "osv_id": "CVE-2026-4800",
@@ -185,7 +194,10 @@
     "epd_status": "fallback_no_ai",
     "status": "open",
     "re_review_triggered_at": null,
-    "re_review_reasons": null
+    "re_review_reasons": null,
+    "runtime_confirmed_at": null,
+    "runtime_confirmed_dast_finding_id": null,
+    "runtime_confirmed_prior_level": null
   },
   {
     "osv_id": "CVE-2021-23337",
@@ -232,6 +244,9 @@
     "epd_status": "fallback_no_ai",
     "status": "open",
     "re_review_triggered_at": null,
-    "re_review_reasons": null
+    "re_review_reasons": null,
+    "runtime_confirmed_at": null,
+    "runtime_confirmed_dast_finding_id": null,
+    "runtime_confirmed_prior_level": null
   }
 ]

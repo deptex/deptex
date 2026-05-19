@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
 import { runDastPipeline } from './dast/pipeline';
+import { sweepStaleDastTmpDirs } from './dast/nuclei-runner';
 import { ExtractionLogger } from './logger';
 import {
   claimJob,
@@ -120,10 +121,8 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
     if (job.type === 'extraction') {
       await processExtractionJob(supabase, job);
     } else if (job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei') {
-      // v2.1a routes all 'dast*' types through the same pipeline. The
-      // dast_zap / dast_nuclei split lands in v2.1c (engine column on
-      // findings, separate runner dispatchers). For now the worker treats
-      // them as aliases of 'dast'.
+      // All 'dast*' types share one pipeline; runDastPipeline dispatches to the
+      // ZAP or Nuclei engine internally based on scan_jobs.type (v2.1c).
       await processDastJob(supabase, job);
     } else {
       const message = `Unsupported scan type: ${job.type}`;
@@ -157,6 +156,10 @@ async function runWorker(): Promise<void> {
   console.log(
     `[depscanner] Worker starting, machine: ${MACHINE_ID}, supported_types=${supportedTypes.join(',')}${dastEnabled ? '' : ' (DAST disabled — DAST_CREDENTIAL_KEY missing)'}`,
   );
+
+  // Clear any dast-nuclei-* credential dirs orphaned by a hard crash that
+  // skipped runNuclei's finally cleanup. Best-effort, never throws.
+  sweepStaleDastTmpDirs();
 
   let lastJobTime = Date.now();
 

@@ -1061,7 +1061,8 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   auth_state text NOT NULL DEFAULT 'anonymous'::text,
   engine text NOT NULL DEFAULT 'zap'::text,
   linked_sast_finding_id uuid,
-  cross_link_methods text[] DEFAULT ARRAY[]::text[]
+  cross_link_methods text[] DEFAULT ARRAY[]::text[],
+  kev boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_targets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1167,7 +1168,10 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_vulnerabilities (
   status text NOT NULL DEFAULT 'open'::text,
   extraction_run_id text,
   re_review_triggered_at timestamp with time zone,
-  re_review_reasons jsonb
+  re_review_reasons jsonb,
+  runtime_confirmed_at timestamp with time zone,
+  runtime_confirmed_dast_finding_id uuid,
+  runtime_confirmed_prior_level text
 );
 CREATE TABLE IF NOT EXISTS public.project_entry_points (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -2772,7 +2776,6 @@ BEGIN
   );
   GET DIAGNOSTICS v_secret_inserted = ROW_COUNT;
 
-  -- Phase 23: extend p_reachable_flows typedef with reachability_source/osv_id/rule_id
   INSERT INTO project_reachable_flows (
     project_id, extraction_run_id, purl, dependency_id, flow_nodes,
     entry_point_file, entry_point_method, entry_point_line, entry_point_tag,
@@ -2858,7 +2861,13 @@ BEGIN
         sla_warning_notified_at = old_data.sla_warning_notified_at,
         sla_breach_notified_at = old_data.sla_breach_notified_at,
         re_review_triggered_at = old_data.re_review_triggered_at,
-        re_review_reasons = old_data.re_review_reasons
+        re_review_reasons = old_data.re_review_reasons,
+        runtime_confirmed_at = old_data.runtime_confirmed_at,
+        runtime_confirmed_dast_finding_id = old_data.runtime_confirmed_dast_finding_id,
+        runtime_confirmed_prior_level = old_data.runtime_confirmed_prior_level,
+        reachability_level = CASE
+          WHEN old_data.runtime_confirmed_at IS NOT NULL THEN 'confirmed'
+          ELSE new_pdv.reachability_level END
       FROM (
         SELECT DISTINCT ON (npd.id, opdv.osv_id)
           npd.id AS new_pd_id,
@@ -2869,7 +2878,8 @@ BEGIN
           opdv.sla_status, opdv.sla_deadline_at, opdv.sla_warning_at,
           opdv.sla_breached_at, opdv.sla_met_at, opdv.sla_exempt_reason,
           opdv.sla_warning_notified_at, opdv.sla_breach_notified_at,
-          opdv.re_review_triggered_at, opdv.re_review_reasons
+          opdv.re_review_triggered_at, opdv.re_review_reasons,
+          opdv.runtime_confirmed_at, opdv.runtime_confirmed_dast_finding_id, opdv.runtime_confirmed_prior_level
         FROM project_dependency_vulnerabilities opdv
         JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
         JOIN project_dependencies npd
@@ -3313,6 +3323,84 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.confirm_pdvs_from_dast_run(p_project_id uuid, p_dast_run_id text)
+ RETURNS TABLE(pdv_id uuid, osv_id text, prior_reachability_level text, new_reachability_level text)
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+ SET statement_timeout TO '5s'
+AS $function$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.project_dast_findings
+     WHERE dast_run_id = p_dast_run_id
+       AND project_id = p_project_id
+       AND engine = 'nuclei'
+  ) THEN
+    RAISE EXCEPTION 'dast_run_id % has no Nuclei findings in project %',
+      p_dast_run_id, p_project_id USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN QUERY
+  WITH matches AS (
+    SELECT DISTINCT ON (pdv.id)
+      pdv.id  AS pdv_id,
+      pdv.osv_id,
+      pdv.reachability_level AS prior_level,
+      f.id    AS dast_finding_id,
+      COALESCE((oat.rereview_settings->>'enabled')::boolean, true)                           AS rr_enabled,
+      COALESCE((oat.rereview_settings->'triggers'->>'reachability_upgrade')::boolean, true)   AS rr_upgrade
+    FROM public.project_dast_findings f
+    CROSS JOIN LATERAL (
+      SELECT array_agg(upper(c)) AS cves
+        FROM jsonb_array_elements_text(f.cross_link_metadata->'nuclei'->'cve_ids') c
+    ) cve_set
+    JOIN public.project_dependency_vulnerabilities pdv
+      ON pdv.project_id = f.project_id
+     AND pdv.project_dependency_id = f.linked_sca_project_dependency_id
+     AND (
+       upper(pdv.osv_id) = ANY(cve_set.cves)
+       OR EXISTS (
+         SELECT 1 FROM unnest(COALESCE(pdv.aliases, ARRAY[]::text[])) a
+          WHERE upper(a) = ANY(cve_set.cves)
+       )
+     )
+    JOIN public.projects p ON p.id = pdv.project_id
+    LEFT JOIN public.organization_asset_tiers oat ON oat.id = p.asset_tier_id
+    WHERE f.project_id = p_project_id
+      AND f.dast_run_id = p_dast_run_id
+      AND f.engine = 'nuclei'
+      AND f.linked_sca_project_dependency_id IS NOT NULL
+      AND cve_set.cves IS NOT NULL
+      AND _pdv_reachability_rank(pdv.reachability_level) < _pdv_reachability_rank('confirmed')
+    ORDER BY pdv.id, _pdv_severity_rank(f.severity) DESC, f.created_at ASC
+  ),
+  updated AS (
+    UPDATE public.project_dependency_vulnerabilities pdv
+       SET reachability_level             = 'confirmed',
+           runtime_confirmed_at           = now(),
+           runtime_confirmed_dast_finding_id = m.dast_finding_id,
+           runtime_confirmed_prior_level  = m.prior_level,
+           re_review_triggered_at = CASE
+             WHEN m.rr_enabled AND m.rr_upgrade THEN now()
+             ELSE pdv.re_review_triggered_at END,
+           re_review_reasons = CASE
+             WHEN m.rr_enabled AND m.rr_upgrade THEN
+               COALESCE(pdv.re_review_reasons, '[]'::jsonb)
+                 || jsonb_build_array(jsonb_build_object(
+                      'trigger', 'reachability_upgrade',
+                      'from', m.prior_level, 'to', 'confirmed',
+                      'detected_at', now()))
+             ELSE pdv.re_review_reasons END
+      FROM matches m
+     WHERE pdv.id = m.pdv_id
+    RETURNING pdv.id, pdv.osv_id, m.prior_level AS prior_level,
+              pdv.reachability_level AS new_level
+  )
+  SELECT updated.id, updated.osv_id, updated.prior_level, updated.new_level FROM updated;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.cosine_distance(halfvec, halfvec)
  RETURNS double precision
  LANGUAGE c
@@ -3652,7 +3740,13 @@ BEGIN
         sla_warning_notified_at = old_data.sla_warning_notified_at,
         sla_breach_notified_at = old_data.sla_breach_notified_at,
         re_review_triggered_at = old_data.re_review_triggered_at,
-        re_review_reasons = old_data.re_review_reasons
+        re_review_reasons = old_data.re_review_reasons,
+        runtime_confirmed_at = old_data.runtime_confirmed_at,
+        runtime_confirmed_dast_finding_id = old_data.runtime_confirmed_dast_finding_id,
+        runtime_confirmed_prior_level = old_data.runtime_confirmed_prior_level,
+        reachability_level = CASE
+          WHEN old_data.runtime_confirmed_at IS NOT NULL THEN 'confirmed'
+          ELSE new_pdv.reachability_level END
       FROM (
         SELECT DISTINCT ON (npd.id, opdv.osv_id)
           npd.id AS new_pd_id,
@@ -3663,7 +3757,8 @@ BEGIN
           opdv.sla_status, opdv.sla_deadline_at, opdv.sla_warning_at,
           opdv.sla_breached_at, opdv.sla_met_at, opdv.sla_exempt_reason,
           opdv.sla_warning_notified_at, opdv.sla_breach_notified_at,
-          opdv.re_review_triggered_at, opdv.re_review_reasons
+          opdv.re_review_triggered_at, opdv.re_review_reasons,
+          opdv.runtime_confirmed_at, opdv.runtime_confirmed_dast_finding_id, opdv.runtime_confirmed_prior_level
         FROM project_dependency_vulnerabilities opdv
         JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
         JOIN project_dependencies npd
@@ -6176,7 +6271,7 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_strategy_check CHECK ((strategy = ANY (ARRAY['bump_version'::text, 'code_patch'::text, 'add_wrapper'::text, 'pin_transitive'::text, 'remove_unused'::text, 'fix_semgrep'::text, 'remediate_secret'::text])));
 ALTER TABLE public.projects ADD CONSTRAINT projects_health_score_check CHECK (((health_score >= 0) AND (health_score <= 100)));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT extraction_jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type = 'dast'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type CHECK (((type ~~ 'dast%'::text) OR ((target_url IS NULL) AND (scan_profile IS NULL) AND (timeout_minutes IS NULL) AND (trigger_source IS NULL) AND (triggered_by IS NULL) AND (error_category IS NULL) AND (findings_count IS NULL) AND (duration_seconds IS NULL))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK (((error_category IS NULL) OR (error_category = ANY (ARRAY['timeout'::text, 'unreachable_target'::text, 'ssrf_blocked'::text, 'auth_failed'::text, 'engine_crash'::text, 'unknown'::text, 'tenant_drift_detected'::text, 'dast_credential_key_missing'::text, 'dast_credential_key_stale'::text, 'dast_credential_rotated'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text]))));
@@ -6334,6 +6429,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_dependency_id_fkey FOREIGN KEY (project_dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_runtime_confirmed_dast_findi FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
@@ -6762,6 +6858,7 @@ CREATE INDEX idx_watchtower_jobs_status ON public.watchtower_jobs USING btree (s
 CREATE INDEX idx_webhook_deliveries_created ON public.webhook_deliveries USING btree (created_at);
 CREATE INDEX idx_webhook_deliveries_delivery_id ON public.webhook_deliveries USING btree (delivery_id);
 CREATE INDEX idx_webhook_deliveries_repo ON public.webhook_deliveries USING btree (repo_full_name);
+CREATE INDEX project_dependency_vulnerabilities_runtime_confirmed_fk ON public.project_dependency_vulnerabilities USING btree (runtime_confirmed_dast_finding_id) WHERE (runtime_confirmed_dast_finding_id IS NOT NULL);
 CREATE UNIQUE INDEX banned_versions_organization_id_dependency_id_banned_version_ke ON public.banned_versions USING btree (organization_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
 CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
