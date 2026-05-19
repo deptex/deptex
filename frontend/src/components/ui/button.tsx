@@ -14,7 +14,7 @@ const buttonVariants = cva(
         solid:
           "bg-foreground text-background hover:bg-foreground/90 rounded-lg",
         destructive:
-          "bg-error/95 text-error-foreground border border-foreground/30 shadow hover:bg-error hover:border-foreground/40",
+          "relative !h-8 !px-3 !rounded-lg bg-error/95 text-error-foreground shadow-sm hover:bg-error disabled:bg-error/30 disabled:text-error-foreground/60 disabled:opacity-100",
         outline:
           "border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground",
         secondary:

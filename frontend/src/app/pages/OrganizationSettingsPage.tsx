@@ -3027,10 +3027,8 @@ export default function OrganizationSettingsPage() {
                             <Button
                               onClick={() => setShowDeleteConfirm(true)}
                               variant="destructive"
-                              size="sm"
                               className="flex-shrink-0"
                             >
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
                               Delete
                             </Button>
                           )}
@@ -3053,16 +3051,14 @@ export default function OrganizationSettingsPage() {
                               <Button
                                 onClick={handleDeleteOrganization}
                                 variant="destructive"
-                                size="sm"
                                 disabled={deleteConfirmText !== organization.name || isDeletingOrg}
-                                className="h-8"
                               >
-                                {isDeletingOrg ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                                ) : (
-                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                <span className={isDeletingOrg ? 'invisible' : ''}>Delete Forever</span>
+                                {isDeletingOrg && (
+                                  <span className="absolute inset-0 flex items-center justify-center">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  </span>
                                 )}
-                                Delete Forever
                               </Button>
                               <Button
                                 onClick={() => {
