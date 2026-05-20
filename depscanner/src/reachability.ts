@@ -506,6 +506,72 @@ export function isDevScoped(environment: string | null | undefined): boolean {
   return environment === 'dev';
 }
 
+/**
+ * v3 precision arc — does the taint-engine callgraph's `usedDependencies`
+ * set credit this dependency as reached?
+ *
+ * Per-ecosystem matching:
+ *   - **npm** populates the set with package names (`lodash`, `@scope/x`).
+ *     A direct `.has(depName.toLowerCase())` covers it.
+ *   - **java** (maven) populates the set with FQN packages (e.g.
+ *     `com.fasterxml.jackson.databind`, `org.springframework.web`) plus
+ *     ancestors. The PDV's name is the maven artifactId (e.g.
+ *     `jackson-core`) and namespace is the groupId (e.g.
+ *     `com.fasterxml.jackson.core`). The matcher does:
+ *       (a) bidirectional dot-segmented prefix match between `namespace`
+ *           and any used-FQN — credits jackson-core for a workspace that
+ *           imports `com.fasterxml.jackson.databind` via common ancestor
+ *           `com.fasterxml.jackson`.
+ *       (b) artifactId hyphen→dot substring against any used-FQN —
+ *           fallback for artifacts whose groupId doesn't share a prefix
+ *           with the package (e.g. older shaded jars).
+ *
+ * Returns false on empty depName or empty usedTransitives. Never throws.
+ */
+export function depMatchesUsedTransitives(
+  depName: string | null | undefined,
+  depNamespace: string | null | undefined,
+  usedTransitives: Set<string>,
+): boolean {
+  if (usedTransitives.size === 0) return false;
+  const lowerName = (depName ?? '').toLowerCase();
+  // npm exact-name match (lowercase).
+  if (lowerName && usedTransitives.has(lowerName)) return true;
+
+  // maven groupId bidirectional dot-segmented prefix match.
+  // `com.fasterxml.jackson.core` ↔ `com.fasterxml.jackson.databind` via
+  // ancestor `com.fasterxml.jackson`. The Java callgraph emits both the
+  // FQN package AND every non-trivial ancestor, so the ancestor lookup
+  // succeeds with a single `.has` on `com.fasterxml.jackson`.
+  const lowerNs = (depNamespace ?? '').toLowerCase();
+  if (lowerNs) {
+    if (usedTransitives.has(lowerNs)) return true;
+    // groupId is a strict prefix of some used-FQN (e.g. groupId
+    // `org.springframework` ⊂ used `org.springframework.web`).
+    for (const used of usedTransitives) {
+      if (used.startsWith(lowerNs + '.') || lowerNs.startsWith(used + '.')) {
+        return true;
+      }
+    }
+  }
+
+  // maven artifactId hyphen→dot substring — catches e.g.
+  // `jackson-databind` mapping to FQN containing `jackson.databind`.
+  // Skip when the dot-converted token is shorter than 5 chars or has
+  // no dots (would degenerate to "anything containing `lodash`" already
+  // covered by the npm exact-match path).
+  if (lowerName.includes('-')) {
+    const dotted = lowerName.replace(/-/g, '.');
+    if (dotted.length >= 5 && dotted.includes('.')) {
+      for (const used of usedTransitives) {
+        if (used.includes(dotted)) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
@@ -779,6 +845,10 @@ export async function updateReachabilityLevels(
   }
 
   const depNameCache = new Map<string, string>();
+  // v3 precision arc — namespace (groupId for maven) cached alongside name.
+  // Used by the callgraph-reach matcher to bridge maven artifactIds (e.g.
+  // `jackson-core`) and Java FQN packages (e.g. `com.fasterxml.jackson.*`).
+  const depNamespaceCache = new Map<string, string | null>();
   let updatedCount = 0;
   let detailsSetCount = 0;
   const levelCounts: Record<string, number> = {
@@ -863,14 +933,17 @@ export async function updateReachabilityLevels(
       }
 
       let depName = depNameCache.get(dependencyId);
-      if (depName === undefined) {
+      let depNamespace = depNamespaceCache.get(dependencyId);
+      if (depName === undefined || depNamespace === undefined) {
         const { data: dep } = await supabase
           .from('dependencies')
-          .select('name')
+          .select('name, namespace')
           .eq('id', dependencyId)
           .single();
         depName = dep?.name ?? '';
+        depNamespace = (dep?.namespace ?? null) as string | null;
         depNameCache.set(dependencyId, depName as string);
+        depNamespaceCache.set(dependencyId, depNamespace);
       }
 
       // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted
@@ -969,7 +1042,7 @@ export async function updateReachabilityLevels(
         const callgraphRan =
           options.usedTransitives !== undefined && options.usedTransitives.size > 0;
         const callgraphReachedThisDep =
-          callgraphRan && !!depName && options.usedTransitives!.has(depName.toLowerCase());
+          callgraphRan && depMatchesUsedTransitives(depName, depNamespace, options.usedTransitives!);
         const heuristicUnreachable =
           graphTrusted &&
           usageAnalysisProducedOutput &&
