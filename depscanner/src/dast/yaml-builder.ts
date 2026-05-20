@@ -52,7 +52,23 @@ export interface BuildAutomationYamlOptions {
   loggedInIndicator?: string;
   loggedOutIndicator?: string;
   scanTimeoutMinutes?: number;
+  /**
+   * v2.1d — login-only mode for the Test-login dry-run job AND for the
+   * pre-flight probe inside a real recorded-strategy scan. When true:
+   *   - the spider, spiderAjax, activeScan, and report jobs are omitted
+   *   - the `requestor` AF job post-auth IS emitted (so loggedInRegex fires)
+   *   - the auth context's `failOnError` is set so a verification miss
+   *     aborts the autorun cleanly (M0 Spike-5 outcome decides whether this
+   *     is via job-level onFail:exit or worker-side gating).
+   */
+  loginOnly?: boolean;
 }
+
+// v2.1d — auth budget reserved out of scan_timeout_minutes for the recorded
+// pre-flight probe. activeScan.maxScanDurationInMins is reduced by this
+// amount for the recorded strategy so the combined (auth + spider + scan)
+// run fits within the outer scan_timeout_minutes wall-clock.
+const RECORDED_AUTH_BUDGET_MIN = 3;
 
 const CONTEXT_NAME = 'deptex-dast';
 
@@ -129,6 +145,11 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
   // zap-baseline.py's coverage (parity check: anonymous AF run must produce
   // findings within +/-10% of zap-baseline.py — `feedback_docker_vs_source_e2e`
   // surfaced the gap when AF emitted ~half the alerts of helper-script).
+  //
+  // v2.1d: includes `authhelper` (browser-based auth method) for recorded
+  // strategy. M0 Spike-1 decided whether to also bake the JAR into the
+  // Dockerfile (yes — to remove the per-cold-start download tax); the addOns
+  // list is harmless when already-installed (ZAP just reports it).
   jobs.push({
     type: 'addOns',
     parameters: {
@@ -140,6 +161,7 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
         'spider',
         'spiderAjax',
         'replacer',
+        'authhelper',
       ],
     },
   });
@@ -166,54 +188,106 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
     });
   }
 
-  // 4. spider vs spiderAjax — runtime-driven.
-  // 'unknown' AND 'spa' both use spiderAjax (the runtime-shape guard in
-  // fly-machines.ts pairs with this — both get the perf-4x machine).
-  if (opts.detectedRuntime === 'spa' || opts.detectedRuntime === 'unknown') {
+  // 3.5. requestor — v2.1d: post-auth verification probe. ZAP's
+  // verification.loggedInRegex fires lazily against responses to subsequent
+  // requests; the spider eventually triggers it, but in login-only mode
+  // (Test-login dry-run AND the pre-flight probe inside a real recorded
+  // scan) we omit the spider and need an explicit GET to drive the regex
+  // check. The requestor issues exactly one GET against loginPageUrl and
+  // ZAP evaluates the verification block against the response.
+  //
+  // M0 Spike-5 outcome decides whether `onFail: exit` is added here so a
+  // regex miss aborts the autorun (the alternative is worker-side gating).
+  // We default to onFail:exit; if Spike-5 returns red, the worker reads the
+  // probe outcome and decides whether to continue to spider/scan.
+  if (opts.authStrategy === 'recorded' && opts.authPayload) {
+    const verificationUrl = (opts.authPayload as { kind: string } & { login_page_url?: string }).login_page_url
+      ?? opts.targetUrl;
     jobs.push({
-      type: 'spiderAjax',
-      parameters: {
-        context: CONTEXT_NAME,
-        // 10-min cap on AJAX crawl; safety net is the outer scan_timeout.
-        maxDuration: 10,
-        // firefox-headless is the AF default and ships in the ZAP image.
-        browserId: 'firefox-headless',
-      },
-    });
-  } else {
-    jobs.push({
-      type: 'spider',
-      parameters: {
-        context: CONTEXT_NAME,
-        maxDuration: 5,
-        maxDepth: 5,
-      },
-    });
-  }
-
-  // 5. activeScan — only on scan_profile='full' (locked decision per plan:
-  // 'auto' is passive-only with no auto-escalation).
-  if (opts.scanProfile === 'full') {
-    jobs.push({
-      type: 'activeScan',
-      parameters: {
-        context: CONTEXT_NAME,
-        maxScanDurationInMins: opts.scanTimeoutMinutes ?? 30,
-        policy: 'Default Policy',
-      },
+      type: 'requestor',
+      parameters: {},
+      // ZAP's requestor job runs each entry sequentially; `requests` is an
+      // array of {url, method, ...}. We issue one GET to the login page (or
+      // a configured post-login URL) so the spider/scan-issued requests
+      // aren't the first place loggedInRegex evaluates.
+      requests: [
+        {
+          url: verificationUrl,
+          method: 'GET',
+        },
+      ],
+      // onFail: exit — if the verification probe fails, halt the autorun
+      // before any spider/active-scan work runs (M0 Spike-5).
+      onFail: 'exit',
     });
   }
 
-  // 6. report — JSON traditional report. Path is relative to /zap/wrk per
-  // the AF report job's reportDir+reportFile convention.
-  jobs.push({
-    type: 'report',
-    parameters: {
-      template: 'traditional-json',
-      reportDir: '/zap/wrk',
-      reportFile: opts.reportRelativePath,
-    },
-  });
+  // 4-6. login-only short-circuit: in login-only mode, omit the spider,
+  // active-scan, and report jobs. The autorun YAML is just addOns +
+  // passiveScan-config + (replacer if needed) + requestor verification.
+  // The worker parses ZAP's diagnostic log to extract the per-step
+  // success/failure outcome and writes DastLoginTestResult to
+  // scan_jobs.error_payload.
+  if (!opts.loginOnly) {
+    // 4. spider vs spiderAjax — runtime-driven.
+    // 'unknown' AND 'spa' both use spiderAjax (the runtime-shape guard in
+    // fly-machines.ts pairs with this — both get the perf-4x machine).
+    if (opts.detectedRuntime === 'spa' || opts.detectedRuntime === 'unknown') {
+      jobs.push({
+        type: 'spiderAjax',
+        parameters: {
+          context: CONTEXT_NAME,
+          // 10-min cap on AJAX crawl; safety net is the outer scan_timeout.
+          maxDuration: 10,
+          // firefox-headless is the AF default and ships in the ZAP image.
+          browserId: 'firefox-headless',
+        },
+      });
+    } else {
+      jobs.push({
+        type: 'spider',
+        parameters: {
+          context: CONTEXT_NAME,
+          maxDuration: 5,
+          maxDepth: 5,
+        },
+      });
+    }
+
+    // 5. activeScan — only on scan_profile='full' (locked decision per plan:
+    // 'auto' is passive-only with no auto-escalation).
+    //
+    // v2.1d: recorded strategy reserves RECORDED_AUTH_BUDGET_MIN minutes of
+    // scan_timeout_minutes for the login replay + verification probe. The
+    // pre-flight runs inside the SAME autorun YAML in the same ZAP process,
+    // so the auth budget is consumed before the active-scan starts.
+    if (opts.scanProfile === 'full') {
+      const baseTimeout = opts.scanTimeoutMinutes ?? 30;
+      const activeScanDuration =
+        opts.authStrategy === 'recorded'
+          ? Math.max(1, baseTimeout - RECORDED_AUTH_BUDGET_MIN)
+          : baseTimeout;
+      jobs.push({
+        type: 'activeScan',
+        parameters: {
+          context: CONTEXT_NAME,
+          maxScanDurationInMins: activeScanDuration,
+          policy: 'Default Policy',
+        },
+      });
+    }
+
+    // 6. report — JSON traditional report. Path is relative to /zap/wrk per
+    // the AF report job's reportDir+reportFile convention.
+    jobs.push({
+      type: 'report',
+      parameters: {
+        template: 'traditional-json',
+        reportDir: '/zap/wrk',
+        reportFile: opts.reportRelativePath,
+      },
+    });
+  }
 
   const automation = {
     env: {
