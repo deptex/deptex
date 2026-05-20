@@ -979,19 +979,31 @@ async function scanContainerImages(
               budgetMs: reachabilityBudgetMs(Date.now() - stepStart),
               logger: ctx.logger,
             });
-            await ctx.logger.info(
-              'container_scan.reachability',
-              `${image.imageRef}: total=${reach.total} classified=${reach.classified} ` +
-                `module=${reach.module} unreachable=${reach.unreachable} fallback=${reach.fallback}` +
-                (reach.fallbackReason ? ` (fallback: ${reach.fallbackReason})` : '')
-            );
+            // Wrap the log call itself in try/catch — a transient logger
+            // fault (e.g., extraction_logs contention) must not abort the
+            // per-image loop and skip every remaining image. Mirrors the
+            // catalog_hash log treatment below.
+            try {
+              await ctx.logger.info(
+                'container_scan.reachability',
+                `${image.imageRef}: total=${reach.total} classified=${reach.classified} ` +
+                  `module=${reach.module} unreachable=${reach.unreachable} fallback=${reach.fallback}` +
+                  (reach.fallbackReason ? ` (fallback: ${reach.fallbackReason})` : '')
+              );
+            } catch {
+              /* logging is best-effort */
+            }
           } catch (e: any) {
             // Decoration is best-effort — a failure leaves reachability_level
             // null and never blocks the scan findings from being written.
-            await ctx.logger.warn(
-              'container_scan.reachability',
-              `${image.imageRef}: ${e?.message ?? e}`
-            );
+            try {
+              await ctx.logger.warn(
+                'container_scan.reachability',
+                `${image.imageRef}: ${e?.message ?? e}`
+              );
+            } catch {
+              /* logging is best-effort */
+            }
           } finally {
             try {
               fs.rmSync(reachScratch, { recursive: true, force: true });
@@ -1097,10 +1109,17 @@ export async function runBaseImageAdvisor(
       // error) — emit a per-file warning and continue. Other Dockerfiles
       // still produce recommendations.
       warnings.push(`base_image_advisor_failed:${relPath}:${e?.message ?? 'unknown'}`);
-      await ctx.logger.warn(
-        'base_image_advisor',
-        `dockerfile ${relPath} skipped: ${e?.message ?? e}`
-      );
+      // Wrap the logger call — a logger fault inside the catch arm must not
+      // re-throw and abort the advisor loop. Mirrors the catalog_hash log
+      // and the reachability log treatment.
+      try {
+        await ctx.logger.warn(
+          'base_image_advisor',
+          `dockerfile ${relPath} skipped: ${e?.message ?? e}`
+        );
+      } catch {
+        /* logging is best-effort */
+      }
     }
   }
 

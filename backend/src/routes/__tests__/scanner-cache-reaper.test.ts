@@ -50,7 +50,7 @@ describe('POST /api/workers/scanner-cache-reap', () => {
     expect(res.status).toBe(401);
   });
 
-  it('invokes BOTH reaps under the same retention window and returns both row counts', async () => {
+  it('invokes BOTH reaps and returns both row counts; recommendation retention defaults to 90 even with a 45-day cache retention', async () => {
     const rpcSpy = jest.spyOn(supabase, 'rpc');
     const res = await request(app)
       .post(REAP_URL)
@@ -63,18 +63,38 @@ describe('POST /api/workers/scanner-cache-reap', () => {
       cache_rows_deleted: 7,
       recommendation_rows_deleted: 3,
       retention_days: 45,
+      recommendation_retention_days: 90,
     });
-    // Both reaps were called, with the SAME retention window.
+    // Cache uses the body's retention_days; recommendations use the 90d
+    // default (RPC's own DEFAULT 90), NOT the cache's window.
     const calls = rpcSpy.mock.calls.map((c) => [c[0], c[1]]);
     expect(calls).toEqual(
       expect.arrayContaining([
         ['cleanup_container_image_scan_cache', { retention_days: 45 }],
-        ['cleanup_dismissed_base_image_recommendations', { retention_days: 45 }],
+        ['cleanup_dismissed_base_image_recommendations', { retention_days: 90 }],
       ])
     );
   });
 
-  it('defaults retention_days to 30 when the body omits it', async () => {
+  it('allows an explicit recommendation_retention_days override', async () => {
+    const rpcSpy = jest.spyOn(supabase, 'rpc');
+    const res = await request(app)
+      .post(REAP_URL)
+      .set('X-Internal-Api-Key', 'test-internal-key')
+      .send({ retention_days: 30, recommendation_retention_days: 14 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.recommendation_retention_days).toBe(14);
+    const calls = rpcSpy.mock.calls.map((c) => [c[0], c[1]]);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        ['cleanup_container_image_scan_cache', { retention_days: 30 }],
+        ['cleanup_dismissed_base_image_recommendations', { retention_days: 14 }],
+      ])
+    );
+  });
+
+  it('defaults to retention_days=30 + recommendation_retention_days=90 when the body omits both', async () => {
     const rpcSpy = jest.spyOn(supabase, 'rpc');
     const res = await request(app)
       .post(REAP_URL)
@@ -82,13 +102,22 @@ describe('POST /api/workers/scanner-cache-reap', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body.retention_days).toBe(30);
+    expect(res.body.recommendation_retention_days).toBe(90);
     const calls = rpcSpy.mock.calls.map((c) => [c[0], c[1]]);
     expect(calls).toEqual(
       expect.arrayContaining([
         ['cleanup_container_image_scan_cache', { retention_days: 30 }],
-        ['cleanup_dismissed_base_image_recommendations', { retention_days: 30 }],
+        ['cleanup_dismissed_base_image_recommendations', { retention_days: 90 }],
       ])
     );
+  });
+
+  it('rejects an out-of-range recommendation_retention_days', async () => {
+    const res = await request(app)
+      .post(REAP_URL)
+      .set('X-Internal-Api-Key', 'test-internal-key')
+      .send({ recommendation_retention_days: 999 });
+    expect(res.status).toBe(400);
   });
 
   it('rejects an out-of-range retention_days', async () => {

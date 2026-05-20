@@ -17,8 +17,13 @@ const router = Router();
  *      dismissed rows accumulate forever.
  *
  * Both reaps are RETURNS INTEGER, so the row counts in the response are real.
- * They share the same retention_days request parameter for simplicity; if the
- * defaults need to diverge in the future, split the body into a struct.
+ *
+ * Retention windows differ on purpose: the cache reaper uses `retention_days`
+ * (default 30) — global per-digest data that is cheap to regenerate. The
+ * recommendation reaper uses `recommendation_retention_days` (default 90,
+ * matching cleanup_dismissed_base_image_recommendations' RPC default) because
+ * a dismissed recommendation is user-actioned state that operators should be
+ * able to review for a longer window before it is purged.
  *
  * Auth: QStash signature OR X-Internal-Api-Key header. Pattern mirrors
  * sync-counter-reset.ts.
@@ -60,10 +65,23 @@ router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // 30-day retention default; matches the migration's reaper signature.
+  // 30-day retention default for the global cache (matches phase27b's reaper
+  // signature). 90-day default for dismissed recommendations (matches
+  // cleanup_dismissed_base_image_recommendations' own DEFAULT 90) — operators
+  // expect user-actioned state to outlive ephemeral cache rows.
   const retentionDays = Number(req.body?.retention_days ?? 30);
   if (!Number.isFinite(retentionDays) || retentionDays < 1 || retentionDays > 365) {
     return res.status(400).json({ error: 'retention_days must be between 1 and 365' });
+  }
+  const recommendationRetentionDays = Number(
+    req.body?.recommendation_retention_days ?? 90
+  );
+  if (
+    !Number.isFinite(recommendationRetentionDays) ||
+    recommendationRetentionDays < 1 ||
+    recommendationRetentionDays > 365
+  ) {
+    return res.status(400).json({ error: 'recommendation_retention_days must be between 1 and 365' });
   }
 
   try {
@@ -77,7 +95,7 @@ router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
 
     const { data: recData, error: recError } = await supabase.rpc(
       'cleanup_dismissed_base_image_recommendations',
-      { retention_days: retentionDays }
+      { retention_days: recommendationRetentionDays }
     );
     if (recError) throw recError;
     const recommendationRowsDeleted =
@@ -88,6 +106,7 @@ router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
       cache_rows_deleted: cacheRowsDeleted,
       recommendation_rows_deleted: recommendationRowsDeleted,
       retention_days: retentionDays,
+      recommendation_retention_days: recommendationRetentionDays,
     });
   } catch (err: any) {
     console.error('[ScannerCacheReaper] Error:', err.message);

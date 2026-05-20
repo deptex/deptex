@@ -35,7 +35,12 @@ export default function ScannersPanel({
   const [error, setError] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [recommendations, setRecommendations] = useState<BaseImageRecommendation[]>([]);
-  const [recsLoading, setRecsLoading] = useState(true);
+  // recsLoading initialises to `false` so projects with no recommendations
+  // (the common case — most projects have no Dockerfiles to recommend
+  // against) don't flash the section chrome + skeleton in for ~300ms before
+  // it collapses again. The Retry button is the only thing that flips it
+  // back to true; the initial mount's pending phase is invisible.
+  const [recsLoading, setRecsLoading] = useState(false);
   const [recsError, setRecsError] = useState<string | null>(null);
   // Bumping this triggers the recommendations fetch effect to re-run, used by
   // the error-state "Retry" button. Independent of the summary fetch's error
@@ -67,7 +72,11 @@ export default function ScannersPanel({
 
   useEffect(() => {
     let cancelled = false;
-    setRecsLoading(true);
+    // Only flip into the loading state on an explicit Retry (recsReloadKey
+    // bumped). The initial mount fetches silently — when results arrive,
+    // either the section appears with cards or stays absent on an empty
+    // result. No flash for the common "no recommendations" case.
+    if (recsReloadKey > 0) setRecsLoading(true);
     setRecsError(null);
     api
       .getBaseImageRecommendations(organizationId, projectId)
@@ -78,7 +87,8 @@ export default function ScannersPanel({
       .catch((e: any) => {
         if (cancelled) return;
         setRecommendations([]);
-        setRecsError(e?.message ?? 'Failed to load base-image recommendations');
+        console.error('[ScannersPanel] base-image recommendations fetch failed', e);
+        setRecsError('Could not load base-image recommendations.');
       })
       .finally(() => {
         if (cancelled) return;

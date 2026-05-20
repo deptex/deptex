@@ -13,7 +13,17 @@ import * as path from 'path';
 
 import { _resetCatalogCacheForTests } from '../base-image-catalog';
 import { _internal } from '../orchestrator';
-import type { ContainerFinding } from '../types';
+
+// Eagerly resolve the same module instances the orchestrator captured at
+// import time, so monkey-patches we apply later land on the same namespace
+// objects the orchestrator dereferences via `base_image_catalog_1.loadCatalog`
+// / `base_image_advisor_1.generateRecommendation`. Loading them via require()
+// inside individual tests would, after a jest.resetModules() call, produce
+// fresh module instances that the orchestrator's already-bound references do
+// NOT see — the patch would land on a different object than the one the SUT
+// reads.
+const catalogModule = require('../base-image-catalog');
+const advisorModule = require('../base-image-advisor');
 
 const { runBaseImageAdvisor, reachabilityBudgetMs } = _internal;
 
@@ -127,17 +137,13 @@ describe('runBaseImageAdvisor — catalog pre-flight', () => {
     _resetCatalogCacheForTests();
   });
 
-  afterEach(() => {
-    jest.resetModules();
-  });
-
   it('emits exactly one base_image_advisor_catalog_unavailable warning when loadCatalog throws', async () => {
-    // Patch loadCatalog ON THE SHARED MODULE so the orchestrator imports the
-    // throwing version too. jest.resetModules() in afterEach restores it.
-    const catalog = require('../base-image-catalog');
-    const original = catalog.loadCatalog;
-    catalog.loadCatalog = () => {
-      throw new catalog.CatalogValidationError('bad-yaml.fixture');
+    // Patch loadCatalog on the shared module instance — the same object the
+    // orchestrator dereferences. Restored in finally so subsequent tests are
+    // unaffected.
+    const original = catalogModule.loadCatalog;
+    catalogModule.loadCatalog = () => {
+      throw new catalogModule.CatalogValidationError('bad-yaml.fixture');
     };
 
     const repo = makeRepo({
@@ -167,7 +173,7 @@ describe('runBaseImageAdvisor — catalog pre-flight', () => {
         calls.filter((c) => c.level === 'warn' && /dockerfile .* skipped/.test(c.message))
       ).toHaveLength(0);
     } finally {
-      catalog.loadCatalog = original;
+      catalogModule.loadCatalog = original;
       cleanupRepo(repo);
     }
   });
@@ -193,60 +199,63 @@ describe('runBaseImageAdvisor — catalog pre-flight', () => {
   });
 
   it('isolates a per-Dockerfile failure — others still produce recommendations', async () => {
-    // The catalog is real; one Dockerfile is unreadable (a directory at the
-    // same path), the other is a normal Dockerfile.
-    const repo = makeRepo({
-      'svc/Dockerfile': 'FROM node:20\nCMD ["node", "server.js"]\n',
-    });
-    // Make the second "Dockerfile" path an unreadable directory so
-    // parseDockerfileFinalStage's fs.readFileSync surfaces an error.
-    const badPath = path.join(repo, 'Dockerfile');
-    fs.mkdirSync(badPath);
+    // Force a per-Dockerfile failure by patching generateRecommendation to
+    // throw on the FIRST call only. The advisor's per-iteration try/catch
+    // (orchestrator.ts:1086-1104) must catch the throw, push a warning that
+    // names the failing file, and continue to the next Dockerfile so its
+    // recommendation still lands. A regression that removes the try/catch
+    // would let the throw escape — both Dockerfiles would be lost AND
+    // result.written would be 0.
+    const originalGenerate = advisorModule.generateRecommendation;
+    const callIndex: { current: number } = { current: 0 };
+    advisorModule.generateRecommendation = (input: any) => {
+      const idx = callIndex.current++;
+      if (idx === 0) {
+        throw new Error('synthetic per-Dockerfile failure');
+      }
+      return originalGenerate(input);
+    };
 
+    const repo = makeRepo({
+      // Two valid Dockerfiles with parseable FROM lines. Sort order is
+      // determined by findDockerfiles() walking the tree — Dockerfile at
+      // root is hit first on both POSIX and Windows.
+      'Dockerfile': 'FROM node:20-bullseye\nCMD ["node", "server.js"]\n',
+      'svc/Dockerfile': 'FROM node:20-bullseye\nCMD ["node", "app.js"]\n',
+    });
     try {
       const { logger, calls } = makeLogger();
-      const supabase = {
-        from: () => ({
-          upsert: async () => ({ error: null }),
-        }),
-      };
-      const ctx = makeCtx({ repoPath: repo, logger, supabase });
-      const result = await runBaseImageAdvisor(ctx, [
-        {
-          scanner_version: 'trivy@0.69.3',
-          image_reference: 'node:20',
-          image_digest: 'sha256:' + 'a'.repeat(64),
-          os_package_name: 'libc6',
-          os_package_version: '1',
-          os_package_ecosystem: 'debian',
-          osv_id: null,
-          cve_id: 'CVE-x',
-          severity: 'HIGH',
-          cvss_score: null,
-          epss_score: null,
-          is_kev: false,
-          fix_versions: [],
-          layer_digest: null,
-          description: null,
-          rule_doc_url: null,
-          container_fingerprint: 'libc6@CVE-x',
-        } as ContainerFinding,
-      ]);
+      const ctx = makeCtx({ repoPath: repo, logger });
+      const result = await runBaseImageAdvisor(ctx, []);
 
-      // No catalog-unavailable warning (catalog loaded fine).
+      // Catalog loaded fine — no catalog-unavailable warning.
       expect(
         result.warnings.filter((w: string) =>
           w.startsWith('base_image_advisor_catalog_unavailable:')
         )
       ).toHaveLength(0);
-      // The advisor still wrote at least one row from the surviving Dockerfile.
-      expect(result.written).toBeGreaterThanOrEqual(1);
-      // Per-Dockerfile failures (if any from the unreadable bad path) were
-      // logged but did not stop the run.
-      // (The bad path is a directory, so parseDockerfileFinalStage skips it
-      // silently rather than throwing; this assertion just establishes that
-      // surviving Dockerfiles are not held hostage by a broken sibling.)
+
+      // EXACTLY one per-Dockerfile failure warning, naming the failing path.
+      const failWarnings = result.warnings.filter((w: string) =>
+        w.startsWith('base_image_advisor_failed:')
+      );
+      expect(failWarnings).toHaveLength(1);
+      expect(failWarnings[0]).toMatch(/synthetic per-Dockerfile failure/);
+
+      // The surviving Dockerfile (call #2) produced a row that upserted.
+      expect(result.written).toBe(1);
+
+      // The per-Dockerfile catch logged via ctx.logger.warn.
+      const dockerfileWarns = calls.filter(
+        (c) => c.level === 'warn' && /dockerfile .* skipped/.test(c.message)
+      );
+      expect(dockerfileWarns).toHaveLength(1);
+
+      // generateRecommendation was actually invoked twice (the failure path
+      // didn't short-circuit the loop on the second iteration).
+      expect(callIndex.current).toBe(2);
     } finally {
+      advisorModule.generateRecommendation = originalGenerate;
       cleanupRepo(repo);
     }
   });

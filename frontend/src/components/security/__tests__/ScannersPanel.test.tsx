@@ -61,29 +61,54 @@ function renderPanel() {
 }
 
 describe('ScannersPanel — recommendations state machine', () => {
-  it('shows a loading skeleton while recommendations are pending', async () => {
-    // Pending — never resolves during this test.
-    (api.getBaseImageRecommendations as any).mockImplementation(
-      () => new Promise(() => { /* never resolves */ })
-    );
+  it('does NOT show a loading skeleton on the initial fetch (avoids empty-state flicker)', async () => {
+    // The common case is a project with no recommendations. Showing a
+    // skeleton + section chrome on every mount only to collapse it on
+    // resolution is the regression ux-5 caught. Initial mount stays silent.
+    (api.getBaseImageRecommendations as any).mockResolvedValueOnce({ recommendations: [] });
 
     renderPanel();
+
+    // Wait for the scanner panel itself to mount, then assert no skeleton
+    // ever showed up during the initial fetch.
+    await screen.findByText('IaC + Container Scanners');
+    expect(
+      screen.queryByLabelText('Loading base-image recommendations')
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the loading skeleton on Retry (user-initiated reload)', async () => {
+    const getRecs = api.getBaseImageRecommendations as any;
+    // First call rejects → error UI with Retry. Second call hangs → Retry
+    // surfaces the skeleton.
+    getRecs
+      .mockRejectedValueOnce(new Error('init failed'))
+      .mockImplementationOnce(() => new Promise(() => { /* hangs */ }));
+
+    renderPanel();
+
+    const retry = await screen.findByRole('button', { name: /retry/i });
+    fireEvent.click(retry);
 
     const skeleton = await screen.findByLabelText('Loading base-image recommendations');
     expect(skeleton).toBeInTheDocument();
     expect(skeleton.getAttribute('aria-busy')).toBe('true');
   });
 
-  it('shows an error message + Retry button when the fetch rejects, distinct from the empty state', async () => {
+  it('shows a generic error message + Retry button when the fetch rejects, distinct from the empty state', async () => {
     (api.getBaseImageRecommendations as any).mockRejectedValueOnce(
       new Error('Network error fetching recommendations')
     );
 
     renderPanel();
 
+    // Generic user-facing message — backend internals never surface to UI.
     expect(
-      await screen.findByText('Network error fetching recommendations')
+      await screen.findByText('Could not load base-image recommendations.')
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Network error fetching recommendations')
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
     // Section header is visible — error state shares the panel chrome, unlike
     // the empty state which omits the section entirely.
@@ -105,7 +130,7 @@ describe('ScannersPanel — recommendations state machine', () => {
       expect(screen.getByText('node:20-bullseye')).toBeInTheDocument();
     });
     expect(getRecs).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText('flaky network')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load base-image recommendations.')).not.toBeInTheDocument();
   });
 
   it('omits the recommendations section entirely on the empty result', async () => {

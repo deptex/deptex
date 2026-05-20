@@ -232,14 +232,21 @@ describe('POST base-image-suggestions', () => {
     expect(res.body.ok).toBe(true);
   });
 
-  it('returns 403 when a member lacks manage_teams_and_projects', async () => {
-    setOrgRole({ manage_teams_and_projects: false }, 'member');
+  it('returns 403 when a team-scoped viewer lacks manage_teams_and_projects (the new gate, not checkProjectAccess)', async () => {
+    // grantTeamViewer gives the caller checkProjectAccess=true via a team
+    // membership but no is_owner team — so checkProjectManagePermission
+    // (the NEW gate this test exists to pin) is the one that fails. With a
+    // plain `setOrgRole({manage_teams_and_projects: false}, 'member')` the
+    // 403 would come from checkProjectAccess first and the new gate would
+    // never run — silently passing the test against the wrong invariant.
+    grantTeamViewer();
     const res = await request(app)
       .post(SUGGEST_URL)
       .set('Authorization', `Bearer ${token}`)
       .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/permission/i);
+    // Tight match — the new gate's exact error string, not the loose /permission/i.
+    expect(res.body.error).toBe('No permission to manage base-image recommendations');
   });
 
   it('allows a non-owner role that does carry manage_teams_and_projects', async () => {
@@ -359,13 +366,14 @@ describe('cross-tenant isolation', () => {
     expect(res.status).toBe(403);
   });
 
-  it('suggest: a viewer without manage_teams_and_projects is rejected (pattern 4)', async () => {
-    setOrgRole({ manage_teams_and_projects: false }, 'member');
+  it('suggest: a team-scoped viewer without manage permission is rejected at the new gate (pattern 4)', async () => {
+    grantTeamViewer();
     const res = await request(app)
       .post(SUGGEST_URL)
       .set('Authorization', `Bearer ${token}`)
       .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(403);
+    expect(res.body.error).toBe('No permission to manage base-image recommendations');
   });
 
   it('GET: a viewer WITHOUT org-wide perms but in a project team can still read (pattern 4)', async () => {
