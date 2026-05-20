@@ -197,7 +197,7 @@ describe('MembersPage', () => {
 
     // While in flight, status cell flips to "Resending..."
     await waitFor(() => {
-      expect(within(row).getByText('Resending...')).toBeInTheDocument();
+      expect(within(row).getByText('Resending')).toBeInTheDocument();
     });
     expect(within(row).queryByText('Pending')).not.toBeInTheDocument();
 

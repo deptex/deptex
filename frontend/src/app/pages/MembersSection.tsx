@@ -1038,7 +1038,16 @@ export default function MembersPage({
               </tbody>
             </table>
           ) : (
-            <table className="w-full">
+            <table className="w-full table-fixed">
+              {/* Pin Role/Teams + Status + Action widths so the row doesn't
+                  reflow when the Status chip swaps between "Pending" and
+                  "Resending" mid-call. */}
+              <colgroup>
+                <col style={{ width: 'auto' }} />
+                <col style={{ width: '240px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '40px' }} />
+              </colgroup>
               <thead className="bg-background-card-header border-b border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -1050,7 +1059,7 @@ export default function MembersPage({
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="w-10"></th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -1092,7 +1101,7 @@ export default function MembersPage({
                     {resendingInvitationIds.has(invitation.id) ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground-secondary">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        Resending...
+                        Resending
                       </span>
                     ) : (
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
