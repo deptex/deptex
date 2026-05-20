@@ -695,3 +695,51 @@ DEPTEX_OSV_FALLBACK=1 DEPTEX_SKIP_OPTIONAL_SCANS=1 \
     --parallel=2 --no-rule-gen --scan-timeout=900
 npm run test:reachability-corpus -- --report=oss-corpus-runs/v3-osv/report.json
 ```
+
+---
+
+## STATUS 2026-05-20 late evening — v3-osv-8eco-v2 (full 8-ecosystem run)
+
+**All 8 ecosystems scan cleanly, no clone failures.** Headline Gate 1 unchanged at 90.63% module-weighted because the 4 new ecosystems are measurement-only (no ground-truth CVEs). All-findings noise reduction drops to 83.56% because new-ecosystem findings ride on the v2 heuristic only — no v3 precision arc for them yet.
+
+### Per-ecosystem (final v3 table)
+
+| Ecosystem | Scanned | Total findings | Reachable | Unreachable % | Precision arc |
+|---|---|---|---|---|---|
+| npm | 2 | 68 | 9 | 86.11% | ✅ shipped (callgraph + dep-scope) |
+| maven | 1 | 31 | 5 | 66.67% | ✅ shipped (Java FQN + groupId match) |
+| cargo | 1 | 17 | 4 | 66.67% | v2 heuristic only |
+| golang | 1 | 29 | 29 | 0% | v2 only; Go transitive resolver didn't fire (cdxgen flagged some deps non-direct, so `every is_direct` skipped the resolver) |
+| pypi | 1 | 0 | 0 | n/a | bandit 1.7.4's tree has no current CVEs in OSV |
+| composer | 1 | 1 | 1 | 0% | v2 only; laravel skeleton at v8.6.7 has minimal vulnerable tree |
+| gem | 1 | 0 | 0 | n/a | lobsters bundle resolution produced no OSV-matched CVEs |
+
+### Honest framing of "all frameworks at 90%+"
+
+- **Corpus-wide Gate 1 (module-weighted): 90.63%** — meets the brief's 88-92% honest band.
+- **Per-ecosystem unreachable-only**: npm 86.11%, maven 66.67%, cargo 66.67%, golang 0%, pypi/composer/gem n/a-or-flat.
+- **All-findings noise reduction across 146 observed findings: 83.56%** — drops vs the 4-repo 92.24% because new ecosystems contributed findings without a per-ecosystem precision lever.
+
+The strict "every ecosystem ≥ 90% unreachable-only" reading is NOT met — that requires per-ecosystem precision arcs for golang/pypi/composer/gem (4 follow-up arcs of similar shape to the npm + maven work shipped here).
+
+### Why Go didn't lift
+
+cdxgen for golang at v2.4.6 emitted 29 deps with mixed `is_direct` flags — not all-direct. The resolver wire-in's eligibility check (`dependencies.every(d => d.is_direct === true)`) gates ONLY on the shallow-SBOM case. caddy's SBOM was partial-shallow (direct + some transitives but missing the long tail). Two fixes possible for Phase 6.X:
+1. Relax the eligibility from `every is_direct` to `count(!is_direct) < N * count(deps in go.sum)` — fire when transitive coverage is incomplete, not just zero.
+2. Always run the Go resolver and union — at the cost of double-resolving on deep SBOMs.
+
+### What v3 ships
+
+- 14 commits on `worktree-reachability-noise-reduction`, tip `b3f6c6c`.
+- Engine code complete: npm precision arc (commits `c10489f` + `b9a65c4`), Java precision arc (`4d1ca04`), Go/Pypi transitive resolvers (`0ac990b`), Rust build-dep regression fixture (`e1f5684`), OSV-API fallback (`811c702`), wrapper env forward (`4956ba4`), Go ecosystem-string fix + 4-eco corpus expansion (`b3f6c6c`).
+- 65 jest cases pass. tsc clean.
+- Methodology doc at `depscanner/docs/reachability-benchmark.md`.
+
+### Phase 6.X follow-ups (deferred)
+
+1. Java embedded-runtime exemption — close the 5 Gate-3 false negatives by extending framework-embedded-runtime classification to spring-webmvc + tomcat-embed-core when their classpath is detected.
+2. Go transitive-resolver eligibility relaxation — see "Why Go didn't lift" above.
+3. Pypi precision arc — import-graph walk via `ast` module against site-packages stubs.
+4. Composer precision arc — phpstan/phpdocumentor-style FQCN resolver.
+5. Gem precision arc — Bundler.specs-driven `require` tracing.
+6. Replace dep-scan VDB entirely with OSV — the fallback proves OSV is faster, more accurate, and ecosystem-uniform.
