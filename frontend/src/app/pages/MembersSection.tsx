@@ -1088,15 +1088,15 @@ export default function MembersPage({
           setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
-          <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
             <DialogTitle>Invite new member</DialogTitle>
             <DialogDescription className="mt-1">
               Invite new members to your organization by email. You can assign them a role and optionally add them to a team.
             </DialogDescription>
           </div>
 
-          <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+          <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
             <div className="grid gap-2">
               <label htmlFor="invite-email" className="text-sm font-medium text-foreground">Email Address</label>
               <input
@@ -1149,18 +1149,17 @@ export default function MembersPage({
             <div className="pt-2">
               <Button
                 variant="outline"
-                size="sm"
                 onClick={handleCopyShareLink}
-                className="text-xs"
+                className="!h-8 !px-3 !rounded-lg"
               >
                 {shareLinkCopied ? (
                   <>
-                    <Check className="h-3 w-3 mr-1" />
+                    <Check />
                     Copied!
                   </>
                 ) : (
                   <>
-                    <LinkIcon className="h-3 w-3 mr-1" />
+                    <LinkIcon />
                     Copy Invite Link
                   </>
                 )}
@@ -1168,7 +1167,7 @@ export default function MembersPage({
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 bg-background">
+          <DialogFooter className="px-6 py-4 bg-background border-t border-border">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"
@@ -1202,17 +1201,17 @@ export default function MembersPage({
           setSelectedMember(null);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
-              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+              <div className="px-6 pt-6 pb-4 flex-shrink-0">
                 <DialogTitle>Change Role</DialogTitle>
                 <DialogDescription className="mt-1">
                   Select a new role for {selectedMember.full_name || selectedMember.email.split('@')[0]}.
                 </DialogDescription>
               </div>
 
-              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+              <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
                   <UserAvatar
                     src={selectedMember.avatar_url}
@@ -1253,7 +1252,7 @@ export default function MembersPage({
                 </div>
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background">
+              <DialogFooter className="px-6 py-4 bg-background border-t border-border">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1290,17 +1289,17 @@ export default function MembersPage({
           setSelectedTeamIds([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
-              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+              <div className="px-6 pt-6 pb-4 flex-shrink-0">
                 <DialogTitle>Add to Team</DialogTitle>
                 <DialogDescription className="mt-1">
                   Select one or more teams to add {selectedMember.full_name || selectedMember.email.split('@')[0]} to.
                 </DialogDescription>
               </div>
 
-              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+              <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
                   <UserAvatar
                     src={selectedMember.avatar_url}
@@ -1349,7 +1348,7 @@ export default function MembersPage({
                 )}
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background">
+              <DialogFooter className="px-6 py-4 bg-background border-t border-border">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1383,8 +1382,8 @@ export default function MembersPage({
 
       {/* Remove Member Dialog */}
       <Dialog open={showRemoveDialog} onOpenChange={(open) => { if (!open) setShowRemoveDialog(false); }}>
-        <DialogContent hideClose className="sm:max-w-md bg-background p-0 gap-0 overflow-visible">
-          <div className="px-6 pt-6 pb-4 border-b border-border">
+        <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+          <div className="px-6 pt-6 pb-4">
             <DialogTitle>
               {user && selectedMember?.user_id === user.id
                 ? 'Leave Organization'
@@ -1396,7 +1395,7 @@ export default function MembersPage({
                 : `Are you sure you want to remove ${selectedMember?.full_name || selectedMember?.email || 'this member'} from the organization? This action cannot be undone.`}
             </DialogDescription>
           </div>
-          <DialogFooter className="px-6 py-4 bg-background">
+          <DialogFooter className="px-6 py-4 bg-background border-t border-border">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"
