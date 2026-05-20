@@ -900,16 +900,25 @@ export async function runRecordedLoginProbe(
     pollIntervalMs: number;
   },
 ): Promise<{ result: DastLoginTestResultRaw; internalIndexToZapIndex: number[] }> {
-  // Compute the index mapping once and hold it locally; the parser receives
-  // it by argument so producer + consumer stay coupled.
+  // Build the auth method once. We retain the `internalIndexToZapIndex[]`
+  // shape on the return type for callers that surface UI-step metadata, but
+  // the parser no longer uses it — ZAP doesn't expose per-step failure.
   const authBuild = buildRecordedAuthForZap(
     inputs.payload,
     inputs.loggedInIndicator ?? undefined,
     inputs.loggedOutIndicator ?? undefined,
   );
 
+  // Allocate a per-job tempdir BEFORE emitting YAML, so the auth-report-json
+  // report job can be told to write inside the tempdir (avoiding collision
+  // with the traditional-json report and across concurrent probes).
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-login-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const authReportPath = path.join(tmpDir, 'auth-report.json');
+
   // Build login-only YAML — no spider, no spiderAjax, no activeScan, no
-  // report job. addOns + passiveScan-config + auth context + requestor probe.
+  // traditional-json report. addOns + passiveScan-config + auth context +
+  // requestor probe + auth-report-json job.
   const yamlText = buildAutomationYaml({
     targetUrl: inputs.targetUrl,
     scanProfile: 'auto', // ignored under loginOnly
@@ -922,15 +931,13 @@ export async function runRecordedLoginProbe(
     loggedOutIndicator: inputs.loggedOutIndicator ?? undefined,
     scanTimeoutMinutes: inputs.scanTimeoutMinutes,
     loginOnly: true,
+    authReportDirAbsolute: tmpDir,
   });
 
-  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-login-'));
-  const yamlPath = path.join(tmpDir, 'automation.yaml');
-  // YAML embeds plaintext credentials — owner-read/write only.
+  // YAML embeds plaintext credentials in each step's `value:` field —
+  // owner-read/write only, unlinked after spawn.
   fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
 
-  let stderrBuffer = '';
-  let stdoutBuffer = '';
   const startedAt = Date.now();
 
   // 5-minute hard cap for a single login probe (well above the p95 budget;
@@ -948,13 +955,14 @@ export async function runRecordedLoginProbe(
     timeoutMs: effectiveTimeoutMs,
     spawnImpl: inputs.spawnImpl,
     onStderr: (chunk) => {
-      // Forward to our stderr (redacted) for ops visibility AND buffer for parsing.
+      // Forward to our stderr (redacted) for ops visibility. We no longer
+      // buffer for parsing — ZAP doesn't emit per-step events on stderr;
+      // the structured signal lives in auth-report.json on disk.
       const redacted = redactCredentials(chunk) ?? '';
       process.stderr.write(`[zap-login] ${redacted}`);
-      stderrBuffer += chunk;
     },
-    onStdout: (chunk) => {
-      stdoutBuffer += chunk;
+    onStdout: () => {
+      /* no-op — auth-report.json carries the verdict */
     },
   });
 
@@ -987,26 +995,42 @@ export async function runRecordedLoginProbe(
   pollTimer.unref?.();
 
   let runResult;
+  // Capture the auth-report.json BEFORE the finally block wipes the tempdir.
+  // We unlink the YAML eagerly (it carries plaintext credentials), then
+  // read + parse the report, then wipe the tempdir.
+  let authReportJson: unknown = null;
   try {
     runResult = await handle.done;
   } finally {
     pollDone = true;
     if (pollTimer) clearTimeout(pollTimer);
+    // Unlink the credential-bearing YAML immediately on exit.
     try {
       fs.unlinkSync(yamlPath);
     } catch {
       /* noop */
+    }
+    // Best-effort read of the structured auth-report. Missing file (ZAP
+    // crashed before emitting) and corrupt JSON both surface as
+    // browser_crashed / unknown via the parser; we don't fail here.
+    try {
+      if (fs.existsSync(authReportPath)) {
+        const raw = fs.readFileSync(authReportPath, { encoding: 'utf-8' });
+        authReportJson = JSON.parse(raw);
+      }
+    } catch (e) {
+      console.error(
+        `[zap-login] failed to read auth-report.json: ${(e as Error).message}`,
+      );
     }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
   const durationMs = Date.now() - startedAt;
 
-  // Parse the diagnostic log. The browser-auth addon writes diagnostic events
-  // to stderr; some ZAP builds also echo to stdout. We pass the concatenation
-  // so the parser can locate markers in either stream.
-  const diagnosticLog = `${stderrBuffer}\n${stdoutBuffer}`;
-  const parsed = parseZapLoginDiagnostics(diagnosticLog, authBuild.internalIndexToZapIndex, durationMs);
+  // Parse the structured auth-report. Missing/null → browser_crashed;
+  // non-object → unknown; otherwise read summaryItems / failureReasons.
+  const parsed = parseZapLoginDiagnostics(authReportJson, durationMs);
 
   // A ZAP cancellation/timeout abort means we never got a real verdict. Surface
   // as browser_crashed so the FE can distinguish "auth genuinely failed" from

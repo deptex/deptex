@@ -112,12 +112,28 @@ async function main(): Promise<void> {
       loggedOutIndicator: 'Sign in',
       loginOnly: true,
     });
-    assert(yaml.includes('method: "browser"'), 'browser auth method present');
+    assert(/method:\s*"?browser"?/.test(yaml), 'browser auth method present');
     assert(yaml.includes('loginPageUrl: '), 'loginPageUrl emitted');
     assert(yaml.includes('"#email"') || yaml.includes('#email'), 'username selector present');
     assert(yaml.includes('onFail: "exit"') || yaml.includes('onFail: exit'), 'requestor onFail:exit present');
-    assert(!yaml.includes('activeScan'), 'activeScan omitted under loginOnly');
-    assert(!yaml.includes('spider'), 'spider omitted under loginOnly');
+    // v2.1d empirical: USERNAME/PASSWORD steps must carry value: or ZAP
+    // silently drops the steps[] array.
+    assert(yaml.includes('alice@example.com'), 'username threaded into USERNAME step value:');
+    assert(yaml.includes('hunter2hunter2'), 'password threaded into PASSWORD step value:');
+    // v2.1d empirical: requestor MUST have parameters.user, otherwise ZAP
+    // never replays the recorded auth method.
+    assert(yaml.includes('user: deptex-dast-user'), 'requestor parameters.user set');
+    // v2.1d empirical: authhelper is pre-baked in the ZAP image — drop it.
+    assert(!yaml.includes('authhelper'), 'authhelper NOT in addOns.install');
+    // v2.1d empirical: diagnostics:true is a no-op in authhelper v0.39.0.
+    assert(!yaml.includes('diagnostics: true'), 'diagnostics:true field omitted');
+    // auth-report-json is the structured signal source.
+    assert(yaml.includes('auth-report-json'), 'auth-report-json report job emitted');
+    // Match the job-type emission (`type: spider`), not the addOns install
+    // list (which carries `- spider` strings without breaking loginOnly).
+    assert(!/type:\s*activeScan/.test(yaml), 'activeScan job omitted under loginOnly');
+    assert(!/type:\s*spider\b/.test(yaml), 'spider job omitted under loginOnly');
+    assert(!/type:\s*spiderAjax\b/.test(yaml), 'spiderAjax job omitted under loginOnly');
   }
 
   // ---------------------------------------------------------------------------
@@ -133,34 +149,37 @@ async function main(): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // Parser-vs-fixture smoke (success).
+  // Parser-vs-fixture smoke — calibrated against ZAP 2.17.0 + authhelper
+  // v0.39.0 auth-report-json output captured during the M0 spike. ZAP
+  // doesn't emit per-step events; we feed structured JSON shapes directly.
   // ---------------------------------------------------------------------------
   console.log('\n[3] parser success path');
   {
-    const log = [
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email SUCCESS',
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#pass SUCCESS',
-      '[BrowserBasedAuth] step #2 type=CLICK selector=button[type=submit] SUCCESS',
-      'verification succeeded — loggedInRegex matched',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(makePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 7400);
+    const report = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: true }],
+      failureReasons: [],
+    };
+    const r = parseZapLoginDiagnostics(report, 7400);
     assert(r.success === true, 'success:true');
     assert(r.duration_ms === 7400, 'duration carried');
   }
 
-  console.log('\n[4] parser failure path (bad selector)');
+  console.log('\n[4] parser failure path (logged-in indicator missed)');
   {
-    const log =
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#nonexistent-field FAILED reason=element not visible after 1000ms';
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(makePayload({ badSelector: true }));
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 1500);
+    const report = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: false }],
+      failureReasons: [
+        { key: 'auth.failure.no_successful_logins', description: 'No successful logins.' },
+        { key: 'auth.failure.logged_in', description: 'No indication found of being logged in.' },
+      ],
+    };
+    const r = parseZapLoginDiagnostics(report, 1500);
     assert(r.success === false, 'success:false');
-    assert(r.failed_at_step?.step_index === 2, `step_index UI 2 (got ${r.failed_at_step?.step_index})`);
     assert(
-      r.failed_at_step?.reason === 'selector_not_visible_after_timeout',
-      `reason=selector_not_visible_after_timeout`,
+      r.failed_at_step?.reason === 'logged_in_indicator_missed',
+      `reason=logged_in_indicator_missed (got ${r.failed_at_step?.reason})`,
     );
+    assert(r.failed_at_step?.step_index === 0, 'step_index=0 (ZAP no per-step)');
   }
 
   console.log(`\n${passed} passed, ${failures} failed`);

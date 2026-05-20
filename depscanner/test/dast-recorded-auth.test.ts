@@ -67,7 +67,13 @@ function main(): void {
       `loginPageUrl pulled from steps[0].goto.value (got ${String(params.loginPageUrl)})`,
     );
     assert(params.browserId === 'firefox-headless', `browserId=firefox-headless`);
-    assert(params.diagnostics === true, `diagnostics=true (so parser sees per-step output)`);
+    // `diagnostics: true` was emitted on the assumption it would produce
+    // per-step log events. The v2.1d empirical spike confirmed it's a
+    // no-op in authhelper v0.39.0; the field is intentionally omitted.
+    assert(
+      params.diagnostics === undefined,
+      `diagnostics field omitted (no-op in authhelper v0.39.0)`,
+    );
     const steps = params.steps as Array<Record<string, unknown>>;
     assert(steps.length === 3, `goto collapsed; remaining 3 steps in ZAP list (got ${steps.length})`);
     assert(steps[0].type === 'USERNAME', `step 0 USERNAME`);
@@ -77,6 +83,29 @@ function main(): void {
       (steps[0] as Record<string, unknown>).cssSelector === '#email',
       `step 0 cssSelector=#email`,
     );
+    // v2.1d empirical: ZAP silently drops the steps[] array unless
+    // USERNAME/PASSWORD steps carry an explicit `value:` field.
+    assert(
+      (steps[0] as Record<string, unknown>).value === 'alice@example.com',
+      `step 0 (USERNAME) carries payload.username as value:`,
+    );
+    assert(
+      (steps[1] as Record<string, unknown>).value === 'hunter2hunter2',
+      `step 1 (PASSWORD) carries payload.password as value:`,
+    );
+    assert(
+      (steps[2] as Record<string, unknown>).value === undefined,
+      `step 2 (CLICK) does NOT carry value (no field to type into)`,
+    );
+    // v2.1d empirical: ZAP's authhelper step-schema validator requires a
+    // `description:` on every step or it silently drops the array.
+    for (const [idx, s] of steps.entries()) {
+      const sObj = s as Record<string, unknown>;
+      assert(
+        typeof sObj.description === 'string' && (sObj.description as string).length > 0,
+        `step ${idx} carries a non-empty description: (got ${JSON.stringify(sObj.description)})`,
+      );
+    }
     assert(
       r.internalIndexToZapIndex.length === 4,
       `mapping length matches steps.length (got ${r.internalIndexToZapIndex.length})`,

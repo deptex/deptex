@@ -233,73 +233,79 @@ export interface DastLoginTestResultRaw {
   raw_log?: string;
 }
 
-// Maps ZAP step types back to our action enum (inverse of auth-config's
-// ACTION_TO_ZAP_TYPE). The `goto` action never appears in the ZAP log
-// because it collapses into loginPageUrl during emit.
-const ZAP_TYPE_TO_ACTION: Record<string, RecordedStepAction> = {
-  CLICK: 'click',
-  USERNAME: 'type_username',
-  PASSWORD: 'type_password',
-  TOTP_FIELD: 'type_totp',
-  CUSTOM_FIELD: 'type_custom',
-  WAIT: 'wait',
-  RETURN: 'return',
-  ESCAPE: 'escape',
+/**
+ * Subset of ZAP's `auth-report-json` report template we read. The shape
+ * was captured empirically against ZAP 2.17.0 + authhelper v0.39.0; the
+ * fixture corpus lives at depscanner/test/fixtures/zap-login-diagnostics/.
+ *
+ * - `summaryItems[]` — per-check pass/fail. The load-bearing entry is
+ *   `key === 'auth.summary.auth'`; everything else is informational.
+ * - `failureReasons[]` — keyed reasons (e.g. `auth.failure.logged_in`),
+ *   present when summaryItems.auth.passed is false.
+ * - `afPlanErrors[]` — present when the AF YAML itself failed to parse /
+ *   couldn't reach a job (distinct from auth-method failures).
+ */
+export interface ZapAuthReport {
+  summaryItems?: Array<{ key?: string; description?: string; passed?: boolean }>;
+  failureReasons?: Array<{ key?: string; description?: string }>;
+  afPlanErrors?: Array<{ description?: string } | string>;
+  afEnv?: string;
+  statistics?: Array<{ key?: string; value?: number }>;
+}
+
+// Maps ZAP's `auth.failure.*` keys to our reason enum. Empirically captured;
+// best-effort across ZAP versions. Anything unmapped → 'unknown' + raw_log.
+const FAILURE_KEY_TO_REASON: Record<string, FailedAtStepRaw['reason']> = {
+  'auth.failure.logged_in': 'logged_in_indicator_missed',
+  'auth.failure.logged_out': 'logged_out_indicator_present_after_login',
+  // ZAP exposes username/password field-identification failures via
+  // summaryItems[auth.summary.username|password], but the discriminator
+  // for the *failure* surfaces here. Map both to the selector-timeout
+  // reason — the user's fix is the same (adjust the selector).
+  'auth.failure.username': 'selector_not_visible_after_timeout',
+  'auth.failure.password': 'selector_not_visible_after_timeout',
+  // 'auth.failure.no_successful_logins' is a roll-up of the more
+  // specific reasons; we intentionally don't map it as the primary cause
+  // because the next entry in failureReasons[] is more actionable.
 };
 
-// Map ZAP-reported failure phrases to our reason enum. These patterns are
-// best-evidence — M0 Spike-3 captures real fixtures and the regex set is
-// tightened then. Each pattern is intentionally loose so the parser stays
-// useful across ZAP versions.
-const REASON_PATTERNS: Array<[RegExp, FailedAtStepRaw['reason']]> = [
-  [/(?:not\s+visible|element\s+not\s+found|timed?\s*out|timeout)/i, 'selector_not_visible_after_timeout'],
-  [/(?:cross[-\s]?origin|navigation\s+blocked|out\s+of\s+scope)/i, 'cross_origin_blocked'],
-  [/(?:totp|2FA|otp).*(?:gen|invalid|failed)/i, 'totp_generation_failed'],
-  [/(?:browser\s+(?:crashed|died|exited)|webdriver\s+(?:disconnected|died))/i, 'browser_crashed'],
-  [/(?:loggedin\s*regex.*(?:no\s+match|missed|did\s+not\s+match)|verification\s+failed)/i, 'logged_in_indicator_missed'],
-  [/loggedout\s*regex.*match/i, 'logged_out_indicator_present_after_login'],
-];
-
-function detectReason(phrase: string): FailedAtStepRaw['reason'] {
-  for (const [re, reason] of REASON_PATTERNS) {
-    if (re.test(phrase)) return reason;
-  }
-  return 'unknown';
-}
+const SUMMARY_AUTH_KEY = 'auth.summary.auth';
 
 /**
- * Translate a ZAP-coordinate step index back into a UI-coordinate step index
- * using the mapping array produced by buildRecordedAuthForZap. Returns -1
- * (i.e. unknown) if no UI index maps to that ZAP step.
- */
-function zapToUiIndex(zapIdx: number, internalIndexToZapIndex: number[]): number {
-  for (let i = 0; i < internalIndexToZapIndex.length; i++) {
-    if (internalIndexToZapIndex[i] === zapIdx) return i;
-  }
-  return -1;
-}
-
-/**
- * Parse a ZAP browser-auth `diagnostics: true` log into a structured
- * DastLoginTestResultRaw. Best-effort: looks for per-step success / failure
- * markers; falls back to `{success: false, raw_log}` when the log shape is
- * unrecognizable.
+ * Parse ZAP's `auth-report-json` report template into a structured
+ * DastLoginTestResultRaw. The empirical v2.1d spike against ZAP 2.17.0 +
+ * authhelper v0.39.0 confirmed this is the ONLY structured signal — ZAP
+ * does NOT emit per-step success/failure events on stderr/stdout/zap.log.
  *
- * The parser returns the FIRST replay's verdict on multi-replay logs
- * (Spike-2B mid-scan re-login interleave). Subsequent re-login failures are
- * surfaced via the existing `consecutive_lost_count` mechanism on
- * error_payload.kind='session_loss', not here.
+ * `step_index` is always 0 on failure: ZAP doesn't tell us which step
+ * failed (it just exposes a roll-up verdict per check). The
+ * `internalIndexToZapIndex[]` plumbing on the build-side is retained as
+ * informational metadata but no longer drives parser output.
  *
- * Every string field in the output is redacted via redactCredentials() so a
- * diagnostic that accidentally echoes a credential can't leak it through to
- * the FE.
+ * Every string field in the output is redacted via redactCredentials() so
+ * a diagnostic that accidentally echoes a credential can't leak it through
+ * to the FE.
  */
 export function parseZapLoginDiagnostics(
-  rawLog: string,
-  internalIndexToZapIndex: number[],
+  authReportJson: unknown,
   durationMs = 0,
 ): DastLoginTestResultRaw {
-  if (typeof rawLog !== 'string' || rawLog.length === 0) {
+  // Defensive coerce: callers might pass null when the file was missing
+  // (ZAP crashed before emitting) or a parse error when the JSON is corrupt.
+  if (authReportJson === null || authReportJson === undefined) {
+    return {
+      success: false,
+      duration_ms: durationMs,
+      steps_run: 0,
+      failed_at_step: {
+        step_index: 0,
+        action: 'click',
+        reason: 'browser_crashed',
+        detail: 'ZAP auth-report.json was missing — likely a browser crash',
+      },
+    };
+  }
+  if (typeof authReportJson !== 'object') {
     return {
       success: false,
       duration_ms: durationMs,
@@ -308,125 +314,102 @@ export function parseZapLoginDiagnostics(
         step_index: 0,
         action: 'click',
         reason: 'unknown',
-        detail: 'ZAP diagnostic log was empty',
+        detail: 'ZAP auth-report payload was not a JSON object',
       },
     };
   }
 
-  const lines = rawLog.split(/\r?\n/);
-  let stepsRun = 0;
-  let firstFailure: { zapIdx: number; type?: string; selector?: string; phrase: string } | null = null;
-  let sawSuccessMarker = false;
-  let sawVerificationFail = false;
-  let verificationPhrase = '';
+  const report = authReportJson as ZapAuthReport;
+  const summary = Array.isArray(report.summaryItems) ? report.summaryItems : [];
+  const failures = Array.isArray(report.failureReasons) ? report.failureReasons : [];
+  const planErrors = Array.isArray(report.afPlanErrors) ? report.afPlanErrors : [];
 
-  // Patterns are written defensively for several plausible ZAP log shapes;
-  // they tolerate the actual format Spike-3 captures. We use SEPARATE regexes
-  // for step-line detection vs type/selector extraction so optional-group
-  // skipping doesn't drop the fields we need (a single mega-regex with
-  // optional groups + non-greedy `.*?` lets the engine skip type/selector
-  // captures when SUCCESS/FAILED is reachable without them).
-  const STEP_LINE_RE =
-    /(?:BrowserBased(?:Auth)?|Browser\s+auth|browser-?auth).*?step\s*#?(\d+).*?(SUCCESS|FAILED?|failure|success|completed|error)/i;
-  const STEP_TYPE_RE = /type[=:]\s*([A-Za-z_]+)/i;
-  const STEP_SELECTOR_RE = /selector[=:]?\s*([^\s,)]+)/i;
-  const VERIFY_RE =
-    /(?:verification\s+(failed|succeeded)|loggedin\s*regex\s*(no\s+match|matched|failed)|loggedout\s*regex\s*matched)/i;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    const stepMatch = line.match(STEP_LINE_RE);
-    if (stepMatch) {
-      stepsRun++;
-      const zapIdx = parseInt(stepMatch[1], 10);
-      const typeMatch = line.match(STEP_TYPE_RE);
-      const selMatch = line.match(STEP_SELECTOR_RE);
-      const type = typeMatch?.[1]?.toUpperCase();
-      const sel = selMatch?.[1];
-      const verdict = (stepMatch[2] ?? '').toLowerCase();
-      const failed = /^fail|error/.test(verdict);
-      if (failed && firstFailure === null) {
-        firstFailure = { zapIdx, type, selector: sel, phrase: line };
-      } else if (!failed) {
-        sawSuccessMarker = true;
-      }
-      continue;
-    }
-
-    const verifyMatch = line.match(VERIFY_RE);
-    if (verifyMatch) {
-      if (/(failed|no\s+match|loggedout\s*regex\s*matched)/i.test(line)) {
-        sawVerificationFail = true;
-        verificationPhrase = line;
-      }
-    }
-  }
-
-  if (firstFailure !== null) {
-    const uiIdx = zapToUiIndex(firstFailure.zapIdx, internalIndexToZapIndex);
-    const mapped =
-      firstFailure.type && firstFailure.type.length > 0
-        ? ZAP_TYPE_TO_ACTION[firstFailure.type]
-        : undefined;
-    const action: RecordedStepAction = mapped ?? 'click';
+  // AF plan errors mean ZAP couldn't even run the auth method — distinct
+  // from "auth method ran and failed verification". Surface as 'unknown'
+  // with the first error as detail; raw_log carries the full set.
+  if (planErrors.length > 0) {
+    const first = planErrors[0];
+    const detail =
+      typeof first === 'string'
+        ? first
+        : typeof first === 'object' && first !== null && typeof first.description === 'string'
+          ? first.description
+          : 'AF plan error';
     return {
       success: false,
       duration_ms: durationMs,
-      steps_run: stepsRun,
-      step_index: uiIdx >= 0 ? uiIdx : firstFailure.zapIdx,
+      steps_run: 0,
       failed_at_step: {
-        step_index: uiIdx >= 0 ? uiIdx : firstFailure.zapIdx,
-        action,
-        selector: firstFailure.selector
-          ? (redactCredentials(firstFailure.selector) ?? undefined)
-          : undefined,
-        reason: detectReason(firstFailure.phrase),
-        detail: redactCredentials(firstFailure.phrase) ?? undefined,
-      },
-    };
-  }
-
-  if (sawVerificationFail) {
-    return {
-      success: false,
-      duration_ms: durationMs,
-      steps_run: stepsRun,
-      failed_at_step: {
-        step_index: stepsRun > 0 ? stepsRun - 1 : 0,
+        step_index: 0,
         action: 'click',
-        reason:
-          detectReason(verificationPhrase) === 'logged_out_indicator_present_after_login'
-            ? 'logged_out_indicator_present_after_login'
-            : 'logged_in_indicator_missed',
-        detail: redactCredentials(verificationPhrase) ?? undefined,
+        reason: 'unknown',
+        detail: redactCredentials(`AF plan error: ${detail}`) ?? undefined,
       },
+      raw_log: redactCredentials(JSON.stringify(planErrors)) ?? undefined,
     };
   }
 
-  if (sawSuccessMarker) {
+  const authItem = summary.find((s) => s?.key === SUMMARY_AUTH_KEY);
+  const success = authItem?.passed === true;
+
+  if (success) {
     return {
       success: true,
       duration_ms: durationMs,
-      steps_run: stepsRun,
+      // ZAP doesn't expose a per-step success count — surface 0 (downstream
+      // FE displays "Logged in" without counting steps).
+      steps_run: 0,
     };
   }
 
-  // Unstructured fallback — emit raw_log so a human can inspect via the UI.
-  // Cap at 8 KB so the JSONB column stays bounded.
+  // Failure path — pick the first mapped failureReason. If none map (or
+  // failureReasons[] is empty even though auth.passed=false), emit
+  // 'unknown' with the first failure's description as detail.
+  let reason: FailedAtStepRaw['reason'] = 'unknown';
+  let detail: string | undefined;
+  for (const f of failures) {
+    if (!f?.key) continue;
+    if (f.key === 'auth.failure.no_successful_logins') {
+      // Roll-up; skip in favor of more specific entries.
+      continue;
+    }
+    const mapped = FAILURE_KEY_TO_REASON[f.key];
+    if (mapped) {
+      reason = mapped;
+      detail = f.description ?? f.key;
+      break;
+    }
+  }
+  if (reason === 'unknown' && failures.length > 0) {
+    // No mapped key. Use first non-roll-up entry as detail.
+    const first = failures.find((f) => f?.key !== 'auth.failure.no_successful_logins') ?? failures[0];
+    detail = first?.description ?? first?.key;
+  }
+
+  // Cap raw_log at 8 KB so the JSONB column stays bounded; useful for FE
+  // "view details" disclosure.
   const RAW_LOG_CAP = 8 * 1024;
-  const redacted = redactCredentials(rawLog) ?? '';
+  let rawLog: string | undefined;
+  try {
+    const serialized = JSON.stringify({ summaryItems: summary, failureReasons: failures });
+    const redacted = redactCredentials(serialized) ?? '';
+    rawLog = redacted.length > RAW_LOG_CAP ? redacted.slice(0, RAW_LOG_CAP) : redacted;
+  } catch {
+    /* noop */
+  }
+
   return {
     success: false,
     duration_ms: durationMs,
-    steps_run: stepsRun,
+    steps_run: 0,
     failed_at_step: {
       step_index: 0,
+      // ZAP doesn't expose which step failed; surface 'click' as a placeholder
+      // (the FE banner shows the reason as the actionable signal, not action).
       action: 'click',
-      reason: 'unknown',
-      detail: 'ZAP diagnostic log was unstructured — see raw_log',
+      reason,
+      detail: detail ? (redactCredentials(detail) ?? undefined) : undefined,
     },
-    raw_log: redacted.length > RAW_LOG_CAP ? redacted.slice(0, RAW_LOG_CAP) : redacted,
+    raw_log: rawLog,
   };
 }

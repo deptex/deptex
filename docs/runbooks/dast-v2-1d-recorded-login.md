@@ -72,16 +72,43 @@ Typical latency:
 
 ### Banner outcomes
 
-| Banner | What happened | Fix |
+ZAP's `auth-report-json` template doesn't expose which **step** failed —
+only a roll-up verdict per check (`auth.summary.auth`) plus a keyed
+`failureReasons[]` list. The banner surfaces the reason; the user is
+responsible for tracing which of their steps was the culprit. Most
+failures are diagnosable by re-opening the editor and reading the
+authored step list against the failing page in browser devtools.
+
+| Banner | failureReasons key | Fix |
 |---|---|---|
-| `✓ Logged in (7.4s, 5 steps)` | Success. | — |
-| `Step 3 (click): selector "#submit" was not visible in time` | `selector_not_visible_after_timeout`. | Verify the selector in browser devtools; check timing (raise `timeout`) or add a `Wait` before. |
-| `Step 4: cross-origin navigation was blocked` | `cross_origin_blocked`. | Add the IdP origin to the credential's `sso_origins[]` (v1: API only; UI field pending). |
-| `Step 2: TOTP code generation failed` | `totp_generation_failed`. | Re-paste the base32 secret; check it's exactly the secret your TOTP app uses. |
-| `the browser crashed during this step` | `browser_crashed`. | Re-run; if persistent, file an issue (Firefox + ZAP browser-auth flake). |
-| `logged-in indicator did not match after login` | `logged_in_indicator_missed`. | Either the login truly failed OR the `Logged-in indicator` regex doesn't match the post-login page. Inspect the page in browser devtools after sign-in. |
-| `A scan is running on this target. [Cancel scan] to test.` | The Test-login button is blocked by the 1/project DAST concurrency cap. | Click **Cancel scan** to free the slot, then Test-login retries automatically. |
-| `Worker unavailable — try again in 30 seconds.` | Fly machine failed to start. | Retry. If repeated, the depscanner Fly app may need attention. |
+| `✓ Logged in (7.4s)` | — | — |
+| `Username field was not identified` | `auth.failure.username` → `selector_not_visible_after_timeout` | Verify the `Type username` selector in browser devtools; the field is likely under a different `id`/`name` or the form re-renders. |
+| `Password field was not identified` | `auth.failure.password` → `selector_not_visible_after_timeout` | Same as above for the `Type password` step. |
+| `Logged-in indicator did not match after login` | `auth.failure.logged_in` → `logged_in_indicator_missed` | Either the login truly failed OR the `Logged-in indicator` regex doesn't match the post-login page. Inspect the page in browser devtools after sign-in. |
+| `Logged-out indicator was still present after login` | `auth.failure.logged_out` → `logged_out_indicator_present_after_login` | Login attempt didn't establish a session. Check that the submit step actually clicks the form's submit element. |
+| `AF plan error: <description>` | `afPlanErrors[]` → `unknown` | The Automation Framework YAML didn't parse / a job couldn't be reached. Usually a worker bug — surface to ops. |
+| `the browser crashed during this step` | (no report file written) → `browser_crashed` | Re-run; if persistent, file an issue (Firefox + ZAP browser-auth flake). |
+| `A scan is running on this target. [Cancel scan] to test.` | — | The Test-login button is blocked by the 1/project DAST concurrency cap. Click **Cancel scan** to free the slot, then Test-login retries automatically. |
+| `Worker unavailable — try again in 30 seconds.` | — | Fly machine failed to start. Retry. If repeated, the depscanner Fly app may need attention. |
+
+#### Why don't we say which step failed?
+
+The v2.1d M0 empirical spike confirmed ZAP 2.17.0 + authhelper v0.39.0
+does NOT emit per-step success/failure events on any channel (stderr,
+stdout, zap.log). The only structured signal is the `auth-report-json`
+report template, which exposes a roll-up verdict. Adding per-step
+attribution would require either an upstream ZAP feature or a
+post-failure "AI selector-suggest" Tier-1 assistant — both tracked as
+v2.1e follow-ups.
+
+#### TOTP-related failures
+
+ZAP browser-auth doesn't surface TOTP-specific failure reasons via the
+auth-report JSON. A bad TOTP secret typically presents as a regular
+`auth.failure.logged_in` (the OTP form gets accepted, the server rejects,
+no logged-in indicator appears). Verify the base32 secret matches your
+TOTP app exactly; re-paste from the source-of-truth (the QR code or the
+backup string when 2FA was first configured).
 
 ## Concurrency model
 

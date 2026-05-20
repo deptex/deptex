@@ -1,0 +1,209 @@
+{
+	"@programName": "ZAP",
+	"@version": "2.17.0",
+	"@generated": "Wed, 20 May 2026 20:41:29",
+	"site":  "http:\/\/host.docker.internal:8080"
+	
+	,"summaryItems": [
+		{
+			"description": "Authentication failed",
+			"passed": false,
+			"key": "auth.summary.auth"
+		},
+		{
+			"description": "Username field identified",
+			"passed": true,
+			"key": "auth.summary.username"
+		},
+		{
+			"description": "Password field identified",
+			"passed": true,
+			"key": "auth.summary.password"
+		},
+		{
+			"description": "Session Handling identified",
+			"passed": true,
+			"key": "auth.summary.session"
+		},
+		{
+			"description": "Verification URL identified",
+			"passed": true,
+			"key": "auth.summary.verif"
+		}
+	]
+	
+	,"failureReasons": [
+		{
+			"key": "auth.failure.no_successful_logins",
+			"description": "No successful logins."
+		},
+		{
+			"key": "auth.failure.logged_in",
+			"description": "No indication found of being logged in."
+		}
+	]
+	
+	
+	
+	,"afEnv": "env:\n  contexts:\n  - name: deptex-dast\n    urls:\n    - http:\/\/host.docker.internal:8080\n    includePaths:\n    - http:\/\/host.docker.internal:8080.*\n    - http:\/\/host\\.docker\\.internal:8080.*\n    authentication:\n      method: browser\n      parameters:\n        loginPageUrl: http:\/\/host.docker.internal:8080\/login\n        loginPageWait: 5\n        browserId: firefox-headless\n        stepDelay: 0\n        diagnostics: false\n        steps:\n        - description: type username\n          type: USERNAME\n          cssSelector: \"#email\"\n          value: alice@example.com\n          timeout: 1000\n        - description: type password\n          type: PASSWORD\n          cssSelector: \"#pass\"\n          value: hunter2hunter2\n          timeout: 1000\n        - description: click submit\n          type: CLICK\n          cssSelector: \"button[type=submit]\"\n          timeout: 1000\n      verification:\n        method: response\n        loggedInRegex: \"Welcome, alice\"\n        loggedOutRegex: Sign in\n        pollFrequency: 60\n        pollUnits: seconds\n    sessionManagement:\n      method: cookie\n    technology: {}\n    structure: {}\n    users:\n    - name: deptex-dast-user\n      credentials:\n        password: hunter2hunter2\n        username: alice@example.com\n  parameters: {}\n"
+	
+	,"afPlanErrors": [
+	]
+	
+	,"statistics": [
+		{
+			"key": "stats.auth.detect.auth.form",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.auth.state.unknown",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 1
+		},
+		{
+			"key": "stats.auto.job.passiveScan-config.run",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.auto.job.requestor.run",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.auto.jobs.run",
+			"scope": "global",
+			"value": 2
+		},
+		{
+			"key": "stats.auto.plans.run",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.code.200",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 2
+		},
+		{
+			"key": "stats.code.302",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 1
+		},
+		{
+			"key": "stats.code.404",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 1
+		},
+		{
+			"key": "stats.contentType.text\/html; charset=utf-8",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 4
+		},
+		{
+			"key": "stats.log.error",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.log.error.org.zaproxy.zap.users.User.StaleElementReferenceException(ErrorCodec.java:169)",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.network.send.success",
+			"scope": "global",
+			"value": 26
+		},
+		{
+			"key": "stats.pscan.10111.alerts",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.pscan.10111.time",
+			"scope": "global",
+			"value": 17
+		},
+		{
+			"key": "stats.pscan.10112.time",
+			"scope": "global",
+			"value": 2
+		},
+		{
+			"key": "stats.pscan.10113.time",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.pscan.50001.time",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.pscan.50003.time",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.pscan.Anti CSRF Token Detection",
+			"scope": "global",
+			"value": 5
+		},
+		{
+			"key": "stats.pscan.recordsToScan",
+			"scope": "global",
+			"value": 16
+		},
+		{
+			"key": "stats.responseTime.32",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 1
+		},
+		{
+			"key": "stats.responseTime.4",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 1
+		},
+		{
+			"key": "stats.responseTime.8",
+			"scope": "site",
+			"site": "http:\/\/host.docker.internal:8080",
+			"value": 2
+		},
+		{
+			"key": "stats.script.call.Graal.js.active",
+			"scope": "global",
+			"value": 1
+		},
+		{
+			"key": "stats.selenium.launch.5.firefox-headless",
+			"scope": "global",
+			"value": 1
+		}
+	]
+	,"domains": [
+		"http:\/\/host.docker.internal:8080",
+		"https:\/\/content-signature-2.cdn.mozilla.net",
+		"https:\/\/firefox-settings-attachments.cdn.mozilla.net",
+		"https:\/\/firefox.settings.services.mozilla.com"
+	]
+	,"domainsPartiallyOutOfScope": [
+	]
+	,"domainsOutOfScope": [
+		"https:\/\/content-signature-2.cdn.mozilla.net",
+		"https:\/\/firefox-settings-attachments.cdn.mozilla.net",
+		"https:\/\/firefox.settings.services.mozilla.com"
+	]
+	,"logFile": "2026-05-20 20:41:12,678 [main ] INFO  Constant - Copying default configuration to \/home\/zap\/.ZAP\/config.xml\n2026-05-20 20:41:12,769 [main ] INFO  Constant - Creating directory \/home\/zap\/.ZAP\/session\n2026-05-20 20:41:12,770 [main ] INFO  Constant - Creating directory \/home\/zap\/.ZAP\/dirbuster\n2026-05-20 20:41:12,770 [main ] INFO  Constant - Creating directory \/home\/zap\/.ZAP\/fuzzers\n2026-05-20 20:41:12,771 [main ] INFO  Constant - Creating directory \/home\/zap\/.ZAP\/plugin\n2026-05-20 20:41:12,847 [main ] INFO  CommandLineBootstrap - ZAP 2.17.0 started 20\/05\/2026, 20:41:12 with home: \/home\/zap\/.ZAP\/ cores: 16 maxMemory: 3 GB\n2026-05-20 20:41:14,791 [main ] INFO  ExtensionFactory - Installed add-ons: [[id=alertFilters, version=26.0.0], [id=ascanrules, version=82.0.0], [id=authhelper, version=0.39.0], [id=automation, version=0.60.0], [id=bruteforce, version=20.0.0], [id=callhome, version=0.21.0], [id=client, version=0.24.0], [id=commonlib, version=1.41.0], [id=database, version=0.9.0], [id=diff, version=18.0.0], [id=directorylistv1, version=9.0.0], [id=domxss, version=24.0.0], [id=encoder, version=1.9.0], [id=exim, version=0.20.0], [id=formhandler, version=6.8.0], [id=fuzz, version=13.16.0], [id=gettingStarted, version=20.0.0], [id=graaljs, version=0.14.0], [id=graphql, version=0.33.0], [id=help, version=22.0.0], [id=hud, version=0.19.0], [id=insights, version=0.4.0], [id=invoke, version=17.0.0], [id=network, version=0.27.0], [id=oast, version=0.24.0], [id=onlineMenu, version=15.0.0], [id=openapi, version=56.0.0], [id=postman, version=0.9.0], [id=pscan, version=0.6.0], [id=pscanrules, version=73.0.0], [id=quickstart, version=56.0.0], [id=replacer, version=22.0.0], [id=reports, version=0.45.0], [id=requester, version=7.10.0], [id=retest, version=0.11.0], [id=retire, version=0.57.0], [id=reveal, version=10.0.0], [id=scanpolicies, version=0.8.0], [id=scripts, version=45.18.0], [id=selenium, version=15.47.0], [id=sequence, version=9.0.0], [id=soap, version=30.0.0], [id=spider, version=0.20.0], [id=spiderAjax, version=23.30.0], [id=tips, version=16.0.0], [id=webdriverlinux, version=195.0.0], [id=websocket, version=37.0.0], [id=zest, version=48.13.0]]\n2026-05-20 20:41:14,791 [main ] INFO  ExtensionFactory - Loading extensions\n2026-05-20 20:41:15,112 [main ] INFO  TlsUtils - Using supported SSL\/TLS protocols: [TLSv1.2, TLSv1.3]\n2026-05-20 20:41:15,383 [main ] INFO  ExtensionFactory - Extensions loaded\n2026-05-20 20:41:15,644 [main ] INFO  FlywayExecutor - Database: jdbc:hsqldb:file:\/home\/zap\/.ZAP\/session\/untitled1 (HSQL Database Engine 2.7)\n2026-05-20 20:41:15,690 [main ] INFO  JdbcTableSchemaHistory - Schema history table \"PUBLIC\".\"CLIENT_FLYWAY_SCHEMA_HISTORY\" does not exist yet\n2026-05-20 20:41:15,693 [main ] INFO  DbValidate - Successfully validated 1 migration (execution time 00:00.009s)\n2026-05-20 20:41:15,702 [main ] INFO  JdbcTableSchemaHistory - Creating Schema History table \"PUBLIC\".\"CLIENT_FLYWAY_SCHEMA_HISTORY\" with baseline ...\n2026-05-20 20:41:15,749 [main ] INFO  DbBaseline - Successfully baselined schema with version: 0\n2026-05-20 20:41:15,769 [main ] INFO  DbMigrate - Current version of schema \"PUBLIC\": 0\n2026-05-20 20:41:15,789 [main ] INFO  DbMigrate - Migrating schema \"PUBLIC\" to version \"1 - Create history table\"\n2026-05-20 20:41:15,805 [main ] INFO  DbMigrate - Successfully applied 1 migration to schema \"PUBLIC\", now at version v1 (execution time 00:00.003s)\n2026-05-20 20:41:16,706 [main ] INFO  ExtensionLoader - Initializing Auto-update Extension - Allows ZAP to check for updates\n2026-05-20 20:41:16,709 [main ] INFO  ExtensionLoader - Initializing Options Extension - Options Extension\n2026-05-20 20:41:16,709 [main ] INFO  ExtensionLoader - Initializing Edit Menu Extension - Edit Menu Extension\n2026-05-20 20:41:16,709 [main ] INFO  ExtensionLoader - Initializing API Extension - Provides a rest based API for controlling and accessing ZAP\n2026-05-20 20:41:16,716 [main ] INFO  ExtensionLoader - Initializing History Extension - History Extension\n2026-05-20 20:41:16,717 [main ] INFO  ExtensionLoader - Initializing ExtensionReveal - Show hidden fields and enable disabled fields\n2026-05-20 20:41:16,718 [main ] INFO  ExtensionLoader - Initializing Search Extension - Search messages for strings and regular expressions\n2026-05-20 20:41:16,720 [main ] INFO  ExtensionLoader - Initializing Breakpoint Extension - Allows you to intercept and modify requests and responses\n2026-05-20 20:41:16,721 [main ] INFO  ExtensionLoader - Initializing Passive Scan Extension - Passive scanner\n2026-05-20 20:41:16,722 [main ] INFO  ExtensionLoader - Initializing Alerts Extension - Allows you to view and manage alerts\n2026-05-20 20:41:16,724 [main ] INFO  ExtensionLoader - Initializing Active Scan Extension - Active scanner, heavily based on the original Paros active scanner, but with additional tests added\n2026-05-20 20:41:16,731 [main ] INFO  ExtensionLoader - Initializing ExtensionSequence - ExtensionSequence\n2026-05-20 20:41:16,731 [main ] INFO  ExtensionLoader - Initializing Standard Menus Extension - A set of common popup menus for miscellaneous tasks\n2026-05-20 20:41:16,732 [main ] INFO  ExtensionLoader - Initializing ExtensionBruteForce - Forced browsing of files and directories using code from the OWASP DirBuster tool\n2026-05-20 20:41:16,733 [main ] INFO  ExtensionLoader - Initializing Compare Extension - Compares 2 sessions and generates an HTML file showing the differences\n2026-05-20 20:41:16,733 [main ] INFO  ExtensionLoader - Initializing ExtensionInvoke - Invoke external applications passing context related information such as URLs and parameters\n2026-05-20 20:41:16,733 [main ] INFO  ExtensionLoader - Initializing Anti-CSRF Extension - Handles anti cross site request forgery (CSRF) tokens\n2026-05-20 20:41:16,739 [main ] INFO  ExtensionLoader - Initializing Authentication Extension - Authentication Extension\n2026-05-20 20:41:16,744 [main ] INFO  ExtensionAuthentication - Loaded authentication method types: [Form-based Authentication, HTTP\/NTLM Authentication, Manual Authentication, Script-based Authentication, JSON-based Authentication]\n2026-05-20 20:41:16,746 [main ] INFO  ExtensionLoader - Initializing Users Extension - Users Extension\n2026-05-20 20:41:16,747 [main ] INFO  ExtensionLoader - Initializing Parameters Extension - Summarise and analyse FORM and URL parameters as well as cookies\n2026-05-20 20:41:16,747 [main ] INFO  ExtensionLoader - Initializing Script Extension - Script integration\n2026-05-20 20:41:16,750 [main ] INFO  ExtensionLoader - Initializing ExtensionScripts - Scripting console, supports all JSR 223 scripting languages\n2026-05-20 20:41:16,757 [main ] INFO  ExtensionLoader - Initializing Forced User Extension - Forced User Extension\n2026-05-20 20:41:16,758 [main ] INFO  ExtensionLoader - Initializing HTTP Sessions Extension - Extension handling HTTP sessions\n2026-05-20 20:41:16,759 [main ] INFO  ExtensionLoader - Initializing ExtensionZest - Zest is a specialized scripting language, originally, from Mozilla specifically designed to be used in security tools\n2026-05-20 20:41:16,830 [main ] INFO  ExtensionLoader - Initializing ExtensionDiff - ExtensionDiff\n2026-05-20 20:41:16,830 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Post Table View Extension - HTTP Panel Post Table View Extension\n2026-05-20 20:41:16,831 [main ] INFO  ExtensionLoader - Initializing Encoder Addon - Adds support for scriptable encoders to ZAP.\n2026-05-20 20:41:16,831 [main ] INFO  ExtensionLoader - Initializing Session Management Extension - Session Management Extension\n2026-05-20 20:41:16,834 [main ] INFO  ExtensionSessionManagement - Loaded session management method types: [Cookie-based Session Management, HTTP Authentication Session Management, Script-based Session Management]\n2026-05-20 20:41:16,835 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Form Table View Extension - HTTP Panel Form Table View Extension\n2026-05-20 20:41:16,836 [main ] INFO  ExtensionLoader - Initializing WebSockets Support - Capture messages from WebSockets with the ability to set breakpoints.\n2026-05-20 20:41:16,848 [main ] INFO  ExtensionLoader - Initializing SOAP\/WSDL Support - Allows you to import a WSDL file containing operations which ZAP will access, adding them to the Sites tree.\n2026-05-20 20:41:16,849 [main ] INFO  ExtensionLoader - Initializing Core UI Extension - Core UI related functionality.\n2026-05-20 20:41:16,850 [main ] INFO  ExtensionLoader - Initializing Authorization Extension - Authorization Extension\n2026-05-20 20:41:16,850 [main ] INFO  ExtensionLoader - Initializing Requester - Allows to manually edit and send messages.\n2026-05-20 20:41:16,853 [main ] INFO  ExtensionLoader - Initializing AJAX Spider - AJAX Spider, uses Crawljax\n2026-05-20 20:41:16,858 [main ] INFO  ExtensionLoader - Initializing WebDriver Provider - Provides WebDrivers to control several browsers using Selenium and includes HtmlUnit browser.\n2026-05-20 20:41:16,873 [main ] INFO  ExtensionLoader - Initializing ExtensionClientIntegration - Client Side Integration\n2026-05-20 20:41:16,878 [main ] INFO  ExtensionLoader - Initializing Refresh Sites Tree Extension - Adds menu item to refresh the Sites tree\n2026-05-20 20:41:16,879 [main ] INFO  ExtensionLoader - Initializing Help Extension - ZAP User Guide\n2026-05-20 20:41:16,880 [main ] INFO  ExtensionLoader - Initializing Call Home - Handles all of the calls to ZAP services\n2026-05-20 20:41:16,881 [main ] INFO  ExtensionLoader - Initializing Network Extension - Provides core networking capabilities.\n2026-05-20 20:41:16,909 [main ] INFO  ConnectionOptions - Unsafe SSL\/TLS renegotiation disabled.\n2026-05-20 20:41:16,911 [main ] INFO  ExtensionLoader - Initializing Extension Configuration Extension - Allows you to configure which extensions are loaded when ZAP starts\n2026-05-20 20:41:16,911 [main ] INFO  ExtensionLoader - Initializing Combined HTTP Panels Extension - Combined HTTP Panels Extension\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Hex View Extension - HTTP Panel Hex View Extension\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Image View Extension - HTTP Panel Image View Extension\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Query Table View Extension - HTTP Panel Query Table View Extension\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing HTTP Panel Syntax Highlighter View Extension - HTTP Panel Syntax Highlighter View Extension\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing Keyboard Configuration Extension - Adds support for configurable keyboard shortcuts for all of the ZAP menus.\n2026-05-20 20:41:16,912 [main ] INFO  ExtensionLoader - Initializing Scanner Rule Configuration Extension - Active and passive rule configuration\n2026-05-20 20:41:16,914 [main ] INFO  ExtensionLoader - Initializing Statistics Extension - Statistics\n2026-05-20 20:41:16,915 [main ] INFO  ExtensionStats - Start recording in memory stats\n2026-05-20 20:41:16,915 [main ] INFO  ExtensionLoader - Initializing Custom Pages Extension - Custom Pages Definition\n2026-05-20 20:41:16,915 [main ] INFO  ExtensionLoader - Initializing Advance Fuzzer - Provides the foundation for concrete message types (for example, HTTP, WebSockets) expose fuzzer implementations.\n2026-05-20 20:41:16,916 [main ] INFO  ExtensionLoader - Initializing HTTP Fuzzer - Allows to fuzz HTTP messages.\n2026-05-20 20:41:16,917 [main ] INFO  ExtensionLoader - Initializing Active Scan Rules - Release status active scan rules\n2026-05-20 20:41:16,917 [main ] INFO  ExtensionLoader - Initializing Client Spider Automation - Client Spider Automation Framework Integration\n2026-05-20 20:41:16,919 [main ] INFO  ExtensionLoader - Initializing Client Map Import\/Export - Client Map export support for Import\/Export.\n2026-05-20 20:41:16,920 [main ] INFO  ExtensionLoader - Initializing Client Zest Script Recording Support - Allows recording client events as Zest scripts.\n2026-05-20 20:41:16,923 [main ] INFO  ExtensionLoader - Initializing Postman Import - Allows you to spider and import Postman collections\n2026-05-20 20:41:16,925 [main ] INFO  ExtensionLoader - Initializing Postman Automation - Postman Automation Framework Integration\n2026-05-20 20:41:16,926 [main ] INFO  ExtensionLoader - Initializing Sequence Automation - Sequence Automation Framework Integration\n2026-05-20 20:41:16,931 [main ] INFO  ExtensionLoader - Initializing WebSocket Message Editor - Provides the WebSocket Message Editor dialogues.\n2026-05-20 20:41:16,932 [main ] INFO  ExtensionLoader - Initializing Report Generator - Templated and themed report generation functionality\n2026-05-20 20:41:16,933 [main ] INFO  ExtensionLoader - Initializing Report Generation Automation Integration - Report Generation Automation Integration\n2026-05-20 20:41:16,936 [main ] INFO  ExtensionLoader - Initializing Retire.js - Retire.js\n2026-05-20 20:41:16,937 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Vulnerable JS Library (Powered by Retire.js)\n2026-05-20 20:41:16,938 [main ] INFO  ExtensionLoader - Initializing OpenAPI Import - Allows you to spider and import OpenAPI (Swagger) definitions \n2026-05-20 20:41:16,939 [main ] INFO  ExtensionLoader - Initializing OpenAPI Automation - OpenAPI Automation Framework Integration\n2026-05-20 20:41:16,942 [main ] INFO  ExtensionLoader - Initializing OpenAPI Scripts - Adds scripts relevant to OpenAPI specifications.\n2026-05-20 20:41:16,942 [main ] INFO  ExtensionLoader - Initializing OpenAPI Spider - OpenAPI Spider Integration\n2026-05-20 20:41:16,945 [main ] INFO  ExtensionLoader - Initializing SOAP Automation - SOAP Automation Framework Integration\n2026-05-20 20:41:16,947 [main ] INFO  ExtensionLoader - Initializing SOAP Spider - SOAP Spider Integration\n2026-05-20 20:41:16,947 [main ] INFO  ExtensionLoader - Initializing ExtensionDomXSS - DOM XSS Active Scan Rule\n2026-05-20 20:41:17,010 [main ] INFO  ExtensionLoader - Initializing ExtensionFormHandler - This extension allows a user to change the default values used for generated content (e.g. spiders, importers).\n2026-05-20 20:41:17,012 [main ] INFO  ExtensionLoader - Initializing Database Extension - Provides databases and persistence capabilities.\n2026-05-20 20:41:17,012 [main ] INFO  ExtensionLoader - Initializing ExtensionGraphQl - Allows you to inspect and attack GraphQL endpoints.\n2026-05-20 20:41:17,016 [main ] INFO  ExtensionLoader - Initializing GraphQL Automation - GraphQL Automation Framework Integration\n2026-05-20 20:41:17,017 [main ] INFO  ExtensionLoader - Initializing GraphQL Spider - GraphQL Spider Integration\n2026-05-20 20:41:17,018 [main ] INFO  ExtensionLoader - Initializing Match and Replace - Easy way to replace strings in requests and responses\n2026-05-20 20:41:17,019 [main ] INFO  ExtensionLoader - Initializing Replacer Automation - Replacer Automation Framework Integration\n2026-05-20 20:41:17,022 [main ] INFO  ExtensionLoader - Initializing Ajax Spider Automation - Ajax Spider Automation Framework Integration\n2026-05-20 20:41:17,024 [main ] INFO  ExtensionLoader - Initializing ExtensionTipsAndTricks - Tips and Tricks\n2026-05-20 20:41:17,025 [main ] INFO  ExtensionLoader - Initializing Spider Extension - Spider used for automatically finding URIs on a site.\n2026-05-20 20:41:17,054 [main ] INFO  ExtensionLoader - Initializing Spider Automation - Spider Automation Integration\n2026-05-20 20:41:17,056 [main ] INFO  ExtensionLoader - Initializing Scripts Automation Framework Integration - Scripts Automation\n2026-05-20 20:41:17,063 [main ] INFO  ExtensionLoader - Initializing ExtensionHUD - Heads Up Display\n2026-05-20 20:41:17,191 [main ] INFO  ExtensionLoader - Initializing ExtensionHUDlaunch - ExtensionHUDlaunch\n2026-05-20 20:41:17,192 [main ] INFO  ExtensionLoader - Initializing GraalVM JavaScript Engine Extension - Provides the GraalVM JavaScript engine for ZAP scripting.\n2026-05-20 20:41:17,201 [main ] INFO  ExtensionLoader - Initializing Common Library - A library of shared functionality\n2026-05-20 20:41:17,202 [main ] INFO  ExtensionLoader - Initializing Authentication Helper - Authentication Helper\n2026-05-20 20:41:17,205 [main ] INFO  ExtensionLoader - Initializing Client Spider Browser Based Authentication Support - Enables browser based authentication when performing an authenticated Client Spider scan.\n2026-05-20 20:41:17,206 [main ] INFO  ExtensionLoader - Initializing Authentication Helper Reports - Authentication Helper Reports\n2026-05-20 20:41:17,207 [main ] INFO  ExtensionLoader - Initializing AJAX Spider Browser Based Authentication Support - Enables browser based authentication when performing an authenticated AJAX Spider scan.\n2026-05-20 20:41:17,208 [main ] INFO  ExtensionLoader - Initializing Import\/Export - Import and Export functionality supporting multiple formats.\n2026-05-20 20:41:17,208 [main ] INFO  ExtensionLoader - Initializing Import\/Export Automation - Import\/Export Automation Framework Integration\n2026-05-20 20:41:17,212 [main ] INFO  ExtensionLoader - Initializing ExtensionInsights - Insights Extension\n2026-05-20 20:41:17,214 [main ] INFO  ExtensionLoader - Initializing Alert Filters Automation - Alert Filters Automation Framework Integration\n2026-05-20 20:41:17,215 [main ] INFO  ExtensionLoader - Initializing Insights Reports Extension - Adds Insights to the report data\n2026-05-20 20:41:17,216 [main ] INFO  ExtensionLoader - Initializing ExtensionOnlineMenu - The Online menu links\n2026-05-20 20:41:17,216 [main ] INFO  ExtensionLoader - Initializing ExtensionGettingStarted - The ZAP Getting Started Guide\n2026-05-20 20:41:17,216 [main ] INFO  ExtensionLoader - Initializing Retest - Facilitates the verification of presence\/absence of certain alerts.\n2026-05-20 20:41:17,217 [main ] INFO  ExtensionLoader - Initializing Quick Start panel  - Adds the Quick Start panel for scanning and exploring applications\n2026-05-20 20:41:17,219 [main ] INFO  ExtensionLoader - Initializing Quick Start Ajax Spider integration - Add the option to use the Ajax Spider in the Quick Start scan\n2026-05-20 20:41:17,220 [main ] INFO  ExtensionLoader - Initializing Quick Start HUD Integration - HUD integration for the quick start panel\n2026-05-20 20:41:17,220 [main ] INFO  ExtensionLoader - Initializing Quick Start Browser Launcher - Launch browsers preset proxying through ZAP\n2026-05-20 20:41:17,220 [main ] INFO  ExtensionLoader - Initializing Quick Start Spider Integration - Adds the option to use the traditional Spider in the Quick Start scan.\n2026-05-20 20:41:17,222 [main ] INFO  ExtensionLoader - Initializing Zest Import\/Export - Zest script export and import support for Import\/Export.\n2026-05-20 20:41:17,222 [main ] INFO  ExtensionLoader - Initializing ExtensionAlertFilters - Context alert rules filter\n2026-05-20 20:41:17,224 [main ] INFO  ExtensionLoader - Initializing Alert Filters Automation - Alert Filters Automation Framework Integration\n2026-05-20 20:41:17,225 [main ] INFO  ExtensionLoader - Initializing Out-of-band Application Security Testing - Adds Out-of-band Application Security Testing functionality.\n2026-05-20 20:41:17,230 [main ] INFO  ExtensionLoader - Initializing OAST Scripts - Adds OAST scripts.\n2026-05-20 20:41:17,230 [main ] INFO  ExtensionLoader - Initializing Passive Scan Rules - Release status passive scan rules.\n2026-05-20 20:41:17,230 [main ] INFO  ExtensionLoader - Initializing Passive Scanner Extension - Provides core passive scanning capabilities.\n2026-05-20 20:41:17,242 [main ] INFO  ExtensionLoader - Initializing Passive Scanner Automation Framework Extension - Provides jobs and result data related to the passive scanner.\n2026-05-20 20:41:17,243 [main ] INFO  ExtensionLoader - Initializing Automation Framework - Provides functionality to simplify using ZAP in an automated manner\n2026-05-20 20:41:18,815 [main ] INFO  CallbackService - Started callback service on 0.0.0.0:41281\n2026-05-20 20:41:18,820 [main ] INFO  ScanRuleManager - Loaded passive scan rule: WSDL File Detection\n2026-05-20 20:41:18,822 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Script Passive Scan Rules\n2026-05-20 20:41:18,826 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Authentication Request Identified\n2026-05-20 20:41:18,826 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Session Management Response Identified\n2026-05-20 20:41:18,826 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Verification Request Identified\n2026-05-20 20:41:18,881 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Anti-clickjacking Header\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Application Error Disclosure\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Big Redirect Detected (Potential Sensitive Information Leak)\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Re-examine Cache-control Directives\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Charset Mismatch\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Content Security Policy (CSP) Header Not Set\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: CSP\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Content-Type Header Missing\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cookie No HttpOnly Flag\n2026-05-20 20:41:18,882 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Loosely Scoped Cookie\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cookie without SameSite Attribute\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cookie Without Secure Flag\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cross-Domain Misconfiguration\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cross-Domain JavaScript Source File Inclusion\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Absence of Anti-CSRF Tokens\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Directory Browsing\n2026-05-20 20:41:18,883 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Hash Disclosure\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Heartbleed OpenSSL Vulnerability (Indicative)\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: In Page Banner Information Leak\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Private IP Disclosure\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Session ID in URL Rewrite\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Information Disclosure - Debug Error Messages\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Information Disclosure - Sensitive Information in URL\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Information Disclosure - Sensitive Information in HTTP Referrer Header\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Information Disclosure - Suspicious Comments\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Weak Authentication Method\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: HTTP to HTTPS Insecure Transition in Form Post\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: HTTPS to HTTP Insecure Transition in Form Post\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Insecure JSF ViewState\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Java Serialization Object\n2026-05-20 20:41:18,884 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Reverse Tabnabbing\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Secure Pages Include Mixed Content\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Modern Web Application\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: PII Disclosure\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Script Served From Malicious Domain (polyfill)\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Retrieved from Cache\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: HTTP Server Response Header\n2026-05-20 20:41:18,885 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Strict-Transport-Security Header\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Sub Resource Integrity Attribute Missing\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Timestamp Disclosure\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: User Controllable Charset\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Cookie Poisoning\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: User Controllable HTML Element Attribute (Potential XSS)\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: User Controllable JavaScript Event (XSS)\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Off-site Redirect\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Username Hash Found\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Viewstate\n2026-05-20 20:41:18,886 [main ] INFO  ScanRuleManager - Loaded passive scan rule: X-AspNet-Version Response Header\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: X-Backend-Server Header Information Leak\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: X-ChromeLogger-Data (XCOLD) Header Information Leak\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: X-Content-Type-Options Header Missing\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: X-Debug-Token Information Leak\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Server Leaks Information via \"X-Powered-By\" HTTP Response Header Field(s)\n2026-05-20 20:41:18,887 [main ] INFO  ScanRuleManager - Loaded passive scan rule: ZAP is Out of Date\n2026-05-20 20:41:18,888 [main ] INFO  ScanRuleManager - Loaded passive scan rule: Stats Passive Scan Rule\n2026-05-20 20:41:18,888 [main ] INFO  ExtensionNetwork - Creating new root CA certificate.\n2026-05-20 20:41:19,691 [main ] INFO  ExtensionNetwork - New root CA certificate created.\n2026-05-20 20:41:19,792 [main ] INFO  CommandLine - Job passiveScan-config set scanOnlyInScope = true\n2026-05-20 20:41:19,793 [main ] INFO  CommandLine - Job passiveScan-config set enableTags = false\n2026-05-20 20:41:19,793 [main ] INFO  CommandLine - Job requestor set user = deptex-dast-user\n2026-05-20 20:41:19,794 [main ] INFO  CommandLine - Job requestor set url = http:\/\/host.docker.internal:8080\/dashboard\n2026-05-20 20:41:19,794 [main ] INFO  CommandLine - Job requestor set method = GET\n2026-05-20 20:41:19,794 [main ] INFO  CommandLine - Job report set template = auth-report-json\n2026-05-20 20:41:19,794 [main ] INFO  CommandLine - Job report set reportDir = \/zap\/wrk\n2026-05-20 20:41:19,795 [main ] INFO  CommandLine - Job report set reportFile = auth-report.json\n2026-05-20 20:41:19,890 [main ] INFO  CommandLine - Job passiveScan-config started\n2026-05-20 20:41:19,894 [main ] INFO  CommandLine - Job passiveScan-config finished, time taken: 00:00:00\n2026-05-20 20:41:19,894 [main ] INFO  CommandLine - Job requestor started\n2026-05-20 20:41:19,895 [main ] INFO  CommandLine - Job requestor requesting URL http:\/\/host.docker.internal:8080\/dashboard with user deptex-dast-user\n2026-05-20 20:41:19,919 [main ] INFO  User - Authenticating user: deptex-dast-user\n2026-05-20 20:41:29,720 [main ] ERROR User - An error occurred while authenticating:\norg.openqa.selenium.StaleElementReferenceException: The element with the reference a2374c79-28cb-473b-8614-3212b9a7bbbc is stale; either its node document is not the active document, or it is no longer connected to the DOM\nFor documentation on this error, please visit: https:\/\/www.selenium.dev\/documentation\/webdriver\/troubleshooting\/errors#staleelementreferenceexception\nBuild info: version: '4.43.0', revision: 'dd0f534'\nSystem info: os.name: 'Linux', os.arch: 'amd64', os.version: '6.6.87.2-microsoft-standard-WSL2', java.version: '17.0.19'\nDriver info: org.openqa.selenium.firefox.FirefoxDriver\nCommand: [9849dcde-62a8-48c5-af4b-5af7466b3a11, sendKeysToElement {value=[Ljava.lang.CharSequence;@b94c22d, id=a2374c79-28cb-473b-8614-3212b9a7bbbc}]\nCapabilities {acceptInsecureCerts: true, browserName: firefox, browserVersion: 140.10.1, moz:accessibilityChecks: false, moz:buildID: 20260427105827, moz:geckodriverVersion: 0.36.0, moz:headless: true, moz:platformVersion: 6.6.87.2-microsoft-standard..., moz:processID: 151, moz:profile: \/tmp\/rust_mozprofileZOhpX3, moz:shutdownTimeout: 60000, moz:webdriverClick: true, moz:windowless: false, pageLoadStrategy: normal, platformName: linux, proxy: Proxy(), setWindowRect: true, strictFileInteractability: false, timeouts: {implicit: 0, pageLoad: 300000, script: 30000}, unhandledPromptBehavior: dismiss and notify, userAgent: Mozilla\/5.0 (X11; Linux x86..., webSocketUrl: ws:\/\/127.0.0.1:41173\/sessio...}\nElement: [[FirefoxDriver: firefox on linux (9849dcde-62a8-48c5-af4b-5af7466b3a11)] -> css selector: #email]\nSession ID: 9849dcde-62a8-48c5-af4b-5af7466b3a11\n\tat org.openqa.selenium.remote.ErrorCodec.decode(ErrorCodec.java:169)\n\tat org.openqa.selenium.remote.codec.w3c.W3CHttpResponseCodec.decode(W3CHttpResponseCodec.java:142)\n\tat org.openqa.selenium.remote.codec.w3c.W3CHttpResponseCodec.decode(W3CHttpResponseCodec.java:49)\n\tat org.openqa.selenium.remote.HttpCommandExecutor.execute(HttpCommandExecutor.java:223)\n\tat org.openqa.selenium.remote.service.DriverCommandExecutor.invokeExecute(DriverCommandExecutor.java:216)\n\tat org.openqa.selenium.remote.service.DriverCommandExecutor.execute(DriverCommandExecutor.java:174)\n\tat org.openqa.selenium.remote.RemoteWebDriver.execute(RemoteWebDriver.java:606)\n\tat org.openqa.selenium.remote.RemoteWebElement.execute(RemoteWebElement.java:223)\n\tat org.openqa.selenium.remote.RemoteWebElement.sendKeys(RemoteWebElement.java:110)\n\tat org.zaproxy.addon.authhelper.AuthUtils.sendReturn(AuthUtils.java:828)\n\tat org.zaproxy.addon.authhelper.AuthUtils.sendReturnAndSleep(AuthUtils.java:835)\n\tat org.zaproxy.addon.authhelper.internal.auth.DefaultAuthenticator.authenticate(DefaultAuthenticator.java:134)\n\tat org.zaproxy.addon.authhelper.AuthUtils.internalAuthenticateAsUser(AuthUtils.java:717)\n\tat org.zaproxy.addon.authhelper.AuthUtils.authenticateAsUserImpl(AuthUtils.java:512)\n\tat org.zaproxy.addon.authhelper.AuthUtils.authenticateAsUserWithErrorStep(AuthUtils.java:486)\n\tat org.zaproxy.addon.authhelper.BrowserBasedAuthenticationMethodType$BrowserBasedAuthenticationMethod.authenticateImpl(BrowserBasedAuthenticationMethodType.java:366)\n\tat org.zaproxy.addon.authhelper.BrowserBasedAuthenticationMethodType$BrowserBasedAuthenticationMethod.authenticate(BrowserBasedAuthenticationMethodType.java:334)\n\tat org.zaproxy.zap.users.User.authenticate(User.java:271)\n\tat org.zaproxy.zap.users.User.processMessageToMatchUser(User.java:170)\n\tat org.zaproxy.addon.network.internal.client.BaseHttpSender.sendAuthenticated(BaseHttpSender.java:378)\n\tat org.zaproxy.addon.network.internal.client.BaseHttpSender.sendNoRedirections(BaseHttpSender.java:351)\n\tat org.zaproxy.addon.network.internal.client.BaseHttpSender.send(BaseHttpSender.java:307)\n\tat org.zaproxy.addon.network.internal.client.BaseHttpSender.sendAndReceive(BaseHttpSender.java:278)\n\tat org.zaproxy.addon.network.internal.client.BaseHttpSender.sendAndReceive(BaseHttpSender.java:234)\n\tat org.parosproxy.paros.network.HttpSender.sendImpl(HttpSender.java:536)\n\tat org.parosproxy.paros.network.HttpSender.sendAndReceive(HttpSender.java:356)\n\tat org.zaproxy.addon.automation.jobs.RequestorJob.runJob(RequestorJob.java:224)\n\tat org.zaproxy.addon.automation.ExtensionAutomation.runPlan(ExtensionAutomation.java:616)\n\tat org.zaproxy.addon.automation.ExtensionAutomation.runAutomationPlan(ExtensionAutomation.java:751)\n\tat org.zaproxy.addon.automation.ExtensionAutomation.runPlanCommandLine(ExtensionAutomation.java:922)\n\tat org.zaproxy.addon.automation.ExtensionAutomation.execute(ExtensionAutomation.java:864)\n\tat org.parosproxy.paros.extension.ExtensionLoader.runCommandLine(ExtensionLoader.java:555)\n\tat org.parosproxy.paros.control.Control.runCommandLine(Control.java:429)\n\tat org.zaproxy.zap.CommandLineBootstrap.start(CommandLineBootstrap.java:113)\n\tat org.zaproxy.zap.ZAP.main(ZAP.java:100)\n2026-05-20 20:41:29,721 [main ] INFO  User - Authentication failed for user: deptex-dast-user\n2026-05-20 20:41:29,726 [main ] INFO  CommandLine - Job requestor finished, time taken: 00:00:09\n2026-05-20 20:41:29,726 [main ] INFO  CommandLine - Job report started\n"
+	,"diagnostics": [
+	]
+}

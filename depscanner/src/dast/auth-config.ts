@@ -272,13 +272,18 @@ export function buildNucleiAuthHeaders(
 // ---------------------------------------------------------------------------
 
 /**
- * The shape `buildRecordedAuthForZap` returns. `internalIndexToZapIndex[i]`
- * maps a UI-coordinate step index (against payload.steps as the user
- * authored them) to ZAP's step-array index inside the auth method (which is
- * offset by -1 when payload.steps[0] is a `goto` collapsed into
- * `loginPageUrl`). Parser uses the inverse to translate ZAP-coordinate
- * failures back into UI coordinates so the failed-step UI banner highlights
- * the correct row.
+ * The shape `buildRecordedAuthForZap` returns.
+ *
+ * `internalIndexToZapIndex` is retained for backward-compat with callers
+ * (and tests) that care which UI step collapsed into `loginPageUrl` vs which
+ * emitted a real ZAP step. The empirical v2.1d spike against ZAP 2.17.0 +
+ * authhelper v0.39.0 confirmed that ZAP does NOT emit per-step
+ * success/failure events — the only structured diagnostic signal is the
+ * `auth-report-json` REPORT template (summaryItems[] / failureReasons[] /
+ * afPlanErrors[]). So the parser no longer uses this mapping to translate
+ * ZAP-coordinate failures back into UI coordinates: every failure is
+ * `step_index: 0` from ZAP's perspective. The field stays as informational
+ * metadata for callers that want to surface "your goto collapsed here".
  */
 export interface RecordedAuthBuildResult {
   contextAuthentication: Record<string, unknown>;
@@ -306,6 +311,40 @@ const ACTION_TO_ZAP_TYPE: Record<RecordedStepAction, string | null> = {
   return: 'RETURN',
   escape: 'ESCAPE',
 };
+
+/**
+ * v2.1d empirical: ZAP's authhelper step-schema validator REQUIRES a
+ * `description: <string>` on every step, otherwise it silently drops the
+ * step (the entire steps[] array becomes empty in afEnv → ZAP falls back
+ * to AUTO_DETECT). Without this, our explicit-step value-add disappears
+ * and recorded login regresses to ~the same coverage as the form strategy.
+ * Derive a short human-readable description from the action + selector.
+ */
+function describeStep(step: RecordedStep, index: number): string {
+  switch (step.action) {
+    case 'click':
+      return step.selector ? `click ${step.selector}` : 'click';
+    case 'type_username':
+      return 'type username';
+    case 'type_password':
+      return 'type password';
+    case 'type_totp':
+      return 'type TOTP code';
+    case 'type_custom':
+      return step.selector ? `type into ${step.selector}` : 'type custom value';
+    case 'wait':
+      return typeof step.wait_ms === 'number' ? `wait ${step.wait_ms}ms` : 'wait';
+    case 'return':
+      return 'press Enter';
+    case 'escape':
+      return 'press Escape';
+    case 'goto':
+      // Should never reach the step list (collapsed into loginPageUrl).
+      return step.value ? `go to ${step.value}` : `step ${index}`;
+    default:
+      return `step ${index}`;
+  }
+}
 
 function recordedSelectorField(step: RecordedStep): Record<string, unknown> {
   // ZAP's browser-auth step accepts `cssSelector` or `xpath`. We default to
@@ -367,6 +406,12 @@ export function buildRecordedAuthForZap(
       internalIndexToZapIndex.push(-1);
       continue;
     }
+    // v2.1d empirical: each step REQUIRES a `description:` field, otherwise
+    // ZAP's authhelper validator silently drops the entire steps[] array and
+    // falls back to AUTO_DETECT (echoing back `steps: []` in afEnv). Use
+    // the user-authored description when present (via step.value on action
+    // descriptors that don't otherwise consume value), or derive one.
+    const description = describeStep(step, i);
     if (step.action === 'wait') {
       // ZAP's WAIT step takes the wait duration via the step's `timeout`
       // (ms). The validator already requires step.wait_ms; we mirror it into
@@ -374,10 +419,10 @@ export function buildRecordedAuthForZap(
       if (typeof step.wait_ms !== 'number') {
         throw new Error(`buildRecordedAuthForZap: step ${i} wait requires wait_ms`);
       }
-      zapSteps.push({ type: 'WAIT', timeout: step.wait_ms });
+      zapSteps.push({ description, type: 'WAIT', timeout: step.wait_ms });
     } else if (step.action === 'return' || step.action === 'escape') {
       // RETURN/ESCAPE need no selector or value; ZAP sends the keystroke.
-      zapSteps.push({ type: zapType });
+      zapSteps.push({ description, type: zapType });
     } else if (step.action === 'type_custom') {
       // CUSTOM_FIELD requires a selector + value. The value is a literal
       // string ZAP types into the targeted element (treated as potentially-
@@ -386,17 +431,49 @@ export function buildRecordedAuthForZap(
         throw new Error(`buildRecordedAuthForZap: step ${i} type_custom missing selector or value`);
       }
       zapSteps.push({
+        description,
         type: 'CUSTOM_FIELD',
         ...recordedSelectorField(step),
         value: step.value,
         timeout: step.timeout_ms ?? RECORDED_DEFAULT_STEP_TIMEOUT_MS,
       });
+    } else if (step.action === 'type_username') {
+      // USERNAME requires both selector AND value. Without value: AND
+      // description:, ZAP's schema validator drops the step (the array
+      // becomes empty in afEnv, AUTO_DETECT runs instead). Thread the
+      // decrypted credential into the step so ZAP's schema is satisfied.
+      // YAML lives at mode 0600 + unlinked after spawn (same posture as
+      // the form strategy).
+      if (!step.selector) {
+        throw new Error(`buildRecordedAuthForZap: step ${i} type_username requires a selector`);
+      }
+      zapSteps.push({
+        description,
+        type: 'USERNAME',
+        ...recordedSelectorField(step),
+        value: payload.username,
+        timeout: step.timeout_ms ?? RECORDED_DEFAULT_STEP_TIMEOUT_MS,
+      });
+    } else if (step.action === 'type_password') {
+      // PASSWORD: same `value:` + `description:` requirement as USERNAME.
+      if (!step.selector) {
+        throw new Error(`buildRecordedAuthForZap: step ${i} type_password requires a selector`);
+      }
+      zapSteps.push({
+        description,
+        type: 'PASSWORD',
+        ...recordedSelectorField(step),
+        value: payload.password,
+        timeout: step.timeout_ms ?? RECORDED_DEFAULT_STEP_TIMEOUT_MS,
+      });
     } else {
-      // click / type_username / type_password / type_totp — all selector-only.
+      // click / type_totp — selector-only. TOTP_FIELD generates the code
+      // at scan time from credentials.totp; no `value:` needed on the step.
       if (!step.selector) {
         throw new Error(`buildRecordedAuthForZap: step ${i} ${step.action} requires a selector`);
       }
       zapSteps.push({
+        description,
         type: zapType,
         ...recordedSelectorField(step),
         timeout: step.timeout_ms ?? RECORDED_DEFAULT_STEP_TIMEOUT_MS,
@@ -436,9 +513,13 @@ export function buildRecordedAuthForZap(
       loginPageWait: loginPageWaitSec,
       stepDelay: stepDelaySec,
       browserId: 'firefox-headless',
-      // diagnostics:true is what produces the per-step success/failure log
-      // the parser consumes. M0 Spike-3 captures the exact shape for fixtures.
-      diagnostics: true,
+      // NOTE: `diagnostics: true` was emitted in the v2.1d M2 implementation
+      // on the assumption it would produce per-step success/failure log
+      // events. The empirical spike against ZAP 2.17.0 + authhelper v0.39.0
+      // showed the field is a no-op — ZAP emits no per-step events on any
+      // channel (stderr / stdout / zap.log). The structured signal lives in
+      // the `auth-report-json` report template, which the yaml-builder emits
+      // and the runner parses. Field intentionally omitted.
       steps: zapSteps,
     },
     verification,

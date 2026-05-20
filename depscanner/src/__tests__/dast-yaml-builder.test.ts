@@ -12,7 +12,6 @@ import {
   type BuildAutomationYamlOptions,
 } from '../dast/yaml-builder';
 import {
-  UnsupportedAuthStrategyError,
   type CredentialPayload,
 } from '../dast/auth-config';
 
@@ -306,23 +305,20 @@ describe('buildAutomationYaml — auth strategies', () => {
     expect(replacer.rules[1].matchString).toBe('Authorization');
   });
 
-  it("'recorded' strategy throws UnsupportedAuthStrategyError with stable code", () => {
+  it("'recorded' strategy is now implemented (v2.1d) — full coverage lives in dast-yaml-builder-recorded.test.ts", () => {
+    // v2.1a stub: `buildAuthForStrategy('recorded', …)` threw
+    // `UnsupportedAuthStrategyError` (code `dast_strategy_not_supported_in_v2_1a`).
+    // v2.1d removed that branch — the call now delegates to
+    // `buildRecordedAuthForZap`. This smoke confirms the implementation
+    // path is reached (an empty payload fails the inner validator, NOT
+    // the UnsupportedAuthStrategyError guard).
     expect(() =>
       buildAutomationYaml({
         ...BASELINE_OPTS,
         authStrategy: 'recorded',
         authPayload: { kind: 'recorded' as any } as any,
       }),
-    ).toThrow(UnsupportedAuthStrategyError);
-    try {
-      buildAutomationYaml({
-        ...BASELINE_OPTS,
-        authStrategy: 'recorded',
-        authPayload: { kind: 'recorded' as any } as any,
-      });
-    } catch (e: any) {
-      expect(e.code).toBe('dast_strategy_not_supported_in_v2_1a');
-    }
+    ).toThrow(/at least one non-goto step|payload.kind/);
   });
 });
 

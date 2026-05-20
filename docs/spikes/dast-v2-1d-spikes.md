@@ -278,4 +278,94 @@ Henry's hands-on iteration.
 ## Files captured in this branch from the empirical run
 
 - `depscanner/test/fixtures/zap-login-diagnostics/2.17.0/auth-report-empty-steps.json`
-  — real ZAP auth-report from the AUTO_DETECT fallback case (current code path).
+  — real ZAP auth-report from the AUTO_DETECT fallback case (steps[] silently dropped).
+- `depscanner/test/fixtures/zap-login-diagnostics/2.17.0/auth-report-failure-logged-in-missed.json`
+  — captured failure-case: auth.failure.logged_in / auth.failure.no_successful_logins,
+  steps[] with value: but missing description: → array dropped, AUTO_DETECT used.
+- `depscanner/test/fixtures/zap-login-diagnostics/2.17.0/auth-report-with-description-steps-survive.json`
+  — final fixture: steps[] survive in afEnv when each step carries BOTH
+  value: AND description:. (Auth still fails on the fixture's button click
+  due to a Selenium stale-element issue, but the YAML-shape question is
+  fully resolved.)
+
+## Rework completed (post-empirical findings)
+
+Beyond the rework path laid out above, the second spike round surfaced one
+additional ZAP schema requirement that needed to land in `auth-config.ts`:
+
+### Finding C — every step REQUIRES a `description: <string>` field
+
+Three more spike runs confirmed that **even with `value:` populated**, ZAP's
+authhelper still drops the entire `steps[]` array unless each step also
+carries a `description:` field. The afEnv output shows the steps survive
+only when both `value:` and `description:` are present.
+
+The `describeStep(step, index)` helper in `auth-config.ts` synthesizes a
+short human-readable description per action (e.g. "type username", "click
+#submit", "wait 250ms"). This is emitted on every step in the YAML.
+
+**This was a SCHEMA REQUIREMENT, not the empty-steps cause we originally
+hypothesized.** The corrected mental model:
+
+- `value:` is required for USERNAME / PASSWORD / CUSTOM_FIELD steps. The
+  hypothesized "ZAP drops the array without value:" claim was actually
+  the description: requirement masking as a value-related issue.
+- `description:` is required on EVERY step regardless of type.
+- Without either, ZAP's authhelper silently drops the step (and, in the
+  absence of any valid steps, falls back to AUTO_DETECT).
+
+### Files changed in the post-empirical rework
+
+- `depscanner/src/dast/auth-config.ts` — thread `value:` into USERNAME /
+  PASSWORD / CUSTOM_FIELD steps, emit `description:` on every step,
+  drop `diagnostics: true` (no-op in authhelper v0.39.0).
+- `depscanner/src/dast/yaml-builder.ts` — drop `authhelper` from
+  `addOns.install[]` (pre-baked in image; deprecated warning otherwise),
+  add `parameters.user: deptex-dast-user` to the requestor job
+  (without it ZAP never replays auth), always emit an
+  `auth-report-json` report job for the recorded strategy (with
+  override `authReportDirAbsolute` for the per-job tempdir),
+  add `verificationProbeUrl` option for a post-login URL.
+- `depscanner/src/dast/runner.ts` — `parseZapLoginDiagnostics` rewritten
+  against the structured `auth-report-json` shape; reads
+  `summaryItems[auth.summary.auth].passed` for verdict, maps
+  `failureReasons[].key` to our reason enum, surfaces `afPlanErrors[]`
+  as detail when the AF YAML itself failed to run. ZAP doesn't expose
+  per-step failure → `step_index` is always 0 on failure.
+- `depscanner/src/dast/pipeline.ts` — `runRecordedLoginProbe` now reads
+  `auth-report.json` from the per-job tempdir after ZAP exits; drops
+  stdout/stderr buffering (no diagnostic value).
+- `docs/runbooks/dast-v2-1d-recorded-login.md` — banner-outcome table
+  updated to map `auth.failure.*` keys to actionable user advice; adds
+  a "Why don't we say which step failed?" section explaining the ZAP
+  limitation.
+
+### Test coverage post-rework
+
+- `depscanner/test/dast-recorded-auth.test.ts` — 43 cases (was 32; added
+  `description:` and `value:` assertions per step).
+- `depscanner/test/dast-yaml-builder-recorded.test.ts` — 45 cases
+  (was 33; added auth-report-json job, `user:` on requestor,
+  `authhelper` exclusion, `verificationProbeUrl` override,
+  `authReportDirAbsolute` override).
+- `depscanner/test/dast-recorded-pipeline.test.ts` — 39 cases (was 32;
+  rewritten against real captured fixtures, drops the old log-string
+  parser invocations).
+- `depscanner/test/e2e/dast-recorded.ts` — 22 cases (was 14; tightened
+  job-type assertions, switched parser invocations to real auth-report
+  shapes).
+
+### Remaining unknowns (not blockers)
+
+- The fixture's `click button[type=submit]` step hits a Selenium
+  `StaleElementReferenceException` regardless of `stepDelay` — the auth
+  verdict is `logged_in_indicator_missed`, even with steps[] surviving
+  in afEnv. This is a fixture-specific issue (the form submits via
+  redirect; Selenium loses the element reference between `value` populate
+  and click). A real-world app or a fixture redesigned to submit via
+  RETURN keystroke would surface a clean success path. Untested but
+  doesn't block v2.1d's value-prop ship.
+- Spike-2 (cross-origin SSO), Spike-2B (loggedOutRegex re-trigger), and
+  Spike-5 (`onFail: exit` halts spider) remain deferred. The rework
+  preserves the relevant code paths; these graduate to v2.1e or to
+  bug-fix follow-ups if production traffic hits them.

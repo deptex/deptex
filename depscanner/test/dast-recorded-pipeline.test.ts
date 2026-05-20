@@ -1,29 +1,35 @@
 /**
- * parseZapLoginDiagnostics + the v2.1d dry-run dispatch tests.
+ * parseZapLoginDiagnostics tests — calibrated against ZAP's `auth-report-json`
+ * report template (the only structured signal ZAP browser-auth exposes).
  *
- * The pipeline integration is exercised end-to-end via the e2e harness
- * (M7) and the real-app smoke (M6). Here we lock the parser contract
- * and the load-bearing negative invariants of the dry-run branch:
- *   - structured success log → success:true, no failed_at_step
- *   - structured failure log → success:false, failed_at_step with the
- *     UI-coordinate step_index translated via internalIndexToZapIndex
- *   - unstructured log → success:false + raw_log fallback
- *   - secret redaction grid — every parsed string field redacts username /
- *     password / TOTP / Bearer / cookies
- *   - dispatch-shape: the dry-run code path is gated on payload.dry_run===true
- *     AND auth_strategy==='recorded' AND engine==='zap'
+ * The empirical v2.1d M0 spike against ZAP 2.17.0 + authhelper v0.39.0
+ * confirmed that ZAP does NOT emit per-step success/failure events to
+ * stderr / stdout / zap.log. The auth verdict lives entirely in the
+ * auth-report.json file. These cases lock the parser contract against:
+ *
+ *   - real captured failure fixture (logged_in_indicator_missed)
+ *   - fabricated success fixture (mutate captured one: passed=true,
+ *     empty failureReasons)
+ *   - missing / null report → browser_crashed
+ *   - non-object payload → unknown
+ *   - afPlanErrors[] non-empty → unknown with detail
+ *   - failureReasons[] mapping table — known keys → reason enum
+ *   - rolled-up auth.failure.no_successful_logins skipped in favor of
+ *     more specific entries
+ *   - secret redaction grid — every output string field is run through
+ *     redactCredentials so a captured value can't leak to the FE
  *
  * Run: npx tsx test/dast-recorded-pipeline.test.ts
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 import {
   parseZapLoginDiagnostics,
   redactCredentials,
+  type ZapAuthReport,
 } from '../src/dast/runner';
-import {
-  buildRecordedAuthForZap,
-  type RecordedCredentialPayload,
-} from '../src/dast/auth-config';
 
 let failures = 0;
 let passed = 0;
@@ -37,187 +43,218 @@ function assert(cond: unknown, msg: string): void {
   }
 }
 
-function basePayload(overrides: Partial<RecordedCredentialPayload> = {}): RecordedCredentialPayload {
+const FIXTURE_DIR = path.join(
+  __dirname,
+  'fixtures',
+  'zap-login-diagnostics',
+  '2.17.0',
+);
+
+function loadFixture(name: string): ZapAuthReport {
+  const raw = fs.readFileSync(path.join(FIXTURE_DIR, name), { encoding: 'utf-8' });
+  return JSON.parse(raw) as ZapAuthReport;
+}
+
+/**
+ * Fabricate a success-case auth-report by mutating the captured failure
+ * fixture. The resume plan explicitly authorizes this approach — capturing
+ * a real success-case fixture requires a login-app the fixture's click step
+ * doesn't trip Selenium's stale-element on, and the success shape is
+ * deterministically the inverse of the failure shape (passed=true,
+ * empty failureReasons).
+ */
+function fabricateSuccessReport(): ZapAuthReport {
+  const base = loadFixture('auth-report-failure-logged-in-missed.json');
+  const summary = (base.summaryItems ?? []).map((s) => ({ ...s }));
+  const authItem = summary.find((s) => s.key === 'auth.summary.auth');
+  if (authItem) authItem.passed = true;
   return {
-    kind: 'recorded',
-    login_page_url: 'https://app.example.com/login',
-    steps: [
-      { action: 'goto', value: 'https://app.example.com/login' },
-      { action: 'type_username', selector: '#email' },
-      { action: 'type_password', selector: '#pass' },
-      { action: 'click', selector: 'button[type=submit]' },
-    ],
-    username: 'alice@example.com',
-    password: 'hunter2hunter2',
-    ...overrides,
+    ...base,
+    summaryItems: summary,
+    failureReasons: [],
+    afPlanErrors: [],
   };
 }
 
 function main(): void {
   const t0 = Date.now();
-  console.log('parseZapLoginDiagnostics + dispatch tests\n');
+  console.log('parseZapLoginDiagnostics (auth-report-json shape) tests\n');
 
   // ---------------------------------------------------------------------------
-  console.log('[1] structured success log → success:true, no failed_at_step');
+  console.log('[1] real captured failure fixture → logged_in_indicator_missed');
   {
-    const log = [
-      '[BrowserBasedAuth] starting browser auth',
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email SUCCESS',
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#pass SUCCESS',
-      '[BrowserBasedAuth] step #2 type=CLICK selector=button[type=submit] SUCCESS',
-      '[BrowserBasedAuth] verification succeeded — loggedInRegex matched',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 7400);
-    assert(r.success === true, `success:true`);
-    assert(r.failed_at_step === undefined, `no failed_at_step on success`);
-    assert(r.duration_ms === 7400, `duration_ms passed through`);
-    assert(r.steps_run >= 3, `steps_run≥3 (got ${r.steps_run})`);
-  }
-
-  // ---------------------------------------------------------------------------
-  console.log('[2] structured failure log → step_index translates ZAP-coord → UI-coord');
-  {
-    // ZAP step index 2 = CLICK (button submit). With the default 4-step
-    // payload (goto/type_username/type_password/click), goto collapses, so:
-    //   UI 0 → ZAP -1
-    //   UI 1 → ZAP 0 (type_username)
-    //   UI 2 → ZAP 1 (type_password)
-    //   UI 3 → ZAP 2 (click) ← failure here
-    const log = [
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email SUCCESS',
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#pass SUCCESS',
-      '[BrowserBasedAuth] step #2 type=CLICK selector=button[type=submit] FAILED reason=element not visible after 1000ms',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 12_345);
-    assert(r.success === false, `success:false on failure`);
-    assert(r.failed_at_step !== undefined, `failed_at_step present`);
-    assert(r.failed_at_step?.step_index === 3, `step_index translated to UI 3 (got ${r.failed_at_step?.step_index})`);
-    assert(r.failed_at_step?.action === 'click', `action=click`);
-    assert(
-      r.failed_at_step?.reason === 'selector_not_visible_after_timeout',
-      `reason=selector_not_visible_after_timeout (got ${r.failed_at_step?.reason})`,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  console.log('[3] verification failure log → logged_in_indicator_missed');
-  {
-    const log = [
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email SUCCESS',
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#pass SUCCESS',
-      '[BrowserBasedAuth] step #2 type=CLICK selector=button SUCCESS',
-      'verification failed — loggedin regex no match in response',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex);
-    assert(r.success === false, `success:false`);
+    const report = loadFixture('auth-report-failure-logged-in-missed.json');
+    const r = parseZapLoginDiagnostics(report, 17_000);
+    assert(r.success === false, `success:false on captured failure`);
+    assert(r.duration_ms === 17_000, `duration_ms passes through`);
+    assert(r.failed_at_step !== undefined, `failed_at_step populated`);
     assert(
       r.failed_at_step?.reason === 'logged_in_indicator_missed',
       `reason=logged_in_indicator_missed (got ${r.failed_at_step?.reason})`,
     );
+    assert(
+      r.failed_at_step?.step_index === 0,
+      `step_index=0 (ZAP doesn't expose per-step failure; got ${r.failed_at_step?.step_index})`,
+    );
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[4] empty log → unknown failure');
+  console.log('[2] fabricated success → success:true, no failed_at_step');
   {
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics('', internalIndexToZapIndex);
-    assert(r.success === false, `success:false`);
-    assert(r.failed_at_step?.reason === 'unknown', `reason=unknown on empty log`);
-    assert(r.raw_log === undefined, `no raw_log when log was empty`);
+    const r = parseZapLoginDiagnostics(fabricateSuccessReport(), 7400);
+    assert(r.success === true, `success:true`);
+    assert(r.failed_at_step === undefined, `no failed_at_step on success`);
+    assert(r.duration_ms === 7400, `duration_ms passes through`);
+    assert(r.steps_run === 0, `steps_run=0 (ZAP doesn't expose per-step counts)`);
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[5] unstructured log → fallback raw_log + success:false');
+  console.log('[3] null report (file missing) → browser_crashed');
   {
-    const log = 'Lorem ipsum dolor sit amet, this is not a ZAP log\nnothing matches any known marker\n';
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 2000);
+    const r = parseZapLoginDiagnostics(null, 2000);
     assert(r.success === false, `success:false`);
-    assert(typeof r.raw_log === 'string' && r.raw_log.length > 0, `raw_log populated`);
+    assert(
+      r.failed_at_step?.reason === 'browser_crashed',
+      `reason=browser_crashed on missing report`,
+    );
+    assert(
+      r.failed_at_step?.detail?.includes('missing'),
+      `detail mentions missing report`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[4] non-object payload → unknown');
+  {
+    const r = parseZapLoginDiagnostics('not an object', 1000);
+    assert(r.success === false, `success:false on string payload`);
     assert(r.failed_at_step?.reason === 'unknown', `reason=unknown`);
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[6] secret redaction grid — known patterns scrubbed by redactCredentials');
+  console.log('[5] afPlanErrors[] non-empty → unknown + AF plan error detail');
   {
-    // redactCredentials redacts patterned secrets (password=X, api_key=X,
-    // Bearer X, Set-Cookie: ..., JWT shape, AWS/GitHub/Slack tokens). A
-    // bare-string password embedded in free-form prose is NOT covered (and
-    // shouldn't be — that would over-redact normal English). This test pins
-    // the patterned secrets the worker actually emits to the diagnostic
-    // stream: JWT-shaped Bearer tokens, Set-Cookie, password= / api_key=
-    // assignments.
+    const report: ZapAuthReport = {
+      summaryItems: [],
+      failureReasons: [],
+      afPlanErrors: [{ description: 'requestor: user "deptex-dast-user" not found' }],
+    };
+    const r = parseZapLoginDiagnostics(report, 500);
+    assert(r.success === false, `success:false`);
+    assert(r.failed_at_step?.reason === 'unknown', `reason=unknown for AF plan errors`);
+    assert(
+      r.failed_at_step?.detail?.includes('AF plan error'),
+      `detail mentions AF plan error (got: ${r.failed_at_step?.detail})`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[6] afPlanErrors[] as bare strings (alternate ZAP shape)');
+  {
+    const report: ZapAuthReport = {
+      summaryItems: [],
+      failureReasons: [],
+      afPlanErrors: ['Unknown job type: requestorrr' as unknown as { description?: string }],
+    };
+    const r = parseZapLoginDiagnostics(report);
+    assert(r.success === false, `success:false`);
+    assert(
+      r.failed_at_step?.detail?.includes('Unknown job type'),
+      `string-shaped AF plan error surfaces as detail`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[7] failureReasons key → reason enum mapping');
+  {
+    const cases: Array<{ key: string; expected: string }> = [
+      { key: 'auth.failure.logged_in', expected: 'logged_in_indicator_missed' },
+      { key: 'auth.failure.logged_out', expected: 'logged_out_indicator_present_after_login' },
+      { key: 'auth.failure.username', expected: 'selector_not_visible_after_timeout' },
+      { key: 'auth.failure.password', expected: 'selector_not_visible_after_timeout' },
+    ];
+    for (const c of cases) {
+      const report: ZapAuthReport = {
+        summaryItems: [{ key: 'auth.summary.auth', passed: false, description: 'Authentication failed' }],
+        failureReasons: [{ key: c.key, description: 'desc' }],
+      };
+      const r = parseZapLoginDiagnostics(report);
+      assert(
+        r.failed_at_step?.reason === c.expected,
+        `${c.key} → ${c.expected} (got ${r.failed_at_step?.reason})`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[8] no_successful_logins skipped in favor of more specific reason');
+  {
+    const report: ZapAuthReport = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: false }],
+      failureReasons: [
+        { key: 'auth.failure.no_successful_logins', description: 'No successful logins.' },
+        { key: 'auth.failure.logged_in', description: 'No indication of being logged in.' },
+      ],
+    };
+    const r = parseZapLoginDiagnostics(report);
+    assert(
+      r.failed_at_step?.reason === 'logged_in_indicator_missed',
+      `picks logged_in over the no_successful_logins roll-up`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[9] unmapped failureReason → unknown + detail surfaces description');
+  {
+    const report: ZapAuthReport = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: false }],
+      failureReasons: [{ key: 'auth.failure.experimental_thing', description: 'some new ZAP shape' }],
+    };
+    const r = parseZapLoginDiagnostics(report);
+    assert(r.failed_at_step?.reason === 'unknown', `reason=unknown for unmapped key`);
+    assert(
+      r.failed_at_step?.detail === 'some new ZAP shape',
+      `detail surfaces description (got: ${r.failed_at_step?.detail})`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[10] failed auth with empty failureReasons → unknown + raw_log');
+  {
+    const report: ZapAuthReport = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: false }],
+      failureReasons: [],
+    };
+    const r = parseZapLoginDiagnostics(report, 1500);
+    assert(r.success === false, `success:false when auth.summary.auth false even w/ empty reasons`);
+    assert(r.failed_at_step?.reason === 'unknown', `reason=unknown`);
+    assert(typeof r.raw_log === 'string', `raw_log populated with summary+failures JSON`);
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[11] secret redaction grid — patterns scrubbed in detail and raw_log');
+  {
     const password = 'hunter2hunter2';
-    const totp = 'JBSWY3DPEHPK3PXP';
     const bearer = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature1234567890';
-    const cookie = 'session=secret-session-token-1234567890';
-    const log = [
-      'Bearer ' + bearer,
-      'Set-Cookie: ' + cookie,
-      'password=' + password,
-      'api_key=' + totp,
-      'unstructured tail so the parser falls back to raw_log',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex, 1000);
+    const report: ZapAuthReport = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: false }],
+      failureReasons: [
+        {
+          key: 'auth.failure.logged_in',
+          description: `Verification probe saw Bearer ${bearer}; password=${password} echoed back`,
+        },
+      ],
+    };
+    const r = parseZapLoginDiagnostics(report);
     const surface = (r.raw_log ?? '') + JSON.stringify(r);
-    assert(!surface.includes('hunter2hunter2'), `password= value not in output (got via raw_log?)`);
-    assert(!surface.includes(bearer.slice(20)), `Bearer token mid-portion redacted`);
-    assert(!surface.includes('secret-session-token'), `Set-Cookie value redacted`);
-    assert(!surface.includes('JBSWY3DPEHPK3PXP'), `api_key= value not in output`);
+    assert(!surface.includes(password), `password= value redacted from output`);
+    assert(!surface.includes(bearer.slice(20)), `Bearer token redacted`);
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[7] selector field passes through (redacted) on failure');
+  console.log('[12] redactCredentials inverse smoke — hits the worker-emitted formats');
   {
-    const log = '[BrowserBasedAuth] step #2 type=CLICK selector=button[type=submit] FAILED reason=timeout';
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex);
-    assert(
-      r.failed_at_step?.selector === 'button[type=submit]',
-      `selector preserved (got ${r.failed_at_step?.selector})`,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  console.log('[8] multi-replay log — parser returns FIRST replay verdict');
-  {
-    // Spike-2B scenario: scan re-logs after session expiration. The parser
-    // sees N replays interleaved; the first replay's verdict is the one we
-    // report (subsequent re-login failures use the session_loss envelope).
-    const log = [
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email SUCCESS',
-      '[BrowserBasedAuth] step #1 type=PASSWORD selector=#pass SUCCESS',
-      '[BrowserBasedAuth] step #2 type=CLICK selector=button SUCCESS',
-      '[BrowserBasedAuth] verification succeeded',
-      '... time passes; session expires; scan triggers re-login ...',
-      '[BrowserBasedAuth] step #0 type=USERNAME selector=#email FAILED reason=element not visible',
-    ].join('\n');
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex);
-    // FIRST replay was a success.
-    // The parser is intentionally first-failure-or-success-marker biased;
-    // the failure on step #0 from the SECOND replay would be the first
-    // failure seen — assert this surfaces as a failure with action mapping.
-    // Note: this is the parser's "first failure wins" semantics. The
-    // SEPARATE session-loss envelope (kind='session_loss') handles re-login
-    // exhaustion mid-scan; the parser doesn't need to.
-    assert(r.success === false, `parser sees the second-replay failure (first failure wins)`);
-    assert(
-      r.failed_at_step?.reason === 'selector_not_visible_after_timeout',
-      `reason captured from second-replay failure`,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  console.log('[9] redactCredentials inverse check — pattern hits assorted secret formats');
-  {
-    // Direct redaction smoke (no parser involvement) to confirm the redaction
-    // helper covers the formats the worker emits to the diagnostic stream.
-    const samples = [
+    const samples: Array<[string, string]> = [
       ['Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIi.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', 'Bearer'],
       ['password=hunter2hunter2 next=...', 'password='],
       ['api_key=ABCDEFGHIJK01234567890 next=...', 'api_key='],
@@ -233,40 +270,39 @@ function main(): void {
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[10] internalIndexToZapIndex round-trip with TOTP step');
+  console.log('[13] real captured fixture round-trips redaction without lossy field shape');
   {
-    const payload = basePayload({
-      totp_secret: 'JBSWY3DPEHPK3PXP',
-      steps: [
-        { action: 'goto', value: 'https://app.example.com/login' },
-        { action: 'type_username', selector: '#email' },
-        { action: 'type_password', selector: '#pass' },
-        { action: 'type_totp', selector: '#otp' }, // UI 3 → ZAP 2
-        { action: 'click', selector: 'button[type=submit]' }, // UI 4 → ZAP 3
-      ],
-    });
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(payload);
-    // Now feed a log that fails on ZAP step 2 (TOTP) and confirm we report UI 3.
-    const log = '[BrowserBasedAuth] step #2 type=TOTP_FIELD selector=#otp FAILED reason=totp generation invalid';
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex);
-    assert(r.failed_at_step?.step_index === 3, `TOTP failure → UI step 3 (got ${r.failed_at_step?.step_index})`);
-    assert(r.failed_at_step?.action === 'type_totp', `action=type_totp`);
+    const report = loadFixture('auth-report-failure-logged-in-missed.json');
+    const r = parseZapLoginDiagnostics(report);
+    // The captured fixture's afEnv echoes back our YAML, including the
+    // fixture's hardcoded password ("hunter2hunter2"). The parser must not
+    // copy afEnv into the output — only the failure description string —
+    // and the description should pass through redaction unchanged because
+    // it doesn't contain a patterned secret.
+    const surface = JSON.stringify(r);
     assert(
-      r.failed_at_step?.reason === 'totp_generation_failed',
-      `reason=totp_generation_failed`,
+      !surface.includes('hunter2hunter2'),
+      `password from afEnv not leaked into output JSON`,
+    );
+    assert(
+      r.failed_at_step?.detail !== undefined,
+      `detail populated from failure description`,
     );
   }
 
   // ---------------------------------------------------------------------------
-  console.log('[11] cross-origin block detected');
+  console.log('[14] auth.summary.auth=true with stray failureReason → still success');
   {
-    const log = '[BrowserBasedAuth] step #0 type=CLICK selector=#sso FAILED reason=navigation blocked — out of scope';
-    const { internalIndexToZapIndex } = buildRecordedAuthForZap(basePayload());
-    const r = parseZapLoginDiagnostics(log, internalIndexToZapIndex);
-    assert(
-      r.failed_at_step?.reason === 'cross_origin_blocked',
-      `reason=cross_origin_blocked`,
-    );
+    // ZAP CAN emit failureReasons for diagnostic categories even when
+    // auth.summary.auth.passed===true (e.g. partial sub-check failures).
+    // The auth-summary key is the load-bearing verdict.
+    const report: ZapAuthReport = {
+      summaryItems: [{ key: 'auth.summary.auth', passed: true }],
+      failureReasons: [{ key: 'auth.failure.diagnostic_note', description: 'minor' }],
+    };
+    const r = parseZapLoginDiagnostics(report);
+    assert(r.success === true, `success:true when auth.summary.auth.passed`);
+    assert(r.failed_at_step === undefined, `no failed_at_step on success`);
   }
 
   const t1 = Date.now();
