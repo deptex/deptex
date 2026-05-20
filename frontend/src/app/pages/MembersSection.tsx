@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
-import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, Loader2 } from 'lucide-react';
+import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Loader2 } from 'lucide-react';
 import { api, OrganizationMember, OrganizationInvitation, Team, Organization, OrganizationRole, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -650,7 +650,6 @@ export default function MembersPage({
           </div>
           {!isSettingsSubpage && (
             <Button variant="green" className="mb-1" disabled>
-              <Plus className="h-4 w-4 mr-2" />
               Invite
             </Button>
           )}
@@ -763,7 +762,6 @@ export default function MembersPage({
             variant="green"
             className="mb-1"
           >
-            <Plus className="h-4 w-4 mr-2" />
             Invite
           </Button>
         )}
@@ -1173,6 +1171,7 @@ export default function MembersPage({
           <DialogFooter className="px-6 py-4 bg-background">
             <Button
               variant="outline"
+              className="!h-8 !px-3 !rounded-lg"
               onClick={() => {
                 setShowInviteModal(false);
                 setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
@@ -1257,6 +1256,7 @@ export default function MembersPage({
               <DialogFooter className="px-6 py-4 bg-background">
                 <Button
                   variant="outline"
+                  className="!h-8 !px-3 !rounded-lg"
                   onClick={() => {
                     setShowRoleSidebar(false);
                     setSelectedMember(null);
@@ -1352,6 +1352,7 @@ export default function MembersPage({
               <DialogFooter className="px-6 py-4 bg-background">
                 <Button
                   variant="outline"
+                  className="!h-8 !px-3 !rounded-lg"
                   onClick={() => {
                     setShowAddToTeamSidebar(false);
                     setSelectedMember(null);
@@ -1396,7 +1397,11 @@ export default function MembersPage({
             </DialogDescription>
           </div>
           <DialogFooter className="px-6 py-4 bg-background">
-            <Button variant="outline" onClick={() => setShowRemoveDialog(false)}>
+            <Button
+              variant="outline"
+              className="!h-8 !px-3 !rounded-lg"
+              onClick={() => setShowRemoveDialog(false)}
+            >
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleConfirmRemove}>

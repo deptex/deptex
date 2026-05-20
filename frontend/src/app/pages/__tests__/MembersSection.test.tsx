@@ -467,7 +467,8 @@ describe('MembersPage', () => {
       await waitFor(() => {
         expect(screen.getByText('member@example.com')).toBeInTheDocument();
       });
-      const restored = onMembersUpdate.mock.calls.at(-1)?.[0];
+      const lastCall = onMembersUpdate.mock.calls[onMembersUpdate.mock.calls.length - 1];
+      const restored = lastCall?.[0];
       expect(restored?.some((m: any) => m.user_id === 'user-2')).toBe(true);
     });
   });
@@ -523,9 +524,9 @@ describe('MembersPage', () => {
         ...stableOrgContext,
         organization: {
           ...stableOrgContext.organization,
-          role: 'manager',
+          role: 'manager' as any,
           user_rank: 1,
-          permissions: { view_members: true, edit_roles: true, kick_members: true, manage_teams_and_projects: false },
+          permissions: { view_members: true, add_members: true, edit_roles: true, kick_members: true, manage_teams_and_projects: false } as any,
         },
       });
       const rolesWithManager = [
