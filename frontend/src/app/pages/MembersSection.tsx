@@ -886,11 +886,15 @@ export default function MembersPage({
               </thead>
               <tbody className="divide-y divide-border">
               {filteredMembers.length === 0 ? (
-                <tr>
+                // A global `table tbody tr:hover` rule in Main.css paints every
+                // table row on hover regardless of per-row tailwind classes —
+                // hover:!bg-background-card overrides it (the !important is
+                // what wins against the global rule's !important).
+                <tr className="hover:!bg-background-card">
                   <td colSpan={3} className="px-4 py-10">
                     <div className="flex flex-col items-center gap-3 text-center">
                       <div className="h-14 w-14 rounded-full border border-border bg-background-card flex items-center justify-center">
-                        <Users className="h-7 w-7 text-foreground-secondary" />
+                        <Users className="h-6 w-6 text-foreground-secondary" />
                       </div>
                       <div className="space-y-1">
                         <p className="text-sm font-medium text-foreground">
