@@ -68,6 +68,10 @@ export default function MembersPage({
   const [inviting, setInviting] = useState(false);
   const [changingRole, setChangingRole] = useState(false);
   const [addingToTeam, setAddingToTeam] = useState(false);
+  // Per-invitation set of IDs currently being resent — drives the
+  // "Resending..." spinner in the status cell and disables the dropdown item
+  // so a long network trip can't be triggered twice in a row.
+  const [resendingInvitationIds, setResendingInvitationIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string>('all');
@@ -559,6 +563,13 @@ export default function MembersPage({
 
   const handleResendInvitation = async (invitationId: string) => {
     if (!id) return;
+    if (resendingInvitationIds.has(invitationId)) return; // guard against double-tap
+
+    setResendingInvitationIds(prev => {
+      const next = new Set(prev);
+      next.add(invitationId);
+      return next;
+    });
 
     try {
       await api.resendInvitation(id, invitationId);
@@ -573,6 +584,12 @@ export default function MembersPage({
         title: 'Error',
         description: 'Failed to resend invitation. Please try again.',
         variant: 'destructive',
+      });
+    } finally {
+      setResendingInvitationIds(prev => {
+        const next = new Set(prev);
+        next.delete(invitationId);
+        return next;
       });
     }
   };
@@ -1072,9 +1089,16 @@ export default function MembersPage({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
-                      Pending
-                    </span>
+                    {resendingInvitationIds.has(invitation.id) ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground-secondary">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Resending...
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
+                        Pending
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                   <DropdownMenu>
@@ -1084,7 +1108,10 @@ export default function MembersPage({
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleResendInvitation(invitation.id)}>
+                      <DropdownMenuItem
+                        onClick={() => handleResendInvitation(invitation.id)}
+                        disabled={resendingInvitationIds.has(invitation.id)}
+                      >
                         Resend Invitation
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleCancelInvitation(invitation.id)}>

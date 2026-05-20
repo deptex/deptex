@@ -176,6 +176,38 @@ describe('MembersPage', () => {
     expect(mockResendInvitation).toHaveBeenCalledWith('org-1', 'inv-1');
   });
 
+  it('shows a Resending... status while the resend API call is in flight, then settles back to Pending', async () => {
+    mockGetOrganizationInvitations.mockResolvedValue([
+      { id: 'inv-1', email: 'invited@example.com', role: 'member', status: 'pending', created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 7 * 864e5).toISOString() },
+    ]);
+    // Hold the resend promise open so we can assert the in-flight UI.
+    let resolveResend: (v: unknown) => void = () => {};
+    mockResendInvitation.mockImplementation(() => new Promise(resolve => { resolveResend = resolve; }));
+
+    render(<MembersPage />);
+    await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
+    await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
+
+    const row = screen.getByText('invited@example.com').closest('tr')!;
+    expect(within(row).getByText('Pending')).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole('button'));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Resend Invitation' }));
+
+    // While in flight, status cell flips to "Resending..."
+    await waitFor(() => {
+      expect(within(row).getByText('Resending...')).toBeInTheDocument();
+    });
+    expect(within(row).queryByText('Pending')).not.toBeInTheDocument();
+
+    // Resolve and confirm the cell settles back to Pending.
+    resolveResend({ message: 'Invitation resent', invitation: {} });
+    await waitFor(() => {
+      expect(within(row).getByText('Pending')).toBeInTheDocument();
+    });
+  });
+
   it('invite modal opens with email input, role dropdown, Copy Invite Link', async () => {
     render(<MembersPage />);
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
