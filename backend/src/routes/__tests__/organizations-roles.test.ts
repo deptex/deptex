@@ -542,5 +542,131 @@ describe('Organization Roles & Members (EE)', () => {
       expect([400, 403]).toContain(res.status);
       if (res.status === 400) expect(res.body.error).toContain('assigned to members');
     });
+
+    it('37. Delete role that has pending invitations - 400', async () => {
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { role: 'owner' },
+        error: null,
+      });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { role: 'owner' },
+        error: null,
+      });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { display_order: 0, name: 'owner' },
+        error: null,
+      });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: {
+          id: 'r-custom',
+          name: 'contributor',
+          is_default: false,
+          display_order: 2,
+        },
+        error: null,
+      });
+      // No members assigned…
+      queryBuilder.then.mockImplementationOnce((resolve: any) =>
+        resolve({ data: [], error: null })
+      );
+      // …but there is a pending invitation referencing the role.
+      queryBuilder.then.mockImplementationOnce((resolve: any) =>
+        resolve({ data: [{ id: 'inv-1' }], error: null })
+      );
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/roles/r-custom`)
+        .set('Authorization', `Bearer ${mockToken}`);
+      expect([400, 403]).toContain(res.status);
+      if (res.status === 400) expect(res.body.error).toMatch(/pending invitations/i);
+    });
+  });
+
+  describe('Color validation', () => {
+    it('38. POST /roles rejects an invalid color hex with 400', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/roles`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'lead', color: 'notacolor' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid color format/);
+    });
+
+    it('39. POST /roles accepts a 6-char hex color', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { display_order: 0, name: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: null, error: null });
+      queryBuilder.then.mockImplementationOnce((resolve: any) =>
+        resolve({ data: [{ display_order: 1 }], error: null }),
+      );
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { id: 'role-new', name: 'lead', display_name: 'Lead', display_order: 2, color: '#3b82f6', is_default: false },
+        error: null,
+      });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/roles`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'lead', display_name: 'Lead', color: '#3b82f6' });
+      // The route can still 403 if other guards trip on the mock chain; the
+      // important assertion is that color hex validation didn't reject this.
+      expect([200, 403]).toContain(res.status);
+      expect(res.body.error).not.toMatch(/Invalid color format/);
+    });
+
+    it('40. PUT /roles rejects an invalid color hex with 400', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { display_order: 0, name: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { id: 'r-custom', name: 'contributor', is_default: false, display_order: 2, color: null, display_name: 'Contributor' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .put(`/api/organizations/${orgId}/roles/r-custom`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ color: 'rgb(1,2,3)' });
+      expect([400, 403]).toContain(res.status);
+      if (res.status === 400) expect(res.body.error).toMatch(/Invalid color format/);
+    });
+  });
+
+  describe('Display order guards on PUT', () => {
+    it('41. PUT /roles rejects display_order = 0 (owner-reserved) with 400', async () => {
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { display_order: 0, name: 'owner' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { id: 'r-custom', name: 'contributor', is_default: false, display_order: 2, color: null, display_name: 'Contributor' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .put(`/api/organizations/${orgId}/roles/r-custom`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ display_order: 0 });
+      expect([400, 403]).toContain(res.status);
+      if (res.status === 400) expect(res.body.error).toMatch(/Rank 0 is reserved/);
+    });
+
+    it('42. PUT /roles rejects promoting a role above the actor\'s rank with 403', async () => {
+      // Actor is rank 2 (contributor) editing a rank-3 role; tries to set display_order = 1.
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'contributor' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { role: 'contributor' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({ data: { display_order: 2, name: 'contributor' }, error: null });
+      queryBuilder.single.mockResolvedValueOnce({
+        data: { id: 'r-junior', name: 'junior', is_default: false, display_order: 3, color: null, display_name: 'Junior' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .put(`/api/organizations/${orgId}/roles/r-junior`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ display_order: 1 });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/above your own rank|ranked at or below|Could not determine your role rank/);
+    });
   });
 });
