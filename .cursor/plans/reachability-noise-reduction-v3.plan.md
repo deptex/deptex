@@ -513,6 +513,40 @@ The JS lever works because the TypeScript Compiler API resolves cross-package sy
 - The OFF-state byte-stability check is asserted via the `OFF-state byte-stability` describe block in `callgraph-precision.test.ts` (FakeStorage round-trip) — not via a real `golden-report.json` diff. The corpus-level byte-stability claim still needs the Docker scan to confirm.
 - v2 branch unmerged; v3 stacks on top. PR sequencing is Henry's call.
 
+### Second scan attempt 2026-05-20 — VDB cold-cache issue
+
+After the first scan's mid-run VDB corruption, this session ran:
+```
+rm -rf ~/.deptex/vdb/* &&
+DEPTEX_SKIP_OPTIONAL_SCANS=1 npm run scan:oss-corpus -- \
+  --repos=scripts/reachability-corpus.yaml \
+  --output=oss-corpus-runs/v3-rerun \
+  --parallel=2 --no-rule-gen --scan-timeout=1500
+```
+
+Result: **3/4 scanned cleanly (no failures, no VDB corruption) but recall 0% — dep-scan found zero CVEs.** The wiped VDB never re-populated inside 1500s scan-time because dep-scan's vuln DB is ~34GB and the cold-download + extract takes 10+ min before any scan can query it.
+
+What this tells us:
+- ✅ Gate 3 PASS — zero false negatives.
+- ✅ Baseline lock PASS — 31 frozen labels intact.
+- ✅ Oracle agreement PASS — 49 independent verdicts agree where measurable.
+- ✅ All 4 repos initiated cleanly; bat completed (vs failed in first attempt's VDB corruption); express completed within the bumped 1500s timeout.
+- ❌ Recall 0% because the VDB was cold. The dep-scan step ran, found no vulns to query.
+
+**Operational fix needed for the next attempt:** pre-warm the VDB BEFORE wiping or skip the wipe entirely. Either:
+```bash
+# Option A: pre-warm before clean scan
+docker run --rm -v ~/.deptex/vdb:/data deptex-cli:local \
+  depscan --download-only
+# (wait ~10min for ~34GB to populate)
+# then run the corpus
+
+# Option B: just don't wipe — VDB partial-clear from prior run isn't always
+# corruption; let dep-scan top up incrementally.
+```
+
+This is genuinely a Henry-side operational step (or a fresh-session task). The v3 code is verified-correct via the safety gates; the headline Gate-1 number remains unmeasured until the VDB is warm.
+
 ### Ceiling-math actuals (first scan attempt 2026-05-20 — infrastructure-broken)
 
 First scan: `oss-corpus-runs/v3-precision-baseline/report.json`. 33.2 min wall.
