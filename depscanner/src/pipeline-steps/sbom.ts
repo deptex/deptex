@@ -24,6 +24,8 @@ import {
   type ParsedSbomRelationship,
 } from '../sbom';
 import { recoverDirectSet, applyRecoveredDirectSet } from '../dependency-graph';
+import { resolveGoTransitives } from '../transitive-resolvers/go';
+import { resolvePypiTransitives } from '../transitive-resolvers/pypi';
 import { retry, updateStep, setError, classifyCdxgenError } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -159,6 +161,61 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     } catch (e: any) {
       ctx.graphTrusted = false;
       await log.warn('sbom', `dependency graph recovery failed (non-fatal): ${e?.message ?? e}`);
+    }
+  }
+
+  // v3 precision arc — recover transitives via a per-ecosystem resolver
+  // when cdxgen emitted a direct-deps-only SBOM. cdxgen --without-deep on
+  // gomod / pypi returns the manifest's top-level requires only; without
+  // transitives the reachability classifier can't flag `unreachable` at
+  // all (it keys on `!is_direct`). The resolver runs ONLY when the entire
+  // dep list lacks any !is_direct row, so deep SBOMs (cdxgen --deep on,
+  // future cdxgen versions, etc.) are not double-resolved.
+  const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'pypi']);
+  if (
+    RESOLVER_ECOSYSTEMS.has(jobEcosystem) &&
+    dependencies.length > 0 &&
+    dependencies.every((d) => d.is_direct === true)
+  ) {
+    const before = dependencies.length;
+    try {
+      const result =
+        jobEcosystem === 'gomod'
+          ? await resolveGoTransitives(workspaceRoot)
+          : await resolvePypiTransitives(workspaceRoot);
+      if (result === null) {
+        await log.info(
+          'sbom',
+          `transitive_resolver_skipped { ecosystem: ${jobEcosystem}, reason: no_manifest }`,
+        );
+      } else {
+        // Dedup by `name@version` against cdxgen-emitted rows — cdxgen
+        // wins on coords (it carries license + bom-ref metadata the
+        // resolver doesn't). Resolver fills only the gap.
+        const seen = new Set(dependencies.map((d) => `${d.name}@${d.version}`));
+        let added = 0;
+        for (const dep of result.deps) {
+          const key = `${dep.name}@${dep.version}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          dependencies.push(dep);
+          added++;
+        }
+        // Resolver relationships join onto resolver-emitted bomRefs only —
+        // appending unconditionally is safe because cdxgen relationships
+        // key on different bomRefs entirely.
+        for (const rel of result.relationships) relationships.push(rel);
+        await log.info(
+          'sbom',
+          `transitive_resolver_invoked { ecosystem: ${jobEcosystem}, source: ${result.source}, raw: ${result.rawModuleCount}, added: ${added}, before: ${before}, after: ${dependencies.length} }`,
+        );
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await log.warn(
+        'sbom',
+        `transitive_resolver_failed { ecosystem: ${jobEcosystem}, reason: ${msg} } — continuing with cdxgen-only SBOM`,
+      );
     }
   }
 
