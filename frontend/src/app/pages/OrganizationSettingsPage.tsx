@@ -4388,7 +4388,7 @@ export default function OrganizationSettingsPage() {
                     <h2 className="text-2xl font-bold text-foreground">Members</h2>
                     <Button
                       onClick={() => setMembersInviteModalOpen(true)}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                      variant="green"
                     >
                       <Plus className="h-4 w-4 mr-2" />
                       Invite
