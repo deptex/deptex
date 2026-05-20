@@ -137,7 +137,13 @@ export function ProjectTeamMultiSelect({
         ref={triggerRef}
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between transition-all min-h-[42px] ${variant === 'modal'
+        // -webkit-tap-highlight-color kills the white/light flash some
+        // browsers paint between mousedown and our focus styles landing.
+        // transition-colors (not transition-all) keeps box-shadow + ring
+        // changes from triggering a per-frame compositor pass that can show
+        // through as a flicker.
+        style={{ WebkitTapHighlightColor: 'transparent' }}
+        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between transition-colors min-h-[42px] active:bg-background-card ${variant === 'modal'
           ? 'bg-background-card hover:border-foreground-secondary/30'
           : 'bg-background-card hover:border-foreground-secondary/30'
           } ${isOpen ? 'ring-2 ring-ring border-input' : ''}`}

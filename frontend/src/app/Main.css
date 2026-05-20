@@ -326,6 +326,14 @@
     display: none; /* Chrome, Safari and Opera */
   }
   
+  html, body {
+    /* Tell the browser this is a dark UI. Without it, native controls
+       (button :active backgrounds, form-field accents, the brief
+       :focus-visible halo, scrollbars) paint in their LIGHT defaults
+       and show through our styled elements as a white flash on click. */
+    color-scheme: dark;
+  }
+
   body {
     background-color: #0D0F12;
     color: #F0F4F8;
