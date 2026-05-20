@@ -889,8 +889,8 @@ export default function MembersPage({
                 <tr>
                   <td colSpan={3} className="px-4 py-16">
                     <div className="flex flex-col items-center gap-3 text-center">
-                      <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center">
-                        <Users className="h-6 w-6 text-foreground-secondary" />
+                      <div className="h-12 w-12 rounded-full border border-border bg-background-card flex items-center justify-center">
+                        <Users className="h-5 w-5 text-foreground-secondary" />
                       </div>
                       <div className="space-y-1">
                         <p className="text-sm font-medium text-foreground">
