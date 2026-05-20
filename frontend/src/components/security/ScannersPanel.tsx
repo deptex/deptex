@@ -35,6 +35,17 @@ export default function ScannersPanel({
   const [error, setError] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [recommendations, setRecommendations] = useState<BaseImageRecommendation[]>([]);
+  // recsLoading initialises to `false` so projects with no recommendations
+  // (the common case — most projects have no Dockerfiles to recommend
+  // against) don't flash the section chrome + skeleton in for ~300ms before
+  // it collapses again. The Retry button is the only thing that flips it
+  // back to true; the initial mount's pending phase is invisible.
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [recsError, setRecsError] = useState<string | null>(null);
+  // Bumping this triggers the recommendations fetch effect to re-run, used by
+  // the error-state "Retry" button. Independent of the summary fetch's error
+  // handling — a recommendations failure must not look like a scanner outage.
+  const [recsReloadKey, setRecsReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,20 +72,32 @@ export default function ScannersPanel({
 
   useEffect(() => {
     let cancelled = false;
-    // Recommendations are a best-effort enhancement — a failure here must not
-    // surface as an error on the scanner panel.
+    // Only flip into the loading state on an explicit Retry (recsReloadKey
+    // bumped). The initial mount fetches silently — when results arrive,
+    // either the section appears with cards or stays absent on an empty
+    // result. No flash for the common "no recommendations" case.
+    if (recsReloadKey > 0) setRecsLoading(true);
+    setRecsError(null);
     api
       .getBaseImageRecommendations(organizationId, projectId)
       .then((r) => {
-        if (!cancelled) setRecommendations(r.recommendations ?? []);
+        if (cancelled) return;
+        setRecommendations(r.recommendations ?? []);
       })
-      .catch(() => {
-        if (!cancelled) setRecommendations([]);
+      .catch((e: any) => {
+        if (cancelled) return;
+        setRecommendations([]);
+        console.error('[ScannersPanel] base-image recommendations fetch failed', e);
+        setRecsError('Could not load base-image recommendations.');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setRecsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [organizationId, projectId]);
+  }, [organizationId, projectId, recsReloadKey]);
 
   return (
     <div className="space-y-6">
@@ -185,7 +208,7 @@ export default function ScannersPanel({
         </div>
       </div>
 
-      {recommendations.length > 0 && (
+      {(recsLoading || recsError || recommendations.length > 0) && (
         <div className="rounded-lg border border-border bg-background-card overflow-hidden">
           <div className="p-6">
             <h3 className="text-base font-semibold text-foreground mb-1">
@@ -196,20 +219,51 @@ export default function ScannersPanel({
               shell-compatibility verdict so you can tell a drop-in swap from one that
               needs verification.
             </p>
-            <div className="space-y-3">
-              {recommendations.map((rec) => (
-                <BaseImageRecommendationCard
-                  key={rec.id}
-                  organizationId={organizationId}
-                  projectId={projectId}
-                  recommendation={rec}
-                  canManage={canManage}
-                  onDismissed={(id) =>
-                    setRecommendations((prev) => prev.filter((r) => r.id !== id))
-                  }
-                />
-              ))}
-            </div>
+            {recsLoading ? (
+              <div
+                className="space-y-3"
+                aria-busy="true"
+                aria-label="Loading base-image recommendations"
+              >
+                {[0, 1].map((i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg border border-border bg-background-card-header p-4 space-y-3"
+                  >
+                    <div className="h-4 w-1/3 rounded-md bg-muted/50 animate-pulse" />
+                    <div className="h-3 w-2/3 rounded-md bg-muted/40 animate-pulse" />
+                    <div className="h-3 w-1/2 rounded-md bg-muted/40 animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            ) : recsError ? (
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm text-destructive">{recsError}</div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRecsReloadKey((k) => k + 1)}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recommendations.map((rec) => (
+                  <BaseImageRecommendationCard
+                    key={rec.id}
+                    organizationId={organizationId}
+                    projectId={projectId}
+                    recommendation={rec}
+                    canManage={canManage}
+                    onDismissed={(id) =>
+                      setRecommendations((prev) => prev.filter((r) => r.id !== id))
+                    }
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

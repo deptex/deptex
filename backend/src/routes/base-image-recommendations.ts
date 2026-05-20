@@ -12,15 +12,20 @@
  * Tenant isolation: the GET path is gated by checkProjectAccess (which itself
  * rejects an (orgA, projectB) param-tampering pair). The dismiss path loads
  * the row first, then walks an explicit four-step guard — assertProjectInOrg,
- * URL-projectId match, then the manage_integrations RBAC check — so a
- * recommendation id from another tenant can never be dismissed.
+ * URL-projectId match, then the checkProjectManagePermission RBAC check — so
+ * a recommendation id from another tenant can never be dismissed. The suggest
+ * path mirrors the same manage-permission gate (it is a mutation that writes
+ * an activity-log row).
  */
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
-import { checkProjectAccess, assertProjectInOrg } from '../lib/project-access';
-import { checkOrgManageIntegrations } from '../lib/rbac';
+import {
+  checkProjectAccess,
+  assertProjectInOrg,
+  checkProjectManagePermission,
+} from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { createActivity } from '../lib/activities';
 
@@ -125,8 +130,11 @@ router.post(
         return res.status(404).json({ error: 'Recommendation not found' });
       }
 
-      // (4) RBAC — dismissing a recommendation is a manage_integrations action.
-      if (!(await checkOrgManageIntegrations(userId, id))) {
+      // (4) RBAC — dismissing a recommendation requires project-manage
+      // permission (matches the sibling scanner-findings ignore/risk-accept
+      // routes; the previous manage_integrations check was the registry-
+      // secrets permission, which is unrelated to per-finding state).
+      if (!(await checkProjectManagePermission(userId, id, projectId))) {
         return res
           .status(403)
           .json({ error: 'No permission to dismiss base-image recommendations' });
@@ -177,6 +185,14 @@ router.post(
       const access = await checkProjectAccess(userId, id, projectId);
       if (!access.hasAccess) {
         return res.status(access.error!.status).json({ error: access.error!.message });
+      }
+      // base-image-suggestions writes an activity-log row — gate it with the
+      // same project-manage permission as dismiss so view-only members can't
+      // mutate the security tab's state.
+      if (!(await checkProjectManagePermission(userId, id, projectId))) {
+        return res
+          .status(403)
+          .json({ error: 'No permission to manage base-image recommendations' });
       }
 
       const sourceImage = String((req.body ?? {}).source_image ?? '').trim();
