@@ -45,12 +45,20 @@ import {
 } from './storage';
 import { generateRecommendation } from './base-image-advisor';
 import {
+  catalogHash,
+  loadCatalog,
+  CatalogValidationError,
+} from './base-image-catalog';
+import {
   AuthMintError,
   CredDecryptError,
   classifyContainerScanError,
 } from './scanner-errors';
 import { validateScanTimeHost } from './host-guard';
-import { decorateContainerFindingsWithReachability } from './container-reachability';
+import {
+  decorateContainerFindingsWithReachability,
+  REACHABILITY_PER_IMAGE_TIMEOUT_MS,
+} from './container-reachability';
 import type {
   ContainerFinding,
   CredentialPlaintext,
@@ -79,6 +87,26 @@ const CONTAINER_SCAN_TOTAL_BUDGET_MS = Number(
  *  tenants on the same Fly machine from a runaway loop. (Plan §M8 Step 6 /
  *  MTD-r2-6.) */
 const DECRYPT_BUDGET = Number(process.env.DEPTEX_DECRYPT_BUDGET ?? 200);
+
+/**
+ * Wall-clock budget to pass to `decorateContainerFindingsWithReachability` for
+ * the image currently being scanned, given how much of the per-step container
+ * budget has already elapsed.
+ *
+ * - Clamps to `REACHABILITY_PER_IMAGE_TIMEOUT_MS` so a fresh scan never gets a
+ *   larger budget than the per-image default.
+ * - Floors at 1 ms (never returns ≤0) so the decorator's "remaining <= 0 →
+ *   fail-closed to module" path triggers immediately on subsequent steps
+ *   rather than hanging on a zero-or-negative timeout.
+ *
+ * Exported via `_internal` for unit tests.
+ */
+export function reachabilityBudgetMs(elapsedMs: number): number {
+  return Math.min(
+    REACHABILITY_PER_IMAGE_TIMEOUT_MS,
+    Math.max(1, CONTAINER_SCAN_TOTAL_BUDGET_MS - elapsedMs)
+  );
+}
 const VERBOSE_TRIVY = process.env.DEPTEX_TRIVY_VERBOSE_LOG === '1';
 const VERBOSE_CHECKOV = process.env.DEPTEX_CHECKOV_VERBOSE_LOG === '1';
 
@@ -945,11 +973,16 @@ async function scanContainerImages(
               imageRef: image.imageRef,
               scratchDir: reachScratch,
               dockerConfigDir: envelope.dockerConfigDir,
+              // Clamp the per-image budget to the remaining per-step container
+              // budget — prevents a single late-admitted image from overshooting
+              // CONTAINER_SCAN_TOTAL_BUDGET_MS by a full 30s.
+              budgetMs: reachabilityBudgetMs(Date.now() - stepStart),
               logger: ctx.logger,
             });
             await ctx.logger.info(
               'container_scan.reachability',
-              `${image.imageRef}: ${reach.module} loaded, ${reach.unreachable} unreachable` +
+              `${image.imageRef}: total=${reach.total} classified=${reach.classified} ` +
+                `module=${reach.module} unreachable=${reach.unreachable} fallback=${reach.fallback}` +
                 (reach.fallbackReason ? ` (fallback: ${reach.fallbackReason})` : '')
             );
           } catch (e: any) {
@@ -996,37 +1029,79 @@ async function scanContainerImages(
  * repo. Counts the live container findings per image to drive the CVE delta.
  * Best-effort: a failure surfaces as a warning, never blocks the scan.
  */
-async function runBaseImageAdvisor(
+export async function runBaseImageAdvisor(
   ctx: ScannerStepContext,
   dockerfileFindings: ContainerFinding[]
 ): Promise<{ written: number; warnings: string[] }> {
   const warnings: string[] = [];
   const rows: BaseImageRecommendationInsert[] = [];
+  const dockerfilePaths = findDockerfiles(ctx.repoPath);
 
-  for (const dfPath of findDockerfiles(ctx.repoPath)) {
-    const stage = parseDockerfileFinalStage(dfPath);
-    if (!stage) continue;
-    let text: string | null = null;
-    try {
-      text = fs.readFileSync(dfPath, 'utf8');
-    } catch {
-      text = null;
-    }
-    const relPath = path.relative(ctx.repoPath, dfPath).split(path.sep).join('/');
-    const imageFindings = dockerfileFindings.filter(
-      (f) => f.image_reference === stage.imageRef
+  // ---- Catalog pre-flight (once, before the per-Dockerfile loop) -----------
+  // generateRecommendation() calls loadCatalog() synchronously; a bad/missing
+  // catalog YAML throws CatalogValidationError. That's a whole-run failure
+  // (the catalog is a single per-process resource), not a per-Dockerfile one
+  // — wrapping each iteration would emit N identical warnings. Load it once
+  // here so a single warning is surfaced and we can short-circuit the loop.
+  try {
+    loadCatalog();
+  } catch (e: any) {
+    const msg = e instanceof CatalogValidationError ? e.message : (e?.message ?? 'unknown');
+    warnings.push(`base_image_advisor_catalog_unavailable:${msg}`);
+    await ctx.logger.warn(
+      'base_image_advisor',
+      `catalog unavailable — skipping advisor: ${msg}`
     );
-    const row = generateRecommendation({
-      project_id: ctx.projectId,
-      organization_id: ctx.organizationId,
-      extraction_run_id: ctx.runId,
-      dockerfile_path: relPath.slice(0, 1024),
-      currentImage: stage.imageRef,
-      currentImageDigest: imageFindings[0]?.image_digest ?? null,
-      currentImageFindingCount: imageFindings.length,
-      dockerfileText: text,
-    });
-    rows.push({ ...row });
+    return { written: 0, warnings };
+  }
+
+  // Catalog version hash + Dockerfile fan-out for observability — emitted
+  // once per scan, before any per-Dockerfile work, so catalog drift between
+  // worker deploys is greppable across runs.
+  try {
+    await ctx.logger.info(
+      'base_image_advisor',
+      `catalog_hash=${catalogHash()} dockerfile_count=${dockerfilePaths.length}`
+    );
+  } catch {
+    /* logging is best-effort */
+  }
+
+  for (const dfPath of dockerfilePaths) {
+    const relPath = path.relative(ctx.repoPath, dfPath).split(path.sep).join('/');
+    try {
+      const stage = parseDockerfileFinalStage(dfPath);
+      if (!stage) continue;
+      let text: string | null = null;
+      try {
+        text = fs.readFileSync(dfPath, 'utf8');
+      } catch {
+        text = null;
+      }
+      const imageFindings = dockerfileFindings.filter(
+        (f) => f.image_reference === stage.imageRef
+      );
+      const row = generateRecommendation({
+        project_id: ctx.projectId,
+        organization_id: ctx.organizationId,
+        extraction_run_id: ctx.runId,
+        dockerfile_path: relPath.slice(0, 1024),
+        currentImage: stage.imageRef,
+        currentImageDigest: imageFindings[0]?.image_digest ?? null,
+        currentImageFindingCount: imageFindings.length,
+        dockerfileText: text,
+      });
+      rows.push({ ...row });
+    } catch (e: any) {
+      // Per-Dockerfile failure (parse error, read error, advisor row-build
+      // error) — emit a per-file warning and continue. Other Dockerfiles
+      // still produce recommendations.
+      warnings.push(`base_image_advisor_failed:${relPath}:${e?.message ?? 'unknown'}`);
+      await ctx.logger.warn(
+        'base_image_advisor',
+        `dockerfile ${relPath} skipped: ${e?.message ?? e}`
+      );
+    }
   }
 
   if (rows.length === 0) return { written: 0, warnings };
@@ -1034,7 +1109,7 @@ async function runBaseImageAdvisor(
     const result = await upsertBaseImageRecommendations(ctx.supabase, rows);
     return { written: result.inserted, warnings };
   } catch (e: any) {
-    warnings.push(`base_image_advisor_failed:${e?.message ?? 'unknown'}`);
+    warnings.push(`base_image_advisor_upsert_failed:${e?.message ?? 'unknown'}`);
     return { written: 0, warnings };
   }
 }
@@ -1282,4 +1357,6 @@ export function ensureWorkspaceTmp(): string {
 export const _internal = {
   isPublicImage,
   scanOneImage,
+  runBaseImageAdvisor,
+  reachabilityBudgetMs,
 };
