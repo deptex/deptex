@@ -522,13 +522,6 @@ export async function runTrivyImage(
       'image',
       '--format', 'json',
       '--scanners=vuln',
-      // Emit every installed package under Results[].Packages[], not just the
-      // ones with vulnerabilities. Phase 2's container reachability classifier
-      // intersects this full package list against the image's ELF dynamic-linker
-      // graph to decide which OS-package CVEs are actually loaded at runtime.
-      // Without this flag Results[].Packages[] is empty and the classifier has
-      // zero loaded-vs-installed signal.
-      '--list-all-pkgs',
       // Pin platform so the manifest-list resolution is deterministic between
       // the crane digest probe and the Trivy pull. Without this, the cache key
       // (Trivy's RepoDigest) can diverge from the probe digest on multi-arch
