@@ -267,7 +267,9 @@ describe('Organization Routes', () => {
       expect(res.body.error).toMatch(/email is required/i);
     });
 
-    it('returns 403 when user is not admin or owner', async () => {
+    it('returns 403 when caller has no add_members permission', async () => {
+      // beforeEach seeds organization_roles with { manage_members: true } —
+      // notably NOT add_members, so a non-owner caller is blocked.
       setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
 
       const res = await request(app)
@@ -277,7 +279,7 @@ describe('Organization Routes', () => {
         .send({ email: 'new@test.com', role: 'member' });
 
       expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/only admins and owners can invite/i);
+      expect(res.body.error).toMatch(/permission/i);
     });
 
     it('returns 400 when email already has pending invitation', async () => {
@@ -320,7 +322,7 @@ describe('Organization Routes', () => {
   });
 
   describe('DELETE /api/organizations/:id/invitations/:invitationId', () => {
-    it('returns 403 when user is not admin or owner', async () => {
+    it('returns 403 when caller has no add_members permission', async () => {
       setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
 
       const res = await request(app)
@@ -328,11 +330,11 @@ describe('Organization Routes', () => {
         .set('Authorization', `Bearer ${mockToken}`);
 
       expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/only admins and owners can cancel/i);
+      expect(res.body.error).toMatch(/permission/i);
     });
 
-    it('returns 200 when admin cancels invitation', async () => {
-      setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
+    it('returns 200 when owner cancels invitation', async () => {
+      // beforeEach sets caller to owner; owner short-circuits the permission check.
       setTableResponse('organization_invitations', 'single', { data: { email: 'x@test.com', role: 'member', team_id: null }, error: null });
 
       const res = await request(app)
@@ -345,7 +347,7 @@ describe('Organization Routes', () => {
   });
 
   describe('POST /api/organizations/:id/invitations/:invitationId/resend', () => {
-    it('returns 403 when user is not admin or owner', async () => {
+    it('returns 403 when caller has no add_members permission', async () => {
       setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
 
       const res = await request(app)
@@ -353,7 +355,7 @@ describe('Organization Routes', () => {
         .set('Authorization', `Bearer ${mockToken}`);
 
       expect([403, 404]).toContain(res.status);
-      if (res.body.error) expect(res.body.error).toMatch(/only admins and owners can resend|access|denied/i);
+      if (res.body.error) expect(res.body.error).toMatch(/permission|access|denied/i);
     });
 
     it('returns 404 when invitation not found', async () => {
@@ -367,12 +369,12 @@ describe('Organization Routes', () => {
       if (res.body.error) expect(res.body.error).toMatch(/not found|already used|access|denied/i);
     });
 
-    it('returns 200 when admin resends invitation', async () => {
+    it('returns 200 when owner resends invitation', async () => {
       (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({
         data: { user: { email: 'admin@test.com' } },
         error: null,
       });
-      setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
+      // beforeEach sets caller to owner (short-circuits permission check).
       setTableResponse('organization_invitations', 'single', {
         data: { id: 'inv-1', email: 'x@test.com', role: 'member', organization_id: 'org-1', status: 'pending' },
         error: null,
@@ -385,6 +387,64 @@ describe('Organization Routes', () => {
 
       expect([200, 201, 403, 404]).toContain(res.status);
       if (res.status === 200 || res.status === 201) expect(res.body.message).toMatch(/resent/i);
+    });
+  });
+
+  describe('PUT /api/organizations/:id/members/:userId/role', () => {
+    it('returns 403 when caller has no edit_roles permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { id: 'r1' }, error: null });
+
+      const res = await request(app)
+        .put('/api/organizations/org-1/members/other-user/role')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ role: 'member' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission/i);
+    });
+
+    it('returns 400 for an unknown role name', async () => {
+      // The role-validation lookup runs BEFORE the permission gate; an unknown
+      // role short-circuits with a 400. Mock the role lookup to return null.
+      setTableResponse('organization_roles', 'single', { data: null, error: null });
+
+      const res = await request(app)
+        .put('/api/organizations/org-1/members/other-user/role')
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ role: 'admin' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/invalid role/i);
+    });
+  });
+
+  describe('DELETE /api/organizations/:id/members/:userId', () => {
+    it('returns 403 when caller has no kick_members permission', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+
+      const res = await request(app)
+        .delete('/api/organizations/org-1/members/other-user')
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission/i);
+    });
+
+    it('allows self-removal regardless of permission', async () => {
+      // Self-leave bypasses the permission check (the membership lookup still
+      // runs, and the last-owner guard still applies).
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      // Owners list — not the only owner so self-leave is allowed.
+      setTableResponse('organization_members', 'select', { data: [{ user_id: 'someone-else' }, { user_id: mockUser.id }], error: null });
+
+      const res = await request(app)
+        .delete(`/api/organizations/org-1/members/${mockUser.id}`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      // The full delete chain is mocked permissively; we just confirm the
+      // permission gate didn't fire on self-removal.
+      expect(res.status).not.toBe(403);
     });
   });
 });
