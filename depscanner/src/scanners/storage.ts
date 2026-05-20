@@ -5,6 +5,31 @@ import type { ContainerFinding, IaCFinding } from './types';
 
 const BATCH_SIZE = 100;
 
+/**
+ * Multiplier applied to a container finding's severity-based depscore when the
+ * reachability classifier proved the OS package is NOT loaded by the image's
+ * entrypoint. `module` and unclassified (`null`) findings keep the full
+ * severity score — fail-closed by construction.
+ *
+ * Deliberately diverges from `depscanner/src/depscore.ts`'s
+ * `REACHABILITY_WEIGHT_UNREACHABLE = 0.0` for code-dependency findings:
+ *
+ *   - Code-dependency reachability comes from a call-graph traversal of the
+ *     project's own source. An `unreachable` verdict there is strong evidence
+ *     the package can't be invoked, so the depscore zeroes out.
+ *   - Container OS-package reachability is a static inference from DT_NEEDED
+ *     chains + dlopen literals against the image's dpkg/apk DB. The binutils
+ *     and `exec "$@"`-wrapper fallbacks both fail closed to `module`, so an
+ *     `unreachable` verdict here means "we positively determined nothing
+ *     reaches it" — a weaker signal than the code-dep call graph. We downweight
+ *     it hard but never zero it.
+ *
+ * Locked at 0.4: a HIGH `unreachable` finding lands at 28 (just below LOW=30),
+ * CRITICAL at 36 (above LOW), MEDIUM at 20. The named constant exists for
+ * future tuning, not a deferred decision.
+ */
+export const CONTAINER_UNREACHABLE_DEPSCORE_MULTIPLIER = 0.4;
+
 interface IaCRow extends Record<string, unknown> {
   project_id: string;
   extraction_run_id: string;
@@ -70,6 +95,22 @@ function severityToDepscore(severity: string | null): number | null {
     case 'INFO': return 10;
     default: return null;
   }
+}
+
+/**
+ * Compute the depscore for a container finding, folding in the static OS-
+ * package reachability verdict so an `unreachable` finding ranks below a
+ * `module`/unclassified finding of equal severity. Used only by
+ * upsertContainerFindings — IaC findings have no reachability signal and
+ * continue to use `severityToDepscore` directly.
+ */
+export function containerDepscore(f: ContainerFinding): number | null {
+  const base = severityToDepscore(f.severity);
+  if (base === null) return null;
+  if (f.reachability_level === 'unreachable') {
+    return Math.round(base * CONTAINER_UNREACHABLE_DEPSCORE_MULTIPLIER);
+  }
+  return base;
 }
 
 /**
@@ -162,7 +203,7 @@ export async function upsertContainerFindings(
     is_kev: f.is_kev,
     fix_versions: f.fix_versions ?? [],
     layer_digest: f.layer_digest,
-    depscore: severityToDepscore(f.severity),
+    depscore: containerDepscore(f),
     description: f.description,
     rule_doc_url: f.rule_doc_url,
     container_fingerprint: f.container_fingerprint,
