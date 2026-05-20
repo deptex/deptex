@@ -515,7 +515,7 @@ export default function AccountSettingsPage() {
                           onChange={(e) => setDeleteConfirmInput(e.target.value)}
                           placeholder={user?.email ?? ''}
                           autoFocus
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                         />
                         <div className="flex gap-2">
                           <Button

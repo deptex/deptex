@@ -2795,7 +2795,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowMemberDropdown(!showMemberDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2 flex-1 min-w-0 text-left">
                                       {selectedTransferMemberId && !loadingMembers ? (
@@ -2845,7 +2845,7 @@ export default function OrganizationSettingsPage() {
                                               value={memberSearchTerm}
                                               onChange={(e) => setMemberSearchTerm(e.target.value)}
                                               placeholder="Search members..."
-                                              className="w-full pl-9 pr-3 py-2 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                                              className="w-full pl-9 pr-3 py-2 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                                               autoFocus
                                             />
                                           </div>
@@ -2907,7 +2907,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2">
                                       {(() => {
@@ -3045,7 +3045,7 @@ export default function OrganizationSettingsPage() {
                               onChange={(e) => setDeleteConfirmText(e.target.value)}
                               placeholder={organization.name}
                               autoFocus
-                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                             />
                             <div className="flex gap-2">
                               <Button
