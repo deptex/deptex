@@ -160,8 +160,13 @@ export function ProjectTeamMultiSelect({
       </button>
 
       {isOpen && (
-        variant === 'modal' && portalPosition
-          ? createPortal(dropdownContent, document.body)
+        // Modal variant: render NOTHING until useLayoutEffect has measured the
+        // trigger and set portalPosition. Otherwise the panel mounts inline
+        // (the absolute-mt-1.5 fallback branch), then unmounts and remounts
+        // into the portal once the position lands — firing animate-in twice
+        // and producing a visible flash on first open.
+        variant === 'modal'
+          ? (portalPosition ? createPortal(dropdownContent, document.body) : null)
           : dropdownContent
       )}
     </div>
