@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -3112,10 +3112,9 @@ export default function OrganizationSettingsPage() {
                     </div>
                     {effectivePermissions?.edit_roles && (
                       <Button
+                        variant="green"
                         onClick={() => setShowAddRoleSidepanel(true)}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                       >
-                        <Plus className="h-4 w-4 mr-2" />
                         Add Role
                       </Button>
                     )}
@@ -3184,7 +3183,7 @@ export default function OrganizationSettingsPage() {
                           return (
                             <tr
                               key={role.id || role.name}
-                              className={`transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'}`}
+                              className={`transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : ''}`}
                               draggable={canDrag}
                               onDragStart={(e) => {
                                 if (!canDrag) return;
@@ -3239,7 +3238,7 @@ export default function OrganizationSettingsPage() {
                                             setEditingRoleName('');
                                           }
                                         }}
-                                        className="bg-transparent border-b border-primary outline-none text-sm font-medium text-foreground focus:outline-none focus:border-primary p-0"
+                                        className="bg-transparent border-b border-input outline-none text-sm font-medium text-foreground focus:outline-none focus:border-foreground-secondary p-0 transition-colors"
                                         autoFocus
                                       />
                                     ) : (
@@ -3248,7 +3247,7 @@ export default function OrganizationSettingsPage() {
                                       </span>
                                     )}
                                     {isUserRole && (
-                                      <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-green-600/15 text-green-500 rounded-full whitespace-nowrap">
+                                      <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-muted text-foreground-secondary rounded-full whitespace-nowrap">
                                         Your Role
                                       </span>
                                     )}
@@ -3325,11 +3324,14 @@ export default function OrganizationSettingsPage() {
                       </table>
                     </div>
                   ) : (
-                    <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-                      <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                        <Users className="h-6 w-6 text-foreground-secondary" />
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-8 flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Shield className="h-5 w-5 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-lg font-semibold text-foreground">No roles found</h3>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">No roles found</h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        Your organization doesn't have any roles configured yet. Add a role to start customizing what members can see and do.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -4509,7 +4511,7 @@ export default function OrganizationSettingsPage() {
                             value={newRoleNameInput}
                             onChange={(e) => setNewRoleNameInput(e.target.value)}
                             maxLength={24}
-                            className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                            className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                             autoFocus
                             disabled={isCreatingRole}
                           />
@@ -4658,20 +4660,21 @@ export default function OrganizationSettingsPage() {
                     </div>
 
                     {/* Footer */}
-                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                    <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                       <Button
                         variant="outline"
                         onClick={closeAddRolePanel}
                         disabled={isCreatingRole}
+                        className="!h-8 !px-3 !rounded-lg"
                       >
                         Cancel
                       </Button>
                       <Button
+                        variant="green"
                         onClick={async () => {
                           await handleCreateRole(newRolePermissions);
                         }}
                         disabled={isCreatingRole || !newRoleNameInput.trim()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
                         {isCreatingRole ? (
                           <>
@@ -4679,10 +4682,7 @@ export default function OrganizationSettingsPage() {
                             Create Role
                           </>
                         ) : (
-                          <>
-                            <FileCheck className="h-4 w-4 mr-2" />
-                            Create Role
-                          </>
+                          'Create Role'
                         )}
                       </Button>
                     </div>
@@ -4731,8 +4731,9 @@ export default function OrganizationSettingsPage() {
                         <div className="space-y-6">
                           {/* Read-only notice when user cannot edit name/color */}
                           {!canEditNameAndColor && (
-                            <div className="px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                              <p className="text-sm text-amber-400">
+                            <div className="px-4 py-3 bg-background-subtle border border-border rounded-lg flex items-center gap-2.5">
+                              <Lock className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
+                              <p className="text-sm text-foreground-secondary">
                                 {selectedRoleForSettings.name === 'owner'
                                   ? 'The owner role cannot be modified.'
                                   : isViewingOwnRole
@@ -4755,7 +4756,7 @@ export default function OrganizationSettingsPage() {
                               placeholder="Enter role name"
                               maxLength={24}
                               disabled={!canEditNameAndColor}
-                              className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
+                              className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
                             />
                           </div>
 
@@ -4905,13 +4906,14 @@ export default function OrganizationSettingsPage() {
                       </div>
 
                       {/* Footer */}
-                      <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                      <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                         {canEditNameAndColor || canEditThisRole ? (
                           <>
                             <Button
                               variant="outline"
                               onClick={closeRoleSettingsPanel}
                               disabled={isSavingRole}
+                              className="!h-8 !px-3 !rounded-lg"
                             >
                               Cancel
                             </Button>
@@ -4949,7 +4951,7 @@ export default function OrganizationSettingsPage() {
                                 }
                               }}
                               disabled={isSavingRole || !editingRoleName.trim()}
-                              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                              variant="green"
                             >
                               {isSavingRole ? (
                                 <>
@@ -4957,10 +4959,7 @@ export default function OrganizationSettingsPage() {
                                   Save Changes
                                 </>
                               ) : (
-                                <>
-                                  <FileCheck className="h-4 w-4 mr-2" />
-                                  Save Changes
-                                </>
+                                'Save Changes'
                               )}
                             </Button>
                           </>
@@ -4968,6 +4967,7 @@ export default function OrganizationSettingsPage() {
                           <Button
                             variant="outline"
                             onClick={closeRoleSettingsPanel}
+                            className="!h-8 !px-3 !rounded-lg"
                           >
                             Close
                           </Button>
