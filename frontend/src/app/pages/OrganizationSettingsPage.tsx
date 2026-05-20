@@ -2705,7 +2705,7 @@ export default function OrganizationSettingsPage() {
                                 onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
                                 placeholder="Enter organization name"
                                 disabled={!isOrgOwner}
-                                className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
                               />
                             </div>
                           ) : (

@@ -359,7 +359,7 @@ export default function AccountSettingsPage() {
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
                         maxLength={32}
-                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-ring transition-colors"
+                        className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                       />
                     </div>
                   </div>
