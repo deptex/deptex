@@ -23,7 +23,7 @@ const SUGGEST_URL = `/api/organizations/${orgId}/projects/${projectId}/base-imag
 
 // ---- mock-state helpers ----------------------------------------------------
 
-/** projectBelongsToOrg bind used by checkProjectAccess. */
+/** projectBelongsToOrg bind used by checkProjectAccess + checkProjectManagePermission. */
 function bindProjectToOrg(orgForProject = orgId) {
   setTableResponse('projects', 'maybeSingle', {
     data: { organization_id: orgForProject },
@@ -53,6 +53,8 @@ function denyOrgMembership() {
 
 function grantTeamViewer() {
   // Org member without org-wide perms, reaches the project via a team.
+  // checkProjectAccess succeeds because the project_teams join matches; the
+  // manage-permission gate still fails because the team has no is_owner flag.
   setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
   setTableResponse('organization_roles', 'single', {
     data: { permissions: { manage_teams_and_projects: false }, display_order: 0 },
@@ -82,7 +84,7 @@ beforeEach(() => {
     error: null,
   });
   bindProjectToOrg(orgId);
-  setOrgRole({ manage_teams_and_projects: true, manage_integrations: true }, 'owner');
+  setOrgRole({ manage_teams_and_projects: true }, 'owner');
   setProjectSingle({ id: projectId, organization_id: orgId, active_extraction_run_id: 'run-1' });
   setTableResponse('project_base_image_recommendations', 'then', { data: [], error: null });
   setTableResponse('activities', 'then', { data: null, error: null });
@@ -187,18 +189,19 @@ describe('POST dismiss', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 403 when the caller lacks manage_integrations', async () => {
+  it('returns 403 when a member lacks manage_teams_and_projects', async () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: orgId });
-    setOrgRole({ manage_integrations: false }, 'member');
+    setOrgRole({ manage_teams_and_projects: false }, 'member');
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
     expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/permission/i);
   });
 
-  it('allows a non-owner role that does carry manage_integrations', async () => {
+  it('allows a non-owner role that does carry manage_teams_and_projects', async () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: orgId });
-    setOrgRole({ manage_integrations: true }, 'member');
+    setOrgRole({ manage_teams_and_projects: true }, 'member');
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
     expect(res.status).toBe(200);
   });
@@ -227,6 +230,25 @@ describe('POST base-image-suggestions', () => {
       .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+  });
+
+  it('returns 403 when a member lacks manage_teams_and_projects', async () => {
+    setOrgRole({ manage_teams_and_projects: false }, 'member');
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/permission/i);
+  });
+
+  it('allows a non-owner role that does carry manage_teams_and_projects', async () => {
+    setOrgRole({ manage_teams_and_projects: true }, 'member');
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
+    expect(res.status).toBe(200);
   });
 
   it('rejects a missing source_image', async () => {
@@ -261,7 +283,7 @@ describe('POST base-image-suggestions', () => {
 });
 
 // ============================================================
-// Mandatory cross-tenant isolation matrix (5 patterns x 2 routes)
+// Mandatory cross-tenant isolation matrix (5 patterns x 3 routes)
 // ============================================================
 
 describe('cross-tenant isolation', () => {
@@ -275,9 +297,18 @@ describe('cross-tenant isolation', () => {
   it('dismiss: rejects a caller who is not in the org (pattern 1)', async () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: orgId });
-    denyOrgMembership(); // checkOrgManageIntegrations fails -> 403
+    denyOrgMembership(); // checkProjectManagePermission fails -> 403
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
     expect(res.status).toBe(403);
+  });
+
+  it('suggest: rejects a caller who is not in the org (pattern 1)', async () => {
+    denyOrgMembership();
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
+    expect(res.status).toBe(404);
   });
 
   // Pattern 2 — URL orgId is the caller's, but the projectId lives in another org.
@@ -291,6 +322,16 @@ describe('cross-tenant isolation', () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: 'org-B' }); // assertProjectInOrg mismatch
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(404);
+  });
+
+  it('suggest: rejects when the URL project belongs to a different org (pattern 2)', async () => {
+    // projectBelongsToOrg fails first inside checkProjectAccess.
+    bindProjectToOrg('org-B');
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(404);
   });
 
@@ -310,11 +351,20 @@ describe('cross-tenant isolation', () => {
   });
 
   // Pattern 4 — viewer-level access cannot perform the privileged action.
-  it('dismiss: a viewer without manage_integrations is rejected (pattern 4)', async () => {
+  it('dismiss: a viewer without manage_teams_and_projects is rejected (pattern 4)', async () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: orgId });
-    setOrgRole({ manage_integrations: false }, 'member');
+    setOrgRole({ manage_teams_and_projects: false }, 'member');
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('suggest: a viewer without manage_teams_and_projects is rejected (pattern 4)', async () => {
+    setOrgRole({ manage_teams_and_projects: false }, 'member');
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(403);
   });
 
@@ -325,11 +375,20 @@ describe('cross-tenant isolation', () => {
   });
 
   // Pattern 5 — correctly-permissioned caller succeeds.
-  it('dismiss: a caller with manage_integrations succeeds (pattern 5)', async () => {
+  it('dismiss: a caller with manage_teams_and_projects succeeds (pattern 5)', async () => {
     loadRecommendation(validRecRow);
     setProjectSingle({ id: projectId, organization_id: orgId });
-    setOrgRole({ manage_integrations: true }, 'member');
+    setOrgRole({ manage_teams_and_projects: true }, 'member');
     const res = await request(app).post(DISMISS_URL).set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(200);
+  });
+
+  it('suggest: a caller with manage_teams_and_projects succeeds (pattern 5)', async () => {
+    setOrgRole({ manage_teams_and_projects: true }, 'member');
+    const res = await request(app)
+      .post(SUGGEST_URL)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source_image: 'acme/internal:1.0' });
     expect(res.status).toBe(200);
   });
 
