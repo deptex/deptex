@@ -1105,7 +1105,7 @@ export default function MembersPage({
                 placeholder=""
                 value={inviteForms[0]?.email || ''}
                 onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
+                className="w-full px-3 py-2 bg-background-card-header border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && inviteForms[0]?.email) {
                     handleSendInvites();

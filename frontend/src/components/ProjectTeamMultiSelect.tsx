@@ -144,7 +144,7 @@ export function ProjectTeamMultiSelect({
         // through as a flicker.
         style={{ WebkitTapHighlightColor: 'transparent' }}
         className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between transition-colors min-h-[42px] ${variant === 'modal'
-          ? 'bg-background hover:border-foreground-secondary/30 active:bg-background'
+          ? 'bg-background-card-header hover:border-foreground-secondary/30 active:bg-background-card-header'
           : 'bg-background-card hover:border-foreground-secondary/30 active:bg-background-card'
           } ${isOpen ? 'ring-2 ring-ring border-input' : ''}`}
       >
