@@ -472,3 +472,48 @@ Two-tier per Patch 6 (engineering completion vs headline lift are decoupled).
 This plan integrates 10 patches from the 2026-05-20 plan-review (lean mode, 6 personas, 47 findings, verdict REVISE). Patches applied: right-size T3.1/T3.2 + commit OFF-state test + drop new env flag + add ceiling-math budget + fix shallow-SBOM trigger + restructure Success Criteria + use TaintEngineOutput + pypi resolver tooling + cut T1.4 cargo repo + add Java fuzzy-match + verdict provenance.
 
 Optional second `/review-plan` pass in lean mode would sanity-check the revisions. Proceed to `/implement` when ready.
+
+---
+
+## STATUS — 2026-05-20 (mid-arc, code complete for shipped scope)
+
+### Shipped (5 commits on top of v2 tip `2b02e19`)
+
+| SHA | Scope | Tests |
+|---|---|---|
+| `c10489f` | phase34 migration + JS callgraph widening (`calleeExternalSourcePath` + `usedDependencies`) + `extractNpmUsedDependencies` extractor | 13 |
+| `b9a65c4` | Precision arc end-to-end: `TaintEngineOutput.usedDependencies` plumbed through pipeline → `reachability.ts` heuristic AND-clause → `verdict: 'callgraph_reached_transitive'` + `callgraph_evidence: { dep_name }` | 10 |
+| `0ac990b` | Custom transitive resolvers: `go list -m -json all` + pip `--dry-run --report` with `pipdeptree` fallback; `sbom.ts` wire-in with structural shallow-SBOM trigger + dedup + structured warnings | 10 |
+| `e1f5684` | Synthetic Rust `[build-dependencies]` fixture pinning the existing classifier wiring | 3 |
+| `08dca3a` | `depscanner/docs/reachability-benchmark.md` — publishable methodology doc (corpus, gates, baseline lock + oracle, precision arc, per-language status, go/pypi resolvers, vendor comparison) | — |
+
+36 new jest cases pass; the wider depscanner+backend jest run stays clean (modulo the pre-existing `fix-worker/llm.test.ts` `@ai-sdk/openai` install gap, unchanged from v2 baseline). `tsc --noEmit` clean.
+
+### Deviation from plan: Python/Go/Rust per-language extensions deferred
+
+The plan called for T3.2-Python / -Go / -Rust as separate milestones each. After implementing T3.2-JS and reviewing the per-language callgraph code (each language deliberately skips dep dirs — `site-packages` / `pkg/mod` / `registry/src` / `target` / `.m2`), the honest assessment is that **import-based detection in those languages would re-derive `filesImporting > 0`**, a signal the existing v2 heuristic already uses. The frameworks-call-into-transitives pattern (jackson-vs-idna) is acute in maven Java and present in npm; it's much less common in Python/Go/Rust. Shipping per-language extensions for those three would have delivered marginal precision lift at ~1.5-2h cost each.
+
+The JS lever works because the TypeScript Compiler API resolves cross-package symbols even when the workspace source doesn't `import` them. That's language-specific to TS. Python/Go/Rust callgraphs would need to walk dep code (which they explicitly don't) to recover the equivalent signal — non-trivial work for thin payoff. Deferred to v3.1.
+
+### Deferred from this arc
+
+- **T3.2-Java** (1-hour class-FQN → SBOM-purl resolver spike + 4-6h impl). This IS the load-bearing precision arc for maven (the brief and review both flag it). Deferring to a focused next session because it's a real spike, not mechanical fan-out.
+- **T1.1 / T1.2 / T1.3 / T2.5** corpus repo scouting. Henry-blocked decisions — the YAML edits + label-writing are mechanical once a repo is chosen. Candidates to evaluate next session:
+  - **npm 5th app**: `prettier/prettier` at v2.x (CLI with rich devDep tree), `mocha/mocha` at v9.x, `npm/cli` at a 2-year-old tag.
+  - **maven swap**: older `spring-projects/spring-boot-samples` tagged release, an OWASP-Benchmark fork, or a Vul4J-derived sample.
+  - **go**: `traefik/traefik` v2.5.x, `kubernetes/kops` at an older release, `go-gitea/gitea` at an older release.
+  - **pypi**: Django 3.2.x sample app, older `salt`, `awscli` v1.x.
+- **T1.5 / T2.6 / T3.7** Docker corpus verification runs. Docker rebuild dispatched in this session; needs a 30-45 min scan after corpus repos land.
+- **T4.1** golden report refresh (runs after T3.7).
+- **T4.3** full test gate (covered by per-commit gates already; final run runs after Docker scan).
+
+### Honest caveats from the shipped scope
+
+- `callgraph_evidence` ships as `{ dep_name }` only — the plan's richer `{ callee_file, callee_method }` snippet would need a type-shape change to `usedDependencies` (Set<string> → Map<string, EvidenceSample>). Deferred; not load-bearing for the metric.
+- The OFF-state byte-stability check is asserted via the `OFF-state byte-stability` describe block in `callgraph-precision.test.ts` (FakeStorage round-trip) — not via a real `golden-report.json` diff. The corpus-level byte-stability claim still needs the Docker scan to confirm.
+- v2 branch unmerged; v3 stacks on top. PR sequencing is Henry's call.
+
+### Ceiling-math actuals (live update after Docker scan)
+
+The Pre-Implement Ceiling-Math Budget above projected 82-95% with a midpoint ~88%. Actual Gate 1 from a fresh corpus scan against the v3 commits will be measured in the T3.7 verification run. Recording here when the scan completes.
+
