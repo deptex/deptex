@@ -1066,9 +1066,21 @@ export default function MembersPage({
               </thead>
               <tbody className="divide-y divide-border">
               {filteredInvitations.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                    {searchQuery ? 'No invitations matched this search.' : 'No pending invitations.'}
+                <tr data-no-hover>
+                  <td colSpan={4} className="px-4 py-8">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Mail className="h-5 w-5 text-foreground-secondary" />
+                      </div>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">
+                        {searchQuery ? 'No invitations match your search' : 'No pending invitations'}
+                      </h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        {searchQuery
+                          ? 'Try a different search or clear the filter.'
+                          : "When you invite teammates, they'll show up here until they accept."}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : filteredInvitations.map((invitation) => (

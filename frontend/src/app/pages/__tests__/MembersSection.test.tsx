@@ -113,7 +113,7 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => {
-      expect(screen.getByText('No pending invitations.')).toBeInTheDocument();
+      expect(screen.getByText('No pending invitations')).toBeInTheDocument();
     });
   });
 
@@ -123,7 +123,7 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => {
-      expect(screen.getByText('No pending invitations.')).toBeInTheDocument();
+      expect(screen.getByText('No pending invitations')).toBeInTheDocument();
     });
   });
 
@@ -138,7 +138,7 @@ describe('MembersPage', () => {
     const filterInput = screen.getByPlaceholderText('Filter...');
     await userEvent.type(filterInput, 'other');
     await waitFor(() => {
-      expect(screen.getByText('No invitations matched this search.')).toBeInTheDocument();
+      expect(screen.getByText('No invitations match your search')).toBeInTheDocument();
     });
   });
 
