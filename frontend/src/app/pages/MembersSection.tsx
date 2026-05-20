@@ -891,23 +891,21 @@ export default function MembersPage({
                 // hover:!bg-background-card overrides it (the !important is
                 // what wins against the global rule's !important).
                 <tr className="hover:!bg-background-card">
-                  <td colSpan={3} className="px-4 py-10">
-                    <div className="flex flex-col items-center gap-3 text-center">
-                      <div className="h-14 w-14 rounded-full border border-border bg-background-card flex items-center justify-center">
+                  <td colSpan={3} className="px-4 py-12">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
                         <Users className="h-5 w-5 text-foreground-secondary" />
                       </div>
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium text-foreground">
-                          {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
-                            ? 'No members match your filters'
-                            : 'No members yet'}
-                        </p>
-                        <p className="text-xs text-foreground-secondary">
-                          {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
-                            ? 'Try a different search or clear the filters.'
-                            : 'Invite teammates to join this organization.'}
-                        </p>
-                      </div>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">
+                        {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                          ? 'No members match your filters'
+                          : 'No members yet'}
+                      </h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                          ? 'Try a different search or clear the filters.'
+                          : 'Invite teammates to join this organization.'}
+                      </p>
                     </div>
                   </td>
                 </tr>
