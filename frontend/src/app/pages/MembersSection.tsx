@@ -1088,7 +1088,7 @@ export default function MembersPage({
           setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           <div className="px-6 pt-6 pb-4 flex-shrink-0">
             <DialogTitle>Invite new member</DialogTitle>
             <DialogDescription className="mt-1">
@@ -1167,7 +1167,7 @@ export default function MembersPage({
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 bg-background border-t border-border">
+          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"
@@ -1201,7 +1201,7 @@ export default function MembersPage({
           setSelectedMember(null);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
               <div className="px-6 pt-6 pb-4 flex-shrink-0">
@@ -1252,7 +1252,7 @@ export default function MembersPage({
                 </div>
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background border-t border-border">
+              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1289,7 +1289,7 @@ export default function MembersPage({
           setSelectedTeamIds([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
               <div className="px-6 pt-6 pb-4 flex-shrink-0">
@@ -1348,7 +1348,7 @@ export default function MembersPage({
                 )}
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background border-t border-border">
+              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1382,7 +1382,7 @@ export default function MembersPage({
 
       {/* Remove Member Dialog */}
       <Dialog open={showRemoveDialog} onOpenChange={(open) => { if (!open) setShowRemoveDialog(false); }}>
-        <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+        <DialogContent hideClose className="sm:max-w-md bg-background p-0 gap-0 overflow-visible">
           <div className="px-6 pt-6 pb-4">
             <DialogTitle>
               {user && selectedMember?.user_id === user.id
@@ -1395,7 +1395,7 @@ export default function MembersPage({
                 : `Are you sure you want to remove ${selectedMember?.full_name || selectedMember?.email || 'this member'} from the organization? This action cannot be undone.`}
             </DialogDescription>
           </div>
-          <DialogFooter className="px-6 py-4 bg-background border-t border-border">
+          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"
