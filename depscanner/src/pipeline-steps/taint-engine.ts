@@ -56,6 +56,17 @@ export interface TaintEngineOutput {
    * `updateReachabilityLevels`. Empty when no CVE-targeted specs loaded.
    */
   cveSinkPatterns: Map<string, string[]>;
+  /**
+   * v3 (precision arc): lowercase set of dep package names the engine's
+   * callgraph confirmed are reached by at least one CallEdge from workspace
+   * code. JS callgraph populates this from resolved `node_modules/*` paths;
+   * per-language callgraphs land their extractors in follow-up commits.
+   * Empty Set means either the callgraph didn't extract for this language
+   * yet, the engine was rollout-gated off, or the workspace genuinely calls
+   * nothing — the classifier treats empty as "no signal" and falls back to
+   * the v2 heuristic for every transitive.
+   */
+  usedDependencies: Set<string>;
 }
 
 export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOutput> {
@@ -69,6 +80,10 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   // osv_id → vulnerable call patterns from CVE-targeted spec sinks; consumed
   // by the reachability classifier for function-tier symbol verification.
   const cveSinkPatterns = new Map<string, string[]>();
+  // v3 precision arc — lowercase npm/pypi/cargo/etc. package names the
+  // engine's callgraph confirmed are reached. Empty here; populated when
+  // the engine ran successfully and its callgraph carried usedDependencies.
+  let usedDependencies = new Set<string>();
   let fpFilterCostUsd = 0;
 
   const stepStart = Date.now();
@@ -84,7 +99,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: 'rollout_gate',
     });
-    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
   }
 
   const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
@@ -101,7 +116,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: breaker.blockedReason ?? 'circuit_breaker',
     });
-    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
   }
 
   // Mark the run as 'running' first so a crash mid-engine still
@@ -328,6 +343,12 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       });
     } else {
       const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter, detectorFlows } = engineResult;
+      // v3 precision — surface usedDependencies for the reachability
+      // classifier even when zero specs matched / zero flows emitted: the
+      // callgraph may still have crossed into dep code and we want to
+      // credit those deps. Empty set when the engine's callgraph didn't
+      // extract for this language (per-language extractors land later).
+      usedDependencies = engineResult.usedDependencies ?? new Set();
       const taintSurvivors = flowsAfterFilter ?? propagation.flows;
       // Detector flows (Phase F4 sanitizer-absence + Phase 3.3 insecure-default)
       // are LLM-checked alongside taint flows and ride into
@@ -429,5 +450,5 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
     throw err;
   }
 
-  return { validOsvIds, fpFilterCostUsd, cveSinkPatterns };
+  return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
 }

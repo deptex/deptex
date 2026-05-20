@@ -134,10 +134,18 @@ export async function runPipeline(
 
     // === Cross-file taint engine (Phase 6, shadow mode) ===
     if (checkCancelled && await checkCancelled()) return;
-    const { validOsvIds, fpFilterCostUsd, cveSinkPatterns } = await doTaintEngine(ctx);
+    const { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies } =
+      await doTaintEngine(ctx);
 
     // === Reachability classification + depscore recalc + EPD scoring ===
-    await doReachabilityAndEpd(ctx, validOsvIds, fpFilterCostUsd, scanStart, cveSinkPatterns);
+    await doReachabilityAndEpd(
+      ctx,
+      validOsvIds,
+      fpFilterCostUsd,
+      scanStart,
+      cveSinkPatterns,
+      usedDependencies,
+    );
 
     // === IaC, Malicious, Semgrep, TruffleHog (OPTIONAL) ===
     // None of these four affect reachability classification (done above) —

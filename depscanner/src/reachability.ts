@@ -426,6 +426,26 @@ export interface UpdateReachabilityOptions {
    * CVEs with no generated spec, which keep the package-name `function` tier.
    */
   cveSinkPatterns?: Map<string, string[]>;
+  /**
+   * v3 (precision arc) — lowercase set of dep package names the taint-engine
+   * callgraph confirmed are reached by at least one CallEdge from workspace
+   * code. The heuristicUnreachable branch AND-clauses with
+   * `!usedTransitives.has(depName.toLowerCase())` so a transitive dep
+   * exercised through a framework's request handler (the jackson-core case)
+   * is demoted to `module` instead of being mis-classified `unreachable`.
+   *
+   * Semantics:
+   *   - undefined / empty Set: callgraph didn't extract for this ecosystem
+   *     yet (Ruby/PHP/C#/Java/Python/Go/Rust pre-T3.2) or the engine was
+   *     rollout-gated off. Classifier falls back to v2 heuristic behavior
+   *     for every transitive — `!callgraphReachedThisDep` is vacuously true.
+   *   - Populated Set: the dep names listed get `callgraph_reached=true` —
+   *     they short-circuit the unreachable verdict on transitives. Deps
+   *     NOT in the set with the standard heuristic preconditions
+   *     (transitive, zero files importing) collapse to `unreachable` as
+   *     v2 did.
+   */
+  usedTransitives?: Set<string>;
 }
 
 /**
@@ -940,19 +960,43 @@ export async function updateReachabilityLevels(
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
+        // v3 precision: when the taint-engine callgraph confirms a CallEdge
+        // crossed into this dep's code, demote it from `unreachable` to
+        // `module`. Handles the jackson-vs-idna case where a framework's
+        // request handler calls jackson on every request even though the app
+        // never `import`s it directly. `callgraphRan` treats an empty Set
+        // identically to undefined — both mean "no signal", fall back to v2.
+        const callgraphRan =
+          options.usedTransitives !== undefined && options.usedTransitives.size > 0;
+        const callgraphReachedThisDep =
+          callgraphRan && !!depName && options.usedTransitives!.has(depName.toLowerCase());
         const heuristicUnreachable =
           graphTrusted &&
           usageAnalysisProducedOutput &&
           !!meta &&
           !meta.isDirect &&
           meta.filesImporting === 0 &&
-          !isFrameworkEmbeddedRuntime(depName);
+          !isFrameworkEmbeddedRuntime(depName) &&
+          !callgraphReachedThisDep;
         if (heuristicUnreachable) {
           level = 'unreachable';
           details = {
             reason: 'no source file imports this transitive dependency',
             scope: 'orphan',
             verdict: 'orphan_transitive_unreachable',
+          };
+        } else if (callgraphReachedThisDep) {
+          // The taint-engine callgraph traced a CallEdge into this dep's
+          // code. Floor at `module` and stamp provenance so downstream
+          // consumers (UI badges, EPD context, audit reports) can tell
+          // this verdict apart from a generic direct-dep or
+          // framework-embedded-runtime floor.
+          level = 'module';
+          details = {
+            reason: `taint-engine callgraph confirmed a CallEdge into ${depName}`,
+            scope: 'callgraph_reached',
+            verdict: 'callgraph_reached_transitive',
+            callgraph_evidence: { dep_name: depName },
           };
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime

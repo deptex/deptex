@@ -39,6 +39,7 @@ export async function doReachabilityAndEpd(
   fpFilterCostUsd: number,
   scanStart: number,
   cveSinkPatterns: Map<string, string[]>,
+  usedDependencies: Set<string>,
 ): Promise<void> {
   const {
     supabase,
@@ -53,6 +54,56 @@ export async function doReachabilityAndEpd(
     graphTrusted,
   } = ctx;
 
+  // v3 precision — persist project_dependencies.callgraph_reached for every
+  // PD row in this run when the engine's callgraph extracted dep credits.
+  // The classifier reads usedDependencies in-memory; this column is
+  // provenance for future UI/EPD signals and lets operators query
+  // "which deps got demoted by the callgraph pass" without re-running.
+  // Skip when usedDependencies is empty: either the callgraph didn't
+  // extract for this ecosystem yet, or the engine was rollout-gated off —
+  // either way the column stays NULL (= not measured).
+  if (usedDependencies.size > 0) {
+    try {
+      const { data: pdRows } = await supabase
+        .from('project_dependencies')
+        .select('id, name')
+        .eq('project_id', projectId)
+        .eq('last_seen_extraction_run_id', runId);
+      const updates: Array<{ id: string; reached: boolean }> = [];
+      for (const row of (pdRows ?? []) as Array<{ id: string; name: string | null }>) {
+        const reached = !!row.name && usedDependencies.has(row.name.toLowerCase());
+        updates.push({ id: row.id, reached });
+      }
+      // Two batched UPDATEs (one per boolean value) — `in('id', [...])`
+      // lets us avoid N+1 round-trips. Stay below PostgREST's URL-length
+      // ceiling by chunking on 200 ids per call.
+      const reachedIds = updates.filter((u) => u.reached).map((u) => u.id);
+      const unreachedIds = updates.filter((u) => !u.reached).map((u) => u.id);
+      const CHUNK = 200;
+      const writePartition = async (ids: string[], value: boolean) => {
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const slice = ids.slice(i, i + CHUNK);
+          if (slice.length === 0) continue;
+          const { error } = await supabase
+            .from('project_dependencies')
+            .update({ callgraph_reached: value })
+            .in('id', slice);
+          if (error) {
+            await log.warn(
+              'reachability',
+              `callgraph_reached write failed (${value} batch, ${slice.length} rows): ${error.message}`,
+            );
+          }
+        }
+      };
+      await writePartition(reachedIds, true);
+      await writePartition(unreachedIds, false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await log.warn('reachability', `callgraph_reached persist failed: ${msg}`);
+    }
+  }
+
   // Reachability classification runs for every ecosystem — it consumes
   // tree-sitter's usage_slices (non-Java) or atom's slices + usages
   // (Java). files_importing_count is authoritative from the tree-sitter
@@ -63,6 +114,11 @@ export async function doReachabilityAndEpd(
     astParsedSuccessfully,
     graphTrusted,
     cveSinkPatterns,
+    // v3 precision: dep names the callgraph confirmed are reached. The
+    // classifier's heuristicUnreachable branch AND-clauses with
+    // `!usedTransitives.has(depName)` to demote called-but-not-imported
+    // transitives from `unreachable` to `module` (the jackson-vs-idna fix).
+    usedTransitives: usedDependencies,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
