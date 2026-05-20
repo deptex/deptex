@@ -2066,13 +2066,20 @@ export default function OrganizationSettingsPage() {
       setIsOwner(owner);
       // Admin has view_settings + view_members
       setIsAdmin(owner || (userRolePermissions.view_settings === true && userRolePermissions.view_members === true));
-
-      // Load members if user can view them
-      if ((owner || userRolePermissions.view_members) && id) {
-        loadMembers();
-      }
     }
   }, [userRolePermissions, organization, id]);
+
+  // Load members as soon as the org permissions say so — don't wait for the lazy
+  // loadRoles() pass to populate userRolePermissions, since Transfer Ownership in
+  // General needs the members list immediately. effectivePermissions falls back
+  // to organization.permissions when userRolePermissions hasn't loaded yet.
+  useEffect(() => {
+    if (!id || !organization || !permissionsChecked) return;
+    const canViewMembers = isOrgOwner || effectivePermissions?.view_members === true;
+    if (canViewMembers) {
+      loadMembers();
+    }
+  }, [id, organization, permissionsChecked, isOrgOwner, effectivePermissions?.view_members]);
 
   // Settings access is not gated by view_settings; section-level permissions handle access
 
