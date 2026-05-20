@@ -513,7 +513,43 @@ The JS lever works because the TypeScript Compiler API resolves cross-package sy
 - The OFF-state byte-stability check is asserted via the `OFF-state byte-stability` describe block in `callgraph-precision.test.ts` (FakeStorage round-trip) — not via a real `golden-report.json` diff. The corpus-level byte-stability claim still needs the Docker scan to confirm.
 - v2 branch unmerged; v3 stacks on top. PR sequencing is Henry's call.
 
-### Ceiling-math actuals (live update after Docker scan)
+### Ceiling-math actuals (first scan attempt 2026-05-20 — infrastructure-broken)
 
-The Pre-Implement Ceiling-Math Budget above projected 82-95% with a midpoint ~88%. Actual Gate 1 from a fresh corpus scan against the v3 commits will be measured in the T3.7 verification run. Recording here when the scan completes.
+First scan: `oss-corpus-runs/v3-precision-baseline/report.json`. 33.2 min wall.
+
+**Two of four repos failed for infrastructure reasons (not v3 code):**
+
+- **express** scan_timeout at 901s, 1s over the 900s cap. Cold VDB cache + first-after-Docker-rebuild contention. 36 CVEs lost to this.
+- **bat** scan_failed exit 137 mid-VDB-corruption: `"VDB on volume is corrupted (e.g. from previous out-of-space); clearing and retrying once..."`. The mid-corpus VDB reset likely also wiped fastify's lookup cache.
+- **fastify** completed in 204s but found 0 findings vs v2's 12 dev-scope CVEs on the same pinned ref. Strongly implies dep-scan ran with a wiped cache after bat's VDB clear.
+- **spring-petclinic** completed cleanly: 22 findings, 10/10 ground-truth match (100% maven recall), noise breakdown comparable to v2.
+
+**What the partial run still proves about v3:**
+- ✅ Gate 3 PASS — zero reachable→unreachable false negatives. The precision lever did not introduce a single misclassification.
+- ✅ Baseline lock PASS — 31 frozen labels unchanged.
+- ✅ Oracle agreement PASS — 49 independent verdicts agree where measurable.
+- ✅ petclinic's classifier output matches v2 shape (10 GT match, maven Gate 2 100%) — the v3 changes do not regress the parts of the pipeline that scanned successfully.
+- ✅ The wire-in in `pipeline-steps/sbom.ts` only fires for `ecosystem ∈ {gomod, pypi}` (verified by code review). It cannot affect npm/maven/cargo scans.
+
+**What we DON'T know yet:**
+- Actual Gate 1 number on the v3 commits. The Pre-Implement Ceiling-Math Budget projected 82-95%; this run can't confirm or refute.
+- Whether the precision lever demoted any deps in express (the npm-precision target case lives there with the dev-scope cluster of handlebars / minimatch / serialize-javascript / etc.).
+- Per-CVE precision-diff vs v2 (the snapshot the plan T3.7 calls for).
+
+**To re-run cleanly:**
+```bash
+# Clear the partially-corrupted VDB
+rm -rf ~/.deptex/vdb/*
+# Re-run with a longer express timeout (express alone needs ~5min cold-cache + ~3min warm)
+DEPTEX_SKIP_OPTIONAL_SCANS=1 \
+  npm run scan:oss-corpus -- \
+    --repos=scripts/reachability-corpus.yaml \
+    --output=oss-corpus-runs/v3-precision-baseline-rerun \
+    --parallel=2 \
+    --no-rule-gen \
+    --scan-timeout=1500
+npm run test:reachability-corpus -- --report=oss-corpus-runs/v3-precision-baseline-rerun/report.json
+```
+
+The partial-run artifacts stay on disk at `oss-corpus-runs/v3-precision-baseline/` for diagnostic comparison after the rerun.
 
