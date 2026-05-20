@@ -196,6 +196,11 @@ fi
 if [ -n "${DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR=$DEPTEX_RULE_GENERATION_PLATFORM_RULES_DIR")
 fi
+# OSV-API fallback when dep-scan's bundled VDB lookup returns empty (per-eco
+# silent gaps observed on cargo/maven/some-npm — see pipeline-steps/osv-vuln-scan.ts).
+if [ -n "${DEPTEX_OSV_FALLBACK:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_OSV_FALLBACK=$DEPTEX_OSV_FALLBACK")
+fi
 
 # OpenAI-compatible third-party hosts (DeepInfra, OpenRouter, Alibaba). When
 # DEPTEX_RULE_BASE_URL is set, the rule_generation step routes the openai-
