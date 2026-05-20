@@ -75,7 +75,6 @@ export function computeEffectiveOrgPermissions(
       manage_security: true,
       view_activity: true,
       manage_compliance: true,
-      interact_with_security_agent: true,
       interact_with_aegis: true,
       manage_aegis: true,
       view_ai_spending: true,

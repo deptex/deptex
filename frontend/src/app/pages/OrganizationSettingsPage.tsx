@@ -1547,7 +1547,6 @@ export default function OrganizationSettingsPage() {
     manage_security: false,
     view_activity: false,
     manage_compliance: false,
-    interact_with_security_agent: false,
     interact_with_aegis: false,
     manage_aegis: false,
     view_members: false,
@@ -1665,7 +1664,6 @@ export default function OrganizationSettingsPage() {
     manage_security: true,
     view_activity: true,
     manage_compliance: true,
-    interact_with_security_agent: true,
     interact_with_aegis: true,
     manage_aegis: true,
     view_ai_spending: true,
@@ -1789,9 +1787,17 @@ export default function OrganizationSettingsPage() {
   useEffect(() => {
     if (organization && permissionsChecked) {
       setOrgName(organization.name);
-      loadRoles();
     }
   }, [organization, id, permissionsChecked]);
+
+  // Fetch roles only when the user lands on the Roles tab. Other tabs read the
+  // cached list seeded above; the Transfer Ownership flow in General is fine
+  // with stale role badges (it only needs the role name to submit).
+  useEffect(() => {
+    if (activeSection === 'roles' && id && permissionsChecked) {
+      loadRoles();
+    }
+  }, [activeSection, id, permissionsChecked]);
 
   // Cleanup avatar preview URL on unmount
   useEffect(() => {
@@ -2280,7 +2286,6 @@ export default function OrganizationSettingsPage() {
         manage_security: false,
         view_activity: false,
         manage_compliance: false,
-        interact_with_security_agent: false,
         interact_with_aegis: false,
         manage_aegis: false,
         view_members: false,
@@ -2491,7 +2496,6 @@ export default function OrganizationSettingsPage() {
       manage_security: false,
       view_activity: false,
       manage_compliance: false,
-      interact_with_security_agent: false,
       interact_with_aegis: false,
       manage_aegis: false,
       view_members: false,
