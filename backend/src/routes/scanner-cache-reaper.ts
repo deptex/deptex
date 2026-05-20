@@ -6,11 +6,19 @@ const router = Router();
 /**
  * POST /api/workers/scanner-cache-reap
  *
- * Daily QStash cron (03:00 UTC) — drops container_image_scan_cache rows older
- * than the retention window via the `cleanup_container_image_scan_cache(N)`
- * plpgsql function shipped in phase27b. Without this, the cache grows
- * unbounded at ~3 GB / month for a healthy customer scanning 100 unique
- * digests/day.
+ * Daily QStash cron (03:00 UTC) — runs two container-scan maintenance reaps,
+ * sharing one retention window:
+ *
+ *   1. `cleanup_container_image_scan_cache(N)` — drops global digest-keyed
+ *      cache rows older than retention. Without this, the cache grows at
+ *      ~3 GB / month for a healthy customer scanning 100 unique digests/day.
+ *   2. `cleanup_dismissed_base_image_recommendations(N)` — drops dismissed
+ *      base-image recommendation rows older than retention. Without this,
+ *      dismissed rows accumulate forever.
+ *
+ * Both reaps are RETURNS INTEGER, so the row counts in the response are real.
+ * They share the same retention_days request parameter for simplicity; if the
+ * defaults need to diverge in the future, split the body into a struct.
  *
  * Auth: QStash signature OR X-Internal-Api-Key header. Pattern mirrors
  * sync-counter-reset.ts.
@@ -59,12 +67,28 @@ router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
   }
 
   try {
-    const { data, error } = await supabase.rpc('cleanup_container_image_scan_cache', {
+    const { data: cacheData, error: cacheError } = await supabase.rpc(
+      'cleanup_container_image_scan_cache',
+      { retention_days: retentionDays }
+    );
+    if (cacheError) throw cacheError;
+    const cacheRowsDeleted =
+      typeof cacheData === 'number' ? cacheData : Number(cacheData) || 0;
+
+    const { data: recData, error: recError } = await supabase.rpc(
+      'cleanup_dismissed_base_image_recommendations',
+      { retention_days: retentionDays }
+    );
+    if (recError) throw recError;
+    const recommendationRowsDeleted =
+      typeof recData === 'number' ? recData : Number(recData) || 0;
+
+    res.json({
+      ok: true,
+      cache_rows_deleted: cacheRowsDeleted,
+      recommendation_rows_deleted: recommendationRowsDeleted,
       retention_days: retentionDays,
     });
-    if (error) throw error;
-    const rowsDeleted = typeof data === 'number' ? data : Number(data) || 0;
-    res.json({ ok: true, rows_deleted: rowsDeleted, retention_days: retentionDays });
   } catch (err: any) {
     console.error('[ScannerCacheReaper] Error:', err.message);
     res.status(500).json({ error: 'Failed to reap scanner cache' });
