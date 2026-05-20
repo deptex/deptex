@@ -175,6 +175,34 @@ export interface DastJobDTO {
   error_category: string | null;
   attempts: number;
   created_at: string;
+  /**
+   * v2.1d — discriminated union surfacing recorded-login outcomes (test_result
+   * variant for dry-run completions; pre_flight_failed for real-scan auth
+   * failure; session_loss for mid-scan session-expiry exhaustion). FE
+   * renderers MUST switch on `kind` — using `error_category` alone is
+   * insufficient because dry-run successes also populate this column.
+   */
+  error_payload: DastJobErrorPayload | null;
+}
+
+/**
+ * v2.1d — response from POST /api/projects/:projectId/dast/targets/:targetId/credentials/test.
+ * Client polls GET /dast/jobs?id=<test_job_id> until status is terminal and
+ * reads error_payload.test_result for the outcome.
+ */
+export interface DastLoginTestResponse {
+  test_job_id: string;
+  status: 'queued';
+}
+
+/**
+ * v2.1d — response from POST /api/projects/:projectId/dast/jobs/:jobId/cancel.
+ * 200 on successful cancellation. 409 when the job is not cancellable
+ * (already completed/failed/cancelled). 404 cross-org or missing.
+ */
+export interface DastJobCancelResponse {
+  job_id: string;
+  status: 'cancelled';
 }
 
 export interface DastFindingDTO {

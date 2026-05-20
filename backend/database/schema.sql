@@ -1099,7 +1099,8 @@ CREATE TABLE IF NOT EXISTS public.project_dependencies (
   policy_result jsonb,
   removed_at timestamp with time zone,
   last_seen_extraction_run_id text,
-  namespace text
+  namespace text,
+  callgraph_reached boolean
 );
 CREATE TABLE IF NOT EXISTS public.project_dependency_files (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -2340,6 +2341,24 @@ begin
 
   return false;
 end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.cancel_scan_job(p_job_id uuid, p_organization_id uuid)
+ RETURNS SETOF scan_jobs
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+  RETURN QUERY
+    UPDATE scan_jobs
+       SET status = 'cancelled',
+           completed_at = NOW()
+     WHERE id = p_job_id
+       AND organization_id = p_organization_id
+       AND status IN ('queued', 'processing')
+     RETURNING *;
+END;
 $function$
 ;
 

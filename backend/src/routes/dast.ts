@@ -16,6 +16,7 @@ import {
   isDastEncryptionConfigured,
   decryptCredential,
 } from '../lib/dast-encryption';
+import { createActivity } from '../lib/activities';
 import type {
   DastConfigDTO,
   DastCredentialSummaryDTO,
@@ -667,6 +668,243 @@ router.delete(
 );
 
 // ---------------------------------------------------------------------------
+// POST /:projectId/dast/targets/:targetId/credentials/test     (v2.1d)
+// Queues a dry-run dast_zap job carrying `payload.dry_run: true`. The worker
+// branches on that flag and runs the recorded-login probe ONLY (no spider,
+// no active-scan, no findings emit, no PDV mutation), writing the test
+// result into scan_jobs.error_payload under {kind:'test_result', …}. The
+// FE polls GET /dast/jobs?id=<test_job_id> until status is terminal.
+//
+// 422 wrong-strategy: only recorded credentials are testable; form/jwt/
+// cookie use the inline route-side probe at PUT time.
+// 503 fly_machine_unavailable: cold worker fails to start within the 60s
+// p50 budget — the route deletes the just-queued row so it doesn't sit as
+// "queued forever".
+// ---------------------------------------------------------------------------
+router.post(
+  '/:projectId/dast/targets/:targetId/credentials/test',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+      if (!guard.target.enabled) {
+        return res.status(409).json({ error: 'target_disabled' });
+      }
+
+      // Only `recorded` credentials are testable. Form/JWT/cookie validate
+      // inline at PUT time via probeFormLogin / JWT exp / shape checks.
+      const { data: credRow } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+      if (!credRow) {
+        return res.status(404).json({ error: 'credentials_not_set' });
+      }
+      if (credRow.auth_strategy !== 'recorded') {
+        return res.status(422).json({
+          code: 'unsupported_strategy_for_test',
+          detail: 'Only recorded credentials use the Test-login flow; form/jwt/cookie validate at save time.',
+        });
+      }
+
+      // SPA-detect refresh — same pattern as POST /scan so the test job runs
+      // on the right Fly machine shape.
+      let detectedRuntime = guard.target.detected_runtime;
+      const ttl = guard.target.detected_runtime_ttl_at;
+      if (!ttl || new Date(ttl).getTime() < Date.now()) {
+        const probe = await detectRuntime(guard.target.target_url);
+        if (probe.runtime !== 'unknown') {
+          detectedRuntime = probe.runtime;
+          await supabase
+            .from('project_dast_targets')
+            .update({
+              detected_runtime: probe.runtime,
+              detected_runtime_at: new Date().toISOString(),
+              detected_runtime_ttl_at: nextRuntimeTtlIso(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', targetId);
+        }
+      }
+
+      // Read project DAST config for scan_timeout — same as /scan.
+      const { data: cfg } = await supabase
+        .from('project_dast_config')
+        .select('scan_profile, scan_timeout_minutes')
+        .eq('project_id', projectId)
+        .maybeSingle();
+      const scanProfile = cfg?.scan_profile ?? 'auto';
+      const scanTimeoutMinutes = cfg?.scan_timeout_minutes ?? 30;
+
+      // Queue a regular dast_zap job — the worker reads payload.dry_run=true
+      // and branches into the login-only path. No new scan_jobs.type required.
+      const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
+        p_project_id: projectId,
+        p_organization_id: access.organizationId,
+        p_type: 'dast_zap',
+        p_payload: {
+          source: 'credential_test',
+          detected_runtime: detectedRuntime,
+          dry_run: true,
+        },
+        p_target_id: targetId,
+        p_target_url: guard.target.target_url,
+        p_scan_profile: scanProfile,
+        p_timeout_minutes: scanTimeoutMinutes,
+        p_trigger_source: 'manual',
+        p_triggered_by: userId,
+      });
+
+      if (queueError) {
+        const detail = queueError.message ?? 'Failed to queue test';
+        if (detail.includes('project_concurrent_dast_blocked')) {
+          return res.status(409).json({ error: 'project_concurrent_dast_blocked', detail });
+        }
+        if (detail.includes('org_concurrent_dast_cap')) {
+          return res.status(409).json({ error: 'org_concurrent_dast_cap', detail });
+        }
+        if (detail.includes('tenant drift')) {
+          return res.status(404).json({ error: 'target_not_found' });
+        }
+        console.error('[dast] queue_scan_job(test) error:', detail);
+        return res.status(500).json({ error: 'Failed to queue test' });
+      }
+
+      const job = Array.isArray(queued) ? queued[0] : queued;
+      if (!job?.id) {
+        console.error('[dast] queue_scan_job(test) returned no row');
+        return res.status(500).json({ error: 'Failed to queue test' });
+      }
+
+      // Test-login budget (≤60s p50) is unforgiving of Fly cold-start
+      // failure. Surface as 503 synchronously AND clean up the queued row
+      // so it doesn't sit as "queued forever" — the FE retries on 503.
+      try {
+        await startDastMachine(detectedRuntime);
+      } catch (e: any) {
+        console.error(
+          `[dast] startDastMachine(test) failed (cleaning up queued row): ${e?.message ?? e}`,
+        );
+        // Best-effort delete; we own the row by ID and it's still 'queued'.
+        await supabase.from('scan_jobs').delete().eq('id', job.id);
+        return res.status(503).json({ error: 'fly_machine_unavailable' });
+      }
+
+      // Audit-log entry (best-effort; activities table is gitignored from
+      // failure cascades — never break the user-facing 202 over a log write).
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_login_test.run',
+          description: 'Started recorded-login test',
+          metadata: { test_job_id: job.id, target_id: targetId },
+        });
+      } catch {
+        /* createActivity already swallows; this catch is defensive */
+      }
+
+      return res.status(202).json({
+        test_job_id: job.id,
+        status: 'queued',
+      });
+    } catch (e: any) {
+      console.error('[dast] POST credentials/test exception:', e);
+      return res.status(500).json({ error: 'Failed to trigger test' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /:projectId/dast/jobs/:jobId/cancel                     (v2.1d)
+// User-initiated cancellation of a queued/processing scan_jobs row. Backs
+// the editor's "Cancel running scan" affordance for the Test-login flow
+// concurrency mitigation: a user blocked by a long real scan can cancel
+// it, freeing the 1/project DAST cap so Test-login becomes available.
+//
+// Delegates to the phase34 cancel_scan_job(p_job_id, p_organization_id) RPC
+// — atomic UPDATE scoped to the caller's org. RPC empty-return → 404 (cross-
+// org or missing) OR 409 (job not in cancellable state) — distinguished by
+// a follow-up status lookup.
+// ---------------------------------------------------------------------------
+router.post(
+  '/:projectId/dast/jobs/:jobId/cancel',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, jobId } = req.params;
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      const { data: cancelled, error: cancelErr } = await supabase.rpc('cancel_scan_job', {
+        p_job_id: jobId,
+        p_organization_id: access.organizationId,
+      });
+      if (cancelErr) {
+        console.error('[dast] cancel_scan_job RPC error:', cancelErr.message);
+        return res.status(500).json({ error: 'Failed to cancel scan' });
+      }
+
+      const row = Array.isArray(cancelled) ? cancelled[0] : cancelled;
+      if (!row) {
+        // Empty return — distinguish 404 (cross-org / missing) from 409
+        // (job exists but not in cancellable state). Read scan_jobs status
+        // scoped to org so a cross-org probe still returns 404.
+        const { data: probe } = await supabase
+          .from('scan_jobs')
+          .select('status')
+          .eq('id', jobId)
+          .eq('organization_id', access.organizationId)
+          .maybeSingle();
+        if (!probe) {
+          return res.status(404).json({ error: 'job_not_found' });
+        }
+        return res.status(409).json({
+          code: 'job_not_cancellable',
+          current_status: probe.status,
+        });
+      }
+
+      // Audit-log entry. Best-effort.
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_scan.cancelled',
+          description: 'Cancelled DAST scan',
+          metadata: { job_id: jobId, prior_status: row.status === 'cancelled' ? null : row.status },
+        });
+      } catch {
+        /* swallow */
+      }
+
+      return res.json({ job_id: jobId, status: 'cancelled' });
+    } catch (e: any) {
+      console.error('[dast] POST cancel exception:', e);
+      return res.status(500).json({ error: 'Failed to cancel scan' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /:projectId/dast/scan
 // Body: { target_id }. Pre-flight SSRF + SPA-detect refresh; queue_scan_job
 // with p_target_id. INTERNAL_DAST_PAUSED → 503 handled by middleware.
@@ -703,6 +941,27 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       return res.status(400).json({ code: 'unsupported_engine', supported: ['zap', 'nuclei'] });
     }
     const scanJobType = engine === 'nuclei' ? 'dast_nuclei' : 'dast_zap';
+
+    // v2.1d — Nuclei + recorded credential is structurally unsupported:
+    // Nuclei is a template engine with no auth-replay execution model.
+    // Reject before queue so the user gets a fast, actionable error. We
+    // fetch auth_strategy via a SECOND guarded query (not via
+    // loadTargetOrDeny) to preserve loadTargetOrDeny's single-SELECT timing-
+    // side-channel posture.
+    if (engine === 'nuclei') {
+      const { data: credForEngine } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+      if (credForEngine?.auth_strategy === 'recorded') {
+        return res.status(400).json({
+          code: 'unsupported_recorded_on_nuclei',
+          detail:
+            'Recorded login can only be replayed by the ZAP engine. Re-run with engine=zap.',
+        });
+      }
+    }
 
     // Re-validate URL (SSRF + DNS pinning).
     const urlGuard = await validateExternalUrl(guard.target.target_url);
@@ -834,7 +1093,7 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
     let query = supabase
       .from('scan_jobs')
       .select(
-        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, attempts, created_at',
+        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, error_payload, attempts, created_at',
       )
       .eq('project_id', projectId)
       .in('type', DAST_SCAN_TYPES)
@@ -861,6 +1120,10 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
       completed_at: row.completed_at,
       error: row.error,
       error_category: row.error_category,
+      // v2.1d — discriminated union, FE switches on .kind for the recorded-
+      // login outcome (test_result / pre_flight_failed / session_loss).
+      // Always JSONB-shaped; null when no auth-failure / no test result.
+      error_payload: row.error_payload ?? null,
       attempts: row.attempts ?? 0,
       created_at: row.created_at,
     }));

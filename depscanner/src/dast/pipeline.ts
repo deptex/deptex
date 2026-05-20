@@ -1198,25 +1198,14 @@ async function finalizeDryRunJob(
     throw new Error(`Failed to finalize dry-run DAST scan_jobs row: ${updateErr.message}`);
   }
 
-  // Emit a queryable event for Aegis context / ops runbooks.
-  // organization_activities is best-effort: a failure here doesn't fail the
-  // job (the result is already persisted to scan_jobs).
-  try {
-    await supabase.from('organization_activities').insert({
-      organization_id: organizationId,
-      event: 'dast_login_test.completed',
-      payload: {
-        test_job_id: jobId,
-        success: result.success,
-        reason: result.failed_at_step?.reason ?? null,
-        steps_run: result.steps_run,
-      },
-    });
-  } catch (e) {
-    console.warn(
-      `[dast-${jobId}] failed to write organization_activities row for dast_login_test.completed: ${(e as Error).message}`,
-    );
-  }
+  // The `dast_login_test.completed` activity is intentionally written by the
+  // ROUTE side (when the FE polls and observes terminal state) rather than
+  // here, because activities require user_id — which the worker doesn't have.
+  // The scan_jobs row itself records completion (status + error_payload +
+  // completed_at + duration_seconds + findings_count); that's the canonical
+  // queryable signal. The activity-log entry is supplementary and added by
+  // the route layer where the user identity is available.
+  void organizationId;
 }
 
 async function recordJobError(
