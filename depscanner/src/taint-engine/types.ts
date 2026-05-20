@@ -65,6 +65,18 @@ export interface CallEdge {
   calleeText: string;
   /** Number of arguments at the call site. Useful for sink modeling later. */
   argumentCount: number;
+  /**
+   * v3 (precision arc): absolute source path of the resolved callee's
+   * declaration when the call resolves into dep code (node_modules /
+   * site-packages / pkg/mod / registry/src / .m2 / etc.). Null when the
+   * callee is in the workspace, unresolved, or the per-language callgraph
+   * doesn't track external paths yet (Ruby/PHP/C# in v3 — deferred to v3.1).
+   *
+   * Used by `extractUsedDependencies` to credit transitives the callgraph
+   * confirmed are actually called. The reachability classifier reads the
+   * resulting set to demote `unreachable` → `module` (jackson-vs-idna fix).
+   */
+  calleeExternalSourcePath?: string | null;
 }
 
 /** Per-file telemetry collected during callgraph construction. */
@@ -94,4 +106,14 @@ export interface Callgraph {
   buildMs: number;
   /** Number of source files included in the program. */
   fileCount: number;
+  /**
+   * v3 (precision arc): set of dep package names (ecosystem-natural form —
+   * npm `pkg` / `@scope/name`, pypi distribution name, go module path, cargo
+   * crate, maven `groupId:artifactId`) the callgraph confirmed are reached
+   * by at least one CallEdge from workspace code. Undefined when the
+   * callgraph doesn't ship usedDependencies extraction for this language
+   * (Ruby/PHP/C# in v3). Consumed by `updateReachabilityLevels` to demote
+   * called-but-not-imported transitives from `unreachable` to `module`.
+   */
+  usedDependencies?: Set<string>;
 }

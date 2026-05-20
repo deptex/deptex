@@ -1,0 +1,474 @@
+# Reachability Noise-Reduction v3 — Implementation Plan
+
+Branch: stay on `worktree-reachability-noise-reduction`. Stack v3 commits on
+top of v2 tip `2b02e19`. No new branch. Source brief: `.cursor/plans/feature-brief-reachability-noise-reduction-v3.md`. Plan-review report: `.cursor/plans/review-reachability-noise-reduction-v3.md` (verdict REVISE; 10 patches applied 2026-05-20).
+
+## Overview
+
+v3 lifts the depscanner reachability noise-reduction headline from v2's **79.6%** toward **~88-92% honest** by attacking the two structural issues v2 left open: coverage holes (go/pypi unmeasurable, maven at 10% on a corpus with no genuinely-unreachable maven CVE) and a precision miss (`jackson-core`-style transitives that the M4 heuristic flags `unreachable` because no app source `import`s them, even though a framework's request handler actually calls them).
+
+Three independent workstreams compose the arc:
+
+1. **Corpus expansion** (mechanical): add one more npm app for dilution; swap maven to a repo where test-scope deps have observed CVEs; add a synthetic Rust fixture pinning the existing `[build-dependencies]` classifier behavior (a real Rust corpus repo is deferred to v3.5 — see Brief Deviations).
+2. **Custom go/pypi transitive resolver** in depscanner — `go list -m -json all` + `pip install --dry-run --report=-` — to fold transitive deps into the SBOM when cdxgen returns direct-deps-only.
+3. **Precision arc**: extend the taint-engine callgraph to emit `usedDependencies: Set<string>` and demote called-but-not-imported transitives from `unreachable` to `module`. Shipping languages: **JS/TS + Java + Python + Go + Rust** (5 of 8). Ruby/PHP/C# deferred to v3.1. Java gets its own milestone (the load-bearing case for jackson-vs-idna) with a 1-hour spike to pick a class-FQN→purl resolver source.
+
+The precision arc deliberately *lowers* the headline by ~5-10pp on existing corpus repos (`jackson-core`, `rustix`, `time`, and likely others move from heuristic-unreachable to known-used module) — the corpus expansion has to overcome that drag to land in the target band. Quantified budget below.
+
+## Brief Deviations (2026-05-20)
+
+Documents where this plan diverges from the source brief and review feedback, so subsequent readers don't re-litigate:
+
+1. **Cargo dev/build classifier sub-task retired.** Brief decision #2 listed "cargo dev/build split" as in-scope. `sbom.ts:347-368` (`collectCargoDevDeps`) already matches both `[dev-dependencies]` AND `[build-dependencies]` via `/(?:^|\.)(?:dev|build)-dependencies$/`. No classifier work needed. The cargo lift in v3 comes solely from T1.4a (synthetic build-dep fixture pinning the existing behavior). A real Rust corpus repo (the original T1.4) is deferred to v3.5 because the headline lift is ≤1pp on 3 CVEs.
+
+2. **Per-language scope cut to 5.** Plan-review found per-language callgraph extraction is not free for languages where the callgraph skips dep code AND the CallEdge type carries no callee source path (Java/Python/Go/Ruby/PHP/Rust/C# all skip those dirs). Shipping JS/TS + Java + Python + Go + Rust in v3; Ruby/PHP/C# deferred to v3.1. The heuristic in T3.4 falls back to v2 behavior when `usedTransitives` is undefined or empty — missing-language deps simply stay on the v2 codepath.
+
+3. **No new env flag.** Brief and original plan called for `DEPTEX_REACHABILITY_CALLGRAPH_PRECISION` kill switch. The precision data is a side-effect of the existing taint-engine running, so it inherits `DEPTEX_TAINT_ENGINE_ROLLOUT_PCT` staged rollout + per-org override + circuit breaker. No new flag added; rollback path is the existing engine rollout pct.
+
+4. **`callgraph_evidence` snippet ships, doesn't defer.** The open question in the original plan ("should demoted PDVs carry `callgraph_evidence: { callee_file, callee_method }`?") flips to YES. The data is in hand during T3.1; capping at 1 callsite per pdv + 256 chars total makes the per-CVE corpus breakdown auditable per the brief's "honest methodology you can read" framing.
+
+5. **`docs/reachability-benchmark.md` lands in v3.** Brief deferred it; review surfaced that methodology is freshest now. Short doc (corpus schema, gate definitions, oracle role, lock invariants, precision arc, current numbers) shipped in Phase 4.
+
+6. **`project_dependencies.callgraph_reached` column ships.** Brief deferred; review surfaced that the work happens regardless in T3.3 and the marginal cost is ~30 min additive migration. Unblocks future UI/EPD signals without a migration arc later.
+
+## Pre-Implement Ceiling-Math Budget
+
+The 88-92% target is achievable only if mechanical lift exceeds precision drag. Stop/go decision at the end of Phase 1 (T1.5).
+
+**Drag (precision arc, applied corpus-wide):**
+- Each demotion from `unreachable` (weight 1.0) to `module` (weight 0.5) costs `0.5/N` per CVE on Gate 1.
+- Current corpus N = 49.
+- Estimated demotions on the existing corpus:
+  - **maven** (petclinic): jackson-core + postgres-jdbc currently `module`-labelled but read by heuristic as `unreachable` — these flip to module-known. Net Gate 1: +0 (already module in label) but per-eco precision improves.
+  - **maven** (post-T1.3 swap): unknown until repo lands — assume 2-4 new demotions from jackson-style transitives in test-scope adjacent code.
+  - **cargo**: rustix + time currently `module`-labelled but read by heuristic as one or the other; precision pass flips both to module-known. Per-eco precision improves.
+  - **npm** (express/fastify): possibly 1-2 demotions on framework-embedded transitives the existing `isFrameworkEmbeddedRuntime` exception didn't catch.
+  - **Estimated total demotions: 5-10** corpus-wide. Drag: **~5-10pp**.
+
+**Lift (corpus expansion):**
+- T1.1 (5th npm app): +~3pp expected if ≥8 new unreachable dev-scope CVEs land (each adds `1.0/N_new`).
+- T1.3 (maven swap): +5-15pp expected if ≥5 new unreachable test-scope CVEs land — biggest single lever.
+- T2.5 (go + pypi apps): +~5-8pp expected, each ecosystem ≥5 CVEs with ≥2 unreachable.
+
+**Target math:** v2 79.6% + corpus lift (13-26pp range) − precision drag (5-10pp) = **82-95% range**. Mid-point ~88%. Achievable but maven swap is load-bearing — if T1.3 fails to find a viable repo, the corridor closes to ~82-87%.
+
+**Stop/go gate at T1.5:** if Phase 1 (corpus expansion alone) doesn't push Gate 1 to ≥85%, the precision arc drag will sink the headline below 80%. Decision in that case: ship the corpus arc + go/pypi resolver and DEFER the precision arc to v3.1, accepting that v3 lands at ~85% with broader coverage rather than ~88% with deeper precision.
+
+## Competitive Research & Design Rationale
+
+Captured in the brief. Quick recap of what informs the plan choices:
+
+- **Endor's 97% headline** is on a proprietary corpus with unpublished methodology — not a target to chase blindly. Snyk publishes no number; Socket publishes a tiered model (35% / 80% / 90%). The honest landing spot for a published held-out corpus is **the top of the 85-92% band**.
+- **Coana's published guidance** (now part of Socket): vendors game open benchmarks; test on your own corpus and watch false-negative rate, not false-positive rate. v3 keeps Gate 3 (zero false negatives) as the hard constraint and treats Gate 1 (the headline %) as directional.
+- **No vendor publishes how they solve jackson-vs-idna**. The precision arc is novel work; "honest methodology you can read" is the differentiator over "marketing number we can't reproduce" — and `docs/reachability-benchmark.md` (Patch 5) makes the methodology actually readable.
+
+## Codebase Analysis
+
+### The heuristic — where to plug in
+
+`depscanner/src/reachability.ts:942-963` is the `heuristicUnreachable` branch — the exact site for the precision lever. Its current condition:
+
+```ts
+const heuristicUnreachable =
+  graphTrusted &&
+  usageAnalysisProducedOutput &&
+  !!meta &&
+  !meta.isDirect &&
+  meta.filesImporting === 0 &&
+  !isFrameworkEmbeddedRuntime(depName);
+```
+
+The precision arc adds **one** more AND-clause: when the callgraph ran successfully for this ecosystem AND it confirmed the dep was reached by a CallEdge, demote to `module`. Crucially:
+- `callgraphRan = options.usedTransitives !== undefined && options.usedTransitives.size > 0` — an EMPTY Set means "callgraph didn't find anything", which on Ruby/PHP/C# (no extraction shipped) means fall back to v2.
+- `callgraphReachedThisDep = callgraphRan && options.usedTransitives!.has(meta.dependencyId)`.
+- When demoting, set `reachability_details.verdict = 'callgraph_reached_transitive'` and attach `callgraph_evidence: { callee_file, callee_method }` (1 callsite, 256-char cap) for audit-trail.
+
+`updateReachabilityLevels` already takes an `UpdateReachabilityOptions` object with optional `validOsvIds`, `cveSinkPatterns`, etc. (`reachability.ts:387-429`). Add `usedTransitives?: Set<string>` (set of dependency_id strings) — same pattern, optional, undefined for legacy callers.
+
+### Scope classifier — what's there, what isn't
+
+`depscanner/src/sbom.ts`:
+- `collectCargoDevDeps` (line 347) already matches `[dev-dependencies]` AND `[build-dependencies]` via the regex `/(?:^|\.)(?:dev|build)-dependencies$/`. **Both are already collapsed to `devScoped: true`** → `environment='dev'` → unreachable floor. **No cargo classifier work in v3.**
+- `collectMavenDevDeps` (line 412) was fixed in v2. No changes.
+- `collectNpmDevDeps` / `collectPypiDevDeps` unchanged.
+- `patchDevDependencies` Pass 2 BFS excludes maven per v2 deviation. No changes.
+
+### Callgraph — how each language reaches dep code
+
+`depscanner/src/taint-engine/callgraph.ts` (JS/TS):
+- Walks workspace files; **skips `node_modules`** (`SKIP_DIRS`, line 41).
+- BUT the TypeScript Compiler API resolves CallExpressions across `node_modules` via the type checker (line 508 comment: "External (node_modules / lib) — counts as resolved for the…"). Calls into deps are resolved by the checker; the symbol's declaration carries a file path even when we don't walk it.
+- **Extraction strategy:** widen `CallEdge` in `taint-engine/types.ts` to carry an optional `calleeExternalSourcePath: string | null` populated during the walk when the resolved declaration is outside `rootDir`. Then post-pass: for each edge with a non-null external path, extract `node_modules/<pkg>/...` → `pkg` (handle scoped `@scope/name`).
+
+Per-language callgraphs at `taint-engine/{python,java,go,rust,ruby,php,csharp}/callgraph.ts`:
+- All currently skip dep code (`site-packages`, `vendor`, `target`, `.m2`, `pkg/mod/...`).
+- For Python/Go/Rust: the cheapest extraction is to **stop skipping the dep dirs during the resolver pass only** (still skip them during the IR-emit walk), letting the resolver see a declaration path. Then post-pass match the path against:
+  - Python: `*/site-packages/<pkg>/...` or `*/dist-packages/<pkg>/...`
+  - Go: `*/pkg/mod/<module>@<version>/...`
+  - Rust: `*/registry/src/index.crates.io-*/<crate>-<version>/...`
+- For Java: there is no clean callee-file-path because external classes simply don't exist in the workspace. The extraction strategy here is fundamentally different — see T3.2-Java below.
+
+### Pipeline order
+
+`depscanner/src/pipeline.ts`:
+```
+clone → resolve → SBOM → deps_sync → usage_extraction
+  → dep_scan → rule_generation → taint_engine → reachability + EPD
+```
+
+The precision signal is computed during `taint_engine` (callgraph already runs) and read during `reachability`. **Use the existing `TaintEngineOutput` interface** (`pipeline-steps/taint-engine.ts:48-59` already carries `validOsvIds` + `cveSinkPatterns`) rather than inventing new state. Add `usedDependencies: Set<string>` to that interface; thread via the existing destructure at `pipeline.ts:137`; pass as a positional arg to `doReachabilityAndEpd`.
+
+### Corpus harness — unchanged structure
+
+`depscanner/scripts/reachability-corpus.yaml` already supports the schema we need. New repos slot in. The harness in `reachability-corpus.ts` runs the gate check + baseline lock + oracle. No script change needed. `baseline.lock.yaml` froze 31 labels at v2; v3 adds labels for new corpus repos. The lock check accepts additions (only fails on changes/deletes).
+
+### Files this plan touches
+
+| File | Change |
+|---|---|
+| `depscanner/src/reachability.ts` | Add `usedTransitives` option; AND-clause in heuristic branch; verdict provenance + callgraph_evidence |
+| `depscanner/src/taint-engine/types.ts` | Add `calleeExternalSourcePath: string \| null` to `CallEdge` |
+| `depscanner/src/taint-engine/callgraph.ts` (JS/TS) | Populate `calleeExternalSourcePath` from resolved declaration; emit `usedDependencies` |
+| `depscanner/src/taint-engine/{python,go,rust}/callgraph.ts` | Path-regex extraction analogous |
+| `depscanner/src/taint-engine/java/callgraph.ts` | Class-FQN→purl resolver (its own milestone — see T3.2-Java) |
+| `depscanner/src/taint-engine/runner.ts` | Return `usedDependencies` from `runEngine()` |
+| `depscanner/src/pipeline-steps/taint-engine.ts` | Add `usedDependencies: Set<string>` to `TaintEngineOutput` |
+| `depscanner/src/pipeline.ts` | Plumb `usedDependencies` through existing `TaintEngineOutput` destructure |
+| `depscanner/src/transitive-resolvers/go.ts` | NEW — `go list -m -json all` parser |
+| `depscanner/src/transitive-resolvers/pypi.ts` | NEW — `pip install --dry-run --report=-` parser |
+| `depscanner/src/transitive-resolvers/README.md` | NEW — authoring convention |
+| `depscanner/src/sbom.ts` | Wire transitive-resolver output via structural trigger (zero `is_direct=false` rows) |
+| `depscanner/Dockerfile` | Verify `go 1.22.10` + `pipdeptree 2.23.0` present (per audit, already there); no `uv` add |
+| `backend/database/phaseXX_callgraph_reached.sql` | NEW — `project_dependencies.callgraph_reached BOOLEAN NULL` |
+| `backend/database/schema.sql` | Refresh via `npm run schema:dump` |
+| `depscanner/scripts/reachability-corpus.yaml` | Add npm app + maven app swap + go app + pypi app |
+| `depscanner/scripts/reachability-corpus-baseline.lock.yaml` | Add labels for new repos |
+| `depscanner/scripts/reachability-corpus-oracle.yaml` | Add oracle verdicts for new repos |
+| `depscanner/scripts/reachability-corpus.golden-report.json` | Refresh at v3 final |
+| `depscanner/docs/reachability-benchmark.md` | NEW — methodology doc |
+| `depscanner/scripts/check-golden-report-stable.ts` | NEW — CI script (P3 add) |
+| Tests under `depscanner/src/__tests__/` and `depscanner/test/` | Per-language callgraph fixtures + jackson-vs-idna + Gate-3 unit + OFF-state byte-stability + resolver fixtures + Rust build-dep synthetic |
+
+## Data Model
+
+**One additive migration.** `project_dependencies.callgraph_reached BOOLEAN NULL`:
+- `NULL` when callgraph didn't run or ecosystem unsupported.
+- `true` when callgraph confirmed the dep is reached by a CallEdge.
+- `false` when callgraph ran AND ecosystem supported AND dep not in `usedDependencies`.
+
+Apply via Supabase MCP; refresh `schema.sql` in the same commit.
+
+The precision signal still flows in-memory through `TaintEngineOutput` for the live classifier; the column is provenance for future UI/EPD signals + SQL debugging.
+
+## API Endpoints
+
+None.
+
+## Frontend Surface
+
+None in v3. The `callgraph_reached` column unblocks a future UI badge as a 1-day frontend arc (not in v3).
+
+## Implementation Tasks
+
+### Phase 1 — Corpus expansion (mechanical, low-risk)
+
+Phase 1 sequencing: T1.1 + T1.4a + T1.2 run in parallel (T1.2 is a scout pass with a Henry-pick gate; T1.1 and T1.4a don't depend on it). T1.3 runs after T1.2 yields a pick. T1.5 gates Phase 2.
+
+**T1.1 — Add a 5th npm corpus repo for dilution** (S, ~1-2h)
+- Goal: dilute the reachable floor by ~3pp on npm by adding another rich-devDep app.
+- Candidates to evaluate: Node CLIs pinned to a 2-year-old release with stale devDependencies (e.g., older `commitizen`, `husky`, `lerna`; smaller apps with vulnerable devDep tooling).
+- Acceptance: chosen repo has ≥8 dev-scope CVEs on transitive deps; ≥5 distinct packages.
+- Same scout-and-present-candidates protocol as T1.2: present 2-3 candidates to Henry with predicted Gate-1 lift before committing.
+- File: `depscanner/scripts/reachability-corpus.yaml`
+- Hand-label CVEs; update `baseline.lock.yaml` + `reachability-corpus-oracle.yaml`.
+
+**T1.2 — Scout 2-3 maven candidates, present with predicted Gate-1 lift** (S, ~2h)
+- Search axes:
+  - Older spring-boot sample apps (search `spring-projects` for tagged historical releases with vulnerable `testcontainers` / `junit-jupiter` / `mockito` / `spring-boot-starter-test`).
+  - Apps from OWASP-Benchmark or Vul4J academic datasets.
+  - Java apps where `dep-scan` reports several maven CVEs on testcontainers/junit/mockito at an older tag.
+- Deliverable: writeup with 2-3 candidates + predicted Gate-1 lift based on advisory counts.
+- Pause + ask user to pick before T1.3.
+
+**T1.3 — Swap maven corpus to chosen app, hand-label vulnerable test-scope CVEs** (M, ~3-4h)
+- Replace `spring-petclinic` (or keep both if total corpus runtime allows).
+- Hand-label every CVE: `unreachable` if test-scope-only, `module` if jackson-style "in graph, likely used", `function` if on request path.
+- Update `baseline.lock.yaml` + `reachability-corpus-oracle.yaml`.
+- Target: maven Gate-2 ≥40% post-swap.
+- If no candidate clears the bar within scout window: ship Phase 1 without maven swap; document the punt in plan STATUS; proceed to Phase 2.
+
+**T1.4a — Synthetic Rust build-dep fixture** (S, ~1h) — *replaces original T1.4*
+- File: `depscanner/test/fixtures/precision/rust-build-dep/Cargo.toml`
+- Minimal Cargo.toml pinning a known-vulnerable build-dependency transitive subtree.
+- Unit test in `depscanner/src/__tests__/cargo-build-dep.test.ts`: assert `collectCargoDevDeps` + `patchDevDependencies` + `updateReachabilityLevels` yield `environment='dev'` + `level='unreachable'` for the build-dep transitive.
+- Pins the wired behavior independent of real-repo discovery. Real Rust corpus repo deferred to v3.5.
+
+**T1.5 — Phase 1 verification + ceiling-math stop/go decision** (S, ~30min)
+- Rebuild docker image: `cd depscanner && npm run docker:build`
+- Run corpus: `DEPTEX_SKIP_OPTIONAL_SCANS=1 npm run scan:oss-corpus -- --repos=scripts/reachability-corpus.yaml --output=oss-corpus-runs/v3-phase1 --parallel=2 --no-rule-gen --scan-timeout=900`
+- Run gate: `npm run test:reachability-corpus -- --report=oss-corpus-runs/v3-phase1/report.json`
+- **Acceptance gate (binary):** Gate 1 ≥ v2's 79.6% (no regression); Gate 2 all >0%; Gate 3 zero FN.
+- **Ceiling-math stop/go:** if Gate 1 < 85% after Phase 1 corpus expansion, projected drag from precision arc (~5-10pp) lands the headline <80%. In that case: defer precision arc (Phase 3) to v3.1; ship Phase 2 only; document the decision in plan STATUS.
+- Commit: `feat(reachability): expand corpus across npm and maven`
+
+### Phase 2 — Custom go/pypi transitive resolver (medium-risk)
+
+**T2.1 — Confirm container runtime support** (S, ~30min)
+- Probe `depscanner/Dockerfile`: confirm `go 1.22.10` + `pipdeptree 2.23.0` are present (audit showed both already installed; no Dockerfile change expected).
+- Add a preflight check in `depscanner/scripts/taint-engine-preflight.ts` that verifies `go` + `pip` runnable.
+- **No `uv` add** (per Patch 8) — pip's `--dry-run --report=-` is the canonical path.
+
+**T2.2 — Author `depscanner/src/transitive-resolvers/go.ts`** (M, ~4h)
+- Function: `resolveGoTransitives(repoRoot: string): Promise<{ deps: ParsedSbomDep[]; relationships: ParsedSbomRelationship[]; warning?: string } | null>`
+- Implementation: `spawn('go', ['list', '-m', '-json', 'all'], { cwd: repoRoot })`; stream-parse JSON records; build deps + relationships.
+- **Hard-fail** with structured error if `go.mod` exists but `go list` fails. **Soft-fail** (return null + structured warning) if `go.mod` doesn't exist.
+- Soft-fail warning shape (asserted by test): `{ ecosystem: 'gomod', repo: <path>, reason: 'go_list_failed' | 'no_gomod', detail: <string> }` — emitted to pipeline log.
+- Test fixtures under `depscanner/test/fixtures/transitive-resolvers/go/`:
+  - `simple/` — 3 direct deps + 5 transitives, no replace directives
+  - `with-replace/` — uses `replace` directive (pins to local module)
+  - `multi-module/` — workspace with `go.work`
+  - `missing-gosum/` — go.mod present but go.sum absent
+- Plus a PGLite integration test under `depscanner/test/transitive-resolvers-go-pglite.test.ts` running the real `go list` against a checked-in 5-dep fixture repo.
+
+**T2.3 — Author `depscanner/src/transitive-resolvers/pypi.ts`** (M, ~3h) — *rewritten per Patch 8*
+- Function: `resolvePypiTransitives(repoRoot: string): Promise<{ deps: ParsedSbomDep[]; relationships: ParsedSbomRelationship[]; warning?: string } | null>`
+- **Primary path:** `pip install --dry-run --report=- -r requirements.txt` (or `-r pyproject.toml` via pip's PEP 517 support). pip resolves + emits JSON without installing.
+- **Fallback path** (for poetry-locked repos pip's resolver chokes on): spawn into a throwaway tmpdir venv, `pip install -r requirements.txt --target=<tmp>`, then `pipdeptree --json --root=<tmp>`. `pipdeptree` is already in Dockerfile per audit.
+- **No `uv`** (not in Dockerfile per audit).
+- Hard/soft-fail policy + warning shape matches T2.2.
+- Test fixtures under `depscanner/test/fixtures/transitive-resolvers/pypi/`:
+  - `requirements-only/` — `requirements.txt` with fully pinned versions
+  - `pyproject-pep621/` — `pyproject.toml` with PEP 621 deps
+  - `poetry-locked/` — exercises the pipdeptree fallback
+  - `requirements-unpinned/` — version ranges; pip resolves
+- Plus PGLite integration test running the real `pip install --dry-run --report=-`.
+
+**T2.4 — Wire into `sbom.ts` post-parse pass** (M, ~3h) — *rewritten per Patch 5*
+- **Structural trigger** (replaces the 0.3 ratio heuristic): invoke when `ecosystem ∈ {gomod, pypi} AND parsed.dependencies.every(d => d.is_direct === true)` (i.e., zero transitives in the SBOM). Log the trigger reason: `transitive_resolver_invoked: { ecosystem, reason: 'all_deps_direct' | 'skipped_already_deep' }`.
+- **Dedup policy:** for purls present in the cdxgen output, cdxgen wins on version pin (resolver doesn't overwrite). Resolver fills only purls cdxgen didn't see. New rows: `is_direct = false`, `source = 'transitive'`, `devScoped = false` (resolver doesn't know scope).
+- Test cases (asserted in `depscanner/src/__tests__/transitive-resolvers-wire.test.ts`):
+  - ecosystem-mismatch: resolver NEVER runs for npm/cargo/maven even if all deps look direct.
+  - trigger fires: all-direct go SBOM → resolver runs, transitives appended.
+  - dedup: cdxgen reports `lodash@1.0.0` direct, resolver reports `lodash@1.0.1` transitive → only cdxgen's row survives (version pin).
+  - resolver soft-fail: returns null → no rows added, pipeline log carries structured warning.
+  - resolver hard-fail: throws → pipeline log carries structured error event with named shape.
+
+**T2.5 — Add 1 go app + 1 pypi app to corpus** (M, ~3-4h)
+- Same scout-present-candidates protocol as T1.1 + T1.2.
+- Candidates:
+  - go: a CLI/app importing moderately-sized libs (`cobra`, `viper`); ≥5 CVEs in transitives at a 1-2 year old tag.
+  - pypi: a Django/Flask app at a tagged ref with vulnerable transitives; or a tool like older `awscli` / `salt`.
+- Hand-label; update lock + oracle.
+- Acceptance: each ecosystem ≥5 labels; ≥2 unreachable expected per ecosystem.
+
+**T2.6 — Phase 2 verification run** (S, ~30min)
+- Rebuild + scan corpus + gate.
+- Acceptance: Gate 2 now passes for go AND pypi (>0% each); Gate 3 zero FN.
+- Commit: `feat(depscanner): custom transitive resolver for go and pypi shallow SBOMs`
+
+### Phase 3 — Precision arc (medium-high-risk) — *split per Patch 1*
+
+**T3.0 — Add `project_dependencies.callgraph_reached BOOLEAN NULL`** (S, ~30min)
+- Apply migration via Supabase MCP.
+- `cd depscanner && npm run schema:dump` in the same commit.
+- The column is populated in T3.3.
+
+**T3.1 — Widen `CallEdge` to carry `calleeExternalSourcePath`; populate in JS/TS callgraph** (M, ~3h)
+- File: `depscanner/src/taint-engine/types.ts` — add `calleeExternalSourcePath: string | null` to `CallEdge`.
+- File: `depscanner/src/taint-engine/callgraph.ts` — when the TypeChecker resolves a call to a declaration whose source file is outside `rootDir`, populate the field with the resolved declaration's source file absolute path.
+- Post-pass `extractUsedDependencies(callgraph: Callgraph): Set<string>`: for each edge with non-null `calleeExternalSourcePath`, extract `node_modules/<pkg>/...` (handle `@scope/name`).
+- Unit tests against `depscanner/test/fixtures/precision/js-imports-lodash/` and `js-imports-nothing/`.
+
+**T3.2-Python — Path-regex extraction from site-packages** (S, ~2h)
+- Stop skipping `site-packages` / `dist-packages` in the python callgraph's resolver pass (still skip during IR-emit walk).
+- Populate `calleeExternalSourcePath`; post-pass match `*/site-packages/<pkg>/...` or `*/dist-packages/<pkg>/...`.
+- Unit fixture: `depscanner/test/fixtures/precision/python-imports-requests/`.
+
+**T3.2-Go — Path-regex extraction from pkg/mod** (S, ~2h)
+- Analogous; match `*/pkg/mod/<module>@<version>/...`.
+- Handle vendor mode separately: `*/vendor/<module>/...`.
+- Unit fixture: `depscanner/test/fixtures/precision/go-imports-cobra/`.
+
+**T3.2-Rust — Path-regex extraction from registry/src** (S, ~2h)
+- Analogous; match `*/registry/src/index.crates.io-*/<crate>-<version>/...`.
+- Unit fixture: `depscanner/test/fixtures/precision/rust-imports-serde/`.
+
+**T3.2-Java — Class-FQN→SBOM-purl resolver (its own milestone)** (M, ~4-6h) — *new dedicated milestone per Patch 1*
+- **1-hour timebox spike** at the start: probe three candidate resolver sources and pick the cheapest:
+  - (a) cdxgen's class index output (if available — verify whether cdxgen emits per-class metadata)
+  - (b) `maven-dependency-plugin` output (`mvn dependency:build-classpath` + JAR class listing)
+  - (c) parse `META-INF/MANIFEST.MF` from each JAR in `~/.m2/repository/...`
+- Implementation: build `Map<string /* class FQN prefix */, string /* purl */>` keyed on the longest matching package prefix.
+- For each `unresolved` CallEdge with `calleeText` matching a known FQN prefix, credit the purl.
+- **Disambiguation policy (asserted by ≥3 fixtures):**
+  - Clean match: `com.fasterxml.jackson.databind.ObjectMapper` matches `pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.13.0`.
+  - Ambiguous prefix: both `jackson-databind` and `jackson-core` share `com.fasterxml.jackson.*` → resolve by the LONGER package prefix.
+  - Shaded/relocated class: `shadow.com.fasterxml.jackson.*` → no match (resolver only credits exact-prefix-from-root matches).
+  - Missing SBOM purl: class FQN matches nothing in the map → drop, don't crash.
+- Fixtures under `depscanner/test/fixtures/precision/java-{clean,ambiguous,shaded,nomatch}/`.
+
+**T3.3 — Plumb `usedDependencies` through `TaintEngineOutput`** (M, ~2h) — *aligned with existing pattern per Patch 7*
+- Modify `depscanner/src/pipeline-steps/taint-engine.ts`: add `usedDependencies: Set<string>` to the `TaintEngineOutput` interface.
+- `taint-engine/runner.ts` returns `usedDependencies` from `runEngine()` result.
+- `pipeline.ts:137` already destructures from `TaintEngineOutput`; add `usedDependencies` to the destructure.
+- Resolve package names → dependency_ids by joining against `project_dependencies` in a small map (one query). Pass `options.usedTransitives: Set<string>` (dependency_id strings) into `updateReachabilityLevels`.
+- Persist `callgraph_reached` to `project_dependencies` rows in the same step.
+- Constraint: precision signal applies only when `dep_ecosystem == project.primary_ecosystem` (pinned in test).
+
+**T3.4 — Add `usedTransitives` lever to heuristic + verdict provenance + evidence snippet** (S, ~1.5h) — *expanded per Patches 10 + the callgraph_evidence flip*
+- File: `depscanner/src/reachability.ts:942-963`
+- New conditions:
+  ```ts
+  const callgraphRan =
+    options.usedTransitives !== undefined &&
+    options.usedTransitives.size > 0;
+  const callgraphReachedThisDep =
+    callgraphRan && options.usedTransitives!.has(meta.dependencyId);
+  const heuristicUnreachable =
+    graphTrusted &&
+    usageAnalysisProducedOutput &&
+    !!meta &&
+    !meta.isDirect &&
+    meta.filesImporting === 0 &&
+    !isFrameworkEmbeddedRuntime(depName) &&
+    !callgraphReachedThisDep;
+  ```
+- When `callgraphReachedThisDep` causes the demote, set:
+  - `level = 'module'`
+  - `details.verdict = 'callgraph_reached_transitive'`
+  - `details.callgraph_evidence = { callee_file: <first edge's calleeExternalSourcePath>, callee_method: <first edge's calleeText> }` — capped at 256 chars total.
+
+**T3.5 — *REMOVED.*** Per Patch 3, precision lever is gated on existing `DEPTEX_TAINT_ENGINE_ROLLOUT_PCT`. No new env flag; no new rollback knob. (`taint-engine/runner.ts` already respects the engine rollout pct; when the engine doesn't run, no precision data flows, and `updateReachabilityLevels` falls back to v2 behavior.)
+
+**T3.6 — Authoring jackson-vs-idna precision fixture** (M, ~2h)
+- Two fixtures in `depscanner/test/fixtures/precision/`:
+  - `jackson-style/` — app imports a framework that internally calls jackson; jackson must end up `module` (with `verdict='callgraph_reached_transitive'`), NOT `unreachable`.
+  - `idna-style/` — app does no DNS work; some transitive pulls idna; idna must end up `unreachable`.
+- Test asserts: with `usedTransitives` populated, jackson is `module` and idna is `unreachable`; with `usedTransitives` undefined (no engine run), both fall back to v2 heuristic behavior.
+
+**T3.6a — Gate-3 PDV-shape unit test** (S, ~1h) — *new per Patch 10*
+- File: `depscanner/src/__tests__/gate3-shapes.test.ts`
+- Construct ~6-8 representative PDV shapes:
+  - jackson-confirmed-reach (precision demotes correctly)
+  - idna-truly-unreachable
+  - dev-scope-fastify-CVE (scope floor)
+  - missing-callgraph-graceful-degrade (other ecosystem)
+  - callgraph-empty-set (falls back to v2)
+  - precision-off (usedTransitives undefined)
+  - direct-dep-always-module
+  - framework-embedded-runtime (tomcat/jetty exemption)
+- Assert `updateReachabilityLevels` never produces `unreachable` for the reachable shapes. Runs in `npm test`.
+
+**T3.7 — Phase 3 verification run + precision-diff snapshot** (S, ~1h) — *expanded per Patch 10*
+- Rebuild + scan corpus + gate.
+- Snapshot BEFORE (no precision plumbing) vs AFTER state for each PDV in the corpus; emit `oss-corpus-runs/v3-phase3/precision-diff.json` showing every PDV that moved unreachable→module.
+- Audit the diff: are demotions on real CVEs the expected ones (jackson-core, rustix, time, etc.)? Any unexpected demotions are false-positive risks — investigate.
+- **Acceptance:** Gate 1 in the projected band (75-92%; falls in the corridor from Pre-Implement Ceiling-Math Budget); Gate 2 all >0%; Gate 3 zero FN; precision-diff.json reviewed.
+- Commit precision-diff.json alongside golden report.
+- Commit: `feat(reachability): demote called-but-not-imported transitives via taint-engine callgraph`
+
+**T3.7a — OFF-state byte-stability unit test** (S, ~1h) — *new per Patch 2*
+- File: `depscanner/test/precision-off-state.test.ts`
+- Run `updateReachabilityLevels` twice against a captured PDV set: once with `options.usedTransitives=undefined`, once with it populated.
+- Assert OFF-run produces a verdict set byte-identical to a checked-in baseline JSON (`depscanner/test/fixtures/precision/off-state-baseline.json`).
+- Run in `npm test`. Enforces the v2-behavior-recoverable contract on every PR.
+
+### Phase 4 — Land
+
+**T4.0 — Author `depscanner/docs/reachability-benchmark.md`** (S, ~2-3h) — *new per Patch 5 + OPP-5*
+- ~300-400 lines covering: corpus schema, gate definitions, oracle role + independence caveat, baseline-lock invariants, precision arc design (taint-engine callgraph extension), current per-eco numbers, how to add a repo + label.
+- Cross-link from `depscanner/scripts/reachability-corpus.yaml` header comment.
+- The artifact a future blog post / OSS contributor / sales conversation reads.
+
+**T4.1 — Refresh golden report** (S, ~10min)
+- `cp oss-corpus-runs/v3-final/report.json depscanner/scripts/reachability-corpus.golden-report.json`
+
+**T4.2 — Update plan STATUS + memory entries** (S, ~30min)
+- Append STATUS section to this plan file with final % + per-eco breakdown + ceiling-math actuals.
+- Update `MEMORY.md` entries: archive v2-state, create `reachability_noise_reduction_v3_state.md`.
+- Update `active_sprint.md` to mark v3 shipped.
+
+**T4.3 — Run full test gate** (S, ~10min) — *expanded per Patch TSA-6*
+- `cd depscanner && npm run preflight && npm run tsc && npm test`
+- `cd depscanner && npm run test:integration` — add this script to `depscanner/package.json` that runs `npx tsx test/*.ts` (PGLite integration tests).
+- `cd backend && npm test`
+- **Drop frontend test run** (per sc-f4) — v3 touches no frontend files.
+- Acceptance: clean.
+
+**T4.4 — Final commit + push** (S, ~5min)
+- Commit Conventional Commits, no Co-Author trailer.
+- Push branch — Henry decides PR sequencing (v2 still unmerged; one PR or two is his call).
+
+## Testing & Validation Strategy
+
+**Per-phase corpus gate.** Each phase ends with a corpus run + gate check. Phase fails if Gate 3 (zero false negatives) breaks; recover by fixing the label or the classifier — never by relaxing the gate.
+
+**Unit tests added (named explicitly):**
+- `depscanner/src/__tests__/cargo-build-dep.test.ts` — T1.4a fixture assertion.
+- `depscanner/src/__tests__/transitive-resolvers-wire.test.ts` — T2.4 trigger + dedup + soft/hard-fail warning shape.
+- `depscanner/src/__tests__/gate3-shapes.test.ts` — T3.6a Gate-3 unit shape test.
+- Per-language precision fixtures under `depscanner/test/fixtures/precision/{js,python,go,rust,java}-*/`.
+- Java fuzzy-match: ≥3 fixtures (clean, ambiguous, shaded, nomatch).
+
+**Integration tests (PGLite, run via `test:integration` script):**
+- `depscanner/test/transitive-resolvers-go-pglite.test.ts` — real `go list` against checked-in fixture repo.
+- `depscanner/test/transitive-resolvers-pypi-pglite.test.ts` — real pip --dry-run against checked-in fixture repo.
+- `depscanner/test/precision-pglite.test.ts` — jackson-style PDV resolves to `module` with `verdict='callgraph_reached_transitive'`.
+- `depscanner/test/precision-off-state.test.ts` (T3.7a) — byte-stable OFF-state.
+- Existing `dual-scope-attachment-pglite.test.ts` continues to pass.
+
+**Corpus-level snapshots:**
+- Per-phase delta JSON: `oss-corpus-runs/v3-phase{N}/delta.json` capturing CVE-level transitions. Committed alongside golden report.
+- `precision-diff.json` from T3.7.
+
+**Performance bounds:**
+- Per-repo scan: stay within +30s vs v2 warm-VDB baseline.
+- Full corpus run: ≤45 min at `--parallel=2`.
+- Callgraph extraction adds: measured in T3.7; bound retroactively if exceeded.
+- **No proactive timeout cap on callgraph extraction** (per sc-f5) — measure first; add cap only if T3.7 shows >10s/repo overhead.
+
+**Regression check:**
+- `depscanner/scripts/check-golden-report-stable.ts` (T3.7a-CI add): script that re-evaluates `reachability-corpus.golden-report.json` against the committed baseline + oracle and fails if anything drifted. Wired into CI for PRs touching `depscanner/src/reachability.ts` or `depscanner/src/sbom.ts`. Catches drift without requiring a 45-min docker scan.
+
+## Risks & Open Questions
+
+1. **Maven repo availability (T1.2).** No guaranteed candidate. Mitigation: scout pass produces ranked list; if no candidate clears the bar, accept maven stays at ~10% and document. Plan does not block.
+2. **Java class-FQN→purl resolver source choice (T3.2-Java).** Three candidates (cdxgen class index / maven-dependency-plugin / META-INF parsing); winner unknown until the 1-hour timebox spike runs. Mitigation: spike's binary outcome ("can we cheaply build the map?") gates the rest of T3.2-Java; if all three options are >4h, defer T3.2-Java to v3.1 and ship precision for npm/python/go/rust only.
+3. **Container runtime for go/pip (T2.1).** Per audit Dockerfile has both — risk is low but verify in T2.1.
+4. **Ceiling-math drag may exceed lift if maven swap fails.** Mitigation: stop/go decision at T1.5.
+5. **Step budget on callgraph extraction (T3.7).** Measured retroactively. If >+30s/repo, cap added then.
+
+## Dependencies
+
+- v2 branch tip `2b02e19` on `worktree-reachability-noise-reduction`
+- Taint-engine callgraph (Phase 6 + 6.5 — shipped, multi-language)
+- cdxgen behavior unchanged
+- VDB cache (`~/.deptex/vdb`, ~55GB) resident
+- Dockerfile: `go 1.22.10` + `pipdeptree 2.23.0` present (audit-verified)
+- `DEPTEX_TAINT_ENGINE_ROLLOUT_PCT` controls precision rollout (no new flag)
+
+## Success Criteria
+
+Two-tier per Patch 6 (engineering completion vs headline lift are decoupled).
+
+### Engineering-complete (binary — required to land):
+- T3.6 jackson-vs-idna fixture passes (precision demotion verified on synthetic case).
+- T3.6a Gate-3 PDV-shape unit test passes (no false-negative shapes regress).
+- T3.7a OFF-state byte-stability test passes (v2 behavior recoverable).
+- T2.2/T2.3 go + pypi resolvers work against PGLite integration fixtures.
+- Gate 3 zero false negatives on the corpus.
+- `project_dependencies.callgraph_reached` column lands; `schema.sql` refreshed.
+- Golden report refreshed; `check-golden-report-stable.ts` passes.
+- `docs/reachability-benchmark.md` lands.
+
+### Headline directional (reported, non-blocking):
+- Gate 1 in 82-92% corridor (per Pre-Implement Ceiling-Math Budget).
+- Gate 2 all ecosystems >0%; go AND pypi now measurable.
+- Maven Gate-2 ≥40% IF T1.3 yielded a viable repo (otherwise documented punt).
+- Per-eco numbers in v3-phase{1,2,3}/delta.json artifacts.
+
+## Plan-review handoff
+
+This plan integrates 10 patches from the 2026-05-20 plan-review (lean mode, 6 personas, 47 findings, verdict REVISE). Patches applied: right-size T3.1/T3.2 + commit OFF-state test + drop new env flag + add ceiling-math budget + fix shallow-SBOM trigger + restructure Success Criteria + use TaintEngineOutput + pypi resolver tooling + cut T1.4 cargo repo + add Java fuzzy-match + verdict provenance.
+
+Optional second `/review-plan` pass in lean mode would sanity-check the revisions. Proceed to `/implement` when ready.

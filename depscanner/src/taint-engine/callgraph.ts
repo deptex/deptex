@@ -150,6 +150,7 @@ export async function buildCallgraphContext(options: BuildCallgraphOptions): Pro
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    usedDependencies: extractNpmUsedDependencies(edges),
   };
 
   const nodeIdToDeclaration = new Map<FunctionId, ts.Node>();
@@ -483,6 +484,9 @@ function collectCallEdges(
 
       let kind: CallEdgeKind = 'unresolved';
       let calleeId: FunctionId | null = null;
+      // v3 (precision arc): captured for external calls so the post-pass
+      // `extractUsedDependencies` can credit the dep this call lands in.
+      let calleeExternalSourcePath: string | null = null;
 
       const callExpr = node as ts.CallExpression | ts.NewExpression;
       const symbol = ts.isCallExpression(callExpr)
@@ -508,8 +512,11 @@ function collectCallEdges(
               // External (node_modules / lib) — counts as resolved for the
               // typing-quality metric. We don't emit an edge to a node we
               // don't have. The propagator handles externals via framework specs.
+              // v3: capture the source path so `extractUsedDependencies`
+              // can credit the npm package this call lands in.
               resolvedCallCount++;
               kind = 'static';
+              calleeExternalSourcePath = decl.getSourceFile().fileName;
             }
           }
         }
@@ -524,6 +531,7 @@ function collectCallEdges(
         column: start.character + 1,
         calleeText,
         argumentCount: callExpr.arguments?.length ?? 0,
+        calleeExternalSourcePath,
       });
     }
     ts.forEachChild(node, visit);
@@ -546,6 +554,56 @@ function collectCallEdges(
 function isExternalDeclaration(decl: ts.Node, absoluteRoot: string): boolean {
   const sf = decl.getSourceFile();
   return !isInsideWorkspace(sf.fileName, absoluteRoot);
+}
+
+/**
+ * v3 (precision arc): extract the set of npm packages this callgraph
+ * actually exercises. Walks edges whose calleeExternalSourcePath lands
+ * inside a `node_modules/<pkg>` directory and credits the deepest
+ * (innermost) such package — handles the express → qs case where
+ * `node_modules/express/node_modules/qs/index.js` should credit qs,
+ * not express. Scoped packages (`@scope/name`) keep both segments.
+ *
+ * Returns an empty Set when no external edges were resolved (which is
+ * the dominant case on untyped JS projects — the TypeChecker can't
+ * resolve into deps without type defs). The reachability classifier
+ * treats an empty Set as "callgraph found nothing" and falls back to
+ * the v2 heuristic for every transitive — see `updateReachabilityLevels`.
+ */
+export function extractNpmUsedDependencies(edges: CallEdge[]): Set<string> {
+  const out = new Set<string>();
+  for (const edge of edges) {
+    if (!edge.calleeExternalSourcePath) continue;
+    const pkg = pkgFromNodeModulesPath(edge.calleeExternalSourcePath);
+    if (pkg) out.add(pkg);
+  }
+  return out;
+}
+
+/**
+ * Pull the package name out of a node_modules path. Uses the LAST
+ * `/node_modules/` occurrence so a transitive nested under another
+ * package's node_modules is credited correctly. Returns null if the
+ * path isn't under node_modules (lib.d.ts ambient libs, etc.).
+ */
+export function pkgFromNodeModulesPath(p: string): string | null {
+  const norm = p.replace(/\\/g, '/');
+  const marker = '/node_modules/';
+  const idx = norm.lastIndexOf(marker);
+  if (idx === -1) return null;
+  const after = norm.slice(idx + marker.length);
+  const parts = after.split('/');
+  if (parts.length === 0 || !parts[0]) return null;
+  // Scoped packages: `@scope/name` keeps both segments. A bare `@scope`
+  // with no name segment after it is junk — refuse rather than emit a
+  // half-name that won't match any SBOM purl.
+  if (parts[0].startsWith('@')) {
+    if (parts.length >= 2 && parts[1]) {
+      return `${parts[0]}/${parts[1]}`;
+    }
+    return null;
+  }
+  return parts[0];
 }
 
 function isInterfaceMethod(decl: ts.Node): boolean {
