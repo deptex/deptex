@@ -30,7 +30,13 @@ import { promisify } from 'util';
 import type { ParsedSbomDep, ParsedSbomRelationship } from '../sbom';
 import type { TransitiveResolverResult } from './go';
 
-const execFileP = promisify(execFile);
+// Lazy-initialized — see go.ts for rationale (jest-mock-safety on
+// child_process at module-load).
+let execFileP: ((cmd: string, args: readonly string[], opts?: any) => Promise<{ stdout: string; stderr: string }>) | null = null;
+function getExecFileP() {
+  if (!execFileP) execFileP = promisify(execFile) as any;
+  return execFileP!;
+}
 
 const REQUIREMENTS_FILES = [
   'requirements.txt',
@@ -102,7 +108,7 @@ async function resolveViaPipDryRun(
       // pyproject.toml's [project.dependencies] resolves transitively.
       : ['install', '--dry-run', '--quiet', '--report', '-', '-e', path.dirname(manifestPath)];
 
-  const { stdout } = await execFileP('pip', args, {
+  const { stdout } = await getExecFileP()('pip', args, {
     maxBuffer: 64 * 1024 * 1024,
     env: {
       ...process.env,
@@ -125,18 +131,18 @@ async function resolveViaPipdeptreeVenv(
 ): Promise<TransitiveResolverResult> {
   const venv = fs.mkdtempSync(path.join(os.tmpdir(), 'pypi-resolver-'));
   try {
-    await execFileP('python3', ['-m', 'venv', venv]);
+    await getExecFileP()('python3', ['-m', 'venv', venv]);
     const pip = path.join(venv, 'bin', 'pip');
     const pipdeptree = path.join(venv, 'bin', 'pipdeptree');
     // Install pipdeptree into the venv (avoid relying on the global one
     // pointing at the worker's python).
-    await execFileP(pip, ['install', '--quiet', 'pipdeptree']);
+    await getExecFileP()(pip, ['install', '--quiet', 'pipdeptree']);
     if (manifestPath.endsWith('pyproject.toml')) {
-      await execFileP(pip, ['install', '--quiet', '-e', path.dirname(manifestPath)]);
+      await getExecFileP()(pip, ['install', '--quiet', '-e', path.dirname(manifestPath)]);
     } else {
-      await execFileP(pip, ['install', '--quiet', '-r', manifestPath]);
+      await getExecFileP()(pip, ['install', '--quiet', '-r', manifestPath]);
     }
-    const { stdout } = await execFileP(pipdeptree, ['--json'], { maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await getExecFileP()(pipdeptree, ['--json'], { maxBuffer: 64 * 1024 * 1024 });
     return parsePipdeptreeJson(stdout, 'pipdeptree-venv');
   } finally {
     fs.rmSync(venv, { recursive: true, force: true });

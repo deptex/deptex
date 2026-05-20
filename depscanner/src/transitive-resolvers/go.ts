@@ -19,7 +19,15 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { ParsedSbomDep, ParsedSbomRelationship } from '../sbom';
 
-const execFileP = promisify(execFile);
+// Lazy-initialized to avoid running `promisify(execFile)` at module-load
+// time — some jest test contexts mock `child_process` globally and the
+// mock leaves `execFile` undefined, which would trip `promisify` here
+// before any caller actually invokes the resolver.
+let execFileP: ((cmd: string, args: readonly string[], opts?: any) => Promise<{ stdout: string; stderr: string }>) | null = null;
+function getExecFileP() {
+  if (!execFileP) execFileP = promisify(execFile) as any;
+  return execFileP!;
+}
 
 /**
  * Output of any transitive resolver. Two-tuple of (deps, relationships)
@@ -61,7 +69,7 @@ export async function resolveGoTransitives(
     return null;
   }
 
-  const { stdout } = await execFileP('go', ['list', '-m', '-json', 'all'], {
+  const { stdout } = await getExecFileP()('go', ['list', '-m', '-json', 'all'], {
     cwd: repoRoot,
     maxBuffer: 64 * 1024 * 1024, // 64MB — generous; medium projects stay <1MB
     env: {
