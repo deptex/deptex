@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
-import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Loader2 } from 'lucide-react';
+import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Loader2, Users } from 'lucide-react';
 import { api, OrganizationMember, OrganizationInvitation, Team, Organization, OrganizationRole, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
@@ -210,12 +210,16 @@ export default function MembersPage({
   };
 
   const getAllRoles = () => {
+    // customRoles comes from organization_roles in the DB and carries the
+    // `color` + `display_name` + `permissions` fields that the badge renderer
+    // needs. Put it FIRST in the dedup so the DB record wins over the
+    // bare-bones defensive fallback below — otherwise the dropdown loses
+    // its badge colors for owner/member, which DO exist in the DB.
     const defaultRoles = [
       { name: 'owner', is_default: true },
       { name: 'member', is_default: true },
     ];
-    // Combine and deduplicate by name
-    const allRoles = [...defaultRoles, ...customRoles];
+    const allRoles = [...customRoles, ...defaultRoles];
     const uniqueRoles = allRoles.filter((role, index, self) =>
       index === self.findIndex(r => r.name === role.name)
     );
@@ -784,7 +788,7 @@ export default function MembersPage({
                 searchInputRef.current?.blur();
               }
             }}
-            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
           {searchQuery && (
             <button
@@ -866,8 +870,24 @@ export default function MembersPage({
               <tbody className="divide-y divide-border">
               {filteredMembers.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                    No members matched this search.
+                  <td colSpan={3} className="px-4 py-16">
+                    <div className="flex flex-col items-center gap-3 text-center">
+                      <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center">
+                        <Users className="h-6 w-6 text-foreground-secondary" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-foreground">
+                          {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                            ? 'No members match your filters'
+                            : 'No members yet'}
+                        </p>
+                        <p className="text-xs text-foreground-secondary">
+                          {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                            ? 'Try a different search or clear the filters.'
+                            : 'Invite teammates to join this organization.'}
+                        </p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               ) : filteredMembers.map((member) => (

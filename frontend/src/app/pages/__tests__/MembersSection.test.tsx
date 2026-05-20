@@ -362,7 +362,7 @@ describe('MembersPage', () => {
       });
     });
 
-    it('shows No members matched when filter matches nothing', async () => {
+    it('shows the empty state when filter matches nothing', async () => {
       const membersWithMultiple = [
         { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
       ];
@@ -372,7 +372,7 @@ describe('MembersPage', () => {
       const filterInput = screen.getByPlaceholderText('Filter...');
       await userEvent.type(filterInput, 'nonexistent');
       await waitFor(() => {
-        expect(screen.getByText('No members matched this search.')).toBeInTheDocument();
+        expect(screen.getByText('No members match your filters')).toBeInTheDocument();
       });
     });
   });
