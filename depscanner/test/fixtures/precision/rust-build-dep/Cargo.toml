@@ -1,0 +1,30 @@
+# v3 precision arc — synthetic Rust fixture pinning that the existing
+# `collectCargoDevDeps` regex correctly classifies BOTH [dev-dependencies]
+# AND [build-dependencies] as non-prod (devScoped → environment='dev' →
+# unreachable floor in the reachability classifier).
+#
+# The regex `/(?:^|\.)(?:dev|build)-dependencies$/` in src/sbom.ts:359
+# catches both scopes uniformly. This fixture exists so a future refactor
+# that "tidies up" the regex won't silently regress cargo's Gate 1 lift
+# on real Rust apps where vulnerable build-deps live.
+[package]
+name = "rust-build-dep-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+
+[dev-dependencies]
+mockall = "0.12"
+tokio-test = "0.4"
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.69"
+
+# A target-specific [build-dependencies] section to exercise the
+# `(?:^|\.)` prefix branch of the regex (catches
+# `[target.'cfg(unix)'.build-dependencies]` too).
+[target.'cfg(unix)'.build-dependencies]
+pkg-config = "0.3"
