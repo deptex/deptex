@@ -1105,7 +1105,7 @@ export default function MembersPage({
                 placeholder=""
                 value={inviteForms[0]?.email || ''}
                 onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && inviteForms[0]?.email) {
                     handleSendInvites();
@@ -1167,7 +1167,7 @@ export default function MembersPage({
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
+          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border sm:justify-between">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"
@@ -1252,7 +1252,7 @@ export default function MembersPage({
                 </div>
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
+              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border sm:justify-between">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1348,7 +1348,7 @@ export default function MembersPage({
                 )}
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
+              <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border sm:justify-between">
                 <Button
                   variant="outline"
                   className="!h-8 !px-3 !rounded-lg"
@@ -1395,7 +1395,7 @@ export default function MembersPage({
                 : `Are you sure you want to remove ${selectedMember?.full_name || selectedMember?.email || 'this member'} from the organization? This action cannot be undone.`}
             </DialogDescription>
           </div>
-          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border">
+          <DialogFooter className="px-6 py-4 bg-background-card-header border-t border-border sm:justify-between">
             <Button
               variant="outline"
               className="!h-8 !px-3 !rounded-lg"

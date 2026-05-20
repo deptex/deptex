@@ -170,10 +170,10 @@ export function RoleDropdown({
         ref={triggerRef}
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full min-w-[240px] px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between transition-colors ${variant === 'modal'
+        className={`w-full min-w-[240px] px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between transition-colors ${variant === 'modal'
           ? 'bg-background-card hover:bg-background-subtle/50'
           : 'bg-background-card hover:bg-background-subtle/50'
-          } ${isOpen ? 'ring-2 ring-primary/50 border-primary' : ''}`}
+          } ${isOpen ? 'ring-2 ring-ring border-input' : ''}`}
       >
         <span className="text-left">
           {selectedRole ? getRoleDisplayName(selectedRole.name) : 'Select a role...'}
