@@ -886,12 +886,12 @@ export default function MembersPage({
               </thead>
               <tbody className="divide-y divide-border">
               {filteredMembers.length === 0 ? (
-                // A global `table tbody tr:hover` rule in Main.css paints every
-                // table row on hover regardless of per-row tailwind classes —
-                // hover:!bg-background-card overrides it (the !important is
-                // what wins against the global rule's !important).
-                <tr className="hover:!bg-background-card">
-                  <td colSpan={3} className="px-4 py-12">
+                // data-no-hover opts out of the global `table tbody tr:hover`
+                // rule in Main.css — that selector has higher specificity than
+                // any Tailwind hover utility so `!important` alone can't beat
+                // it; we extend its :not() chain instead.
+                <tr data-no-hover>
+                  <td colSpan={3} className="px-4 py-8">
                     <div className="flex flex-col items-center justify-center text-center">
                       <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
                         <Users className="h-5 w-5 text-foreground-secondary" />
