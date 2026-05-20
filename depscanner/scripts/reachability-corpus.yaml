@@ -300,3 +300,47 @@ repos:
         source: |
           @babel/helpers. UNREACHABLE: Babel reaches fastify only through
           devDependency tooling; fastify transpiles nothing at runtime.
+
+  # === v3 expansion: 4 additional ecosystems for the per-ecosystem table ===
+  # These entries are MEASUREMENT-ONLY (ground_truth_cves: []). They exercise
+  # cdxgen + OSV fallback + reachability classifier on real apps from
+  # ecosystems v2 didn't cover. Their findings feed the all-findings noise
+  # reduction metric (allFindingsNoiseReductionPct) without claiming an oracle.
+  # Refs are pinned to 2-4 year-old releases so the transitive trees carry
+  # known CVEs — the engine's noise-reduction job is exactly to classify
+  # which of those library-internal CVEs the app actually reaches.
+
+  - name: caddy
+    repo_url: https://github.com/caddyserver/caddy.git
+    ecosystem: golang
+    # Dec 2021 — pre-v2.5, transitive tree has known CVEs in golang.org/x/*
+    # and indirect deps that have since been patched.
+    ref: v2.4.6
+    ground_truth_cves: []
+
+  - name: bandit
+    repo_url: https://github.com/PyCQA/bandit.git
+    ecosystem: pypi
+    # Mar 2022 — Bandit pulls a moderate transitive set via PyYAML + gitpython.
+    ref: 1.7.4
+    ground_truth_cves: []
+
+  - name: laravel
+    repo_url: https://github.com/laravel/laravel.git
+    ecosystem: composer
+    # Dec 2021 — Laravel 8 skeleton. Composer pulls a deep transitive set
+    # (symfony components, monolog, doctrine, etc.) with known stale-version
+    # CVEs that v3's heuristic should classify aggressively as unreachable
+    # for an unmodified skeleton with no app code wired up.
+    ref: v8.6.7
+    ground_truth_cves: []
+
+  - name: lobsters
+    repo_url: https://github.com/lobsters/lobsters.git
+    ecosystem: gem
+    # HEAD-of-master SHA resolved 2026-05-20 via git ls-remote. Small Rails
+    # news-board app, Rails 7.x with a manageable bundle that pulls dozens
+    # of transitive gems. Lobsters has no version tags, so master-tip is
+    # the only reproducible pin available.
+    ref: 4cca5fff84f43a55e74c0c992024db544724240c
+    ground_truth_cves: []

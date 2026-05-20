@@ -171,7 +171,14 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
   // all (it keys on `!is_direct`). The resolver runs ONLY when the entire
   // dep list lacks any !is_direct row, so deep SBOMs (cdxgen --deep on,
   // future cdxgen versions, etc.) are not double-resolved.
-  const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'pypi']);
+  // Match both the cdxgen `-t` flag values (`gomod`, `pypi`) AND the
+  // ecosystem strings the corpus harness / scan_jobs.type may carry
+  // (`golang`, `pypi`). cdxgen normalizes `-t go` → `golang`-tagged PURLs
+  // and `-t gomod` → `golang`-tagged PURLs too; the SBOM PURL ecosystem is
+  // always `golang`, but the *job* ecosystem string varies depending on
+  // which surface emitted it.
+  const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'golang', 'pypi']);
+  const isGo = jobEcosystem === 'gomod' || jobEcosystem === 'golang';
   if (
     RESOLVER_ECOSYSTEMS.has(jobEcosystem) &&
     dependencies.length > 0 &&
@@ -179,10 +186,9 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
   ) {
     const before = dependencies.length;
     try {
-      const result =
-        jobEcosystem === 'gomod'
-          ? await resolveGoTransitives(workspaceRoot)
-          : await resolvePypiTransitives(workspaceRoot);
+      const result = isGo
+        ? await resolveGoTransitives(workspaceRoot)
+        : await resolvePypiTransitives(workspaceRoot);
       if (result === null) {
         await log.info(
           'sbom',
