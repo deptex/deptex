@@ -40,6 +40,7 @@ import {
   clearVdbVolumeForRecovery,
 } from '../pipeline-helpers';
 import type { PipelineContext, PipelineLogger } from '../pipeline-types';
+import { runOsvFallback, osvFallbackMode } from './osv-vuln-scan';
 
 function runDepScanProcess(
   depScanExe: string,
@@ -296,6 +297,37 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       }
     },
   });
+
+  // === OSV-API fallback (mid-step, before VDR discovery) ===
+  // dep-scan's bundled VDB has a silent per-ecosystem lookup gap (confirmed
+  // 2026-05-20: returns empty for cargo/maven/npm-dev-cluster against PURLs
+  // that OSV's HTTP API matches instantly). Rather than debug OWASP's tool,
+  // we run OSV directly when dep-scan's VDR is missing/empty. The fallback
+  // writes a CycloneDX-VDR-shaped file into `reportsDir` that the discovery
+  // walk below picks up unchanged.
+  const fallbackMode = osvFallbackMode();
+  if (fallbackMode !== 'off') {
+    try {
+      const result = await runOsvFallback({
+        reportsDir,
+        jobEcosystem,
+        logger: log,
+        force: fallbackMode === 'force',
+      });
+      if (result.wrote && result.vulnCount > 0) {
+        depScanSucceeded = true;
+      } else if (!result.wrote && result.reason) {
+        // Common: dep-scan VDR was already non-empty. Log at debug only.
+        if (process.env.DEPTEX_CLI_MODE !== '1') {
+          console.log(`[osv-fallback] skipped: ${result.reason}`);
+        }
+      }
+    } catch (e) {
+      // Network errors here must NOT fail the whole scan — dep-scan's own
+      // findings (if any) still get processed below.
+      await log.warn('vuln_scan_osv', `OSV fallback errored (continuing): ${(e as Error).message}`);
+    }
+  }
 
   // === Process dep-scan results ===
   const listVdrFiles = (dir: string): string[] => {
