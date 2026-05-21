@@ -1677,18 +1677,15 @@ export default function OrganizationSettingsPage() {
   const customIntegrationDetailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notifCreateRuleRef = useRef<(() => void) | null>(null);
 
-  // Jira PAT dialog state
-  const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
+  // Inline credential-form state for the Add Integration sidebar — each form
+  // expands in place inside the sidebar rather than opening its own dialog.
   const [jiraPatBaseUrl, setJiraPatBaseUrl] = useState('');
   const [jiraPatToken, setJiraPatToken] = useState('');
   const [jiraPatSaving, setJiraPatSaving] = useState(false);
 
-  // Email notification dialog state
-  const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [emailToAdd, setEmailToAdd] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
 
-  const [showPagerDutyDialog, setShowPagerDutyDialog] = useState(false);
   const [pagerDutyServiceName, setPagerDutyServiceName] = useState('');
   const [pagerDutyRoutingKey, setPagerDutyRoutingKey] = useState('');
   const [pagerDutySaving, setPagerDutySaving] = useState(false);
@@ -1701,13 +1698,17 @@ export default function OrganizationSettingsPage() {
   const [disconnectingConnection, setDisconnectingConnection] = useState(false);
   const [showRegenerateSecretConfirm, setShowRegenerateSecretConfirm] = useState(false);
   // Add-integration sidebar — the single CTA on the Integrations header opens this;
-  // each row inside hands off to the matching OAuth start / dialog open / sidepanel open.
+  // each row inside either hands off to an OAuth redirect, expands inline to collect
+  // credentials, or opens the larger Custom Integration form sidepanel.
   // Same slide-in pattern as the Add Role sidebar: a separate "visible" flag drives
   // the transform/opacity transition so we get a real slide-in/out instead of the
   // Dialog primitive's zoom-from-center default.
   const [showAddIntegrationSidebar, setShowAddIntegrationSidebar] = useState(false);
   const [addIntegrationPanelVisible, setAddIntegrationPanelVisible] = useState(false);
   const addIntegrationCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which row in the Add sidebar is currently expanded showing its credential form.
+  // Only one at a time (accordion). Null when nothing is expanded.
+  const [expandedAddItem, setExpandedAddItem] = useState<'email' | 'pagerduty' | 'jira-dc' | null>(null);
 
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
   const [notifPauseLoading, setNotifPauseLoading] = useState(false);
@@ -2396,6 +2397,12 @@ export default function OrganizationSettingsPage() {
     addIntegrationCloseTimeoutRef.current = setTimeout(() => {
       addIntegrationCloseTimeoutRef.current = null;
       setShowAddIntegrationSidebar(false);
+      setExpandedAddItem(null);
+      setEmailToAdd('');
+      setPagerDutyServiceName('');
+      setPagerDutyRoutingKey('');
+      setJiraPatBaseUrl('');
+      setJiraPatToken('');
     }, 150);
   };
 
@@ -5249,228 +5256,6 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {/* Jira Data Center PAT Dialog */}
-              <Dialog open={showJiraPatDialog} onOpenChange={setShowJiraPatDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <img src="/images/integrations/jira.png" alt="Jira" className="h-7 w-7 rounded object-contain" />
-                      <div>
-                        <DialogTitle>Jira Data Center</DialogTitle>
-                        <DialogDescription>Connect via Personal Access Token</DialogDescription>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="jira-url">Server URL</Label>
-                      <Input
-                        id="jira-url"
-                        type="url"
-                        value={jiraPatBaseUrl}
-                        onChange={(e) => setJiraPatBaseUrl(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label htmlFor="jira-pat">Personal Access Token</Label>
-                      <Input
-                        id="jira-pat"
-                        type="password"
-                        value={jiraPatToken}
-                        onChange={(e) => setJiraPatToken(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
-                    <Button
-                      variant="outline"
-                      className="!h-8 !px-3 !rounded-lg"
-                      onClick={() => setShowJiraPatDialog(false)}
-                      disabled={jiraPatSaving}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="green"
-                      disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
-                      onClick={async () => {
-                        if (!organization?.id) return;
-                        setJiraPatSaving(true);
-                        try {
-                          await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
-                          toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
-                          setShowJiraPatDialog(false);
-                          await loadConnections();
-                        } catch (err) {
-                          console.error('Failed to connect Jira PAT:', err);
-                          toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
-                        } finally {
-                          setJiraPatSaving(false);
-                        }
-                      }}
-                    >
-                      <span className={jiraPatSaving ? 'invisible' : ''}>Create connection</span>
-                      {jiraPatSaving && (
-                        <span className="absolute inset-0 flex items-center justify-center">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        </span>
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              {/* Email Notification Dialog */}
-              <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded flex items-center justify-center text-foreground-secondary">
-                        <Mail className="h-7 w-7" />
-                      </div>
-                      <div>
-                        <DialogTitle>Add Email</DialogTitle>
-                        <DialogDescription>Add an email address to receive notification alerts.</DialogDescription>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="email-to-add">Email address</Label>
-                      <Input
-                        id="email-to-add"
-                        type="email"
-                        value={emailToAdd}
-                        onChange={(e) => setEmailToAdd(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
-                    <Button
-                      variant="outline"
-                      className="!h-8 !px-3 !rounded-lg"
-                      onClick={() => setShowEmailDialog(false)}
-                      disabled={emailSaving}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="green"
-                      disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
-                      onClick={async () => {
-                        if (!organization?.id) return;
-                        setEmailSaving(true);
-                        try {
-                          await api.createEmailNotification(organization.id, emailToAdd.trim());
-                          toast({ title: 'Added', description: 'Email notification added successfully.' });
-                          setShowEmailDialog(false);
-                          setEmailToAdd('');
-                          await loadConnections();
-                        } catch (err) {
-                          console.error('Failed to add email notification:', err);
-                          toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
-                        } finally {
-                          setEmailSaving(false);
-                        }
-                      }}
-                    >
-                      <span className={emailSaving ? 'invisible' : ''}>Add</span>
-                      {emailSaving && (
-                        <span className="absolute inset-0 flex items-center justify-center">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        </span>
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              {/* PagerDuty Connect Dialog */}
-              <Dialog open={showPagerDutyDialog} onOpenChange={setShowPagerDutyDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded flex items-center justify-center text-lg leading-none">🚨</div>
-                      <div>
-                        <DialogTitle>Connect PagerDuty</DialogTitle>
-                        <DialogDescription>Get paged for critical security events.</DialogDescription>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="pd-service-name">Service name</Label>
-                      <Input
-                        id="pd-service-name"
-                        value={pagerDutyServiceName}
-                        onChange={(e) => setPagerDutyServiceName(e.target.value)}
-                        placeholder="e.g. Deptex Security Alerts"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="pd-routing-key">Routing key</Label>
-                      <Input
-                        id="pd-routing-key"
-                        type="password"
-                        value={pagerDutyRoutingKey}
-                        onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
-                        placeholder="PagerDuty Events API v2 routing key"
-                      />
-                      <p className="text-xs text-foreground-muted">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
-                    <Button
-                      variant="outline"
-                      className="!h-8 !px-3 !rounded-lg"
-                      onClick={() => setShowPagerDutyDialog(false)}
-                      disabled={pagerDutySaving}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="green"
-                      disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
-                      onClick={async () => {
-                        if (!organization?.id) return;
-                        setPagerDutySaving(true);
-                        try {
-                          await api.connectPagerDutyOrg(organization.id, {
-                            serviceName: pagerDutyServiceName.trim(),
-                            routingKey: pagerDutyRoutingKey.trim(),
-                          });
-                          toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
-                          setShowPagerDutyDialog(false);
-                          await loadConnections();
-                        } catch (err) {
-                          console.error('Failed to connect PagerDuty:', err);
-                          toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
-                        } finally {
-                          setPagerDutySaving(false);
-                        }
-                      }}
-                    >
-                      <span className={pagerDutySaving ? 'invisible' : ''}>Connect</span>
-                      {pagerDutySaving && (
-                        <span className="absolute inset-0 flex items-center justify-center">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        </span>
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
               {/* Add Integration Sidebar — same slide-in pattern as the Add Role panel */}
               {showAddIntegrationSidebar && (
                 <div className="fixed inset-0 z-50">
@@ -5573,16 +5358,14 @@ export default function OrganizationSettingsPage() {
                               toast({ title: 'Error', description: 'Failed to start Discord connection. Please try again.', variant: 'destructive' });
                             }
                           } },
-                          { key: 'email', label: 'Email', description: 'Notification emails to a single address', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Mail className="h-4 w-4" /></div>, onClick: () => {
-                            setShowAddIntegrationSidebar(false);
+                          { key: 'email', label: 'Email', description: 'Notification emails to a single address', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Mail className="h-4 w-4" /></div>, expandKey: 'email' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'email' ? null : 'email');
                             setEmailToAdd('');
-                            setShowEmailDialog(true);
                           } },
-                          { key: 'pagerduty', label: 'PagerDuty', description: 'Page on-call for critical security events', icon: <span className="h-5 w-5 flex items-center justify-center text-sm leading-none">🚨</span>, onClick: () => {
-                            setShowAddIntegrationSidebar(false);
+                          { key: 'pagerduty', label: 'PagerDuty', description: 'Page on-call for critical security events', icon: <span className="h-5 w-5 flex items-center justify-center text-sm leading-none">🚨</span>, expandKey: 'pagerduty' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'pagerduty' ? null : 'pagerduty');
                             setPagerDutyServiceName('');
                             setPagerDutyRoutingKey('');
-                            setShowPagerDutyDialog(true);
                           } },
                         ],
                       },
@@ -5600,11 +5383,10 @@ export default function OrganizationSettingsPage() {
                               toast({ title: 'Error', description: 'Failed to start Jira connection. Please try again.', variant: 'destructive' });
                             }
                           } },
-                          { key: 'jira-dc', label: 'Jira Data Center', description: 'Self-hosted Jira via personal access token', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: () => {
-                            setShowAddIntegrationSidebar(false);
+                          { key: 'jira-dc', label: 'Jira Data Center', description: 'Self-hosted Jira via personal access token', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, expandKey: 'jira-dc' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'jira-dc' ? null : 'jira-dc');
                             setJiraPatBaseUrl('');
                             setJiraPatToken('');
-                            setShowJiraPatDialog(true);
                           } },
                           { key: 'linear', label: 'Linear', description: 'Sync issues with a Linear workspace', icon: <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
                             if (!organization?.id) return;
@@ -5652,22 +5434,216 @@ export default function OrganizationSettingsPage() {
                           {group.category}
                         </div>
                         <ul className="space-y-0.5">
-                          {group.items.map((item) => (
-                            <li key={item.key}>
-                              <button
-                                type="button"
-                                onClick={item.onClick}
-                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md hover:bg-background-subtle transition-colors text-left group"
-                              >
-                                <span className="flex-shrink-0">{item.icon}</span>
-                                <span className="flex-1 min-w-0">
-                                  <span className="block text-sm font-medium text-foreground truncate">{item.label}</span>
-                                  <span className="block text-xs text-foreground-secondary truncate">{item.description}</span>
-                                </span>
-                                <ChevronRight className="h-4 w-4 text-foreground-secondary opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                              </button>
-                            </li>
-                          ))}
+                          {group.items.map((item) => {
+                            const isExpanded = 'expandKey' in item && expandedAddItem === item.expandKey;
+                            return (
+                              <li key={item.key}>
+                                <button
+                                  type="button"
+                                  onClick={item.onClick}
+                                  className={cn(
+                                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-md hover:bg-background-subtle transition-colors text-left group',
+                                    isExpanded && 'bg-background-subtle'
+                                  )}
+                                >
+                                  <span className="flex-shrink-0">{item.icon}</span>
+                                  <span className="flex-1 min-w-0">
+                                    <span className="block text-sm font-medium text-foreground truncate">{item.label}</span>
+                                    <span className="block text-xs text-foreground-secondary truncate">{item.description}</span>
+                                  </span>
+                                  <ChevronRight
+                                    className={cn(
+                                      'h-4 w-4 text-foreground-secondary transition-all flex-shrink-0',
+                                      isExpanded ? 'opacity-100 rotate-90' : 'opacity-0 group-hover:opacity-100'
+                                    )}
+                                  />
+                                </button>
+
+                                {isExpanded && (
+                                  <div className="ml-8 mr-1 mt-2 mb-3 p-3 rounded-md border border-border bg-background-card space-y-3">
+                                    {item.expandKey === 'email' && (
+                                      <>
+                                        <div className="grid gap-1.5">
+                                          <Label htmlFor="inline-email-to-add" className="text-xs">Email address</Label>
+                                          <Input
+                                            id="inline-email-to-add"
+                                            type="email"
+                                            value={emailToAdd}
+                                            onChange={(e) => setEmailToAdd(e.target.value)}
+                                            placeholder="alerts@yourorg.com"
+                                            autoFocus
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-end gap-2">
+                                          <Button
+                                            variant="outline"
+                                            className="!h-8 !px-3 !rounded-lg"
+                                            onClick={() => setExpandedAddItem(null)}
+                                            disabled={emailSaving}
+                                          >
+                                            Cancel
+                                          </Button>
+                                          <Button
+                                            variant="green"
+                                            disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
+                                            onClick={async () => {
+                                              if (!organization?.id) return;
+                                              setEmailSaving(true);
+                                              try {
+                                                await api.createEmailNotification(organization.id, emailToAdd.trim());
+                                                toast({ title: 'Added', description: 'Email notification added successfully.' });
+                                                await loadConnections();
+                                                closeAddIntegrationSidebar();
+                                              } catch (err) {
+                                                console.error('Failed to add email notification:', err);
+                                                toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
+                                              } finally {
+                                                setEmailSaving(false);
+                                              }
+                                            }}
+                                          >
+                                            <span className={emailSaving ? 'invisible' : ''}>Add</span>
+                                            {emailSaving && (
+                                              <span className="absolute inset-0 flex items-center justify-center">
+                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                              </span>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {item.expandKey === 'pagerduty' && (
+                                      <>
+                                        <div className="grid gap-1.5">
+                                          <Label htmlFor="inline-pd-service-name" className="text-xs">Service name</Label>
+                                          <Input
+                                            id="inline-pd-service-name"
+                                            value={pagerDutyServiceName}
+                                            onChange={(e) => setPagerDutyServiceName(e.target.value)}
+                                            placeholder="e.g. Deptex Security Alerts"
+                                            autoFocus
+                                          />
+                                        </div>
+                                        <div className="grid gap-1.5">
+                                          <Label htmlFor="inline-pd-routing-key" className="text-xs">Routing key</Label>
+                                          <Input
+                                            id="inline-pd-routing-key"
+                                            type="password"
+                                            value={pagerDutyRoutingKey}
+                                            onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
+                                            placeholder="PagerDuty Events API v2 routing key"
+                                          />
+                                          <p className="text-[11px] text-foreground-secondary">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
+                                        </div>
+                                        <div className="flex items-center justify-end gap-2">
+                                          <Button
+                                            variant="outline"
+                                            className="!h-8 !px-3 !rounded-lg"
+                                            onClick={() => setExpandedAddItem(null)}
+                                            disabled={pagerDutySaving}
+                                          >
+                                            Cancel
+                                          </Button>
+                                          <Button
+                                            variant="green"
+                                            disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
+                                            onClick={async () => {
+                                              if (!organization?.id) return;
+                                              setPagerDutySaving(true);
+                                              try {
+                                                await api.connectPagerDutyOrg(organization.id, {
+                                                  serviceName: pagerDutyServiceName.trim(),
+                                                  routingKey: pagerDutyRoutingKey.trim(),
+                                                });
+                                                toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
+                                                await loadConnections();
+                                                closeAddIntegrationSidebar();
+                                              } catch (err) {
+                                                console.error('Failed to connect PagerDuty:', err);
+                                                toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
+                                              } finally {
+                                                setPagerDutySaving(false);
+                                              }
+                                            }}
+                                          >
+                                            <span className={pagerDutySaving ? 'invisible' : ''}>Connect</span>
+                                            {pagerDutySaving && (
+                                              <span className="absolute inset-0 flex items-center justify-center">
+                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                              </span>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {item.expandKey === 'jira-dc' && (
+                                      <>
+                                        <div className="grid gap-1.5">
+                                          <Label htmlFor="inline-jira-url" className="text-xs">Server URL</Label>
+                                          <Input
+                                            id="inline-jira-url"
+                                            type="url"
+                                            value={jiraPatBaseUrl}
+                                            onChange={(e) => setJiraPatBaseUrl(e.target.value)}
+                                            placeholder="https://jira.yourcompany.com"
+                                            autoFocus
+                                          />
+                                        </div>
+                                        <div className="grid gap-1.5">
+                                          <Label htmlFor="inline-jira-pat" className="text-xs">Personal Access Token</Label>
+                                          <Input
+                                            id="inline-jira-pat"
+                                            type="password"
+                                            value={jiraPatToken}
+                                            onChange={(e) => setJiraPatToken(e.target.value)}
+                                            placeholder=""
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-end gap-2">
+                                          <Button
+                                            variant="outline"
+                                            className="!h-8 !px-3 !rounded-lg"
+                                            onClick={() => setExpandedAddItem(null)}
+                                            disabled={jiraPatSaving}
+                                          >
+                                            Cancel
+                                          </Button>
+                                          <Button
+                                            variant="green"
+                                            disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
+                                            onClick={async () => {
+                                              if (!organization?.id) return;
+                                              setJiraPatSaving(true);
+                                              try {
+                                                await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
+                                                toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
+                                                await loadConnections();
+                                                closeAddIntegrationSidebar();
+                                              } catch (err) {
+                                                console.error('Failed to connect Jira PAT:', err);
+                                                toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
+                                              } finally {
+                                                setJiraPatSaving(false);
+                                              }
+                                            }}
+                                          >
+                                            <span className={jiraPatSaving ? 'invisible' : ''}>Create connection</span>
+                                            {jiraPatSaving && (
+                                              <span className="absolute inset-0 flex items-center justify-center">
+                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                              </span>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     ))}

@@ -273,7 +273,7 @@ describe('OrganizationSettingsPage – Integrations', () => {
     expect(screen.getByText('Custom')).toBeInTheDocument();
   });
 
-  it('Add sidebar → Jira Data Center hands off to the PAT dialog', async () => {
+  it('Add sidebar → Jira Data Center expands an inline credential form', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
@@ -282,10 +282,11 @@ describe('OrganizationSettingsPage – Integrations', () => {
     const sidebar = await screen.findByRole('dialog');
     await userEvent.click(within(sidebar).getByRole('button', { name: /Jira Data Center/i }));
 
-    // PAT dialog opens
+    // Inline form fields appear inside the same sidebar — no second dialog
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Jira Data Center/i })).toBeInTheDocument();
+      expect(within(sidebar).getByLabelText(/Server URL/i)).toBeInTheDocument();
     });
+    expect(within(sidebar).getByLabelText(/Personal Access Token/i)).toBeInTheDocument();
   });
 
   it('Add sidebar → Linear triggers OAuth redirect', async () => {
@@ -491,52 +492,49 @@ describe('OrganizationSettingsPage – Integrations', () => {
     });
   });
 
-  describe('Email + PagerDuty + Jira PAT dialogs (opened from Add sidebar)', () => {
+  describe('Inline credential forms expand inside the Add sidebar', () => {
     async function openAddSidebar() {
       await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
       return await screen.findByRole('dialog');
     }
 
-    it('Email row opens the email dialog and submission calls api.createEmailNotification', async () => {
+    it('Email row expands inline, submission calls api.createEmailNotification', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
       await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
       const sidebar = await openAddSidebar();
       await userEvent.click(within(sidebar).getByRole('button', { name: /Email/ }));
-      // Email dialog opens; addressing it by the new active dialog
-      const emailDialog = await screen.findByRole('dialog');
-      await userEvent.type(within(emailDialog).getByLabelText(/Email address/i), 'team@x.com');
-      await userEvent.click(within(emailDialog).getByRole('button', { name: 'Add' }));
+      // Inline form lives inside the same sidebar — no second dialog
+      await userEvent.type(within(sidebar).getByLabelText(/Email address/i), 'team@x.com');
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
       await waitFor(() => expect(mockCreateEmailNotification).toHaveBeenCalledWith('org-1', 'team@x.com'));
     });
 
-    it('Email dialog Add is disabled until input is a valid address', async () => {
+    it('Inline email Add is disabled until input is a valid address', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
       await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
       const sidebar = await openAddSidebar();
       await userEvent.click(within(sidebar).getByRole('button', { name: /Email/ }));
-      const emailDialog = await screen.findByRole('dialog');
-      const addBtn = within(emailDialog).getByRole('button', { name: 'Add' });
+      const addBtn = within(sidebar).getByRole('button', { name: 'Add' });
       expect(addBtn).toBeDisabled();
 
-      await userEvent.type(within(emailDialog).getByLabelText(/Email address/i), 'not-an-email');
+      await userEvent.type(within(sidebar).getByLabelText(/Email address/i), 'not-an-email');
       expect(addBtn).toBeDisabled();
     });
 
-    it('PagerDuty row opens the PD dialog; submission routes through the api wrapper', async () => {
+    it('PagerDuty row expands inline, submission routes through the api wrapper', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
       await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
       const sidebar = await openAddSidebar();
       await userEvent.click(within(sidebar).getByRole('button', { name: /PagerDuty/ }));
-      const pdDialog = await screen.findByRole('dialog');
-      await userEvent.type(within(pdDialog).getByLabelText(/Service name/i), 'Critical Alerts');
-      await userEvent.type(within(pdDialog).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
-      await userEvent.click(within(pdDialog).getByRole('button', { name: 'Connect' }));
+      await userEvent.type(within(sidebar).getByLabelText(/Service name/i), 'Critical Alerts');
+      await userEvent.type(within(sidebar).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Connect' }));
 
       await waitFor(() => expect(mockConnectPagerDutyOrg).toHaveBeenCalledWith('org-1', {
         serviceName: 'Critical Alerts',
@@ -544,19 +542,32 @@ describe('OrganizationSettingsPage – Integrations', () => {
       }));
     });
 
-    it('Jira Data Center row opens the PAT dialog; submission routes through api.connectJiraPatOrg', async () => {
+    it('Jira Data Center row expands inline, submission routes through api.connectJiraPatOrg', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
       await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
       const sidebar = await openAddSidebar();
       await userEvent.click(within(sidebar).getByRole('button', { name: /Jira Data Center/i }));
-      const patDialog = await screen.findByRole('dialog');
-      await userEvent.type(within(patDialog).getByLabelText(/Server URL/i), 'https://jira.acme.com');
-      await userEvent.type(within(patDialog).getByLabelText(/Personal Access Token/i), 'pat_xyz');
-      await userEvent.click(within(patDialog).getByRole('button', { name: 'Create connection' }));
+      await userEvent.type(within(sidebar).getByLabelText(/Server URL/i), 'https://jira.acme.com');
+      await userEvent.type(within(sidebar).getByLabelText(/Personal Access Token/i), 'pat_xyz');
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Create connection' }));
 
       await waitFor(() => expect(mockConnectJiraPatOrg).toHaveBeenCalledWith('org-1', 'https://jira.acme.com', 'pat_xyz'));
+    });
+
+    it('Clicking the same item row twice collapses the inline form (toggle behavior)', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
+
+      const sidebar = await openAddSidebar();
+      const emailRow = within(sidebar).getByRole('button', { name: /Email/ });
+      await userEvent.click(emailRow);
+      expect(within(sidebar).getByLabelText(/Email address/i)).toBeInTheDocument();
+
+      await userEvent.click(emailRow);
+      expect(within(sidebar).queryByLabelText(/Email address/i)).not.toBeInTheDocument();
     });
   });
 });
