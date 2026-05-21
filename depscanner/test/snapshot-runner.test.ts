@@ -72,7 +72,7 @@ function caseBootstrapMissingDir() {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   check('returns ok=true', result.ok === true, `message: ${result.message}`);
   check('mentions bootstrap', /bootstrap/i.test(result.message));
@@ -96,7 +96,7 @@ function casePerFileBootstrap() {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   check('returns ok=true', result.ok === true, `message: ${result.message}`);
   check('mentions bootstrapped 1 new', /bootstrapped 1 new/.test(result.message));
@@ -117,7 +117,7 @@ function caseMismatchAgainstExisting() {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   check('returns ok=false', result.ok === false, `message: ${result.message}`);
   check('mentions deps.json', /deps\.json/.test(result.message));
@@ -143,7 +143,7 @@ function caseIgnoreList() {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   check('returns ok=true', result.ok === true, `message: ${result.message}`);
   check('reports 1 file matched', /1 file\(s\) match/.test(result.message));
@@ -164,7 +164,7 @@ function casePerFixtureIgnore() {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(['volatile_custom']),
+    fixtureIgnore: { fields: new Set(['volatile_custom']), files: new Set() },
   });
   check('returns ok=true when per-fixture ignore matches', result.ok === true, `message: ${result.message}`);
 }
@@ -183,7 +183,7 @@ function caseDiffOnlyDryRun() {
     update: false,
     diffOnly: true,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   const after = readJson(path.join(snapshotDir, 'deps.json'));
 
@@ -207,7 +207,7 @@ function caseUpdateOverwrites() {
     update: true,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set(),
+    fixtureIgnore: { fields: new Set(), files: new Set() },
   });
   const after = readJson(path.join(snapshotDir, 'deps.json'));
   check('returns ok=true after update', result.ok === true);
