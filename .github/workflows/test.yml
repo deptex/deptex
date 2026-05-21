@@ -8,6 +8,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    # Emits per-package booleans so downstream jobs can skip work that
+    # the PR didn't touch (e.g. a docs-only PR doesn't need to rebuild
+    # the depscanner Docker image). Only path-filters PRs: on push to
+    # main and workflow_dispatch every job runs unconditionally so
+    # post-merge sanity isn't gated on the diff shape.
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      depscanner: ${{ steps.filter.outputs.depscanner }}
+      fix-worker: ${{ steps.filter.outputs.fix-worker }}
+      workflow: ${{ steps.filter.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # backend/database/schema.sql is grouped with depscanner because
+          # it's the source of truth for PGLite local-mode (depscanner CLI
+          # + CI smoke tests). A migration-only PR that refreshes schema.sql
+          # should still run the depscanner suite.
+          filters: |
+            depscanner:
+              - 'depscanner/**'
+              - 'backend/database/schema.sql'
+            fix-worker:
+              - 'fix-worker/**'
+            workflow:
+              - '.github/workflows/test.yml'
+
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -48,7 +79,10 @@ jobs:
       # (and via the deptex-depscanner file: dep). Jest follows the file: symlink
       # to each worker's canonical path, so module resolution for transitive deps
       # like web-tree-sitter walks up from depscanner/ — which means depscanner
-      # needs its own node_modules populated. Same for fix-worker.
+      # needs its own node_modules populated. Same for fix-worker. This is why
+      # the backend job is NOT path-filtered on depscanner changes: backend's
+      # jest still consumes depscanner code on every run, so a backend change
+      # that breaks the depscanner module-resolution path needs to fail here.
       - name: Install depscanner dependencies
         working-directory: depscanner
         run: npm ci
@@ -63,6 +97,14 @@ jobs:
 
   depscanner:
     name: Depscanner (preflight + tsc)
+    needs: changes
+    # Skip on PRs that don't touch depscanner/** or the workflow file
+    # itself. On push to main, workflow_dispatch, or workflow edits the
+    # condition collapses to true so the job runs.
+    if: |
+      github.event_name != 'pull_request' ||
+      needs.changes.outputs.depscanner == 'true' ||
+      needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +148,11 @@ jobs:
     # regenerate locally with `npm run test:fixtures:update` and commit
     # the snapshot deltas in the same PR.
     name: Depscanner (fixture snapshots)
+    needs: changes
+    if: |
+      github.event_name != 'pull_request' ||
+      needs.changes.outputs.depscanner == 'true' ||
+      needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,16 +180,21 @@ jobs:
         run: npm run test:fixtures
 
   reachability-corpus:
-    # Informational, opt-in: scans the purpose-built hand-labelled
-    # reachability corpus and evaluates the three acceptance gates
-    # (noise reduction >= 60%, every ecosystem > 0% unreachable, zero
-    # false negatives). Manual-trigger only — the scan is Docker-bound and
-    # minutes-long, and the corpus is a starter until hand-labelling fills
-    # out all 8 ecosystems. `continue-on-error` keeps it non-blocking;
-    # promote to a PR-triggered required check once the corpus is populated
-    # and the gates pass.
+    # Scans the hand-labelled reachability corpus (8 ecosystems, 521 findings)
+    # and evaluates the three acceptance gates (noise reduction >= 60%, every
+    # ecosystem > 0% unreachable, zero false negatives). Promoted from
+    # workflow_dispatch-only to PR-triggered when depscanner/** changes —
+    # the corpus is now populated across 8 ecosystems and the gates pass at
+    # 76.8% mw aggregate (v3 shipped in PR #48). `continue-on-error` is
+    # retained for a shakeout window; flip to required once we've seen it
+    # stable on a few PRs (no network flakiness from GitHub clones / OSV).
     name: Reachability corpus (informational)
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        (needs.changes.outputs.depscanner == 'true' ||
+         needs.changes.outputs.workflow == 'true'))
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
@@ -172,6 +224,11 @@ jobs:
 
   fix-worker:
     name: Fix-worker (tsc)
+    needs: changes
+    if: |
+      github.event_name != 'pull_request' ||
+      needs.changes.outputs.fix-worker == 'true' ||
+      needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
