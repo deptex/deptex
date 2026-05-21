@@ -136,6 +136,17 @@ const DEFAULT_IGNORE_FIELDS = new Set([
   // doesn't ship with re-strip churn.
   'flow_extracted_at',
   'confidence_calibrated_at',
+  // Cross-branch ride-along column. `project_dependencies.callgraph_reached`
+  // is dumped into schema.sql from prod because the reachability-v3 branch
+  // (worktree-reachability-noise-reduction) applied its migration ahead of
+  // merge. Without an extractor on this branch the column stays at its
+  // schema-defined zero-value, but local Node + CI emit different
+  // null-vs-false coercions of `SELECT *` on a never-written column —
+  // ignoring the field decouples this branch's snapshot from a column it
+  // doesn't author. The reachability-v3 branch can drop this entry from
+  // the ignore list when its extractor lands and starts writing the
+  // column with a deterministic value.
+  'callgraph_reached',
 ]);
 
 /**

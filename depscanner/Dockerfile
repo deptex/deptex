@@ -3,8 +3,28 @@
 # Base image is ~1.7GB; we COPY only the runtime tree (/zap) into the runtime
 # stage so we don't carry the whole base image. Java is provided by the
 # runtime stage (Temurin 21 already installed for atom + Maven).
-# ============================================================================
-FROM ghcr.io/zaproxy/zaproxy:stable AS zap
+#
+# v2.1d /criticalreview SVED-2 (P1): pinned to a content digest, NOT the
+# floating `:stable` tag. v2.1d depends on a specific contract from ZAP
+# 2.17.0 + authhelper v0.39.0 (`auth-report-json` report template +
+# `summaryItems[]` keys + the schema's per-step `description:` requirement
+# in `auth-config.ts:describeStep`). An unrelated future Dockerfile rebuild
+# (cdxgen bump, Renovate node:20-slim refresh, CVE patch) would otherwise
+# silently re-resolve `:stable` to whatever upstream ships at that moment,
+# and a schema rename would break every recorded-login probe with no
+# Deptex code change.
+#
+# DO NOT bump this digest without:
+#   1. running depscanner/test/dast-recorded-pipeline.test.ts against the
+#      new image's auth-report.json output (the captured fixtures under
+#      depscanner/test/fixtures/zap-login-diagnostics/<version>/ are
+#      version-pinned),
+#   2. confirming authhelper version >= 0.39.0 (`zap.sh -addon-status` in
+#      the new image),
+#   3. updating both the fixture dir name AND the runbook reference.
+#
+# Captured digest from spike against ZAP 2.17.0 + authhelper 0.39.0:
+FROM ghcr.io/zaproxy/zaproxy@sha256:8770b23f9e8b49038f413cb2b10c58c901e5b6717be221a22b1bcab5c9771b8a AS zap
 
 # ============================================================================
 # Stage 2: depscanner runtime
