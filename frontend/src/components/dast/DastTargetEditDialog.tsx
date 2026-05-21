@@ -11,6 +11,7 @@ import {
   type DastTargetDTO,
 } from '../../lib/api';
 import { DastAuthPanel } from './DastAuthPanel';
+import { DastSpecPanel } from './DastSpecPanel';
 
 interface DastTargetEditDialogProps {
   open: boolean;
@@ -238,6 +239,14 @@ export function DastTargetEditDialog({
                 />
               )}
             </div>
+          ) : null}
+          {isEdit && target ? (
+            <DastSpecPanel
+              projectId={projectId}
+              target={target}
+              canManage={canManage}
+              onUpdated={onSaved}
+            />
           ) : null}
         </div>
 

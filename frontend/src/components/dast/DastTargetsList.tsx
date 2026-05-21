@@ -1,4 +1,4 @@
-import { ChevronDown, Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ChevronDown, FileCode, Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
@@ -63,10 +63,28 @@ function authChip(target: DastTargetDTO) {
       ? 'JWT'
       : target.auth_strategy === 'cookie'
         ? 'Cookie'
-        : 'Auth';
+        : target.auth_strategy === 'recorded'
+          ? 'Recorded'
+          : 'Auth';
   return (
     <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-emerald-500/30 text-emerald-500">
       <ShieldCheck className="h-3 w-3 mr-1" /> {label}
+    </Badge>
+  );
+}
+
+// Phase 35 (v1.1) — OpenAPI spec source + endpoint count chip per target row.
+function specChip(target: DastTargetDTO) {
+  const cfg = target.spec_config;
+  if (!cfg || cfg.api_spec_source === 'none') return null;
+  const count = cfg.last_synthesis_endpoint_count ?? null;
+  const label =
+    cfg.api_spec_source === 'synthesized'
+      ? `Synthesized${count !== null ? ` · ${count}` : ''}`
+      : `URL${count !== null ? ` · ${count}` : ''}`;
+  return (
+    <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-sky-500/30 text-sky-500">
+      <FileCode className="h-3 w-3 mr-1" /> {label}
     </Badge>
   );
 }
@@ -119,6 +137,7 @@ export function DastTargetsList({
                   </span>
                   {runtimeBadge(target.detected_runtime)}
                   {authChip(target)}
+                  {specChip(target)}
                   {!target.enabled ? (
                     <Badge variant="outline" className="text-[11px] px-1.5 py-0 text-foreground-muted">Disabled</Badge>
                   ) : null}
