@@ -996,7 +996,7 @@ CREATE TABLE IF NOT EXISTS public.project_container_findings (
   os_package_ecosystem text,
   osv_id text,
   cve_id text,
-  vulnerability_id text NOT NULL,
+  vulnerability_id text NOT NULL GENERATED ALWAYS AS (COALESCE(osv_id, cve_id, ('unknown:'::text || md5(((((image_digest || ':'::text) || os_package_name) || ':'::text) || os_package_version))))) STORED,
   severity text,
   cvss_score numeric(4,1),
   epss_score numeric(8,6),
@@ -1217,7 +1217,7 @@ CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   framework text NOT NULL,
   file_path text NOT NULL,
   start_line integer,
-  start_line_key integer NOT NULL,
+  start_line_key integer NOT NULL GENERATED ALWAYS AS (COALESCE(start_line, '-1'::integer)) STORED,
   end_line integer,
   severity text,
   depscore integer,
@@ -4973,7 +4973,11 @@ AS $function$
         ELSE c.data_type
       END ||
       CASE WHEN c.is_nullable = 'NO' THEN ' NOT NULL' ELSE '' END ||
-      COALESCE(' DEFAULT ' || c.column_default, ''),
+      CASE
+        WHEN c.is_generated = 'ALWAYS' AND c.generation_expression IS NOT NULL
+          THEN ' GENERATED ALWAYS AS (' || c.generation_expression || ') STORED'
+        ELSE COALESCE(' DEFAULT ' || c.column_default, '')
+      END,
       E',\n' ORDER BY c.ordinal_position) || E'\n);' AS ddl
   FROM information_schema.columns c
   WHERE c.table_schema = 'public'
