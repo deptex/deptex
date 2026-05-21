@@ -1708,7 +1708,7 @@ export default function OrganizationSettingsPage() {
   const addIntegrationCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Which row in the Add sidebar is currently expanded showing its credential form.
   // Only one at a time (accordion). Null when nothing is expanded.
-  const [expandedAddItem, setExpandedAddItem] = useState<'email' | 'pagerduty' | 'jira-dc' | null>(null);
+  const [expandedAddItem, setExpandedAddItem] = useState<'email' | 'pagerduty' | 'jira-dc' | 'custom-notification' | 'custom-ticketing' | null>(null);
 
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
   const [notifPauseLoading, setNotifPauseLoading] = useState(false);
@@ -2403,6 +2403,8 @@ export default function OrganizationSettingsPage() {
       setPagerDutyRoutingKey('');
       setJiraPatBaseUrl('');
       setJiraPatToken('');
+      setCustomIntegrationName('');
+      setCustomIntegrationWebhookUrl('');
     }, 150);
   };
 
@@ -2456,6 +2458,45 @@ export default function OrganizationSettingsPage() {
       toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
     } finally {
       setJiraPatSaving(false);
+    }
+  };
+
+  // Inline Custom Notification / Custom Ticketing submit. Icon upload + the
+  // post-create signing-secret reveal stays on the Details panel — this just
+  // collects name + webhook URL, creates the row, then opens the Details
+  // panel with the generated secret pre-populated.
+  const handleInlineCustomSubmit = async (type: 'notification' | 'ticketing') => {
+    if (!organization?.id) return;
+    setCustomIntegrationSaving(true);
+    try {
+      const result = await api.createCustomIntegration(organization.id, {
+        name: customIntegrationName.trim(),
+        type,
+        webhook_url: customIntegrationWebhookUrl.trim(),
+        icon_url: undefined,
+      });
+      setNewlyCreatedIntegrationId(result.id);
+      setCustomIntegrationSecret(result.secret);
+      const newConn: CiCdConnection = {
+        id: result.id,
+        display_name: customIntegrationName.trim(),
+        metadata: { custom_name: customIntegrationName.trim(), webhook_url: customIntegrationWebhookUrl.trim() },
+        provider: type === 'notification' ? 'custom_notification' : 'custom_ticketing',
+        status: 'connected',
+        connected_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setCustomIntegrationDetailsConn(newConn);
+      setShowCustomIntegrationDetailsSidebar(true);
+      toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret below.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to create custom integration:', err);
+      toast({ title: 'Error', description: 'Failed to create custom integration. Please try again.', variant: 'destructive' });
+    } finally {
+      setCustomIntegrationSaving(false);
     }
   };
 
@@ -5457,27 +5498,15 @@ export default function OrganizationSettingsPage() {
                       {
                         category: 'Custom',
                         items: [
-                          { key: 'custom-notification', label: 'Custom notification webhook', description: 'HMAC-signed POST for security events', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, onClick: () => {
-                            setShowAddIntegrationSidebar(false);
-                            setCustomIntegrationType('notification');
-                            setEditingCustomIntegration(null);
+                          { key: 'custom-notification', label: 'Custom notification webhook', description: 'HMAC-signed POST for security events', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, expandKey: 'custom-notification' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'custom-notification' ? null : 'custom-notification');
                             setCustomIntegrationName('');
                             setCustomIntegrationWebhookUrl('');
-                            setCustomIntegrationIconFile(null);
-                            setCustomIntegrationIconPreview(null);
-                            setCustomIntegrationSecret(null);
-                            setShowCustomIntegrationSidepanel(true);
                           } },
-                          { key: 'custom-ticketing', label: 'Custom ticketing webhook', description: 'HMAC-signed POST for issue routing', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, onClick: () => {
-                            setShowAddIntegrationSidebar(false);
-                            setCustomIntegrationType('ticketing');
-                            setEditingCustomIntegration(null);
+                          { key: 'custom-ticketing', label: 'Custom ticketing webhook', description: 'HMAC-signed POST for issue routing', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, expandKey: 'custom-ticketing' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'custom-ticketing' ? null : 'custom-ticketing');
                             setCustomIntegrationName('');
                             setCustomIntegrationWebhookUrl('');
-                            setCustomIntegrationIconFile(null);
-                            setCustomIntegrationIconPreview(null);
-                            setCustomIntegrationSecret(null);
-                            setShowCustomIntegrationSidepanel(true);
                           } },
                         ],
                       },
@@ -5488,7 +5517,7 @@ export default function OrganizationSettingsPage() {
                         </div>
                         <ul className="space-y-0.5">
                           {group.items.map((item) => {
-                            const expandKey = (item as { expandKey?: 'email' | 'pagerduty' | 'jira-dc' }).expandKey;
+                            const expandKey = (item as { expandKey?: 'email' | 'pagerduty' | 'jira-dc' | 'custom-notification' | 'custom-ticketing' }).expandKey;
                             const isExpandable = expandKey !== undefined;
                             const isExpanded = isExpandable && expandedAddItem === expandKey;
                             // Per-expansion submit metadata — drives both the in-row Add CTA and
@@ -5508,6 +5537,14 @@ export default function OrganizationSettingsPage() {
                               submitDisabled = !jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving;
                               submitSaving = jiraPatSaving;
                               submitFn = handleInlineJiraDcSubmit;
+                            } else if (expandKey === 'custom-notification') {
+                              submitDisabled = !customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving;
+                              submitSaving = customIntegrationSaving;
+                              submitFn = () => handleInlineCustomSubmit('notification');
+                            } else if (expandKey === 'custom-ticketing') {
+                              submitDisabled = !customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving;
+                              submitSaving = customIntegrationSaving;
+                              submitFn = () => handleInlineCustomSubmit('ticketing');
                             }
 
                             return (
@@ -5625,6 +5662,30 @@ export default function OrganizationSettingsPage() {
                                                 onChange={(e) => setJiraPatToken(e.target.value)}
                                                 className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
                                               />
+                                            </div>
+                                          </>
+                                        )}
+                                        {(expandKey === 'custom-notification' || expandKey === 'custom-ticketing') && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor={`inline-custom-name-${expandKey}`} className="text-xs">Name</Label>
+                                              <Input
+                                                id={`inline-custom-name-${expandKey}`}
+                                                value={customIntegrationName}
+                                                onChange={(e) => setCustomIntegrationName(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor={`inline-custom-url-${expandKey}`} className="text-xs">Webhook URL</Label>
+                                              <Input
+                                                id={`inline-custom-url-${expandKey}`}
+                                                type="url"
+                                                value={customIntegrationWebhookUrl}
+                                                onChange={(e) => setCustomIntegrationWebhookUrl(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                              <p className="text-[11px] text-foreground-secondary">An icon can be added later by editing the integration.</p>
                                             </div>
                                           </>
                                         )}

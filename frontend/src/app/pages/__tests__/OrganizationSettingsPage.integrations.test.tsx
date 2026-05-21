@@ -14,6 +14,7 @@ const mockConnectPagerDutyOrg = vi.fn();
 const mockCreateEmailNotification = vi.fn();
 const mockStartCicdInstall = vi.fn();
 const mockUpdateCustomIntegration = vi.fn();
+const mockCreateCustomIntegration = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 const mockSetSearchParams = vi.fn();
@@ -55,6 +56,7 @@ vi.mock('../../../lib/api', () => ({
     createEmailNotification: (...args: unknown[]) => mockCreateEmailNotification(...args),
     startCicdInstall: (...args: unknown[]) => mockStartCicdInstall(...args),
     updateCustomIntegration: (...args: unknown[]) => mockUpdateCustomIntegration(...args),
+    createCustomIntegration: (...args: unknown[]) => mockCreateCustomIntegration(...args),
     getOrganizationRoles: vi.fn().mockResolvedValue([
       {
         id: 'r1',
@@ -105,6 +107,7 @@ describe('OrganizationSettingsPage – Integrations', () => {
     mockCreateEmailNotification.mockResolvedValue({ success: true, id: 'email-1' });
     mockStartCicdInstall.mockResolvedValue({ redirectUrl: 'https://github.com/apps/deptex/installations/new' });
     mockUpdateCustomIntegration.mockResolvedValue({ success: true, secret: 'whsec_new' });
+    mockCreateCustomIntegration.mockResolvedValue({ id: 'cust-1', secret: 'whsec_initial' });
     Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true });
   });
 
@@ -555,6 +558,48 @@ describe('OrganizationSettingsPage – Integrations', () => {
       await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
 
       await waitFor(() => expect(mockConnectJiraPatOrg).toHaveBeenCalledWith('org-1', 'https://jira.acme.com', 'pat_xyz'));
+    });
+
+    it('Custom notification webhook row expands inline, submission calls api.createCustomIntegration with type=notification', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
+
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Custom notification/i }));
+      // Both Custom forms share labels — scope the queries to the only
+      // open accordion via the data-state="open" wrapper.
+      const openForm = sidebar.querySelector('[data-state="open"]') as HTMLElement;
+      await userEvent.type(within(openForm).getByLabelText(/^Name$/i), 'PagerDuty bridge');
+      await userEvent.type(within(openForm).getByLabelText(/Webhook URL/i), 'https://hooks.x.com/abc');
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
+
+      await waitFor(() => expect(mockCreateCustomIntegration).toHaveBeenCalledWith('org-1', {
+        name: 'PagerDuty bridge',
+        type: 'notification',
+        webhook_url: 'https://hooks.x.com/abc',
+        icon_url: undefined,
+      }));
+    });
+
+    it('Custom ticketing webhook row expands inline, submission calls api.createCustomIntegration with type=ticketing', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
+
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Custom ticketing/i }));
+      const openForm = sidebar.querySelector('[data-state="open"]') as HTMLElement;
+      await userEvent.type(within(openForm).getByLabelText(/^Name$/i), 'Linear bridge');
+      await userEvent.type(within(openForm).getByLabelText(/Webhook URL/i), 'https://hooks.linear.app/x');
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
+
+      await waitFor(() => expect(mockCreateCustomIntegration).toHaveBeenCalledWith('org-1', {
+        name: 'Linear bridge',
+        type: 'ticketing',
+        webhook_url: 'https://hooks.linear.app/x',
+        icon_url: undefined,
+      }));
     });
 
     it('Clicking the same item row twice collapses the inline form (toggle behavior)', async () => {
