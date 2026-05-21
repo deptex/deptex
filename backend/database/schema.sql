@@ -2035,6 +2035,7 @@ CREATE OR REPLACE FUNCTION public.apply_composition_results(p_project_id uuid, p
  RETURNS integer
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
 AS $function$
 DECLARE
   updated_count integer;
@@ -2052,6 +2053,7 @@ BEGIN
      WHERE pdv.id = u.pdv_id
        AND pdv.project_id = p_project_id
        AND pdv.extraction_run_id = p_run_id
+       AND pdv.contextual_depscore IS NOT NULL
     RETURNING 1
   )
   SELECT count(*) INTO updated_count FROM result;

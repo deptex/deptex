@@ -169,10 +169,21 @@ CREATE OR REPLACE FUNCTION public.apply_composition_results(
 RETURNS integer  -- count of PDV rows updated
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
   updated_count integer;
 BEGIN
+  -- SECURITY DEFINER hardening: the SET search_path above pins resolution
+  -- so a caller cannot redirect `project_dependency_vulnerabilities` via
+  -- session search_path manipulation; tables are also explicitly
+  -- schema-qualified for defense in depth.
+  --
+  -- contextual_depscore IS NOT NULL guard: an EPD-untouched PDV (or one
+  -- whose EPD failure path left the score null) would otherwise produce
+  -- NULL × factor = NULL, silently nuking the score while still
+  -- incrementing pdvs_updated telemetry. Skip such rows instead — they
+  -- get composition_factor stamped on a future run after EPD finalizes.
   WITH updates AS (
     SELECT (e->>'pdv_id')::uuid  AS pdv_id,
            (e->>'factor')::numeric AS factor
@@ -186,6 +197,7 @@ BEGIN
      WHERE pdv.id = u.pdv_id
        AND pdv.project_id = p_project_id
        AND pdv.extraction_run_id = p_run_id
+       AND pdv.contextual_depscore IS NOT NULL
     RETURNING 1
   )
   SELECT count(*) INTO updated_count FROM result;

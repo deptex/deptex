@@ -1403,10 +1403,16 @@ export async function runIaCAndContainerScans(
             ctx.runId,
             containerResult.nativeBindings
           );
+          // Dedup os_family_seen — N-image scans on the same base would
+          // otherwise log e.g. 'dpkg/dpkg/dpkg/dpkg'; the family set is
+          // what matters for triage.
+          const familySet = Array.from(
+            new Set(containerResult.bindingsTelemetry.os_family_seen)
+          );
           await ctx.logger.info(
             'container_scan',
             `Native bindings written: ${nbUpsert.inserted} ` +
-              `(os_family=${containerResult.bindingsTelemetry.os_family_seen.join('/') || 'none'}; ` +
+              `(os_family=${familySet.join('/') || 'none'}; ` +
               `language inspected=${containerResult.bindingsTelemetry.language_inspected} unparsable=${containerResult.bindingsTelemetry.language_unparsable}; ` +
               `os inspected=${containerResult.bindingsTelemetry.os_inspected} unparsable=${containerResult.bindingsTelemetry.os_unparsable})`
           );

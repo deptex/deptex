@@ -257,9 +257,15 @@ export async function composeFindings(
 
   // Resolve PDV → (ecosystem, name) via project_dependencies → dependencies.
   const pdIds = Array.from(new Set(usablePdvs.map((p) => p.project_dependency_id)));
+  // Defense-in-depth tenant filter: PDV.project_dependency_id should
+  // always point to a project_dependencies row in the same project (by
+  // upstream convention), but no DB constraint enforces it. A wrong-org
+  // PD row leak would silently pair against the wrong ecosystem's
+  // bindings — adding .eq('project_id') closes the gap at no cost.
   const { data: pdsData } = await supabase
     .from('project_dependencies')
     .select('id, name, dependency_id')
+    .eq('project_id', projectId)
     .in('id', pdIds);
   const pds = (pdsData ?? []) as ProjectDependencyRow[];
   const depIds = Array.from(new Set(pds.map((d) => d.dependency_id).filter(Boolean) as string[]));
@@ -461,7 +467,11 @@ async function logComposeSummary(
       `composeFindings.summary partnerable_pcf=${summary.partnerable_pcf} ` +
         `partnerable_pdv=${summary.partnerable_pdv} edges_written=${summary.edges_written} ` +
         `pdvs_updated=${summary.pdvs_updated} suppressions_to_zero=${summary.suppressions_to_zero} ` +
-        `coverage_pct=${summary.composition_coverage_pct} duration_ms=${summary.duration_ms}`
+        `coverage_pct=${summary.composition_coverage_pct} duration_ms=${summary.duration_ms} ` +
+        `pdvs_skipped_no_rl=${summary.pdvs_skipped.no_reachability_level} ` +
+        `pdvs_skipped_no_osv=${summary.pdvs_skipped.no_osv_id} ` +
+        `edges_skipped_unknown_rl=${summary.edges_skipped_unknown_reachability} ` +
+        `pcfs_skipped_no_id=${summary.pcfs_skipped_no_identifier}`
     );
   } catch {
     /* logging is best-effort */
