@@ -323,17 +323,18 @@ repos:
     ref: v2.4.6
     ground_truth_cves: []
 
-  - name: airflow
-    repo_url: https://github.com/apache/airflow.git
+  - name: mlflow
+    repo_url: https://github.com/mlflow/mlflow.git
     ecosystem: pypi
-    # Dec 2020 — Apache Airflow 2.0.0. Heavy pypi app with ~80-100 setup.py
-    # install_requires + transitive tree. sentry-python@1.5.0 was tried
-    # earlier but its tree is genuinely tiny (sentry-sdk + urllib3 +
-    # certifi = 3 deps total, no measurement). Airflow's dep tree of
-    # flask, sqlalchemy, alembic, requests, jinja2, celery, kombu, and
-    # their transitives gives us 80+ deps with real stale-version CVEs
-    # to classify.
-    ref: 34d7fa0b7922adcb96a21259c759504bc1e2f25f
+    # Sept 2021 — MLflow 1.20.0. ML platform that declares ~30 install_requires
+    # + a long tail of optional flavor providers (azure-storage-blob,
+    # google-cloud-storage, kubernetes, mleap, prophet, sqlalchemy,
+    # gunicorn, alembic, jinja2, etc.) — many of which are only imported
+    # by specific tracking-server / serving / kubernetes-deployment modes
+    # and not by the core CLI. Better shape for noise-reduction measurement
+    # than mitmproxy (where the proxy uses most of what it declares) or
+    # sentry-python (3-dep tree).
+    ref: c22889f7d4c0a1b876335571c73bb4ed33d6bf8a
     ground_truth_cves: []
 
   - name: symfony-demo
