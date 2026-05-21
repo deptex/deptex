@@ -122,7 +122,7 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'roles', label: 'Roles', icon: <Users className={iconClass} /> });
   }
 
-  // Configuration — how the platform analyzes code and what it does with findings.
+  // Configuration — how the platform behaves and what it connects to.
   entries.push({ id: 'category_configuration', label: 'Configuration', isCategory: true });
   entries.push({ id: 'ai', label: 'AI', icon: <Atom className={iconClass} /> });
   if (perms.manage_organization_settings) {
@@ -136,10 +136,7 @@ export function buildOrgSettingsSections(
   if (perms.manage_organization_settings) {
     entries.push({ id: 'malicious_allowlist', label: 'Malicious Allowlist', icon: <ShieldCheck className={iconClass} /> });
   }
-
-  // Integrations — outbound plumbing: source-control hosts, alert sinks, ticketing.
   if (perms.manage_integrations) {
-    entries.push({ id: 'category_integrations', label: 'Integrations', isCategory: true });
     entries.push({ id: 'integrations', label: 'Integrations', icon: <Plug className={iconClass} /> });
   }
 
