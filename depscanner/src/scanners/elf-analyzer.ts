@@ -73,6 +73,14 @@ export interface DlopenResult {
   libraries: string[];
 }
 
+export interface DtSonameResult {
+  status: ReadelfStatus;
+  /** DT_SONAME value declared by the binary itself. Meaningful only when
+   *  `status === 'ok'`. Empty when the binary declares no SONAME (e.g. an
+   *  executable with no shared-library identity). */
+  soname: string | null;
+}
+
 // ============================================================
 // DT_NEEDED — declared shared-library dependencies
 // ============================================================
@@ -116,6 +124,47 @@ export async function extractDtNeeded(
     }
   }
   return { status: 'ok', needed: out };
+}
+
+// ============================================================
+// DT_SONAME — the binary's own shared-library identity
+// ============================================================
+
+// readelf -d prints SONAME entries as:
+//   0x000000000000000e (SONAME)  Library soname: [libssl.so.3]
+const SONAME_RE = /\(SONAME\)\s+Library soname:\s+\[([^\]]+)\]/;
+
+/**
+ * Extract a shared library's `DT_SONAME` — the name the dynamic linker
+ * uses to identify this library when other binaries declare it as
+ * `DT_NEEDED`. This is the OS-side identity that the composition step
+ * pairs against language-side `DT_NEEDED` entries to confirm a
+ * container OS-package actually backs a language wheel's native module.
+ *
+ * Tri-state mirrors `extractDtNeeded`: `unavailable` (readelf could not
+ * spawn) vs `unparsable` (corrupt/stripped ELF) vs `ok` (clean output).
+ * An `ok` result with `soname: null` is meaningful — it says "this
+ * binary genuinely declares no SONAME" (e.g. a stripped library or an
+ * executable), and composition must treat that case as "no bridge"
+ * rather than collapsing it with "readelf failed."
+ */
+export async function extractDtSoname(
+  binaryPath: string,
+  runner: ReadelfRunner = defaultReadelfRunner
+): Promise<DtSonameResult> {
+  let result: { stdout: string; exitCode: number };
+  try {
+    result = await runner(['-d', binaryPath]);
+  } catch {
+    return { status: 'unavailable', soname: null };
+  }
+  if (result.exitCode !== 0) return { status: 'unparsable', soname: null };
+
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const m = SONAME_RE.exec(line);
+    if (m) return { status: 'ok', soname: m[1] };
+  }
+  return { status: 'ok', soname: null };
 }
 
 // ============================================================

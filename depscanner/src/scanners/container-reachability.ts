@@ -532,6 +532,15 @@ export interface DecorateOptions {
   budgetMs?: number;
   runners?: ReachabilityRunners;
   logger?: ScannerSubprocessLogger;
+  /**
+   * Item G — second analysis pass over the same extracted rootDir. Called
+   * AFTER the dynamic-linker walk completes and BEFORE the scratch dir is
+   * cleaned. Failures here must not affect the reachability summary; the
+   * decorator catches and logs but never rethrows. Keeping this on the
+   * decorate API (rather than a second extract) means one crane export
+   * powers both analyses — no doubled image-pull cost.
+   */
+  onRootDirReady?: (rootDir: string) => Promise<void>;
 }
 
 export interface DecorateSummary {
@@ -592,6 +601,7 @@ export async function decorateContainerFindingsWithReachability(
   const remaining = () => budgetMs - (Date.now() - started);
 
   const workDir = path.join(opts.scratchDir, 'reach');
+  let extractedRootDir: string | null = null;
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
@@ -611,6 +621,7 @@ export async function decorateContainerFindingsWithReachability(
       });
     }
     const rootDir = path.join(workDir, 'rootfs');
+    extractedRootDir = rootDir;
 
     // ---- resolve entrypoint ----
     let config: ImageConfig;
@@ -747,6 +758,16 @@ export async function decorateContainerFindingsWithReachability(
       error: (err as Error).message,
     });
   } finally {
+    // Item G — second pass over the same extracted rootDir BEFORE cleanup.
+    // Failures are swallowed: native bindings are an optional analysis and
+    // must never break reachability decoration or the scan as a whole.
+    if (extractedRootDir && opts.onRootDirReady) {
+      try {
+        await opts.onRootDirReady(extractedRootDir);
+      } catch {
+        /* native-bindings extractor is best-effort */
+      }
+    }
     try {
       fs.rmSync(workDir, { recursive: true, force: true });
     } catch {

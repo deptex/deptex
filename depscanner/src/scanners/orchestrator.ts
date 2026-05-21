@@ -41,8 +41,14 @@ import {
   upsertContainerFindings,
   upsertContainerScanCache,
   upsertIaCFindings,
+  upsertNativeBindings,
   type BaseImageRecommendationInsert,
+  type NativeBindingInsert,
 } from './storage';
+import {
+  extractLanguageBindings,
+  extractOsBindings,
+} from './native-bindings';
 import { generateRecommendation } from './base-image-advisor';
 import {
   catalogHash,
@@ -892,11 +898,30 @@ async function scanContainerImages(
   findings: { dockerfile: ContainerFinding[]; configured: ContainerFinding[] };
   skipped: SkippedImage[];
   warnings: string[];
+  nativeBindings: NativeBindingInsert[];
+  bindingsTelemetry: {
+    os_family_seen: string[];
+    language_inspected: number;
+    language_unparsable: number;
+    os_inspected: number;
+    os_unparsable: number;
+  };
 }> {
   const skipped: SkippedImage[] = [];
   const warnings: string[] = [];
   const dockerfileFindings: ContainerFinding[] = [];
   const configuredFindings: ContainerFinding[] = [];
+  // Item G — bindings flow up to runIaCAndContainerScans, which upserts
+  // them once at the end. Per-image collection keeps the upsert atomic
+  // even when later images skip or fail.
+  const nativeBindings: NativeBindingInsert[] = [];
+  const bindingsTelemetry = {
+    os_family_seen: [] as string[],
+    language_inspected: 0,
+    language_unparsable: 0,
+    os_inspected: 0,
+    os_unparsable: 0,
+  };
 
   // Step 1 — metadata reads (no decryption yet; tenancy guards inside).
   const dockerfilePaths = findDockerfiles(ctx.repoPath);
@@ -935,6 +960,8 @@ async function scanContainerImages(
       findings: { dockerfile: [], configured: [] },
       skipped,
       warnings,
+      nativeBindings,
+      bindingsTelemetry,
     };
   }
 
@@ -978,6 +1005,39 @@ async function scanContainerImages(
               // CONTAINER_SCAN_TOTAL_BUDGET_MS by a full 30s.
               budgetMs: reachabilityBudgetMs(Date.now() - stepStart),
               logger: ctx.logger,
+              // Item G — second analysis pass over the same extracted FS.
+              // Failures are swallowed inside the decorator's finally block;
+              // the worst case here is "no bindings written for this image,"
+              // which composition.ts handles as a no-edge no-op.
+              onRootDirReady: async (rootDir) => {
+                const langResult = await extractLanguageBindings({ rootDir });
+                bindingsTelemetry.language_inspected += langResult.binaries_inspected;
+                bindingsTelemetry.language_unparsable += langResult.binaries_unparsable;
+                for (const b of langResult.bindings) {
+                  nativeBindings.push({
+                    scope: 'language',
+                    package_identifier: b.package_identifier,
+                    package_ecosystem: b.ecosystem,
+                    soname: b.soname,
+                    install_path: b.install_path,
+                    link_method: b.link_method,
+                  });
+                }
+                const osResult = await extractOsBindings({ rootDir });
+                bindingsTelemetry.os_family_seen.push(osResult.os_family);
+                bindingsTelemetry.os_inspected += osResult.binaries_inspected;
+                bindingsTelemetry.os_unparsable += osResult.binaries_unparsable;
+                for (const b of osResult.bindings) {
+                  nativeBindings.push({
+                    scope: 'os',
+                    package_identifier: b.package_identifier,
+                    package_ecosystem: null,
+                    soname: b.soname,
+                    install_path: b.install_path,
+                    link_method: b.link_method,
+                  });
+                }
+              },
             });
             // Wrap the log call itself in try/catch — a transient logger
             // fault (e.g., extraction_logs contention) must not abort the
@@ -1029,6 +1089,8 @@ async function scanContainerImages(
     findings: { dockerfile: dockerfileFindings, configured: configuredFindings },
     skipped,
     warnings,
+    nativeBindings,
+    bindingsTelemetry,
   };
 }
 
@@ -1328,6 +1390,34 @@ export async function runIaCAndContainerScans(
         'container_scan',
         `Container scan complete — ${summary.containerFindingsWritten} findings written, ${containerResult.skipped.length} images skipped`
       );
+
+      // Item G — persist SONAME bridge rows derived during the per-image
+      // reachability extract. Best-effort: a failed upsert leaves
+      // composition.ts with no bridge for this run, which falls through
+      // as a no-edge no-op (no PDV.contextual_depscore is touched).
+      if (containerResult.nativeBindings.length > 0) {
+        try {
+          const nbUpsert = await upsertNativeBindings(
+            ctx.supabase,
+            ctx.projectId,
+            ctx.runId,
+            containerResult.nativeBindings
+          );
+          await ctx.logger.info(
+            'container_scan',
+            `Native bindings written: ${nbUpsert.inserted} ` +
+              `(os_family=${containerResult.bindingsTelemetry.os_family_seen.join('/') || 'none'}; ` +
+              `language inspected=${containerResult.bindingsTelemetry.language_inspected} unparsable=${containerResult.bindingsTelemetry.language_unparsable}; ` +
+              `os inspected=${containerResult.bindingsTelemetry.os_inspected} unparsable=${containerResult.bindingsTelemetry.os_unparsable})`
+          );
+        } catch (e: any) {
+          summary.warnings.push(`native_bindings_upsert_failed:${e?.message ?? 'unknown'}`);
+          await ctx.logger.warn(
+            'container_scan',
+            `native bindings upsert failed: ${e?.message ?? e}`
+          );
+        }
+      }
 
       // Base-image advisor — recommendations are derived from the Dockerfile
       // findings just written, so this runs after the container upsert.
