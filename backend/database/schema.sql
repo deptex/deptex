@@ -2344,6 +2344,27 @@ end;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.cancel_scan_job(p_job_id uuid, p_organization_id uuid, p_project_id uuid)
+ RETURNS SETOF scan_jobs
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog', 'public'
+AS $function$
+BEGIN
+  RETURN QUERY
+    UPDATE scan_jobs
+       SET status = 'cancelled',
+           completed_at = NOW()
+     WHERE id = p_job_id
+       AND organization_id = p_organization_id
+       AND project_id = p_project_id
+       AND type IN ('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run')
+       AND status IN ('queued', 'processing')
+     RETURNING *;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.canonicalize_malicious_ecosystem(raw text)
  RETURNS text
  LANGUAGE sql
@@ -4964,7 +4985,7 @@ DECLARE
   v_credential_hash TEXT;
   v_host TEXT;
 BEGIN
-  IF p_type IN ('dast', 'dast_zap', 'dast_nuclei') THEN
+  IF p_type IN ('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run') THEN
     IF p_target_id IS NULL THEN
       RAISE EXCEPTION 'queue_scan_job: p_target_id is required for dast* types'
         USING ERRCODE = 'P0001';
@@ -5023,7 +5044,7 @@ BEGIN
     SELECT COUNT(*) INTO v_proj_concurrent
     FROM scan_jobs
     WHERE project_id = p_project_id
-      AND type IN ('dast', 'dast_zap', 'dast_nuclei')
+      AND type IN ('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run')
       AND status IN ('queued', 'processing');
 
     IF v_proj_concurrent >= 1 THEN
@@ -5035,7 +5056,7 @@ BEGIN
     SELECT COUNT(*) INTO v_org_concurrent
     FROM scan_jobs
     WHERE organization_id = p_organization_id
-      AND type IN ('dast', 'dast_zap', 'dast_nuclei')
+      AND type IN ('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run')
       AND status IN ('queued', 'processing');
 
     IF v_org_concurrent >= 5 THEN
@@ -5051,7 +5072,8 @@ BEGIN
     scan_profile, timeout_minutes,
     trigger_source, triggered_by,
     credential_id, credential_payload_hash
-  ) VALUES (
+  )
+  VALUES (
     p_project_id, p_organization_id, p_type, 'queued', COALESCE(p_payload, '{}'::jsonb),
     p_target_id, p_target_url,
     p_scan_profile, p_timeout_minutes,
@@ -6277,7 +6299,7 @@ ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_error_category_check CHECK
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_malicious_scan_status_check CHECK (((malicious_scan_status IS NULL) OR (malicious_scan_status = ANY (ARRAY['complete'::text, 'partial'::text, 'failed'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_scan_profile_check CHECK (((scan_profile IS NULL) OR (scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text]))));
 ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_trigger_source_check CHECK (((trigger_source IS NULL) OR (trigger_source = ANY (ARRAY['manual'::text, 'webhook'::text, 'recovery'::text, 'scheduled'::text, 'on_deploy'::text, 'aegis'::text]))));
-ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_type_check CHECK ((type = ANY (ARRAY['extraction'::text, 'dast'::text, 'dast_zap'::text, 'dast_nuclei'::text])));
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_type_check CHECK ((type = ANY (ARRAY['extraction'::text, 'dast'::text, 'dast_zap'::text, 'dast_nuclei'::text, 'dast_zap_dry_run'::text])));
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_source_type_check CHECK ((source_type = ANY (ARRAY['hand_written'::text, 'ai_inferred'::text, 'user_edited'::text])));
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'aborted'::text, 'skipped'::text])));
 ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_cost_cap_sane CHECK (((monthly_ai_cost_cap_usd >= (0)::numeric) AND (monthly_ai_cost_cap_usd <= (1000)::numeric)));

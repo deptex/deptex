@@ -57,16 +57,20 @@ import {
 import {
   buildAuthForStrategy,
   buildNucleiAuthHeaders,
+  buildRecordedAuthForZap,
   UnsupportedAuthStrategyError,
   InvalidCredentialCharacterError,
   type CredentialPayload,
   type DastAuthStrategy,
+  type RecordedCredentialPayload,
 } from './auth-config';
 import {
   parseZapReport,
+  parseZapLoginDiagnostics,
   redactCredentials,
   ZAP_DEFAULT_TIMEOUT_MS,
   type DastFindingRaw,
+  type DastLoginTestResultRaw,
   type DastScanProfile,
 } from './runner';
 import { runNuclei } from './nuclei-runner';
@@ -96,6 +100,52 @@ interface DastJobPayload {
   target_url?: string;
   scan_profile?: DastScanProfile;
   scan_timeout_minutes?: number;
+  detected_runtime?: DetectedRuntime;
+  source?: string;
+  /**
+   * v2.1d — when true, runDastPipeline branches at the top into the recorded-
+   * login probe ONLY: no spider, no active-scan, no findings inserted, no
+   * PDV mutation, no populateDependencies. Result written to
+   * scan_jobs.error_payload under {kind:'test_result', test_result:…}.
+   * The backend route validates the payload at queue time AND the worker
+   * re-validates after load (defense against false→full-scan typos like
+   * dryRun / dry-run, which would otherwise silently route a Test-login
+   * through the full spider/scan path).
+   */
+  dry_run?: boolean;
+  engine?: 'zap' | 'nuclei';
+}
+
+/**
+ * Worker-side payload validator (mirrors backend's validateDastJobPayload).
+ * Rejects unknown keys so a typo on the load-bearing dry_run flag surfaces
+ * as a job failure instead of a silent full-scan. Tolerates null/undefined
+ * (legacy queues sometimes inserted empty payloads).
+ */
+function validateWorkerPayload(input: unknown): DastJobPayload | { __error: string } {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return { __error: 'payload must be an object' };
+  }
+  const obj = input as Record<string, unknown>;
+  const KNOWN = new Set([
+    'target_url',
+    'scan_profile',
+    'scan_timeout_minutes',
+    'detected_runtime',
+    'source',
+    'dry_run',
+    'engine',
+  ]);
+  for (const k of Object.keys(obj)) {
+    if (!KNOWN.has(k)) {
+      return { __error: `unknown payload key ${JSON.stringify(k)} — likely a typo (e.g. dryRun → dry_run)` };
+    }
+  }
+  if (obj.dry_run !== undefined && typeof obj.dry_run !== 'boolean') {
+    return { __error: 'dry_run must be boolean' };
+  }
+  return obj as DastJobPayload;
 }
 
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
@@ -817,6 +867,194 @@ export function resolveEngine(jobType: string): 'zap' | 'nuclei' {
   return jobType === 'dast_nuclei' ? 'nuclei' : 'zap';
 }
 
+// ---------------------------------------------------------------------------
+// v2.1d — Recorded-login probe (shared core for dry-run + real-scan pre-flight)
+// ---------------------------------------------------------------------------
+
+export interface RecordedLoginProbeInputs {
+  targetUrl: string;
+  payload: RecordedCredentialPayload;
+  loggedInIndicator?: string | null;
+  loggedOutIndicator?: string | null;
+  detectedRuntime: DetectedRuntime;
+  scope?: ScopeConfig;
+  scanTimeoutMinutes: number;
+  zapWorkDir: string;
+  spawnImpl?: typeof import('child_process').spawn;
+}
+
+/**
+ * Run a login-only ZAP autorun and parse the diagnostic log into a
+ * DastLoginTestResultRaw. Used by:
+ *   (1) the dry-run dispatch branch in runDastPipeline (Test-login flow);
+ *   (2) the pre-flight probe inside a real recorded-strategy scan (M7).
+ *
+ * Returns the result envelope plus the internalIndexToZapIndex[] mapping so
+ * callers can correlate parsed step indices with the user's authored steps.
+ */
+export async function runRecordedLoginProbe(
+  inputs: RecordedLoginProbeInputs,
+  control: {
+    onHeartbeat: () => Promise<void>;
+    isCancelled: () => Promise<boolean>;
+    pollIntervalMs: number;
+  },
+): Promise<{ result: DastLoginTestResultRaw; internalIndexToZapIndex: number[] }> {
+  // Build the auth method once. We retain the `internalIndexToZapIndex[]`
+  // shape on the return type for callers that surface UI-step metadata, but
+  // the parser no longer uses it — ZAP doesn't expose per-step failure.
+  const authBuild = buildRecordedAuthForZap(
+    inputs.payload,
+    inputs.loggedInIndicator ?? undefined,
+    inputs.loggedOutIndicator ?? undefined,
+  );
+
+  // Allocate a per-job tempdir BEFORE emitting YAML, so the auth-report-json
+  // report job can be told to write inside the tempdir (avoiding collision
+  // with the traditional-json report and across concurrent probes).
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-login-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const authReportPath = path.join(tmpDir, 'auth-report.json');
+
+  // Build login-only YAML — no spider, no spiderAjax, no activeScan, no
+  // traditional-json report. addOns + passiveScan-config + auth context +
+  // requestor probe + auth-report-json job.
+  const yamlText = buildAutomationYaml({
+    targetUrl: inputs.targetUrl,
+    scanProfile: 'auto', // ignored under loginOnly
+    detectedRuntime: inputs.detectedRuntime,
+    reportRelativePath: 'zap-report.json', // unused under loginOnly
+    scope: inputs.scope,
+    authStrategy: 'recorded',
+    authPayload: inputs.payload,
+    loggedInIndicator: inputs.loggedInIndicator ?? undefined,
+    loggedOutIndicator: inputs.loggedOutIndicator ?? undefined,
+    scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+    loginOnly: true,
+    authReportDirAbsolute: tmpDir,
+  });
+
+  // YAML embeds plaintext credentials in each step's `value:` field —
+  // owner-read/write only, unlinked after spawn.
+  fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
+
+  const startedAt = Date.now();
+
+  // 5-minute hard cap for a single login probe (well above the p95 budget;
+  // the outer scan_timeout_minutes also applies). Anything past this is a
+  // wedged Firefox / ZAP and a cancel-and-retry is the right move.
+  const LOGIN_PROBE_HARD_CAP_MS = 5 * 60_000;
+  const effectiveTimeoutMs = Math.min(
+    inputs.scanTimeoutMinutes * 60_000,
+    LOGIN_PROBE_HARD_CAP_MS,
+  );
+
+  const handle = spawnExternal({
+    command: '/zap/zap.sh',
+    args: ['-cmd', '-autorun', yamlPath],
+    timeoutMs: effectiveTimeoutMs,
+    spawnImpl: inputs.spawnImpl,
+    onStderr: (chunk) => {
+      // Forward to our stderr (redacted) for ops visibility. We no longer
+      // buffer for parsing — ZAP doesn't emit per-step events on stderr;
+      // the structured signal lives in auth-report.json on disk.
+      const redacted = redactCredentials(chunk) ?? '';
+      process.stderr.write(`[zap-login] ${redacted}`);
+    },
+    onStdout: () => {
+      /* no-op — auth-report.json carries the verdict */
+    },
+  });
+
+  // Heartbeat + cancellation poll (same shape as runZapWithControlPlane).
+  let pollDone = false;
+  let pollTimer: NodeJS.Timeout | null = null;
+  async function pollOnce(): Promise<void> {
+    if (pollDone) return;
+    try {
+      await control.onHeartbeat();
+    } catch {
+      /* non-fatal */
+    }
+    if (pollDone) return;
+    let cancelled = false;
+    try {
+      cancelled = await control.isCancelled();
+    } catch {
+      cancelled = false;
+    }
+    if (pollDone) return;
+    if (cancelled) {
+      handle.abort('cancellation_requested');
+      return;
+    }
+    pollTimer = setTimeout(pollOnce, control.pollIntervalMs);
+    pollTimer.unref?.();
+  }
+  pollTimer = setTimeout(pollOnce, control.pollIntervalMs);
+  pollTimer.unref?.();
+
+  let runResult;
+  // Capture the auth-report.json BEFORE the finally block wipes the tempdir.
+  // We unlink the YAML eagerly (it carries plaintext credentials), then
+  // read + parse the report, then wipe the tempdir.
+  let authReportJson: unknown = null;
+  try {
+    runResult = await handle.done;
+  } finally {
+    pollDone = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    // Unlink the credential-bearing YAML immediately on exit.
+    try {
+      fs.unlinkSync(yamlPath);
+    } catch {
+      /* noop */
+    }
+    // Best-effort read of the structured auth-report. Missing file (ZAP
+    // crashed before emitting) and corrupt JSON both surface as
+    // browser_crashed / unknown via the parser; we don't fail here.
+    try {
+      if (fs.existsSync(authReportPath)) {
+        const raw = fs.readFileSync(authReportPath, { encoding: 'utf-8' });
+        authReportJson = JSON.parse(raw);
+      }
+    } catch (e) {
+      console.error(
+        `[zap-login] failed to read auth-report.json: ${(e as Error).message}`,
+      );
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const durationMs = Date.now() - startedAt;
+
+  // Parse the structured auth-report. Missing/null → browser_crashed;
+  // non-object → unknown; otherwise read summaryItems / failureReasons.
+  const parsed = parseZapLoginDiagnostics(authReportJson, durationMs);
+
+  // A ZAP cancellation/timeout abort means we never got a real verdict. Surface
+  // as browser_crashed so the FE can distinguish "auth genuinely failed" from
+  // "we never finished checking".
+  if (runResult.aborted) {
+    return {
+      result: {
+        success: false,
+        duration_ms: durationMs,
+        steps_run: parsed.steps_run,
+        failed_at_step: {
+          step_index: parsed.failed_at_step?.step_index ?? 0,
+          action: parsed.failed_at_step?.action ?? 'click',
+          reason: 'browser_crashed',
+          detail: `ZAP login probe aborted: ${runResult.abortReason ?? 'unknown'}`,
+        },
+      },
+      internalIndexToZapIndex: authBuild.internalIndexToZapIndex,
+    };
+  }
+
+  return { result: parsed, internalIndexToZapIndex: authBuild.internalIndexToZapIndex };
+}
+
 /**
  * Build the cross_link_metadata payload for an inserted finding. Nuclei
  * findings get a `nuclei.cve_ids` array merged in — confirm_pdvs_from_dast_run
@@ -954,6 +1192,46 @@ async function finalizeJob(
   }
 }
 
+/**
+ * v2.1d — finalize a dry-run Test-login job. Writes scan_jobs.error_payload
+ * under the {kind:'test_result', test_result:…} discriminator and sets
+ * status='completed' (success AND failure both end completed; error_category
+ * stays NULL — distinguish via error_payload.kind). NEVER inserts findings,
+ * NEVER flips PDVs, NEVER calls populateDependencies. Also writes an
+ * organization_activities row so Aegis and operators have a queryable signal.
+ */
+async function finalizeDryRunJob(
+  supabase: Storage,
+  jobId: string,
+  organizationId: string,
+  result: DastLoginTestResultRaw,
+): Promise<void> {
+  const errorPayload = { kind: 'test_result' as const, test_result: result };
+  const { error: updateErr } = await supabase
+    .from('scan_jobs')
+    .update({
+      status: 'completed',
+      error_category: null,
+      error_payload: errorPayload,
+      findings_count: 0,
+      duration_seconds: Math.max(0, Math.round(result.duration_ms / 1000)),
+      completed_at: new Date().toISOString(),
+    })
+    .eq('id', jobId);
+  if (updateErr) {
+    throw new Error(`Failed to finalize dry-run DAST scan_jobs row: ${updateErr.message}`);
+  }
+
+  // The `dast_login_test.completed` activity is intentionally written by the
+  // ROUTE side (when the FE polls and observes terminal state) rather than
+  // here, because activities require user_id — which the worker doesn't have.
+  // The scan_jobs row itself records completion (status + error_payload +
+  // completed_at + duration_seconds + findings_count); that's the canonical
+  // queryable signal. The activity-log entry is supplementary and added by
+  // the route layer where the user identity is available.
+  void organizationId;
+}
+
 async function recordJobError(
   supabase: Storage,
   jobId: string,
@@ -989,11 +1267,34 @@ export async function runDastPipeline(
 ): Promise<DastPipelineResult> {
   const startedAt = Date.now();
   const tag = `[dast-${job.id}]`;
-  const payload = job.payload as DastJobPayload;
+
+  // v2.1d — validate the payload at top-of-pipe. Defense against typos like
+  // dryRun / dry-run on the load-bearing dry_run dispatch flag (false→full-
+  // scan is the unsafe direction). The backend route validates at queue time;
+  // this re-validation defends against schema drift between deploys.
+  const validatedPayload = validateWorkerPayload(job.payload);
+  if ('__error' in validatedPayload) {
+    const abort = new DastPipelineAbortError(
+      'unknown',
+      { stage: 'validate_payload', detail: validatedPayload.__error },
+      `Invalid DAST job payload: ${validatedPayload.__error}`,
+    );
+    console.error(`${tag} aborted at payload validation: ${validatedPayload.__error}`);
+    await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+    throw abort;
+  }
+  const payload: DastJobPayload = validatedPayload;
 
   const scanProfile: DastScanProfile = payload.scan_profile ?? 'auto';
   const timeoutMinutes = payload.scan_timeout_minutes ?? Math.round(ZAP_DEFAULT_TIMEOUT_MS / 60_000);
   const zapWorkDir = options.zapWorkDir ?? process.env.DAST_WORK_DIR ?? '/zap/wrk';
+  // v2.1d /criticalreview SVED-1 (P0): the dry-run discriminator is now the
+  // scan_jobs.type column (`dast_zap_dry_run`) — NOT a payload key. Old
+  // pre-v2.1d workers don't advertise the new type so claim_scan_job won't
+  // hand them dry-run rows. The legacy `payload.dry_run === true` fallback
+  // is retained transitionally for in-flight rows; new code paths queue the
+  // type only and the v2.1e cleanup will remove the payload field entirely.
+  const isDryRun = job.type === 'dast_zap_dry_run' || payload.dry_run === true;
 
   // Step 1: tenant-guard load (no decrypt yet).
   let guard;
@@ -1082,6 +1383,78 @@ export async function runDastPipeline(
     throw abort;
   }
 
+  // v2.1d — additional scan-time SSRF revalidation for recorded credentials.
+  // The route layer validates login_page_url + goto step values + sso_origins
+  // via validateRecordedSsrf at PUT time, but DNS-rebind between PUT and the
+  // actual scan can re-point a benign-at-create-time hostname at IMDS / Fly
+  // 6PN / RFC1918. Re-resolve every URL the browser-auth method will fetch.
+  if (cred && cred.credentialRow.auth_strategy === 'recorded') {
+    const rec = cred.payload as RecordedCredentialPayload;
+    // Effective loginPageUrl per buildRecordedAuthForZap: steps[0].goto.value
+    // overrides payload.login_page_url when present.
+    const effectiveLoginPageUrl =
+      rec.steps?.[0]?.action === 'goto' && typeof rec.steps[0].value === 'string'
+        ? rec.steps[0].value
+        : rec.login_page_url;
+    let recHostname: string;
+    try {
+      recHostname = new URL(effectiveLoginPageUrl).hostname;
+    } catch {
+      const abort = new DastPipelineAbortError(
+        'ssrf_blocked',
+        { stage: 'parse_login_page_url' },
+        'DAST recorded login_page_url is malformed',
+      );
+      console.error(`${tag} aborted: recorded login_page_url not a valid URL`);
+      await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+      throw abort;
+    }
+    const recCheck = await validateScanTimeHost(recHostname, 'host');
+    if (!recCheck.valid) {
+      const abort = new DastPipelineAbortError(
+        'ssrf_blocked',
+        { stage: 'scan_time_login_page_url_revalidation' },
+        'DAST recorded login_page_url failed scan-time SSRF revalidation',
+      );
+      console.error(
+        `${tag} aborted: recorded login_page_url SSRF revalidation failed: ${recCheck.reason}`,
+      );
+      await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+      throw abort;
+    }
+    // sso_origins forward-compat — same posture.
+    if (Array.isArray(rec.sso_origins)) {
+      for (const o of rec.sso_origins) {
+        if (typeof o !== 'string') continue;
+        try {
+          const ssoHost = new URL(o).hostname;
+          const ssoCheck = await validateScanTimeHost(ssoHost, 'host');
+          if (!ssoCheck.valid) {
+            const abort = new DastPipelineAbortError(
+              'ssrf_blocked',
+              { stage: 'scan_time_sso_origin_revalidation' },
+              'DAST recorded sso_origins entry failed scan-time SSRF revalidation',
+            );
+            console.error(
+              `${tag} aborted: recorded sso_origins SSRF revalidation failed: ${ssoCheck.reason}`,
+            );
+            await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+            throw abort;
+          }
+        } catch {
+          // Malformed sso_origin — treat as ssrf_blocked per the same posture.
+          const abort = new DastPipelineAbortError(
+            'ssrf_blocked',
+            { stage: 'parse_sso_origin' },
+            'DAST recorded sso_origins entry is malformed',
+          );
+          await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+          throw abort;
+        }
+      }
+    }
+  }
+
   // Step 4: run the selected DAST engine. job.type='dast_nuclei' → Nuclei,
   // everything else ('dast' legacy alias, 'dast_zap') → ZAP. Both engines
   // share the cancellation-poll + heartbeat control loop.
@@ -1105,6 +1478,196 @@ export async function runDastPipeline(
     },
     pollIntervalMs: options.cancellationPollMs ?? DEFAULT_CANCELLATION_POLL_MS,
   };
+
+  // v2.1d — Dry-run dispatch (Test-login flow). Branches BEFORE engine
+  // dispatch, BEFORE any spider/active-scan, BEFORE findings insert, BEFORE
+  // PDV mutation, BEFORE populateDependencies. Strictly:
+  //   - requires recorded auth strategy (422-equivalent for any other shape;
+  //     the route layer enforces this but defense-in-depth here)
+  //   - requires ZAP engine (Nuclei has no auth replay; we never even queue
+  //     this combination but check anyway)
+  //   - returns status='completed' on both success AND failure (the user-
+  //     visible outcome lives under error_payload.kind='test_result')
+  if (isDryRun) {
+    if (engine !== 'zap') {
+      const abort = new DastPipelineAbortError(
+        'auth_failed',
+        { stage: 'dry_run_dispatch', reason: 'nuclei_does_not_support_dry_run_login_probe' },
+        'Test-login (dry-run) is only supported on the ZAP engine',
+      );
+      console.error(`${tag} dry-run rejected: engine=${engine}`);
+      await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+      throw abort;
+    }
+    if (!cred || cred.credentialRow.auth_strategy !== 'recorded') {
+      const abort = new DastPipelineAbortError(
+        'auth_failed',
+        {
+          stage: 'dry_run_dispatch',
+          reason: 'dry_run_requires_recorded_strategy',
+          got: cred?.credentialRow.auth_strategy ?? 'none',
+        },
+        'Test-login (dry-run) requires auth_strategy=recorded',
+      );
+      console.error(
+        `${tag} dry-run rejected: auth_strategy=${cred?.credentialRow.auth_strategy ?? 'none'}`,
+      );
+      await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+      throw abort;
+    }
+
+    console.log(`${tag} dry-run dispatch — running recorded login probe (loginOnly)`);
+    let probe: { result: DastLoginTestResultRaw };
+    try {
+      probe = await runRecordedLoginProbe(
+        {
+          targetUrl: target.target_url,
+          payload: cred.payload as RecordedCredentialPayload,
+          loggedInIndicator: cred.credentialRow.logged_in_indicator,
+          loggedOutIndicator: cred.credentialRow.logged_out_indicator,
+          detectedRuntime: target.detected_runtime,
+          scope,
+          scanTimeoutMinutes: timeoutMinutes,
+          zapWorkDir,
+          spawnImpl: options.spawnImpl,
+        },
+        control,
+      );
+    } catch (e) {
+      // v2.1d /criticalreview EHA-1 (P1): the original implementation
+      // re-threw here, causing the outer worker catch (depscanner/src/index.ts
+      // processJob → updateJobStatus 'failed') to overwrite the
+      // 'completed' status finalizeDryRunJob just wrote. Per the documented
+      // invariant ('success AND failure both end completed; distinguish via
+      // error_payload.kind') the dry-run path OWNS its terminal state —
+      // return cleanly so the outer worker sees a normal success exit and
+      // doesn't touch scan_jobs.error / status.
+      //
+      // Defense-in-depth (/criticalreview service-role-leakage-auditor-f1):
+      // redact (e as Error).message before persisting — every other write
+      // to error_payload string fields goes through redactCredentials.
+      const rawMessage = `Test-login probe failed: ${(e as Error).message}`;
+      const redactedMessage = redactCredentials(rawMessage) ?? rawMessage;
+      console.error(`${tag} dry-run probe threw: ${redactCredentials((e as Error).message) ?? '(redacted)'}`);
+      const failResult: DastLoginTestResultRaw = {
+        success: false,
+        duration_ms: Date.now() - startedAt,
+        steps_run: 0,
+        failed_at_step: {
+          step_index: 0,
+          action: 'click',
+          reason: 'browser_crashed',
+          detail: redactedMessage,
+        },
+      };
+      await finalizeDryRunJob(supabase, job.id, job.organization_id, failResult);
+      return {
+        dast_run_id: '',
+        findings_count: 0,
+        duration_seconds: Math.max(0, Math.round(failResult.duration_ms / 1000)),
+        cross_linked_count: 0,
+        auth_state_summary: 'authentication_lost',
+        runtime_confirmed_count: 0,
+      };
+    }
+
+    await finalizeDryRunJob(supabase, job.id, job.organization_id, probe.result);
+
+    console.log(
+      `${tag} dry-run complete: success=${probe.result.success} steps_run=${probe.result.steps_run} duration_ms=${probe.result.duration_ms}`,
+    );
+
+    // Return the same DastPipelineResult shape the regular path returns so the
+    // worker dispatch doesn't need a special case. findings_count=0,
+    // cross_linked_count=0, runtime_confirmed_count=0; the real result lives
+    // in scan_jobs.error_payload.test_result.
+    return {
+      dast_run_id: '',
+      findings_count: 0,
+      duration_seconds: Math.max(0, Math.round(probe.result.duration_ms / 1000)),
+      cross_linked_count: 0,
+      auth_state_summary: probe.result.success ? 'authenticated' : 'authentication_lost',
+      runtime_confirmed_count: 0,
+    };
+  }
+
+  // v2.1d /criticalreview RH-4: real-scan pre-flight using the same
+  // runRecordedLoginProbe core as the dry-run Test-login flow. Without this
+  // a recorded-auth failure during a real scan surfaced as a flat
+  // {strategy:'recorded'} payload (or no payload at all), and the FE's
+  // RecordedStrategyEditor `kind:'pre_flight_failed'` branch had no
+  // producer. We now run the probe BEFORE spider/active-scan dispatch; on
+  // probe.success===false we record_payload with the discriminated union
+  // variant the FE expects and short-circuit before any engine work.
+  //
+  // Only ZAP engine + recorded credential needs this — Nuclei rejects
+  // recorded outright via buildNucleiAuthHeaders below, and form/jwt/cookie
+  // use their pre-existing in-engine auth flows.
+  if (engine === 'zap' && cred && cred.credentialRow.auth_strategy === 'recorded') {
+    console.log(`${tag} recorded-auth pre-flight probe (shared with Test-login)`);
+    try {
+      const preflight = await runRecordedLoginProbe(
+        {
+          targetUrl: target.target_url,
+          payload: cred.payload as RecordedCredentialPayload,
+          loggedInIndicator: cred.credentialRow.logged_in_indicator,
+          loggedOutIndicator: cred.credentialRow.logged_out_indicator,
+          detectedRuntime: target.detected_runtime,
+          scope,
+          scanTimeoutMinutes: timeoutMinutes,
+          zapWorkDir,
+          spawnImpl: options.spawnImpl,
+        },
+        control,
+      );
+      if (!preflight.result.success) {
+        const abort = new DastPipelineAbortError(
+          'auth_failed',
+          {
+            kind: 'pre_flight_failed',
+            failed_at_step: preflight.result.failed_at_step ?? {
+              step_index: 0,
+              action: 'click',
+              reason: 'unknown',
+            },
+            // 0 because this is the first failed auth attempt — the
+            // mid-scan re-login counter is owned by the
+            // `kind:'session_loss'` envelope which only the form strategy
+            // emits today.
+            consecutive_lost_count: 0,
+          },
+          'Recorded login pre-flight failed',
+        );
+        console.error(
+          `${tag} pre-flight failed: ${preflight.result.failed_at_step?.reason ?? 'unknown'}`,
+        );
+        await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+        throw abort;
+      }
+      console.log(`${tag} pre-flight passed in ${preflight.result.duration_ms}ms`);
+    } catch (e) {
+      if (e instanceof DastPipelineAbortError) throw e;
+      // Probe spawn / Firefox crash: surface as pre_flight_failed with the
+      // browser_crashed reason so the FE banner still renders.
+      const abort = new DastPipelineAbortError(
+        'auth_failed',
+        {
+          kind: 'pre_flight_failed',
+          failed_at_step: {
+            step_index: 0,
+            action: 'click',
+            reason: 'browser_crashed',
+            detail: `pre-flight probe crashed: ${(e as Error).message}`,
+          },
+          consecutive_lost_count: 0,
+        },
+        'Recorded login pre-flight probe crashed',
+      );
+      console.error(`${tag} pre-flight probe crashed: ${(e as Error).message}`);
+      await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
+      throw abort;
+    }
+  }
 
   let scanFindings: DastFindingRaw[];
   let scanDurationMs: number;

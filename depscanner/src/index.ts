@@ -95,7 +95,7 @@ async function processDastJob(supabase: Storage, job: ExtractionJobRow): Promise
 }
 
 async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
-  const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei';
+  const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei' || job.type === 'dast_zap_dry_run';
   const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
   console.log(`${tag} Dispatching ${job.type} job for project ${job.project_id}`);
 
@@ -120,9 +120,13 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   try {
     if (job.type === 'extraction') {
       await processExtractionJob(supabase, job);
-    } else if (job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei') {
+    } else if (job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei' || job.type === 'dast_zap_dry_run') {
       // All 'dast*' types share one pipeline; runDastPipeline dispatches to the
-      // ZAP or Nuclei engine internally based on scan_jobs.type (v2.1c).
+      // ZAP or Nuclei engine internally based on scan_jobs.type (v2.1c). The
+      // 'dast_zap_dry_run' type routes to the Test-login probe branch
+      // (v2.1d). Old workers don't advertise this type — claim_scan_job will
+      // skip them so a stale worker can't accidentally run a real scan in
+      // place of a probe.
       await processDastJob(supabase, job);
     } else {
       const message = `Unsupported scan type: ${job.type}`;
@@ -169,7 +173,7 @@ async function runWorker(): Promise<void> {
 
       if (job) {
         lastJobTime = Date.now();
-        const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei';
+        const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei' || job.type === 'dast_zap_dry_run';
         const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
         console.log(`${tag} Claimed for project ${job.project_id} (attempt ${job.attempts})`);
 

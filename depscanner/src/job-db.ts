@@ -29,7 +29,7 @@ export interface ExtractionJobRow {
 export function getSupportedJobTypes(): string[] {
   const types: string[] = ['extraction'];
   if (process.env.DAST_CREDENTIAL_KEY) {
-    types.push('dast', 'dast_zap', 'dast_nuclei');
+    types.push('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run');
   }
   return types;
 }

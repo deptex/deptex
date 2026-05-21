@@ -2082,6 +2082,36 @@ export const api = {
     );
   },
 
+  /**
+   * v2.1d — queue a recorded-login dry-run (Test-login button).
+   * Returns the test_job_id; client polls GET /dast/jobs?id=<id> via the
+   * useJobResult hook until status is terminal.
+   */
+  async postDastLoginTest(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastLoginTestResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials/test`,
+      { method: 'POST' },
+    );
+  },
+
+  /**
+   * v2.1d — cancel a queued/processing scan_jobs row. Backs the editor's
+   * "Cancel running scan" affordance for the Test-login flow concurrency
+   * mitigation.
+   */
+  async cancelDastJob(
+    projectId: string,
+    jobId: string,
+  ): Promise<DastJobCancelResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/jobs/${jobId}/cancel`,
+      { method: 'POST' },
+    );
+  },
+
   async triggerDastScan(
     projectId: string,
     body: { target_id: string; engine?: 'zap' | 'nuclei' },
@@ -3980,7 +4010,94 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
-export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded';
+
+// v2.1d — recorded-login step authoring. Maps 1:1 to the backend type.
+export type RecordedStepAction =
+  | 'goto'
+  | 'click'
+  | 'type_username'
+  | 'type_password'
+  | 'type_totp'
+  | 'type_custom'
+  | 'wait'
+  | 'return'
+  | 'escape';
+
+export interface RecordedStep {
+  action: RecordedStepAction;
+  selector?: string;
+  selector_kind?: 'css' | 'xpath';
+  value?: string;
+  timeout_ms?: number;
+  wait_ms?: number;
+}
+
+export interface RecordedCredentialPayload {
+  kind: 'recorded';
+  login_page_url: string;
+  steps: RecordedStep[];
+  username: string;
+  password: string;
+  totp_secret?: string;
+  login_page_wait_ms?: number;
+  step_delay_ms?: number;
+  label?: string;
+  sso_origins?: string[];
+}
+
+export interface FailedAtStep {
+  step_index: number;
+  action: RecordedStepAction;
+  selector?: string;
+  reason:
+    | 'selector_not_visible_after_timeout'
+    | 'cross_origin_blocked'
+    | 'totp_generation_failed'
+    | 'browser_crashed'
+    | 'logged_in_indicator_missed'
+    | 'logged_out_indicator_present_after_login'
+    | 'unknown';
+  detail?: string;
+  dom_excerpt?: string;
+}
+
+export interface DastLoginTestResult {
+  success: boolean;
+  duration_ms: number;
+  steps_run: number;
+  step_index?: number;
+  failed_at_step?: FailedAtStep;
+  raw_log?: string;
+}
+
+// Discriminated union — FE renderers switch on `kind`. Backend type mirror.
+export type DastJobErrorPayload =
+  | {
+      kind: 'session_loss';
+      consecutive_lost_count: number;
+      last_logged_out_url?: string;
+      last_logged_out_at?: string;
+    }
+  | {
+      kind: 'pre_flight_failed';
+      failed_at_step: FailedAtStep;
+      consecutive_lost_count: 0;
+    }
+  | {
+      kind: 'test_result';
+      test_result: DastLoginTestResult;
+    };
+
+export interface DastLoginTestResponse {
+  test_job_id: string;
+  status: 'queued';
+}
+
+export interface DastJobCancelResponse {
+  job_id: string;
+  status: 'cancelled';
+}
 export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
 export type DastEngine = 'zap' | 'nuclei' | 'merged';
@@ -4023,7 +4140,8 @@ export interface DastConfigDTO {
 export type DastCredentialPayloadSummary =
   | { kind: 'form'; username_masked: string }
   | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
-  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] };
+  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] }
+  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string };
 
 export interface DastCredentialSummaryDTO {
   auth_strategy: DastAuthStrategy;
@@ -4046,7 +4164,8 @@ export type DastCredentialUpsertPayload =
   | {
       kind: 'cookie';
       cookies: { name: string; value: string; domain?: string; path?: string }[];
-    };
+    }
+  | RecordedCredentialPayload;
 
 export interface DastCredentialUpsertDTO {
   auth_strategy: DastAuthStrategy;
@@ -4070,6 +4189,8 @@ export interface DastJobDTO {
   completed_at: string | null;
   error: string | null;
   error_category: string | null;
+  /** v2.1d — discriminated union; FE switches on .kind. */
+  error_payload: DastJobErrorPayload | null;
   attempts: number;
   created_at: string;
 }
