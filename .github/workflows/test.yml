@@ -179,48 +179,17 @@ jobs:
         working-directory: depscanner
         run: npm run test:fixtures
 
-  reachability-corpus:
-    # Scans the hand-labelled reachability corpus (8 ecosystems, 521 findings)
-    # and evaluates the three acceptance gates (noise reduction >= 60%, every
-    # ecosystem > 0% unreachable, zero false negatives).
-    #
-    # MANUAL-TRIGGER ONLY. Tried promoting to PR-triggered and it failed on
-    # the first PR (chore/ci-path-filters): 4 of 8 repos timed out / failed
-    # without a warm dep-scan VDB cache, and the 4 that completed observed
-    # 174 findings but matched 0 of the hand-labelled CVE IDs — most likely
-    # CI's cold-downloaded VDB lacks the GHSA→CVE-2026-* alias chains the
-    # corpus expects. Making this CI-honest needs real infra work: either
-    # bake the ~38GB VDB into the Docker image (image bloat) or shard the
-    # VDB into multiple GHA caches (10GB/cache, 10GB/repo limits) or pin a
-    # known-good OSV snapshot. Until that's done, this stays manual.
-    name: Reachability corpus (informational)
-    if: github.event_name == 'workflow_dispatch'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: depscanner/package-lock.json
-
-      - name: Install depscanner dependencies
-        working-directory: depscanner
-        run: npm ci
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build deptex-cli image
-        working-directory: depscanner
-        run: npm run docker:build
-
-      - name: Scan reachability corpus + evaluate acceptance gates
-        working-directory: depscanner
-        run: npm run test:reachability-corpus
+  # Note: there is no reachability-corpus job here by design. The corpus check
+  # (depscanner/scripts/reachability-corpus.ts, `npm run test:reachability-corpus`)
+  # is a local-only developer benchmark — it needs a warm ~38GB dep-scan VDB
+  # cache at `~/.deptex/vdb` to complete in reasonable time, and the
+  # hand-labelled CVE IDs in reachability-corpus.yaml depend on the GHSA→CVE
+  # alias chains that the warm VDB exposes. Ephemeral GHA runners satisfy
+  # neither. Tried promoting it to PR-triggered on 2026-05-21 and it
+  # failed (4/8 scans timeout/fail, 174 findings matched 0 hand-labels).
+  # The gate-evaluator logic IS covered by depscanner/src/__tests__/
+  # reachability-corpus.test.ts, which runs under the `depscanner` job above.
+  # Don't add this job back until the VDB caching problem is solved upstream.
 
   fix-worker:
     name: Fix-worker (tsc)
