@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -625,21 +625,28 @@ export default function OrgSidebar({
                       <span>Settings</span>
                     </button>
                   </SidebarMenuItem>
-                  {settingsGroups.flatMap((group) => group.items).map((item) => {
-                    const isActive = settingsActiveSection === item.id;
-                    return (
-                      <SidebarMenuItem key={item.id}>
-                        <SidebarMenuButton
-                          isActive={isActive}
-                          onClick={() => handleSettingsItemClick(item.id)}
-                          aria-current={isActive ? 'page' : undefined}
-                        >
-                          {item.icon}
-                          <span>{item.label}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
+                  {settingsGroups.map((group, groupIndex) => (
+                    <Fragment key={`settings-group-${groupIndex}`}>
+                      {groupIndex > 0 && (
+                        <li aria-hidden className="my-1 mx-2 border-t border-border/50" />
+                      )}
+                      {group.items.map((item) => {
+                        const isActive = settingsActiveSection === item.id;
+                        return (
+                          <SidebarMenuItem key={item.id}>
+                            <SidebarMenuButton
+                              isActive={isActive}
+                              onClick={() => handleSettingsItemClick(item.id)}
+                              aria-current={isActive ? 'page' : undefined}
+                            >
+                              {item.icon}
+                              <span>{item.label}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
