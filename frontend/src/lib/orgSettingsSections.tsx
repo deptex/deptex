@@ -6,7 +6,6 @@ import {
   Atom,
   Network,
   Plug,
-  Bell,
   Shield,
   Tag,
   Clock,
@@ -27,7 +26,6 @@ export const VALID_SETTINGS_SECTIONS = new Set([
   'ai',
   'reachability',
   'integrations',
-  'notifications',
   'policies',
   'statuses',
   'security_slas',
@@ -139,16 +137,10 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'malicious_allowlist', label: 'Malicious Allowlist', icon: <ShieldCheck className={iconClass} /> });
   }
 
-  // Integrations — outbound plumbing: source-control hosts, alert sinks, webhooks.
-  const showIntegrationsCategory = perms.manage_integrations || perms.manage_notifications;
-  if (showIntegrationsCategory) {
-    entries.push({ id: 'category_integrations', label: 'Integrations', isCategory: true });
-  }
+  // Integrations — outbound plumbing: source-control hosts, alert sinks, ticketing.
   if (perms.manage_integrations) {
+    entries.push({ id: 'category_integrations', label: 'Integrations', isCategory: true });
     entries.push({ id: 'integrations', label: 'Integrations', icon: <Plug className={iconClass} /> });
-  }
-  if (perms.manage_integrations || perms.manage_notifications) {
-    entries.push({ id: 'notifications', label: 'Notifications', icon: <Bell className={iconClass} /> });
   }
 
   // Org Security — auth surface + audit trail, distinct from "Configuration"-style policy rules.

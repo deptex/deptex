@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -33,8 +33,6 @@ import MembersPage from './MembersSection';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
 import StatusesSection from '@/components/StatusesSection';
-import NotificationRulesSection from './NotificationRulesSection';
-import NotificationHistorySection from './NotificationHistorySection';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
@@ -541,36 +539,6 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-        </div>
-      );
-    case 'notifications':
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className={`h-8 w-36 ${pulse}`} />
-            <div className={`h-9 w-28 ${pulse}`} />
-          </div>
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-              <div className={`h-4 w-28 ${pulse}`} />
-            </div>
-            <div className="divide-y divide-border">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="px-4 py-3 flex items-center gap-3 animate-pulse">
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
-                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    <div className={`h-4 w-32 ${pulse}`} />
-                    <div className={`h-3 w-48 ${pulse}`} />
-                  </div>
-                  <div className="h-6 w-6 rounded-full bg-muted flex-shrink-0 hidden sm:block" />
-                  <div className="h-6 w-6 rounded bg-muted flex-shrink-0" />
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -1648,8 +1616,6 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
-  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
-  const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [hasVisitedStatuses, setHasVisitedStatuses] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
@@ -1709,7 +1675,6 @@ export default function OrganizationSettingsPage() {
   const [customIntegrationDetailsClosing, setCustomIntegrationDetailsClosing] = useState(false);
   const [customIntegrationSecretVisible, setCustomIntegrationSecretVisible] = useState(false);
   const customIntegrationDetailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const notifCreateRuleRef = useRef<(() => void) | null>(null);
 
   // Inline credential-form state for the Add Integration sidebar — each form
   // expands in place inside the sidebar rather than opening its own dialog.
@@ -1743,9 +1708,6 @@ export default function OrganizationSettingsPage() {
   // Which row in the Add sidebar is currently expanded showing its credential form.
   // Only one at a time (accordion). Null when nothing is expanded.
   const [expandedAddItem, setExpandedAddItem] = useState<'email' | 'pagerduty' | 'jira-dc' | 'custom-notification' | 'custom-ticketing' | null>(null);
-
-  const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
-  const [notifPauseLoading, setNotifPauseLoading] = useState(false);
 
   // Usage screen state
   const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
@@ -1971,18 +1933,13 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  // Track when user visits Members/Integrations/Webhooks/Notifications/Policies tabs so we can keep them mounted (cached) when switching away
+  // Track when user visits Members/Integrations/Policies/Statuses tabs so we can keep them mounted (cached) when switching away
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
-    if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
     if (activeSection === 'statuses') setHasVisitedStatuses(true);
   }, [activeSection]);
-
-  useEffect(() => {
-    setNotifPausedUntil((organization as any)?.notifications_paused_until ?? null);
-  }, [organization]);
 
   const loadUsage = async () => {
     if (!id) return;
@@ -3831,127 +3788,6 @@ export default function OrganizationSettingsPage() {
                       )}
                     </>
                   )}
-                </div>
-              )}
-
-              {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
-              {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
-                <div className="pt-8 space-y-6" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  {/* Header: title + description, Pause + Create Rule (no border under title) */}
-                  <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
-                    <div>
-                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                      <p className="mt-1.5 text-sm text-foreground-secondary">
-                        Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={notifPauseLoading}>
-                            {notifPauseLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <PauseCircle className="h-3.5 w-3.5" />
-                            )}
-                            {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
-                            <DropdownMenuItem onClick={async () => {
-                              setNotifPauseLoading(true);
-                              try {
-                                await fetch(`${API_BASE}/api/organizations/${id}`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                  body: JSON.stringify({ notifications_paused_until: null }),
-                                });
-                                setNotifPausedUntil(null);
-                                toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                              } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                              finally { setNotifPauseLoading(false); }
-                            }}>
-                              Resume notifications
-                            </DropdownMenuItem>
-                          ) : (
-                            <>
-                              {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                                <DropdownMenuItem key={hours} onClick={async () => {
-                                  setNotifPauseLoading(true);
-                                  try {
-                                    const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                    await fetch(`${API_BASE}/api/organizations/${id}`, {
-                                      method: 'PATCH',
-                                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                      body: JSON.stringify({ notifications_paused_until: until }),
-                                    });
-                                    setNotifPausedUntil(until);
-                                    toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                  } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                                  finally { setNotifPauseLoading(false); }
-                                }}>
-                                  {label}
-                                </DropdownMenuItem>
-                              ))}
-                            </>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        onClick={() => notifCreateRuleRef.current?.()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                      >
-                        Create Rule
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Paused banner */}
-                  {notifPausedUntil && new Date(notifPausedUntil) > new Date() && (
-                    <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                      <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                      <span className="text-sm text-amber-400">
-                        Notifications paused until {new Date(notifPausedUntil).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Sub-tabs - Members style (border-b, underline active) */}
-                  <div className="flex items-center justify-between border-b border-border mb-4">
-                    <div className="flex items-center gap-6">
-                      <button
-                        onClick={() => setNotifSubTab('rules')}
-                        className={cn(
-                          'pb-3 text-sm font-medium transition-colors',
-                          notifSubTab === 'rules'
-                            ? 'text-foreground border-b-2 border-foreground'
-                            : 'text-foreground-secondary hover:text-foreground'
-                        )}
-                      >
-                        Rules
-                      </button>
-                      <button
-                        onClick={() => setNotifSubTab('history')}
-                        className={cn(
-                          'pb-3 text-sm font-medium transition-colors',
-                          notifSubTab === 'history'
-                            ? 'text-foreground border-b-2 border-foreground'
-                            : 'text-foreground-secondary hover:text-foreground'
-                        )}
-                      >
-                        History
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Tab content: Rules section always mounted (no display:none) so Create Rule sidebar opens from any tab; list hidden on History. */}
-                  <div>
-                    <NotificationRulesSection organizationId={id} connections={cicdConnections} hideTitle hideListContent={notifSubTab === 'history'} createHandlerRef={notifCreateRuleRef} />
-                  </div>
-                  <div style={{ display: notifSubTab === 'history' ? undefined : 'none' }}>
-                    <NotificationHistorySection organizationId={id} />
-                  </div>
                 </div>
               )}
 
