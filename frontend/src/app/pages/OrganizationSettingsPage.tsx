@@ -38,6 +38,7 @@ import NotificationHistorySection from './NotificationHistorySection';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
+import AISpendingSection from '../../components/settings/AISpendingSection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 import { VALID_SETTINGS_SECTIONS } from '../../lib/orgSettingsSections';
@@ -229,19 +230,65 @@ const INTEGRATION_TYPE_ORDER: Record<IntegrationType, number> = {
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 const CACHE_KEY_INTEGRATIONS = (orgId: string) => `org_integrations_${orgId}`;
-const CACHE_KEY_WEBHOOKS = (orgId: string) => `org_webhooks_${orgId}`;
 
-type WebhookCacheSnapshot = {
-  provider: string;
-  status: string;
-  event: string;
-  timeframe: string;
-  page: number;
-  deliveries: any[];
-  totalCount: number;
+type WebhookStatus = 'received' | 'processed' | 'skipped' | 'error';
+type WebhookTimeframe = '1H' | '24H' | '7D' | '30D';
+
+interface WebhookDelivery {
+  id?: string;
+  provider?: string;
+  event_type?: string;
+  repo_full_name?: string;
+  processing_status?: WebhookStatus | string;
+  status?: WebhookStatus | string;
+  processing_duration_ms?: number | null;
+  duration_ms?: number | null;
+  payload_size_bytes?: number | null;
+  received_at?: string | null;
+  created_at?: string | null;
+  error_message?: string | null;
+  request_headers?: Record<string, string> | null;
+  payload_preview?: string | null;
+}
+
+const WEBHOOK_PROVIDER_LABEL: Record<string, string> = {
+  all: 'All Providers',
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  bitbucket: 'Bitbucket',
 };
-const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
+const WEBHOOK_STATUS_LABEL: Record<string, string> = {
+  all: 'All Statuses',
+  received: 'Queued',
+  processed: 'Processed',
+  skipped: 'Skipped',
+  error: 'Error',
+};
+
+const WEBHOOK_STATUS_TOOLTIP: Record<string, string> = {
+  received: 'Delivery received; pipeline has not yet run.',
+  processed: 'Delivery accepted and pipeline ran successfully.',
+  skipped: 'Delivery accepted but no action required (e.g. unrelated branch).',
+  error: 'Delivery failed to process. See detail for error message.',
+};
+
+const WEBHOOK_EVENT_LABEL: Record<string, string> = {
+  all: 'All Events',
+  push: 'Push',
+  pull_request: 'Pull Request',
+  repository: 'Repository',
+};
+
+const WEBHOOK_TIMEFRAME_LABEL: Record<string, string> = {
+  '1H': 'Last Hour',
+  '24H': '24 Hours',
+  '7D': '7 Days',
+  '30D': '30 Days',
+};
+
+const webhookEventLabel = (eventType: string) =>
+  WEBHOOK_EVENT_LABEL[eventType] ?? (eventType ? eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—');
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -1517,18 +1564,6 @@ function getCachedIntegrations(orgId: string): CiCdConnection[] | null {
   }
 }
 
-function getCachedWebhooks(orgId: string): WebhookCacheSnapshot | null {
-  if (orgWebhooksCache[orgId]) return orgWebhooksCache[orgId];
-  try {
-    const raw = localStorage.getItem(CACHE_KEY_WEBHOOKS(orgId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as WebhookCacheSnapshot;
-    orgWebhooksCache[orgId] = parsed;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 export default function OrganizationSettingsPage() {
   const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
@@ -1613,7 +1648,6 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
-  const [hasVisitedWebhooks, setHasVisitedWebhooks] = useState(false);
   const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
   const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
@@ -1717,17 +1751,8 @@ export default function OrganizationSettingsPage() {
   const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(false);
 
-  // Webhooks section state
-  const [webhookDeliveries, setWebhookDeliveries] = useState<any[]>([]);
-  const [webhookTotalCount, setWebhookTotalCount] = useState(0);
-  const [webhookLoading, setWebhookLoading] = useState(false);
-  const [webhookLoadMoreLoading, setWebhookLoadMoreLoading] = useState(false);
-  const [webhookProvider, setWebhookProvider] = useState('all');
-  const [webhookStatus, setWebhookStatus] = useState('all');
-  const [webhookEvent, setWebhookEvent] = useState('all');
-  const [webhookTimeframe, setWebhookTimeframe] = useState('30D');
-  const [webhookPage, setWebhookPage] = useState(1);
-  const WEBHOOK_PER_PAGE = 50;
+  // Latest delivery per git provider — folded into Integrations rows for at-a-glance health.
+  const [latestDeliveryByProvider, setLatestDeliveryByProvider] = useState<Record<string, WebhookDelivery | null>>({});
 
   // Get cached or organization permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -1950,7 +1975,6 @@ export default function OrganizationSettingsPage() {
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
-    if (activeSection === 'webhooks') setHasVisitedWebhooks(true);
     if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
     if (activeSection === 'statuses') setHasVisitedStatuses(true);
@@ -1992,137 +2016,49 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  const loadWebhookDeliveries = async (opts?: { silent?: boolean; page?: number }) => {
-    if (!id) return;
-    const silent = opts?.silent ?? false;
-    const page = opts?.page ?? webhookPage;
-    if (!silent) setWebhookLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const params = new URLSearchParams({
-        timeframe: webhookTimeframe,
-        page: String(page),
-        per_page: String(WEBHOOK_PER_PAGE),
-      });
-      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
-      if (webhookStatus !== 'all') params.set('status', webhookStatus);
-      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const deliveries = data.deliveries ?? data.items ?? data ?? [];
-        const totalCount = data.total ?? data.total_count ?? 0;
-        setWebhookDeliveries(deliveries);
-        setWebhookTotalCount(totalCount);
-        setWebhookPage(page);
-        const snapshot: WebhookCacheSnapshot = {
-          provider: webhookProvider,
-          status: webhookStatus,
-          event: webhookEvent,
-          timeframe: webhookTimeframe,
-          page,
-          deliveries,
-          totalCount,
-        };
-        orgWebhooksCache[id] = snapshot;
-        try {
-          localStorage.setItem(CACHE_KEY_WEBHOOKS(id), JSON.stringify(snapshot));
-        } catch { /* ignore */ }
-      }
-    } catch { /* ignore */ } finally {
-      if (!silent) setWebhookLoading(false);
-    }
-  };
-
-  const loadMoreWebhookDeliveries = async () => {
-    if (!id || webhookLoadMoreLoading) return;
-    const nextPage = webhookPage + 1;
-    setWebhookLoadMoreLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const params = new URLSearchParams({
-        timeframe: webhookTimeframe,
-        page: String(nextPage),
-        per_page: String(WEBHOOK_PER_PAGE),
-      });
-      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
-      if (webhookStatus !== 'all') params.set('status', webhookStatus);
-      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const more = data.deliveries ?? data.items ?? data ?? [];
-        const totalCount = data.total ?? data.total_count ?? webhookTotalCount;
-        setWebhookDeliveries((prev) => [...prev, ...more]);
-        setWebhookTotalCount(totalCount);
-        setWebhookPage(nextPage);
-      }
-    } catch { /* ignore */ } finally {
-      setWebhookLoadMoreLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeSection === 'webhooks' && id) {
-      const cached = getCachedWebhooks(id);
-      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
-      if (paramsMatch && cached.deliveries.length >= 0) {
-        setWebhookDeliveries(cached.deliveries);
-        setWebhookTotalCount(cached.totalCount);
-        setWebhookPage(cached.page ?? 1);
-        loadWebhookDeliveries({ silent: true, page: 1 });
-      } else {
-        loadWebhookDeliveries({ page: 1 });
-      }
-    }
-  }, [activeSection, id, webhookTimeframe]);
-
-  useEffect(() => {
-    if (activeSection === 'webhooks' && id) {
-      const cached = getCachedWebhooks(id);
-      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
-      if (paramsMatch && cached.deliveries.length >= 0) {
-        setWebhookDeliveries(cached.deliveries);
-        setWebhookTotalCount(cached.totalCount);
-        setWebhookPage(cached.page ?? 1);
-        loadWebhookDeliveries({ silent: true, page: 1 });
-      } else {
-        loadWebhookDeliveries({ page: 1 });
-      }
-    }
-  }, [webhookProvider, webhookStatus, webhookEvent]);
-
   const formatWebhookTime = (dateString: string | null): string => {
     if (!dateString) return '—';
     const date = new Date(dateString);
     const now = new Date();
     const diffS = Math.floor((now.getTime() - date.getTime()) / 1000);
-    if (diffS < 60) return 'Just now';
+    if (diffS < 60) return 'just now';
     if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
     if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;
     if (diffS < 2592000) return `${Math.floor(diffS / 86400)}d ago`;
     return date.toLocaleDateString();
   };
 
-  const webhookStatusDot = (status: string) => {
-    switch (status) {
-      case 'processed': return 'bg-green-500';
-      case 'skipped': return 'bg-amber-400';
-      case 'error': return 'bg-red-500';
-      default: return 'bg-foreground-secondary';
-    }
+  // Fetch the latest delivery for each connected git provider, used by the
+  // small health badge on Integrations rows.
+  const loadLatestDeliveriesPerProvider = async () => {
+    if (!id) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const providers: Array<'github' | 'gitlab' | 'bitbucket'> = ['github', 'gitlab', 'bitbucket'];
+      const results = await Promise.all(providers.map(async (provider) => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?timeframe=30D&provider=${provider}&page=1&per_page=1`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (!res.ok) return [provider, null] as const;
+          const data = await res.json();
+          const first: WebhookDelivery | undefined = (data.deliveries ?? data.items ?? data ?? [])[0];
+          return [provider, first ?? null] as const;
+        } catch {
+          return [provider, null] as const;
+        }
+      }));
+      setLatestDeliveryByProvider(Object.fromEntries(results));
+    } catch { /* ignore */ }
   };
 
-  const webhookEventLabel = (eventType: string) =>
-    eventType ? eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
+  useEffect(() => {
+    if (activeSection === 'integrations' && id) {
+      loadLatestDeliveriesPerProvider();
+    }
+  }, [activeSection, id]);
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -3777,6 +3713,23 @@ export default function OrganizationSettingsPage() {
                                   const isEmail = conn.provider === 'email';
                                   const isCicd = conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket';
                                   const showAvatar = isCicd && accountAvatarUrl;
+                                  const latestDelivery = isCicd ? latestDeliveryByProvider[conn.provider] : undefined;
+                                  const latestStatus = latestDelivery?.processing_status ?? latestDelivery?.status ?? null;
+                                  const latestDeliveryDot = latestStatus === 'error'
+                                    ? 'bg-red-500'
+                                    : latestStatus === 'skipped'
+                                      ? 'bg-amber-400'
+                                      : latestStatus === 'processed'
+                                        ? 'bg-green-500'
+                                        : latestStatus === 'received'
+                                          ? 'bg-foreground-secondary'
+                                          : null;
+                                  const latestDeliveryWhen = latestDelivery ? formatWebhookTime(latestDelivery.received_at ?? latestDelivery.created_at ?? null) : null;
+                                  const latestDeliveryTitle = latestDelivery && latestStatus === 'error' && latestDelivery.error_message
+                                    ? `Last delivery failed: ${latestDelivery.error_message}`
+                                    : latestDelivery && latestStatus
+                                      ? `Last delivery ${latestStatus} ${latestDeliveryWhen}`
+                                      : 'No deliveries in the last 30 days';
                                   return (
                                     <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
                                       <td className="px-4 py-3">
@@ -3805,10 +3758,24 @@ export default function OrganizationSettingsPage() {
                                           {showAvatar ? (
                                             <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" />
                                           ) : null}
-                                          <div className={cn('flex flex-col gap-0.5 min-w-0', identifier.secondary ? '' : 'justify-center')}>
+                                          <div className={cn('flex flex-col gap-0.5 min-w-0', identifier.secondary || isCicd ? '' : 'justify-center')}>
                                             <span className="text-sm text-foreground truncate">{identifier.primary}</span>
                                             {identifier.secondary && (
                                               <span className="text-xs text-foreground-secondary truncate">{identifier.secondary}</span>
+                                            )}
+                                            {isCicd && (
+                                              <span className="flex items-center gap-1.5 text-xs text-foreground-secondary truncate" title={latestDeliveryTitle}>
+                                                {latestDeliveryDot ? (
+                                                  <div className={cn('h-1.5 w-1.5 rounded-full flex-shrink-0', latestDeliveryDot)} />
+                                                ) : (
+                                                  <div className="h-1.5 w-1.5 rounded-full flex-shrink-0 bg-border" />
+                                                )}
+                                                <span className="truncate">
+                                                  {latestDelivery
+                                                    ? `Last delivery ${latestDeliveryWhen}`
+                                                    : 'No recent deliveries'}
+                                                </span>
+                                              </span>
                                             )}
                                           </div>
                                         </div>
@@ -3988,241 +3955,6 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {/* Keep Webhooks mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
-              {(activeSection === 'webhooks' || hasVisitedWebhooks) && id && (
-                <div
-                  className="space-y-6 pt-8"
-                  style={{ display: activeSection === 'webhooks' ? undefined : 'none' }}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
-                      <p className="mt-1.5 text-sm text-foreground-secondary">
-                        Recent webhook deliveries for your projects (push, pull_request, repository, etc.). Check suite and check run events are excluded. Filter by provider, event, and status.
-                      </p>
-                    </div>
-                    <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                      <Button variant="outline" size="sm" className="text-xs">
-                        <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                        Docs
-                      </Button>
-                    </Link>
-                  </div>
-
-                  {/* Filters Row */}
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {/* Provider filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookProvider === 'all' ? 'All Providers' : webhookProvider === 'github' ? 'GitHub' : webhookProvider === 'gitlab' ? 'GitLab' : 'Bitbucket'}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Providers' },
-                          { value: 'github', label: 'GitHub' },
-                          { value: 'gitlab', label: 'GitLab' },
-                          { value: 'bitbucket', label: 'Bitbucket' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookProvider(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookProvider === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Status filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookStatus === 'all' ? 'All Statuses' : webhookStatus.charAt(0).toUpperCase() + webhookStatus.slice(1)}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Statuses' },
-                          { value: 'processed', label: 'Processed' },
-                          { value: 'received', label: 'Received' },
-                          { value: 'skipped', label: 'Skipped' },
-                          { value: 'error', label: 'Error' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookStatus(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookStatus === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Event filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookEvent === 'all' ? 'All Events' : webhookEventLabel(webhookEvent)}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Events' },
-                          { value: 'push', label: 'Push' },
-                          { value: 'pull_request', label: 'Pull Request' },
-                          { value: 'repository', label: 'Repository' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookEvent(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookEvent === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Timeframe filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookTimeframe === '1H' ? 'Last Hour' : webhookTimeframe === '24H' ? '24 Hours' : webhookTimeframe === '7D' ? '7 Days' : '30 Days'}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: '1H', label: 'Last Hour' },
-                          { value: '24H', label: '24 Hours' },
-                          { value: '7D', label: '7 Days' },
-                          { value: '30D', label: '30 Days' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookTimeframe(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookTimeframe === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Refresh */}
-                    <Button variant="ghost" size="sm" className="text-xs gap-1.5 ml-auto" onClick={() => loadWebhookDeliveries()} disabled={webhookLoading}>
-                      <RefreshCw className={cn('h-3.5 w-3.5', webhookLoading && 'animate-spin')} />
-                      Refresh
-                    </Button>
-                  </div>
-
-                  {/* Deliveries Table */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <table className="w-full table-fixed">
-                      <thead className="bg-background-card-header border-b border-border">
-                        <tr>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Time</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Provider</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[130px]">Event</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider min-w-0">Repository</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Status</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[80px]">Duration</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Size</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {webhookLoading ? (
-                          [1, 2, 3, 4, 5].map((i) => (
-                            <tr key={i}>
-                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded-sm bg-muted animate-pulse" /><div className="h-4 w-14 bg-muted animate-pulse rounded" /></div></td>
-                              <td className="px-4 py-3"><div className="h-4 w-24 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="h-4 w-32 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
-                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
-                            </tr>
-                          ))
-                        ) : webhookDeliveries.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="px-4 py-3 text-center text-sm text-foreground-secondary">
-                              No deliveries
-                            </td>
-                          </tr>
-                        ) : (
-                          webhookDeliveries.map((d: any, idx: number) => {
-                            const providerIcon = d.provider === 'github' ? '/images/integrations/github.png'
-                              : d.provider === 'gitlab' ? '/images/integrations/gitlab.png'
-                              : d.provider === 'bitbucket' ? '/images/integrations/bitbucket.png' : null;
-                            const providerLabel = d.provider === 'github' ? 'GitHub'
-                              : d.provider === 'gitlab' ? 'GitLab'
-                              : d.provider === 'bitbucket' ? 'Bitbucket' : d.provider ?? '—';
-                            const processingStatus = d.processing_status ?? d.status ?? 'received';
-                            const isError = processingStatus === 'error';
-                            const durationMs = d.processing_duration_ms ?? d.duration_ms ?? null;
-                            const sizeKb = d.payload_size_bytes ? (d.payload_size_bytes / 1024).toFixed(1) : null;
-                            return (
-                              <tr key={d.id ?? idx} className={cn('group hover:bg-table-hover transition-colors', isError && 'bg-red-500/[0.03]')} title={isError && d.error_message ? d.error_message : undefined}>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground" title={d.received_at ? new Date(d.received_at).toLocaleString() : undefined}>
-                                    {formatWebhookTime(d.received_at ?? d.created_at)}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-2">
-                                    {providerIcon ? (
-                                      <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
-                                    ) : (
-                                      <Webhook className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
-                                    )}
-                                    <span className="text-sm text-foreground">{providerLabel}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground">{webhookEventLabel(d.event_type)}</span>
-                                </td>
-                                <td className="px-4 py-3 min-w-0 overflow-hidden">
-                                  <span className="text-sm text-foreground truncate block" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5">
-                                    <div className={cn('h-2 w-2 rounded-full flex-shrink-0', webhookStatusDot(processingStatus))} />
-                                    <span className="text-sm text-foreground capitalize">{processingStatus}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-right">
-                                  <span className="text-sm text-foreground-secondary tabular-nums">{durationMs != null ? `${durationMs}ms` : '—'}</span>
-                                </td>
-                                <td className="px-4 py-3 text-right whitespace-nowrap">
-                                  <span className="text-sm text-foreground-secondary tabular-nums">{sizeKb != null ? `${sizeKb} KB` : '—'}</span>
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Load more */}
-                  {webhookDeliveries.length < webhookTotalCount && webhookTotalCount > 0 && (
-                    <div className="flex justify-center pt-3 pb-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-sm"
-                        disabled={webhookLoadMoreLoading || webhookLoading}
-                        onClick={() => loadMoreWebhookDeliveries()}
-                      >
-                        {webhookLoadMoreLoading ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Loading…
-                          </>
-                        ) : (
-                          `Load more (${webhookDeliveries.length} of ${webhookTotalCount.toLocaleString()})`
-                        )}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Keep Members mounted after first visit so it doesn't reload when switching tabs (like Roles) */}
               {(activeSection === 'members' || hasVisitedMembers) && (
                 <div
@@ -4305,7 +4037,10 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'usage' && (
-                <UsageSectionContent organizationId={id || ''} />
+                <UsageSectionContent
+                  organizationId={id || ''}
+                  canViewSpending={!!effectivePermissions?.view_ai_spending}
+                />
               )}
 
               {/* Create New Role – Vercel-style right-side popup panel */}
@@ -5807,7 +5542,7 @@ export default function OrganizationSettingsPage() {
 // PHASE 13: Usage Section Content
 // ═══════════════════════════════════════════════════════════════════════
 
-function UsageSectionContent({ organizationId }: { organizationId: string }) {
+function UsageSectionContent({ organizationId, canViewSpending }: { organizationId: string; canViewSpending: boolean }) {
   const navigate = useNavigate();
   const { plan, loading, error, refetch } = usePlan();
 
@@ -5950,6 +5685,10 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
           })}
         </div>
       </div>
+
+      {canViewSpending && (
+        <AISpendingSection organizationId={organizationId} canViewSpending={canViewSpending} />
+      )}
     </div>
   );
 }

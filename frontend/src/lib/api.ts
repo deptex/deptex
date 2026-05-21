@@ -1304,7 +1304,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage${params}`);
   },
 
-  async getAIUsageLogs(orgId: string, page?: number, perPage?: number): Promise<{ logs: any[]; total: number }> {
+  async getAIUsageLogs(orgId: string, page?: number, perPage?: number): Promise<{ logs: AIUsageLog[]; total: number }> {
     const params = new URLSearchParams();
     if (page) params.set('page', String(page));
     if (perPage) params.set('per_page', String(perPage));
@@ -4470,6 +4470,16 @@ export interface AIUsageSummary {
   monthlyCostCap: number;
   byFeature: Record<string, { tokens: number; cost: number; count: number }>;
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
+}
+
+export interface AIUsageLog {
+  id: string;
+  created_at: string;
+  feature: string;
+  model: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  estimated_cost?: number | null;
 }
 
 export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';

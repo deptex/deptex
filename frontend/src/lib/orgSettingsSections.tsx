@@ -3,10 +3,9 @@ import {
   Settings,
   UserCircle,
   Users,
-  Sparkles,
+  Atom,
   Network,
   Plug,
-  Webhook,
   Bell,
   Shield,
   Tag,
@@ -28,7 +27,6 @@ export const VALID_SETTINGS_SECTIONS = new Set([
   'ai',
   'reachability',
   'integrations',
-  'webhooks',
   'notifications',
   'policies',
   'statuses',
@@ -128,7 +126,7 @@ export function buildOrgSettingsSections(
 
   // Configuration — how the platform analyzes code and what it does with findings.
   entries.push({ id: 'category_configuration', label: 'Configuration', isCategory: true });
-  entries.push({ id: 'ai', label: 'AI', icon: <Sparkles className={iconClass} /> });
+  entries.push({ id: 'ai', label: 'AI', icon: <Atom className={iconClass} /> });
   if (perms.manage_organization_settings) {
     entries.push({ id: 'reachability', label: 'Reachability', icon: <Network className={iconClass} /> });
   }
@@ -148,7 +146,6 @@ export function buildOrgSettingsSections(
   }
   if (perms.manage_integrations) {
     entries.push({ id: 'integrations', label: 'Integrations', icon: <Plug className={iconClass} /> });
-    entries.push({ id: 'webhooks', label: 'Webhooks', icon: <Webhook className={iconClass} /> });
   }
   if (perms.manage_integrations || perms.manage_notifications) {
     entries.push({ id: 'notifications', label: 'Notifications', icon: <Bell className={iconClass} /> });
