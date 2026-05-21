@@ -55,6 +55,7 @@
     "test:dast-yaml-builder-recorded": "tsx test/dast-yaml-builder-recorded.test.ts",
     "test:dast-recorded-pipeline": "tsx test/dast-recorded-pipeline.test.ts",
     "e2e:dast-recorded": "tsx test/e2e/dast-recorded.ts",
+    "e2e:dast-openapi": "tsx test/e2e/dast-openapi.ts",
     "test:dast-cross-link-cve": "tsx test/dast-cross-link-cve.test.ts",
     "test:dast-pipeline-engine-dispatch": "tsx test/dast-pipeline-engine-dispatch.test.ts",
     "docker:prepare": "node -e \"const fs=require('fs');fs.mkdirSync('.schema',{recursive:true});fs.copyFileSync('../backend/database/schema.sql','.schema/schema.sql')\" && tsx ../scripts/sync-encryption.ts",
