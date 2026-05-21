@@ -5460,7 +5460,7 @@ export default function OrganizationSettingsPage() {
                                 </button>
 
                                 {isExpanded && (
-                                  <div className="ml-8 mr-1 mt-2 mb-3 p-3 rounded-md border border-border bg-background-card space-y-3">
+                                  <div className="ml-8 mr-1 mt-2 mb-3 space-y-3">
                                     {item.expandKey === 'email' && (
                                       <>
                                         <div className="grid gap-1.5">
@@ -5470,7 +5470,6 @@ export default function OrganizationSettingsPage() {
                                             type="email"
                                             value={emailToAdd}
                                             onChange={(e) => setEmailToAdd(e.target.value)}
-                                            placeholder="alerts@yourorg.com"
                                             autoFocus
                                           />
                                         </div>
@@ -5521,7 +5520,6 @@ export default function OrganizationSettingsPage() {
                                             id="inline-pd-service-name"
                                             value={pagerDutyServiceName}
                                             onChange={(e) => setPagerDutyServiceName(e.target.value)}
-                                            placeholder="e.g. Deptex Security Alerts"
                                             autoFocus
                                           />
                                         </div>
@@ -5532,7 +5530,6 @@ export default function OrganizationSettingsPage() {
                                             type="password"
                                             value={pagerDutyRoutingKey}
                                             onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
-                                            placeholder="PagerDuty Events API v2 routing key"
                                           />
                                           <p className="text-[11px] text-foreground-secondary">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
                                         </div>
@@ -5587,7 +5584,6 @@ export default function OrganizationSettingsPage() {
                                             type="url"
                                             value={jiraPatBaseUrl}
                                             onChange={(e) => setJiraPatBaseUrl(e.target.value)}
-                                            placeholder="https://jira.yourcompany.com"
                                             autoFocus
                                           />
                                         </div>
@@ -5598,7 +5594,6 @@ export default function OrganizationSettingsPage() {
                                             type="password"
                                             value={jiraPatToken}
                                             onChange={(e) => setJiraPatToken(e.target.value)}
-                                            placeholder=""
                                           />
                                         </div>
                                         <div className="flex items-center justify-end gap-2">
