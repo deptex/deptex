@@ -269,6 +269,7 @@ export async function runOsvFallback(opts: {
 
   let sbomFile: string | null = null;
   let existingVdrHasVulns = false;
+  let extraPurlsFile: string | null = null;
   try {
     for (const entry of fs.readdirSync(reportsDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
@@ -282,6 +283,8 @@ export async function runOsvFallback(opts: {
         } catch { /* malformed VDR — treat as empty */ }
       } else if (entry.name.endsWith('.cdx.json') && !sbomFile) {
         sbomFile = full;
+      } else if (entry.name === 'osv-extra-purls.json') {
+        extraPurlsFile = full;
       }
     }
   } catch (e) {
@@ -305,7 +308,34 @@ export async function runOsvFallback(opts: {
   const projectBomRef =
     (sbom as unknown as { metadata?: { component?: { 'bom-ref'?: string } } })?.metadata?.component?.['bom-ref']
     ?? null;
-  const purls = extractPurlsFromSbom(sbom, projectBomRef);
+  const sbomPurls = extractPurlsFromSbom(sbom, projectBomRef);
+
+  // v3 extension: union in any purls the transitive resolver added in the
+  // SBOM step (gomod/pypi shallow-SBOM workaround). cdxgen for those ecos
+  // emits only direct deps, so without this the OSV fallback would
+  // vuln-query just the 29 directs and miss the 500+ transitives the
+  // resolver supplied to the classifier.
+  let extraPurls: string[] = [];
+  if (extraPurlsFile) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(extraPurlsFile, 'utf8')) as { purls?: unknown };
+      if (Array.isArray(parsed.purls)) {
+        extraPurls = parsed.purls.filter((p): p is string => typeof p === 'string' && p.startsWith('pkg:'));
+      }
+    } catch (e) {
+      await logger.warn?.('vuln_scan', `osv-extra-purls.json parse failed: ${(e as Error).message}`);
+    }
+  }
+
+  const seen = new Set(sbomPurls);
+  const purls = [...sbomPurls];
+  for (const p of extraPurls) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      purls.push(p);
+    }
+  }
+
   if (purls.length === 0) {
     return { wrote: false, vulnCount: 0, reason: 'SBOM had zero PURL-bearing components' };
   }

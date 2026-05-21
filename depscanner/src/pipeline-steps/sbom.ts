@@ -227,6 +227,37 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
           'sbom',
           `transitive_resolver_invoked { ecosystem: ${jobEcosystem}, source: ${result.source}, raw: ${result.rawModuleCount}, added: ${added}, before: ${before}, after: ${dependencies.length} }`,
         );
+
+        // Sidecar: write the resolver-added purls to a JSON file in
+        // depscan-reports/ so the OSV-API fallback step can query OSV for
+        // them too. cdxgen's SBOM only carries direct deps for the shallow
+        // ecosystems, so without this step the resolver expands the dep
+        // tree for the reachability classifier but those transitive deps
+        // never get vuln-queried — defeating the per-eco lift.
+        try {
+          const reportsDir = path.join(workspaceRoot, 'depscan-reports');
+          fs.mkdirSync(reportsDir, { recursive: true });
+          const eco = isGo ? 'golang' : 'pypi';
+          const extraPurls = result.deps
+            .map((d) => {
+              if (!d.name || !d.version) return null;
+              return isGo
+                ? `pkg:golang/${d.name}@${d.version}`
+                : `pkg:pypi/${d.name}@${d.version}`;
+            })
+            .filter((p): p is string => p !== null);
+          fs.writeFileSync(
+            path.join(reportsDir, 'osv-extra-purls.json'),
+            JSON.stringify({ ecosystem: eco, purls: extraPurls }, null, 2),
+          );
+        } catch (sidecarErr) {
+          // Sidecar is a perf optimization — failure here just means OSV
+          // won't query the resolver-added transitives. Log and continue.
+          await log.warn(
+            'sbom',
+            `transitive_resolver_sidecar_write_failed { reason: ${(sidecarErr as Error).message} }`,
+          );
+        }
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
