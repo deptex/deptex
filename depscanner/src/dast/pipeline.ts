@@ -1459,7 +1459,12 @@ export async function runDastPipeline(
   // everything else ('dast' legacy alias, 'dast_zap') → ZAP. Both engines
   // share the cancellation-poll + heartbeat control loop.
   const engine = resolveEngine(job.type);
-  const afProfile: AfScanProfile = scanProfile === 'api' ? 'auto' : (scanProfile as AfScanProfile);
+  // v1.1 (Phase 35): AfScanProfile is widened to include 'api' as a
+  // first-class value. The prior `'api' ? 'auto'` downcast has been
+  // removed — 'api' propagates through to yaml-builder which gates
+  // activeScan on `'full' || 'api'`. Row-driven openapi: emission is
+  // independent of scanProfile (handled via openApiSpecPath).
+  const afProfile: AfScanProfile = scanProfile as AfScanProfile;
 
   const control: ScanControlOptions = {
     onHeartbeat: async () => {

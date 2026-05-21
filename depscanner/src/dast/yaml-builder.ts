@@ -37,7 +37,11 @@ export interface ScopeConfig {
 }
 
 export type DetectedRuntime = 'unknown' | 'classic' | 'spa';
-export type AfScanProfile = 'auto' | 'quick' | 'full';
+// v1.1 (Phase 35): 'api' joins as a first-class scan_profile. Behaves like
+// 'full' (active scan emitted) and is the canonical name for spec-driven
+// scans even though the openapi: AF job is also engaged on 'full' when the
+// target row provides a resolvable spec (row-driven gating).
+export type AfScanProfile = 'auto' | 'quick' | 'full' | 'api';
 
 export interface BuildAutomationYamlOptions {
   targetUrl: string;
@@ -81,6 +85,17 @@ export interface BuildAutomationYamlOptions {
    * on a single auth-report.json file.
    */
   authReportDirAbsolute?: string;
+  /**
+   * v1.1 (Phase 35) — absolute path to a synthesized or fetched OpenAPI
+   * spec on disk. When set, an `openapi:` AF job is emitted between the
+   * replacer and spider jobs so ZAP seeds its sites tree with the spec's
+   * endpoints before crawl + active scan run.
+   *
+   * Row-driven gating: pipeline decides whether to set this based on the
+   * target's `api_spec_source`; scan profile no longer gates the openapi
+   * emit. Spider/activeScan still respect `scanProfile`.
+   */
+  openApiSpecPath?: string;
 }
 
 // v2.1d — auth budget reserved out of scan_timeout_minutes for the recorded
@@ -248,12 +263,35 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
     });
   }
 
-  // 4-6. login-only short-circuit: in login-only mode, omit the spider,
-  // active-scan, and traditional-json report jobs. The autorun YAML is just
-  // addOns + passiveScan-config + (replacer if needed) + requestor
+  // 4-7. login-only short-circuit: in login-only mode, omit the spider,
+  // active-scan, openapi, and traditional-json report jobs. The autorun YAML
+  // is just addOns + passiveScan-config + (replacer if needed) + requestor
   // verification + auth-report-json. The worker reads the auth-report.json
   // file from disk and writes DastLoginTestResult to scan_jobs.error_payload.
   if (!opts.loginOnly) {
+    // 3.6. openapi — v1.1 (Phase 35): seeds ZAP's sites tree from a
+    // synthesized or URL-fetched OpenAPI spec BEFORE spider+activeScan run,
+    // so the crawl picks up spec-discovered endpoints in addition to its
+    // own link-following.
+    //
+    // User-binding convention matches the requestor job at yaml-builder.ts
+    // around line 239: `parameters.context` for ALL strategies;
+    // `parameters.user` ONLY when authStrategy === 'recorded'. Form/jwt/
+    // cookie use context-only — the ZAP context's authenticate-and-replay
+    // handles them at request time without needing a per-job user binding.
+    if (opts.openApiSpecPath) {
+      const openApiJob: Record<string, unknown> = {
+        type: 'openapi',
+        parameters: {
+          apiFile: opts.openApiSpecPath,
+          targetUrl: opts.targetUrl,
+          context: CONTEXT_NAME,
+          ...(opts.authStrategy === 'recorded' ? { user: 'deptex-dast-user' } : {}),
+        },
+      };
+      jobs.push(openApiJob);
+    }
+
     // 4. spider vs spiderAjax — runtime-driven.
     // 'unknown' AND 'spa' both use spiderAjax (the runtime-shape guard in
     // fly-machines.ts pairs with this — both get the perf-4x machine).
@@ -279,14 +317,14 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
       });
     }
 
-    // 5. activeScan — only on scan_profile='full' (locked decision per plan:
-    // 'auto' is passive-only with no auto-escalation).
+    // 5. activeScan — runs on scan_profile='full' and (v1.1) scan_profile=
+    // 'api'. 'auto' / 'quick' stay passive-only with no auto-escalation.
     //
     // v2.1d: recorded strategy reserves RECORDED_AUTH_BUDGET_MIN minutes of
     // scan_timeout_minutes for the login replay + verification probe. The
     // pre-flight runs inside the SAME autorun YAML in the same ZAP process,
     // so the auth budget is consumed before the active-scan starts.
-    if (opts.scanProfile === 'full') {
+    if (opts.scanProfile === 'full' || opts.scanProfile === 'api') {
       const baseTimeout = opts.scanTimeoutMinutes ?? 30;
       const activeScanDuration =
         opts.authStrategy === 'recorded'
