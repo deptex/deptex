@@ -3566,7 +3566,7 @@ export default function OrganizationSettingsPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                        <Button variant="outline">Docs</Button>
+                        <Button variant="outline" className="!h-8 !px-3 !rounded-lg">Docs</Button>
                       </Link>
                       {effectivePermissions?.manage_integrations && (
                         <Button variant="green" onClick={() => setShowAddIntegrationSidebar(true)}>
