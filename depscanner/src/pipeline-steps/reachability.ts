@@ -119,6 +119,14 @@ export async function doReachabilityAndEpd(
     // `!usedTransitives.has(depName)` to demote called-but-not-imported
     // transitives from `unreachable` to `module` (the jackson-vs-idna fix).
     usedTransitives: usedDependencies,
+    // v3 follow-up: composer/pypi/npm have explicit `use`/`import`
+    // semantics, so `files_importing_count === 0` is strong negative
+    // evidence even on a direct dep. Enabling this for these ecosystems
+    // lets the heuristic demote directly-declared-but-never-imported
+    // packages (dev utilities, optional features behind flags) that
+    // currently stay at `module`. Excluded: gem (Rails autoload),
+    // maven/golang/cargo/nuget (tree-sitter import resolution is partial).
+    ecosystem: jobEcosystem,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);

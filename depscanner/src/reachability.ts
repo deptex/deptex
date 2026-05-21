@@ -446,6 +446,26 @@ export interface UpdateReachabilityOptions {
    *     v2 did.
    */
   usedTransitives?: Set<string>;
+  /**
+   * v3 follow-up — the project's ecosystem (`composer` / `pypi` / `npm` /
+   * `gem` / etc.). When set to an explicit-import ecosystem, the
+   * `heuristicUnreachable` gate relaxes its `!isDirect` requirement and
+   * also demotes DIRECT deps that have `files_importing_count === 0` AND
+   * `!callgraphReached` — composer/pypi/npm source code MUST `use`/`import`
+   * a package to call into it, so files=0 is strong negative evidence
+   * regardless of whether the package is listed in composer.json /
+   * pyproject.toml / package.json.
+   *
+   * Excluded: `gem` (Rails autoload + Bundler.require make files=0
+   * unreliable — a Gemfile-declared gem may be used solely through
+   * Bundler-managed autoloading and never explicitly required). Also
+   * excluded: any ecosystem where the tree-sitter usage extractor
+   * doesn't reliably resolve imports (`maven`, `golang`, `cargo`,
+   * `nuget` — these keep the v2 transitive-only behavior).
+   *
+   * Undefined defaults to the legacy `!isDirect`-only gate.
+   */
+  ecosystem?: string;
 }
 
 /**
@@ -1043,11 +1063,24 @@ export async function updateReachabilityLevels(
           options.usedTransitives !== undefined && options.usedTransitives.size > 0;
         const callgraphReachedThisDep =
           callgraphRan && depMatchesUsedTransitives(depName, depNamespace, options.usedTransitives!);
+        // Ecosystems where source code MUST `use`/`import` a package to
+        // exercise it. For these, files_importing_count === 0 is strong
+        // negative evidence even on a directly-declared dep (composer.json /
+        // pyproject.toml / package.json declares many libs the app never
+        // actually wires up — e.g. dev-only utilities, optional features
+        // gated behind feature flags, packages added for one prototype
+        // commit and never removed). Excluded: `gem` (Rails autoload +
+        // Bundler.require make files=0 unreliable), `maven`/`golang`/`cargo`/
+        // `nuget` (tree-sitter import resolution is partial — we keep the
+        // conservative transitive-only gate to avoid false negatives).
+        const EXPLICIT_IMPORT_ECOSYSTEMS = new Set(['composer', 'pypi', 'npm']);
+        const allowDirectDemotion =
+          !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
         const heuristicUnreachable =
           graphTrusted &&
           usageAnalysisProducedOutput &&
           !!meta &&
-          !meta.isDirect &&
+          (!meta.isDirect || allowDirectDemotion) &&
           meta.filesImporting === 0 &&
           !isFrameworkEmbeddedRuntime(depName) &&
           !callgraphReachedThisDep;

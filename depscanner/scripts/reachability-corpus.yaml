@@ -323,15 +323,17 @@ repos:
     ref: v2.4.6
     ground_truth_cves: []
 
-  - name: sentry-python
-    repo_url: https://github.com/getsentry/sentry-python.git
+  - name: airflow
+    repo_url: https://github.com/apache/airflow.git
     ecosystem: pypi
-    # Jun 2021 — sentry SDK 1.5.0. Pulls urllib3, certifi, aiohttp, and a
-    # full async/http transitive tree from this era. Pin chosen for stale
-    # transitives: bandit@1.7.4 had a small, fully-patched dep set and
-    # returned 0 vulns; this pin has the right "real app, stale deps"
-    # shape for measurement.
-    ref: fe165094cca85e4ea9919fbfd324320ff4332a90
+    # Dec 2020 — Apache Airflow 2.0.0. Heavy pypi app with ~80-100 setup.py
+    # install_requires + transitive tree. sentry-python@1.5.0 was tried
+    # earlier but its tree is genuinely tiny (sentry-sdk + urllib3 +
+    # certifi = 3 deps total, no measurement). Airflow's dep tree of
+    # flask, sqlalchemy, alembic, requests, jinja2, celery, kombu, and
+    # their transitives gives us 80+ deps with real stale-version CVEs
+    # to classify.
+    ref: 34d7fa0b7922adcb96a21259c759504bc1e2f25f
     ground_truth_cves: []
 
   - name: symfony-demo

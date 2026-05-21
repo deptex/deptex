@@ -195,11 +195,19 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
       ? dependencies.filter((d) => d.is_direct === true).length / dependencies.length
       : 1;
   const looksShallow = directRatio > 0.8;
-  if (
+  // composer + gem ALWAYS run the resolver when the lockfile is present,
+  // regardless of how complete cdxgen's SBOM looks. composer.lock and
+  // Gemfile.lock are deterministic and exhaustive — they are strictly
+  // better than cdxgen's partial transitive walk, and the resolver's
+  // name@version dedup already prevents double-counting. For go + pypi we
+  // keep `looksShallow` as the eligibility gate since their resolvers
+  // shell out (go list / pip --dry-run) and we don't want to double-pay
+  // on already-deep SBOMs.
+  const resolverEligible =
     RESOLVER_ECOSYSTEMS.has(jobEcosystem) &&
     dependencies.length > 0 &&
-    looksShallow
-  ) {
+    (looksShallow || isComposer || isRubygems);
+  if (resolverEligible) {
     const before = dependencies.length;
     try {
       const result = isGo
