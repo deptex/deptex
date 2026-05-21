@@ -1702,7 +1702,12 @@ export default function OrganizationSettingsPage() {
   const [showRegenerateSecretConfirm, setShowRegenerateSecretConfirm] = useState(false);
   // Add-integration sidebar — the single CTA on the Integrations header opens this;
   // each row inside hands off to the matching OAuth start / dialog open / sidepanel open.
+  // Same slide-in pattern as the Add Role sidebar: a separate "visible" flag drives
+  // the transform/opacity transition so we get a real slide-in/out instead of the
+  // Dialog primitive's zoom-from-center default.
   const [showAddIntegrationSidebar, setShowAddIntegrationSidebar] = useState(false);
+  const [addIntegrationPanelVisible, setAddIntegrationPanelVisible] = useState(false);
+  const addIntegrationCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
   const [notifPauseLoading, setNotifPauseLoading] = useState(false);
@@ -1812,6 +1817,20 @@ export default function OrganizationSettingsPage() {
       setAddRolePanelVisible(false);
     }
   }, [showAddRoleSidepanel]);
+
+  // Add integration sidebar: same RAF-double-tick trick so the panel mounts
+  // off-screen and then slides in on the next paint.
+  useEffect(() => {
+    if (showAddIntegrationSidebar) {
+      setAddIntegrationPanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAddIntegrationPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setAddIntegrationPanelVisible(false);
+    }
+  }, [showAddIntegrationSidebar]);
 
   // Role Settings sidebar: animate in on open, animate out before unmount
   useEffect(() => {
@@ -2369,6 +2388,15 @@ export default function OrganizationSettingsPage() {
     } finally {
       setIsUploadingAvatar(false);
     }
+  };
+
+  const closeAddIntegrationSidebar = () => {
+    setAddIntegrationPanelVisible(false);
+    if (addIntegrationCloseTimeoutRef.current) clearTimeout(addIntegrationCloseTimeoutRef.current);
+    addIntegrationCloseTimeoutRef.current = setTimeout(() => {
+      addIntegrationCloseTimeoutRef.current = null;
+      setShowAddIntegrationSidebar(false);
+    }, 150);
   };
 
   const closeAddRolePanel = () => {
@@ -5444,30 +5472,44 @@ export default function OrganizationSettingsPage() {
                 </DialogContent>
               </Dialog>
 
-              {/* Add Integration Sidebar — single CTA hands off to OAuth start / dialog open / sidepanel open */}
-              <Dialog open={showAddIntegrationSidebar} onOpenChange={setShowAddIntegrationSidebar}>
-                <DialogContent
-                  hideClose
-                  className="fixed left-auto right-4 top-4 bottom-4 translate-x-0 translate-y-0 w-full max-w-[420px] h-auto bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden p-0 gap-0 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-[420px]"
-                >
-                  <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 border-b border-border">
-                    <div>
-                      <DialogTitle className="text-lg font-semibold">Add integration</DialogTitle>
-                      <DialogDescription className="mt-1 text-sm">
-                        Pick a provider to connect. We'll redirect to the host's install flow or open a setup form.
-                      </DialogDescription>
+              {/* Add Integration Sidebar — same slide-in pattern as the Add Role panel */}
+              {showAddIntegrationSidebar && (
+                <div className="fixed inset-0 z-50">
+                  <div
+                    className={cn(
+                      'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                      addIntegrationPanelVisible ? 'opacity-100' : 'opacity-0'
+                    )}
+                    onClick={closeAddIntegrationSidebar}
+                  />
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="add-integration-title"
+                    className={cn(
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      addIntegrationPanelVisible ? 'translate-x-0' : 'translate-x-full'
+                    )}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 bg-background-card border-b border-border">
+                      <div>
+                        <h2 id="add-integration-title" className="text-xl font-semibold text-foreground">Add integration</h2>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          Pick a provider to connect. We'll redirect to the host's install flow or open a setup form.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                        onClick={closeAddIntegrationSidebar}
+                        aria-label="Close"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
-                      onClick={() => setShowAddIntegrationSidebar(false)}
-                      aria-label="Close"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
 
-                  <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5">
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5 bg-background-card">
                     {[
                       {
                         category: 'CI/CD',
@@ -5630,9 +5672,10 @@ export default function OrganizationSettingsPage() {
                         </ul>
                       </div>
                     ))}
+                    </div>
                   </div>
-                </DialogContent>
-              </Dialog>
+                </div>
+              )}
 
               {/* Disconnect Confirmation Dialog — shared by CI/CD, notification, ticketing rows */}
               <Dialog
