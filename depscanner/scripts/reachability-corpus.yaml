@@ -22,14 +22,19 @@
 #   2. every ecosystem > 0% unreachable
 #   3. zero CVEs labelled reachable but scanned `unreachable` (false negatives)
 #
-# COVERAGE NOTE (2026-05-18): only npm / maven / cargo are represented.
-# golang and pypi are excluded because cdxgen without `--deep` emits a
-# direct-deps-only SBOM for those ecosystems (gin 12 deps, memos 31, fastapi
-# 8, healthchecks 14 — all 0 transitive), so no transitive dep exists to
-# classify `unreachable`. That is an SBOM-generation limit upstream of the
-# reachability classifier (M1-M3) and needs a separate cdxgen-depth fix.
-# gem/composer app repos sampled (lobsters, wallabag) had their observed
-# vulns land on direct deps (or 0 vulns at HEAD); see the plan doc.
+# COVERAGE NOTE (2026-05-21): v3 covers all 8 ecosystems.
+# npm/maven/cargo are oracle-labelled (v2 carry-over); golang/pypi/composer/gem
+# are MEASUREMENT-ONLY (ground_truth_cves: []). The shallow-SBOM problem that
+# previously excluded golang/pypi is solved by the transitive resolver +
+# osv-extra-purls sidecar (see sbom.ts + osv-vuln-scan.ts) which feeds
+# resolver-added purls into the OSV vuln query.
+#
+# Repo pins for the 4 measurement-only ecos are chosen for STALE TRANSITIVES,
+# not for being notable apps: each pin is 2-4 years old so the dep tree
+# carries real CVEs that the reachability classifier can demote. Earlier
+# pins (bandit@1.7.4 / laravel/laravel@v8.6.7 / lobsters HEAD) returned 0
+# findings or hung composer install — bandit's tree was patched, lobsters
+# master tip too current, laravel skeleton triggered a cdxgen install hang.
 #
 # The `id` must be a CVE id — oss-corpus.ts matches observed findings to
 # ground truth on CVE-shaped ids (+ CVE-shaped aliases) only; RUSTSEC-/GHSA-
@@ -318,29 +323,34 @@ repos:
     ref: v2.4.6
     ground_truth_cves: []
 
-  - name: bandit
-    repo_url: https://github.com/PyCQA/bandit.git
+  - name: sentry-python
+    repo_url: https://github.com/getsentry/sentry-python.git
     ecosystem: pypi
-    # Mar 2022 — Bandit pulls a moderate transitive set via PyYAML + gitpython.
-    ref: 1.7.4
+    # Jun 2021 — sentry SDK 1.5.0. Pulls urllib3, certifi, aiohttp, and a
+    # full async/http transitive tree from this era. Pin chosen for stale
+    # transitives: bandit@1.7.4 had a small, fully-patched dep set and
+    # returned 0 vulns; this pin has the right "real app, stale deps"
+    # shape for measurement.
+    ref: fe165094cca85e4ea9919fbfd324320ff4332a90
     ground_truth_cves: []
 
-  - name: laravel
-    repo_url: https://github.com/laravel/laravel.git
+  - name: symfony-demo
+    repo_url: https://github.com/symfony/demo.git
     ecosystem: composer
-    # Dec 2021 — Laravel 8 skeleton. Composer pulls a deep transitive set
-    # (symfony components, monolog, doctrine, etc.) with known stale-version
-    # CVEs that v3's heuristic should classify aggressively as unreachable
-    # for an unmodified skeleton with no app code wired up.
-    ref: v8.6.7
+    # Dec 2020 — symfony/demo v1.5.0. Small skeleton, ~50 transitives across
+    # symfony components, twig, doctrine. Chosen specifically because the
+    # full laravel/laravel@v8.6.7 skeleton hung cdxgen's composer install
+    # for 9.7h; this minimal app finishes in minutes.
+    ref: f73440d151db697c2256f46875b899356bad6b43
     ground_truth_cves: []
 
-  - name: lobsters
-    repo_url: https://github.com/lobsters/lobsters.git
+  - name: discourse
+    repo_url: https://github.com/discourse/discourse.git
     ecosystem: gem
-    # HEAD-of-master SHA resolved 2026-05-20 via git ls-remote. Small Rails
-    # news-board app, Rails 7.x with a manageable bundle that pulls dozens
-    # of transitive gems. Lobsters has no version tags, so master-tip is
-    # the only reproducible pin available.
-    ref: 4cca5fff84f43a55e74c0c992024db544724240c
+    # Apr 2021 — Discourse 2.5.0. Rails forum app with dozens of stale gems
+    # (rack, nokogiri, sidekiq, mini_magick, etc.) of that vintage. Chosen
+    # over the prior lobsters HEAD-of-master pin because Discourse v2.5.0
+    # carries real stale-transitive CVEs whereas lobsters' actively-maintained
+    # master returned 0 vulns.
+    ref: ad49d8feb914e3a618404444c934e9e7e14665e2
     ground_truth_cves: []
