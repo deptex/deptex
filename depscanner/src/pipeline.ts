@@ -74,6 +74,7 @@ export async function runPipeline(
     workspaceRoot: '',
     assetTier: 'EXTERNAL',
     tierMultiplier: undefined,
+    graphTrusted: true,
     projectDepsCount: 0,
     newDepsToPopulate: [],
     astParsedSuccessfully: false,
@@ -133,26 +134,50 @@ export async function runPipeline(
 
     // === Cross-file taint engine (Phase 6, shadow mode) ===
     if (checkCancelled && await checkCancelled()) return;
-    const { validOsvIds, fpFilterCostUsd } = await doTaintEngine(ctx);
+    const { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies } =
+      await doTaintEngine(ctx);
 
     // === Reachability classification + depscore recalc + EPD scoring ===
-    await doReachabilityAndEpd(ctx, validOsvIds, fpFilterCostUsd, scanStart);
+    await doReachabilityAndEpd(
+      ctx,
+      validOsvIds,
+      fpFilterCostUsd,
+      scanStart,
+      cveSinkPatterns,
+      usedDependencies,
+    );
 
-    // === IaC + Container scanning (OPTIONAL) ===
-    if (checkCancelled && await checkCancelled()) return;
-    const scannerSummary = await doIaCContainer(ctx);
+    // === IaC, Malicious, Semgrep, TruffleHog (OPTIONAL) ===
+    // None of these four affect reachability classification (done above) —
+    // they are SAST / secrets / IaC / malicious-package scans. They are also
+    // the dominant scan-time cost on real repos (the malicious step fans
+    // GuardDog out to a semgrep run per dependency). DEPTEX_SKIP_OPTIONAL_SCANS
+    // skips them so the reachability corpus harness can scan many repos
+    // without paying that cost; production extraction always runs them.
+    const skipOptionalScans =
+      process.env.DEPTEX_SKIP_OPTIONAL_SCANS === '1' ||
+      /^true$/i.test(process.env.DEPTEX_SKIP_OPTIONAL_SCANS ?? '');
 
-    // === Malicious-package scan (OPTIONAL, soft-fail) ===
-    if (checkCancelled && await checkCancelled()) return;
-    await doMaliciousScan(ctx);
+    let scannerSummary: Awaited<ReturnType<typeof doIaCContainer>> = null;
+    if (skipOptionalScans) {
+      await log.info('finalize', 'Optional scans (IaC, malicious-package, SAST, secrets) skipped — DEPTEX_SKIP_OPTIONAL_SCANS set');
+    } else {
+      // === IaC + Container scanning (OPTIONAL) ===
+      if (checkCancelled && await checkCancelled()) return;
+      scannerSummary = await doIaCContainer(ctx);
 
-    // === Semgrep (OPTIONAL) ===
-    if (checkCancelled && await checkCancelled()) return;
-    await doSemgrep(ctx);
+      // === Malicious-package scan (OPTIONAL, soft-fail) ===
+      if (checkCancelled && await checkCancelled()) return;
+      await doMaliciousScan(ctx);
 
-    // === TruffleHog (OPTIONAL) ===
-    if (checkCancelled && await checkCancelled()) return;
-    await doTruffleHog(ctx);
+      // === Semgrep (OPTIONAL) ===
+      if (checkCancelled && await checkCancelled()) return;
+      await doSemgrep(ctx);
+
+      // === TruffleHog (OPTIONAL) ===
+      if (checkCancelled && await checkCancelled()) return;
+      await doTruffleHog(ctx);
+    }
 
     // === Finalize ===
     if (checkCancelled && await checkCancelled()) return;

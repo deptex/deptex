@@ -35,6 +35,15 @@ export interface ParsedSbomDep {
   license: string | null;
   is_direct: boolean;
   source: 'dependencies' | 'devDependencies' | 'transitive';
+  /**
+   * True when this dependency is dev/test/build scope — set by
+   * `patchDevDependencies` for direct dev deps (from the manifest) and for
+   * transitive deps reachable only via dev roots. Distinct from `source`:
+   * a transitively-dev-only dep keeps `source: 'transitive'` (the literal
+   * SBOM origin) but carries `devScoped: true`. Persisted indirectly via the
+   * `environment` column, never written back into `source`.
+   */
+  devScoped: boolean;
   bomRef: string;
 }
 
@@ -114,6 +123,13 @@ export function parseSbom(sbom: CycloneDxSbom): {
    *  resolve it). Surfacing this lets the pipeline distinguish "manifest empty"
    *  from "manifest had stuff we couldn't parse." */
   droppedVersionlessCount: number;
+  /** False when cdxgen returned an unwired CycloneDX `dependencies` graph (no
+   *  root node / no edges). When false, the direct/transitive split on every
+   *  dep is untrustworthy — the caller must run lockfile/tree graph recovery
+   *  (`dependency-graph/`) before relying on `is_direct`, and the reachability
+   *  classifier must floor at `module` (never `unreachable`) if recovery also
+   *  fails. */
+  directSetTrusted: boolean;
 } {
   const components = sbom.components || [];
   const depGraph = sbom.dependencies || [];
@@ -152,16 +168,18 @@ export function parseSbom(sbom: CycloneDxSbom): {
     collectTransitive(ref);
   }
 
-  // Fallback: if the dependency graph traversal yielded nothing (e.g. pypi/maven SBOMs where
-  // cdxgen omits metadata.component or doesn't wire the root node), treat every component as a
-  // direct dependency so we don't drop valid packages.
+  // Fallback: cdxgen's CycloneDX `dependencies` graph came back unwired (no
+  // root node, or the root has no edges — common on pypi/maven SBOMs). Include
+  // every component so no valid package is dropped, but DO NOT mark them direct
+  // — the old behaviour (everything `is_direct: true`) structurally disabled
+  // the `unreachable` reachability tier. `directSetTrusted = false` tells the
+  // pipeline to run lockfile/tree graph recovery to rebuild the direct set.
+  let directSetTrusted = true;
   if (allDeps.size === 0 && components.length > 0) {
+    directSetTrusted = false;
     for (const c of components) {
       const ref = c['bom-ref'];
-      if (ref) {
-        allDeps.add(ref);
-        directRefs.add(ref);
-      }
+      if (ref) allDeps.add(ref);
     }
   }
 
@@ -209,11 +227,12 @@ export function parseSbom(sbom: CycloneDxSbom): {
       license,
       is_direct: isDirect,
       source,
+      devScoped: false,
       bomRef: ref,
     });
   }
 
-  return { dependencies, relationships, rawComponentCount, droppedVersionlessCount };
+  return { dependencies, relationships, rawComponentCount, droppedVersionlessCount, directSetTrusted };
 }
 
 function extractLicense(licenses: unknown): string | null {
@@ -235,13 +254,76 @@ function extractLicense(licenses: unknown): string | null {
  * Cross-reference parsed SBOM deps with actual manifest files to correctly identify devDependencies.
  * CycloneDX SBOMs from cdxgen don't reliably distinguish dev from prod deps.
  */
-export function patchDevDependencies(deps: ParsedSbomDep[], repoRoot: string, ecosystem: string): void {
+export function patchDevDependencies(
+  deps: ParsedSbomDep[],
+  repoRoot: string,
+  ecosystem: string,
+  relationships: ParsedSbomRelationship[] = [],
+  directSetTrusted = true,
+): void {
   const devNames = collectDevDependencyNames(repoRoot, ecosystem);
   if (devNames.size === 0) return;
 
+  // Pass 1 — direct dev marking from the manifest (always trustworthy).
   for (const dep of deps) {
-    if (dep.is_direct && devNames.has(dep.name)) {
+    if (!dep.is_direct) continue;
+    // Maven dev names are keyed `groupId:artifactId`; `dep.name` is the bare
+    // artifactId, so probe the namespaced form too. Other ecosystems key on
+    // the bare name.
+    const namespaced = dep.namespace ? `${dep.namespace}:${dep.name}` : null;
+    if (devNames.has(dep.name) || (namespaced && devNames.has(namespaced))) {
       dep.source = 'devDependencies';
+      dep.devScoped = true;
+    }
+  }
+
+  // Pass 2 — transitive dev-only propagation. A transitive dependency that is
+  // reachable in the cdxgen dependency graph only via devDependency roots —
+  // never via a production root — is itself dev-only. Skipped when the graph
+  // is untrusted (the direct-set fallback marked every dep transitive, so the
+  // closure would be meaningless); direct-dev marking from pass 1 still holds.
+  //
+  // Maven is excluded: cdxgen's maven `dependencies` graph is too shallow to
+  // compute prod-reachability — a test-scope starter (testcontainers, the
+  // *-test starters) pulls a large subtree that overlaps production
+  // (jackson, logback, micrometer), and the production-side edges several
+  // hops down are not wired, so the closure mis-marks genuine prod
+  // transitives dev-only. Maven dev-scope therefore comes from pass-1 direct
+  // `<scope>test</scope>` / `provided` deps alone.
+  if (!directSetTrusted || relationships.length === 0 || ecosystem === 'maven') return;
+
+  const adjacency = new Map<string, string[]>();
+  for (const rel of relationships) {
+    const kids = adjacency.get(rel.parentBomRef);
+    if (kids) kids.push(rel.childBomRef);
+    else adjacency.set(rel.parentBomRef, [rel.childBomRef]);
+  }
+  const closureFrom = (rootRefs: string[]): Set<string> => {
+    const seen = new Set<string>(rootRefs);
+    const queue = [...rootRefs];
+    while (queue.length > 0) {
+      const ref = queue.pop()!;
+      for (const child of adjacency.get(ref) ?? []) {
+        if (!seen.has(child)) {
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+    }
+    return seen;
+  };
+  const prodReachable = closureFrom(
+    deps.filter((d) => d.source === 'dependencies').map((d) => d.bomRef),
+  );
+  const devReachable = closureFrom(
+    deps.filter((d) => d.source === 'devDependencies').map((d) => d.bomRef),
+  );
+  for (const dep of deps) {
+    // Only un-marked transitive deps are candidates; a dep reachable from any
+    // production root stays production-scope even if a dev root also reaches it.
+    if (dep.source !== 'transitive') continue;
+    if (devReachable.has(dep.bomRef) && !prodReachable.has(dep.bomRef)) {
+      dep.devScoped = true;
     }
   }
 }
@@ -255,9 +337,34 @@ function collectDevDependencyNames(repoRoot: string, ecosystem: string): Set<str
     collectPypiDevDeps(repoRoot, devNames);
   } else if (ecosystem === 'maven') {
     collectMavenDevDeps(repoRoot, devNames);
+  } else if (ecosystem === 'cargo') {
+    collectCargoDevDeps(repoRoot, devNames);
   }
 
   return devNames;
+}
+
+function collectCargoDevDeps(repoRoot: string, devNames: Set<string>): void {
+  const cargoPath = path.join(repoRoot, 'Cargo.toml');
+  try {
+    const content = fs.readFileSync(cargoPath, 'utf8');
+    // Crate names under [dev-dependencies] / [build-dependencies] and their
+    // target-specific variants, e.g. [target.'cfg(unix)'.dev-dependencies].
+    // Tracked line-by-line: each `[section]` header opens/closes a section.
+    let inDevSection = false;
+    for (const rawLine of content.split('\n')) {
+      const line = rawLine.trim();
+      const header = line.match(/^\[([^\]]+)\]$/);
+      if (header) {
+        inDevSection = /(?:^|\.)(?:dev|build)-dependencies$/.test(header[1].trim());
+        continue;
+      }
+      if (!inDevSection || !line || line.startsWith('#')) continue;
+      // `name = "1.0"`, `name = { version = "1" }`, or `name.workspace = true`
+      const m = line.match(/^([A-Za-z0-9_-]+)\s*[.=]/);
+      if (m) devNames.add(m[1]);
+    }
+  } catch { /* no Cargo.toml or parse error */ }
 }
 
 function collectNpmDevDeps(repoRoot: string, devNames: Set<string>): void {
@@ -306,11 +413,23 @@ function collectMavenDevDeps(repoRoot: string, devNames: Set<string>): void {
   const pomPath = path.join(repoRoot, 'pom.xml');
   try {
     const content = fs.readFileSync(pomPath, 'utf8');
-    // Match dependencies with <scope>test</scope> or <scope>provided</scope>
-    const depRegex = /<dependency>\s*<groupId>([^<]+)<\/groupId>\s*<artifactId>([^<]+)<\/artifactId>[\s\S]*?<scope>(test|provided)<\/scope>[\s\S]*?<\/dependency>/g;
-    let match;
-    while ((match = depRegex.exec(content)) !== null) {
-      devNames.add(`${match[1]}:${match[2]}`);
+    // Isolate each <dependency> block, THEN check its scope. An earlier
+    // single-regex form let `[\s\S]*?` between <artifactId> and <scope> run
+    // past </dependency>, so a compile-scope dependency sitting just before
+    // the first test-scope one absorbed that test scope — on spring-petclinic
+    // that mis-flagged the very first dependency (spring-boot-starter-
+    // actuator) as test-scope, which then propagated dev-scope across its
+    // whole transitive subtree (jackson, micrometer, logback…) and produced
+    // a Gate-3 false negative. Matching the block first keeps the scope
+    // check bounded to the dependency it belongs to.
+    const blockRegex = /<dependency>([\s\S]*?)<\/dependency>/g;
+    let block;
+    while ((block = blockRegex.exec(content)) !== null) {
+      const body = block[1];
+      if (!/<scope>\s*(test|provided)\s*<\/scope>/.test(body)) continue;
+      const groupId = body.match(/<groupId>([^<]+)<\/groupId>/)?.[1]?.trim();
+      const artifactId = body.match(/<artifactId>([^<]+)<\/artifactId>/)?.[1]?.trim();
+      if (groupId && artifactId) devNames.add(`${groupId}:${artifactId}`);
     }
   } catch { /* ignore */ }
 }

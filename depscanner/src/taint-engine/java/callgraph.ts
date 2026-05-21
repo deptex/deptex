@@ -407,6 +407,14 @@ export async function buildJavaCallgraphContext(rootDir: string): Promise<JavaCa
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    // v3 precision arc — credit every external import the workspace
+    // actually wrote. Java has no equivalent to the TS Compiler API's
+    // cross-package symbol resolution, so we use the import-table data
+    // we already collected as a strong-enough proxy: if the source
+    // imports `com.fasterxml.jackson.databind.ObjectMapper`, the
+    // reachability classifier can credit any maven dep whose groupId
+    // or artifactId-derived token shares a prefix with that FQN.
+    usedDependencies: extractJavaUsedDependencies(files, classFqnBySimpleName),
   };
 
   return {
@@ -416,6 +424,68 @@ export async function buildJavaCallgraphContext(rootDir: string): Promise<JavaCa
     classFqnBySimpleName,
     files,
   };
+}
+
+/**
+ * v3 precision arc — Java package extractor.
+ *
+ * Walks every JavaFileIndex's import table. For each FQN whose target
+ * class is NOT in `classFqnBySimpleName` (i.e., it lives outside the
+ * workspace), strip the trailing class-name → package, and emit the
+ * package plus its non-trivial ancestors. The reachability classifier's
+ * `usedTransitives` matcher does bidirectional `startsWith` against the
+ * project_dependency's namespace (groupId), so emitting ancestors lets
+ * `com.fasterxml.jackson.databind` match a jackson-core PDV whose
+ * groupId is `com.fasterxml.jackson.core` via the common ancestor
+ * `com.fasterxml.jackson`.
+ *
+ * Wildcard imports (`import a.b.*`) contribute the wildcard root and
+ * its ancestors directly. Excluded too-shallow roots (`com`, `org`,
+ * `java`, `javax`, `io`, `net`) so a jackson-using project doesn't
+ * spuriously credit every other `com.*` artifact in the SBOM.
+ */
+export function extractJavaUsedDependencies(
+  files: JavaFileIndex[],
+  classFqnBySimpleName: Map<string, string>,
+): Set<string> {
+  const out = new Set<string>();
+  // Roots so generic they'd match nearly every SBOM entry — refuse to
+  // emit these. A single-token top-level domain doesn't disambiguate.
+  const TOO_SHALLOW = new Set(['com', 'org', 'net', 'io', 'java', 'javax', 'edu', 'gov']);
+
+  const addPackageAndAncestors = (pkg: string): void => {
+    if (!pkg) return;
+    const parts = pkg.split('.').filter((p) => p.length > 0);
+    // Walk top-down, accumulating prefixes (com → com.fasterxml →
+    // com.fasterxml.jackson → ...). Skip the single-token root if it's
+    // in TOO_SHALLOW; emit deeper prefixes that include it.
+    for (let i = 1; i <= parts.length; i++) {
+      if (i === 1 && TOO_SHALLOW.has(parts[0].toLowerCase())) continue;
+      const prefix = parts.slice(0, i).join('.').toLowerCase();
+      out.add(prefix);
+    }
+  };
+
+  for (const f of files) {
+    // Explicit imports: simpleName → FQN. The FQN's last segment is the
+    // class name (uppercase convention); drop it to get the package.
+    for (const fqn of f.imports.values()) {
+      const lastDot = fqn.lastIndexOf('.');
+      if (lastDot === -1) continue;
+      const simple = fqn.slice(lastDot + 1);
+      const pkg = fqn.slice(0, lastDot);
+      // Skip imports that resolve to a workspace class — those are
+      // intra-project, not dep code.
+      if (classFqnBySimpleName.has(simple) && classFqnBySimpleName.get(simple) === fqn) continue;
+      addPackageAndAncestors(pkg);
+    }
+    // Wildcard imports: package roots from `import a.b.*`.
+    for (const wildcard of f.wildcardImports) {
+      addPackageAndAncestors(wildcard);
+    }
+  }
+
+  return out;
 }
 
 // ---------------- helpers ----------------

@@ -150,7 +150,16 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
           namespace: d.namespace,
           is_direct: d.is_direct,
           source: d.source,
-          environment: d.source === 'dependencies' ? 'prod' : d.source === 'devDependencies' ? 'dev' : null,
+          // `source` stays the literal SBOM origin; `environment` carries the
+          // resolved scope. A transitively-dev-only dep keeps source 'transitive'
+          // but `devScoped` flips environment to 'dev'. `environment` is not in
+          // the upsert conflict key, so this never destabilises row identity.
+          environment:
+            d.source === 'dependencies'
+              ? 'prod'
+              : d.source === 'devDependencies' || d.devScoped
+                ? 'dev'
+                : null,
           last_seen_extraction_run_id: runId,
           removed_at: null,
         };
@@ -158,6 +167,29 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
 
       const dedupeKey = (r: { name: string; version: string; is_direct: boolean; source: string }) =>
         `${r.name}|${r.version}|${r.is_direct}|${r.source}`;
+
+      // Sticky transitive dev-scope: when cdxgen's edge graph was unwired this
+      // run, Layer-2 transitive dev-only propagation was skipped, so a dep a
+      // prior trusted run marked `environment='dev'` would re-derive to `null`
+      // and briefly inflate its depscore. Carry the prior 'dev' forward; only
+      // a trusted run (propagation ran) is allowed to downgrade dev → null.
+      if (ctx.sbomGraphWired === false) {
+        const { data: priorRows } = await supabase
+          .from('project_dependencies')
+          .select('name, version, is_direct, source, environment')
+          .eq('project_id', projectId);
+        if (priorRows && priorRows.length > 0) {
+          const priorDev = new Set<string>();
+          for (const r of priorRows) {
+            if (r.environment === 'dev') priorDev.add(dedupeKey(r));
+          }
+          for (const row of projectDepsRaw) {
+            if (row.environment === null && priorDev.has(dedupeKey(row))) {
+              row.environment = 'dev';
+            }
+          }
+        }
+      }
       const seenProjDep = new Set<string>();
       const projectDepsToUpsert = projectDepsRaw.filter((r) => {
         const k = dedupeKey(r);

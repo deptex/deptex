@@ -40,6 +40,7 @@ import {
   clearVdbVolumeForRecovery,
 } from '../pipeline-helpers';
 import type { PipelineContext, PipelineLogger } from '../pipeline-types';
+import { runOsvFallback, osvFallbackMode } from './osv-vuln-scan';
 
 function runDepScanProcess(
   depScanExe: string,
@@ -136,6 +137,52 @@ function runDepScanProcess(
 export interface DepScanOutput {
   /** Wall-clock start of vuln_scan, used by the reachability step to log scan completion. */
   scanStart: number;
+}
+
+/** A project_dependencies row, as far as dual-scope PDV attachment cares. */
+export interface DualScopePdRow {
+  id: string;
+  name: string;
+  version: string;
+  environment: string | null;
+}
+
+/**
+ * Build the `name@version → project_dependency_id` map dep-scan uses to attach
+ * a vulnerability to a dependency row.
+ *
+ * When a package appears twice for one project — declared as a direct
+ * devDependency and also pulled in as a production transitive — the PDV must
+ * attach to the **production-scope** row. Otherwise a vuln on a genuine runtime
+ * dependency could land on the dev row and be classed `unreachable` (a Gate-3
+ * false negative once dev-scope classification lands). Preference order:
+ * `environment !== 'dev'` (covers both `'prod'` and `null`) wins; remaining ties
+ * break on lowest `id` so the choice is identical run-to-run regardless of the
+ * order Postgres returns the rows in.
+ */
+export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, string> {
+  const pdByNameVersion = new Map<string, string>();
+  const pdEnvByKey = new Map<string, string | null>();
+  for (const r of pdRows) {
+    const key = `${r.name}@${r.version}`;
+    const incomingEnv = (r.environment ?? null) as string | null;
+    const storedId = pdByNameVersion.get(key);
+    if (storedId === undefined) {
+      pdByNameVersion.set(key, r.id);
+      pdEnvByKey.set(key, incomingEnv);
+      continue;
+    }
+    const incomingIsProd = incomingEnv !== 'dev';
+    const storedIsProd = pdEnvByKey.get(key) !== 'dev';
+    if (
+      (incomingIsProd && !storedIsProd) ||
+      (incomingIsProd === storedIsProd && r.id < storedId)
+    ) {
+      pdByNameVersion.set(key, r.id);
+      pdEnvByKey.set(key, incomingEnv);
+    }
+  }
+  return pdByNameVersion;
 }
 
 export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
@@ -251,6 +298,37 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     },
   });
 
+  // === OSV-API fallback (mid-step, before VDR discovery) ===
+  // dep-scan's bundled VDB has a silent per-ecosystem lookup gap (confirmed
+  // 2026-05-20: returns empty for cargo/maven/npm-dev-cluster against PURLs
+  // that OSV's HTTP API matches instantly). Rather than debug OWASP's tool,
+  // we run OSV directly when dep-scan's VDR is missing/empty. The fallback
+  // writes a CycloneDX-VDR-shaped file into `reportsDir` that the discovery
+  // walk below picks up unchanged.
+  const fallbackMode = osvFallbackMode();
+  if (fallbackMode !== 'off') {
+    try {
+      const result = await runOsvFallback({
+        reportsDir,
+        jobEcosystem,
+        logger: log,
+        force: fallbackMode === 'force',
+      });
+      if (result.wrote && result.vulnCount > 0) {
+        depScanSucceeded = true;
+      } else if (!result.wrote && result.reason) {
+        // Common: dep-scan VDR was already non-empty. Log at debug only.
+        if (process.env.DEPTEX_CLI_MODE !== '1') {
+          console.log(`[osv-fallback] skipped: ${result.reason}`);
+        }
+      }
+    } catch (e) {
+      // Network errors here must NOT fail the whole scan — dep-scan's own
+      // findings (if any) still get processed below.
+      await log.warn('vuln_scan_osv', `OSV fallback errored (continuing): ${(e as Error).message}`);
+    }
+  }
+
   // === Process dep-scan results ===
   const listVdrFiles = (dir: string): string[] => {
     try {
@@ -340,14 +418,14 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       const { data: pdRows } = await supabase
         .from('project_dependencies')
-        .select('id, name, version')
+        .select('id, name, version, environment')
         .eq('project_id', projectId)
         .eq('last_seen_extraction_run_id', runId);
 
-      const pdByNameVersion = new Map<string, string>();
-      if (pdRows) {
-        for (const r of pdRows) pdByNameVersion.set(`${r.name}@${r.version}`, r.id);
-      }
+      // When two rows share name@version — a package declared both as a direct
+      // devDependency and pulled as a production transitive — the PDV attaches
+      // to the production-scope row (see resolveDualScopePdMap).
+      const pdByNameVersion = resolveDualScopePdMap((pdRows ?? []) as DualScopePdRow[]);
 
       const kevCveSet = new Set<string>();
       try {

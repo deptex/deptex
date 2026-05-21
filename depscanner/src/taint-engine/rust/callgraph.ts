@@ -203,6 +203,13 @@ export async function buildRustCallgraphContext(
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    // v3 cargo precision arc — walk every `use_declaration` / `extern crate`
+    // and emit the root crate identifier. Local workspace modules (anything
+    // resolvable via the module index) and Rust's built-in roots get filtered
+    // out so we don't credit them as cargo deps. The reachability classifier
+    // (depMatchesUsedTransitives) then exempts cargo PDVs whose crate name
+    // matches.
+    usedDependencies: extractRustUsedDependencies(parsedFiles, moduleIndex),
   };
 
   const filesContext = new Map<string, RustFileContext>();
@@ -810,4 +817,116 @@ function collectCallEdges(
     callExpressionCount,
     resolvedCallCount,
   };
+}
+
+/**
+ * Walk every `use_declaration` and `extern_crate_declaration` in the
+ * workspace and emit the root crate name (the first `::`-segment). Anything
+ * the module index can resolve to a local workspace file is filtered out as
+ * intra-project. Rust's built-in roots (`std`, `core`, `alloc`, `test`,
+ * `proc_macro`) and the `self`/`super`/`crate` reserved roots are dropped
+ * since they never map to a cargo PDV. The result is the input to
+ * `depMatchesUsedTransitives` — its npm-exact-match strategy already does
+ * the right thing for cargo since cargo crate names are flat (no namespace).
+ *
+ * Rust crate names normalize hyphens → underscores when imported as a Rust
+ * module (cargo `tokio-util` → `use tokio_util::...`). We emit BOTH spellings
+ * so the SBOM PURL's hyphenated form matches. depMatchesUsedTransitives
+ * exact-match handles the lookup; lower-casing happens upstream in runner.ts.
+ */
+export function extractRustUsedDependencies(
+  parsedFiles: FileTrees[],
+  moduleIndex: Map<string, string>,
+): Set<string> {
+  const out = new Set<string>();
+  const BUILTIN_ROOTS = new Set(['std', 'core', 'alloc', 'test', 'proc_macro']);
+  const RESERVED_ROOTS = new Set(['self', 'super', 'crate']);
+
+  // Top-level local module names from `mod foo;` declarations. moduleIndex
+  // keys are dotted (`foo`, `foo::bar`); the root segment of any key is a
+  // workspace module that shadows an external crate of the same name —
+  // exclude it (Cargo enforces no collisions in practice, but defensive).
+  const localRoots = new Set<string>();
+  for (const key of moduleIndex.keys()) {
+    const root = key.split('::')[0];
+    if (root) localRoots.add(root);
+  }
+
+  const addRoot = (root: string): void => {
+    if (!root) return;
+    if (BUILTIN_ROOTS.has(root)) return;
+    if (RESERVED_ROOTS.has(root)) return;
+    if (localRoots.has(root)) return;
+    out.add(root);
+    // Also emit the hyphenated form so a cargo PURL like
+    // `pkg:cargo/tokio-util@0.7.10` matches a `use tokio_util::...` import.
+    if (root.includes('_')) out.add(root.replace(/_/g, '-'));
+  };
+
+  const visit = (node: Node, source: string): void => {
+    if (node.type === 'use_declaration') {
+      const inner = node.namedChild(0);
+      if (inner) {
+        const root = extractUseRoot(inner, source);
+        if (root) addRoot(root);
+      }
+    } else if (node.type === 'extern_crate_declaration') {
+      // `extern crate foo;` or `extern crate foo as bar;` — the field
+      // `name` carries the crate identifier.
+      const nameNode = node.childForFieldName('name') ?? node.namedChild(0);
+      if (nameNode) {
+        const root = textOf(nameNode, source);
+        if (root) addRoot(root);
+      }
+    }
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) visit(child, source);
+    }
+  };
+
+  for (const f of parsedFiles) {
+    visit(f.tree.rootNode, f.source);
+  }
+  return out;
+}
+
+/**
+ * Pull the FIRST `::`-segment out of a `use_declaration`'s inner node.
+ * Handles: identifier | scoped_identifier | scoped_use_list | use_as_clause |
+ * use_wildcard | use_list. Unknown shapes return null.
+ */
+function extractUseRoot(node: Node, source: string): string | null {
+  if (node.type === 'identifier') return textOf(node, source);
+  if (node.type === 'scoped_identifier') {
+    const segments = collectScopedSegments(node, source);
+    return segments[0] ?? null;
+  }
+  if (node.type === 'scoped_use_list') {
+    const pathField = node.childForFieldName('path') ?? node.namedChild(0);
+    if (pathField) {
+      const segments = collectScopedSegments(pathField, source);
+      return segments[0] ?? null;
+    }
+    return null;
+  }
+  if (node.type === 'use_as_clause') {
+    const pathNode = node.childForFieldName('path');
+    if (pathNode) {
+      const segments = collectScopedSegments(pathNode, source);
+      return segments[0] ?? null;
+    }
+    return null;
+  }
+  if (node.type === 'use_wildcard') {
+    const inner = node.namedChild(0);
+    if (inner) return extractUseRoot(inner, source);
+    return null;
+  }
+  if (node.type === 'use_list') {
+    // `use foo::{a, b}` is already handled by the parent scoped_use_list path;
+    // a bare use_list at the top of a use_declaration is rare. Return null.
+    return null;
+  }
+  return null;
 }

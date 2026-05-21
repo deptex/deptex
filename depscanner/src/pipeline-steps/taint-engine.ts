@@ -48,6 +48,25 @@ import type { PipelineContext } from '../pipeline-types';
 export interface TaintEngineOutput {
   validOsvIds: Set<string>;
   fpFilterCostUsd: number;
+  /**
+   * osv_id → the vulnerable call patterns (FrameworkSink.pattern) of every
+   * CVE-targeted spec sink that loaded this run. The reachability classifier
+   * uses these to verify whether a CVE's *specific vulnerable symbol* is on a
+   * call path before assigning the `function` tier — see
+   * `updateReachabilityLevels`. Empty when no CVE-targeted specs loaded.
+   */
+  cveSinkPatterns: Map<string, string[]>;
+  /**
+   * v3 (precision arc): lowercase set of dep package names the engine's
+   * callgraph confirmed are reached by at least one CallEdge from workspace
+   * code. JS callgraph populates this from resolved `node_modules/*` paths;
+   * per-language callgraphs land their extractors in follow-up commits.
+   * Empty Set means either the callgraph didn't extract for this language
+   * yet, the engine was rollout-gated off, or the workspace genuinely calls
+   * nothing — the classifier treats empty as "no signal" and falls back to
+   * the v2 heuristic for every transitive.
+   */
+  usedDependencies: Set<string>;
 }
 
 export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOutput> {
@@ -58,6 +77,13 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   // updateReachabilityLevels call below can validate that every promoted
   // confirmed-tier flow has an osv_id matching a real loaded spec.
   const validOsvIds = new Set<string>();
+  // osv_id → vulnerable call patterns from CVE-targeted spec sinks; consumed
+  // by the reachability classifier for function-tier symbol verification.
+  const cveSinkPatterns = new Map<string, string[]>();
+  // v3 precision arc — lowercase npm/pypi/cargo/etc. package names the
+  // engine's callgraph confirmed are reached. Empty here; populated when
+  // the engine ran successfully and its callgraph carried usedDependencies.
+  let usedDependencies = new Set<string>();
   let fpFilterCostUsd = 0;
 
   const stepStart = Date.now();
@@ -73,7 +99,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: 'rollout_gate',
     });
-    return { validOsvIds, fpFilterCostUsd };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
   }
 
   const breaker = await checkTaintEngineCircuitBreaker(supabase, organizationId);
@@ -90,7 +116,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       totalMs: Date.now() - stepStart,
       errorCode: breaker.blockedReason ?? 'circuit_breaker',
     });
-    return { validOsvIds, fpFilterCostUsd };
+    return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
   }
 
   // Mark the run as 'running' first so a crash mid-engine still
@@ -207,15 +233,23 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
             if (!eco) continue;
             const purl = buildPurl(eco, pd.name, pd.version);
             if (!purl) continue;
-            // First write wins: a single CVE on multiple PDs
-            // (rare, e.g. a monorepo with two copies of a vulnerable
-            // dep) will resolve to the first dep we see. Acceptable
-            // for v1; M5 may add per-PD disambiguation.
-            if (!depsByOsvId.has(r.osv_id)) {
-              depsByOsvId.set(r.osv_id, {
-                purl,
-                dependencyId: pd.dependency_id,
-              });
+            const resolved: ResolvedDep = { purl, dependencyId: pd.dependency_id };
+            // Key the resolver under the PDV's primary osv_id AND every
+            // CVE-shaped alias. CVE-targeted FrameworkSpecs are generated and
+            // keyed by CVE id, so the engine emits flows with osv_id=CVE-xxxx.
+            // When a PDV's primary id is a GHSA advisory (log4shell etc.) a
+            // CVE-only lookup would miss and the flow would be written with a
+            // null dependency_id — which the classifier can never promote to
+            // `confirmed`. First write wins on a key collision (a single CVE
+            // across two PDs — rare, e.g. a monorepo with duplicate deps).
+            const osvKeys = [r.osv_id];
+            if (Array.isArray(r.aliases)) {
+              for (const a of r.aliases) {
+                if (typeof a === 'string' && a.startsWith('CVE-')) osvKeys.push(a);
+              }
+            }
+            for (const k of osvKeys) {
+              if (!depsByOsvId.has(k)) depsByOsvId.set(k, resolved);
             }
           }
         }
@@ -241,7 +275,13 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   // (defense-in-depth for the JSONB CHECK + server-side substitution).
   for (const spec of cveSpecResult.specs) {
     for (const sink of spec.sinks) {
-      if (sink.osv_id) validOsvIds.add(sink.osv_id);
+      if (!sink.osv_id) continue;
+      validOsvIds.add(sink.osv_id);
+      // Collect the vulnerable call pattern so the classifier can check
+      // whether this CVE's specific symbol is actually on a call path.
+      const patterns = cveSinkPatterns.get(sink.osv_id) ?? [];
+      if (sink.pattern && !patterns.includes(sink.pattern)) patterns.push(sink.pattern);
+      cveSinkPatterns.set(sink.osv_id, patterns);
     }
   }
   try {
@@ -303,6 +343,12 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       });
     } else {
       const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter, detectorFlows } = engineResult;
+      // v3 precision — surface usedDependencies for the reachability
+      // classifier even when zero specs matched / zero flows emitted: the
+      // callgraph may still have crossed into dep code and we want to
+      // credit those deps. Empty set when the engine's callgraph didn't
+      // extract for this language (per-language extractors land later).
+      usedDependencies = engineResult.usedDependencies ?? new Set();
       const taintSurvivors = flowsAfterFilter ?? propagation.flows;
       // Detector flows (Phase F4 sanitizer-absence + Phase 3.3 insecure-default)
       // are LLM-checked alongside taint flows and ride into
@@ -404,5 +450,5 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
     throw err;
   }
 
-  return { validOsvIds, fpFilterCostUsd };
+  return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };
 }
