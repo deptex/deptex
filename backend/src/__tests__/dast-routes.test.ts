@@ -618,6 +618,22 @@ describe('Cross-tenant 404 matrix — every :targetId route', () => {
           `/api/projects/${PROJECT_A}/dast/findings?target_id=${TARGET_A}`,
         ),
     },
+    // Phase 35 (v1.1) — new spec routes must respect the same cross-tenant
+    // contract. Probes added per Patch 2 in the round-2 review.
+    {
+      name: 'PATCH /dast/targets/:targetId/spec',
+      perform: () =>
+        request(makeApp())
+          .patch(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/spec`)
+          .send({ api_spec_source: 'none' }),
+    },
+    {
+      name: 'GET /dast/targets/:targetId/spec/download',
+      perform: () =>
+        request(makeApp()).get(
+          `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/spec/download`,
+        ),
+    },
   ];
 
   it.each(probes)('$name returns 404 target_not_found for cross-tenant targetId', async ({ perform }) => {

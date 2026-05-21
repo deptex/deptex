@@ -16,6 +16,14 @@ export interface LoadedTarget {
   detected_runtime_at: string | null;
   detected_runtime_ttl_at: string | null;
   enabled: boolean;
+  // Phase 35 (v1.1) — OpenAPI spec config. Single SELECT widened so every
+  // route that needs spec context (scan route nuclei guard, PATCH /spec,
+  // GET /spec/download) doesn't need a second roundtrip.
+  api_spec_source: 'synthesized' | 'url' | 'none';
+  api_spec_url: string | null;
+  last_synthesized_at: string | null;
+  last_synthesis_endpoint_count: number | null;
+  last_synthesis_ok: boolean | null;
 }
 
 export type LoadTargetDeny = { status: 404; reason: 'target_not_found' };
@@ -50,7 +58,7 @@ export async function loadTargetOrDeny(
   const { data, error } = await supabase
     .from('project_dast_targets')
     .select(
-      'id, project_id, organization_id, target_url, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, enabled',
+      'id, project_id, organization_id, target_url, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, enabled, api_spec_source, api_spec_url, last_synthesized_at, last_synthesis_endpoint_count, last_synthesis_ok',
     )
     .eq('id', targetId)
     .maybeSingle();
@@ -88,6 +96,11 @@ export async function loadTargetOrDeny(
       detected_runtime_at: data.detected_runtime_at,
       detected_runtime_ttl_at: data.detected_runtime_ttl_at,
       enabled: data.enabled,
+      api_spec_source: (data.api_spec_source ?? 'none') as 'synthesized' | 'url' | 'none',
+      api_spec_url: data.api_spec_url ?? null,
+      last_synthesized_at: data.last_synthesized_at ?? null,
+      last_synthesis_endpoint_count: data.last_synthesis_endpoint_count ?? null,
+      last_synthesis_ok: data.last_synthesis_ok ?? null,
     },
   };
 }

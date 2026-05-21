@@ -77,6 +77,48 @@ export interface RecordedCredentialPayload {
   sso_origins?: string[];
 }
 
+// Phase 35 (v1.1) — OpenAPI spec source enum + per-target spec_config DTO.
+// 'upload' is reserved for v1.2 (no backend code path accepts it in v1.1).
+export type DastSpecSource = 'synthesized' | 'url' | 'none';
+
+/**
+ * Canonical list of error code strings returned by the spec routes
+ * (PATCH /spec, GET /spec/download) + the scan-route guard. Duplicated
+ * verbatim in `frontend/src/lib/dast-error-codes.ts`; CI runs
+ * `scripts/check-dast-error-codes-match.sh` to fail PRs on drift.
+ *
+ * Adding a code: add here, add to the frontend file, update
+ * friendlySpecErrorMessage on the frontend side.
+ */
+export const SPEC_ERROR_CODES = [
+  'invalid_spec_source',
+  'spec_url_required',
+  'spec_url_invalid',
+  'spec_url_unreachable',
+  'spec_parse_failed',
+  'spec_too_large',
+  'spec_unavailable',
+  'target_not_found',
+  'unsupported_openapi_on_nuclei',
+] as const;
+export type SpecErrorCode = typeof SPEC_ERROR_CODES[number];
+
+export interface DastSpecConfigDTO {
+  api_spec_source: DastSpecSource;
+  api_spec_url: string | null;
+  last_synthesized_at: string | null;
+  last_synthesis_endpoint_count: number | null;
+  /**
+   * null = never synthesized (target created before any scan ran).
+   * true = last spec resolution + scan succeeded.
+   * false = last spec resolution failed (no entries / URL fetch fail /
+   *         URL parse fail / storage write fail). The frontend infers the
+   *         specific cause from `api_spec_source` + `last_synthesized_at`
+   *         + `last_synthesis_endpoint_count`.
+   */
+  last_synthesis_ok: boolean | null;
+}
+
 export interface DastTargetDTO {
   id: string;
   target_url: string;
@@ -90,6 +132,8 @@ export interface DastTargetDTO {
   active_dast_run_id: string | null;
   last_scanned_at: string | null;
   created_at: string;
+  // Phase 35 (v1.1) — OpenAPI spec config + last-synthesis stats.
+  spec_config: DastSpecConfigDTO;
 }
 
 export interface DastScopeHeaderRule {

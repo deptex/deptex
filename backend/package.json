@@ -30,6 +30,7 @@
     "@ai-sdk/openai": "^3.0.37",
     "@ai-sdk/openai-compatible": "^2.0.41",
     "@anthropic-ai/sdk": "^0.39.0",
+    "@apidevtools/swagger-parser": "^12.1.0",
     "@google/generative-ai": "^0.24.0",
     "@node-saml/node-saml": "^5.1.0",
     "@react-pdf/renderer": "^4.3.2",
