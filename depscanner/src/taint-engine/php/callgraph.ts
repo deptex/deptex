@@ -227,6 +227,12 @@ export async function buildPhpCallgraphContext(
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    // v3 composer precision arc — emit the FIRST namespace segment of every
+    // `use Vendor\Package\Class` declaration. Composer PURLs encode dep
+    // namespace as the vendor (`symfony` of `symfony/console`), so the
+    // maven-bidirectional-prefix path in depMatchesUsedTransitives matches
+    // `symfony/*` deps when source code uses any `Symfony\...` namespace.
+    usedDependencies: extractPhpUsedDependencies(fileImportsByPath, fileFunctionsByPath),
   };
 
   const filesContext = new Map<string, PhpFileContext>();
@@ -875,4 +881,56 @@ function collectCallEdges(
     callExpressionCount,
     resolvedCallCount,
   };
+}
+
+/**
+ * Walk every `use Vendor\Package\Class;` and emit the FIRST namespace
+ * segment lowercased. Composer PURLs encode dep `namespace` as the vendor
+ * (`symfony` of `symfony/console`); the maven-bidirectional-prefix path in
+ * depMatchesUsedTransitives then matches any `symfony/*` PDV.
+ *
+ * Workspace-local namespaces (anything that resolves to a file in this
+ * repo's classFqnToFile map) are filtered. Common single-word root names
+ * like `App`, `Tests`, `Database` (Laravel skeleton conventions) get
+ * blacklisted explicitly — they ARE workspace-local but show up in
+ * classFqnToFile via the PSR-4 root prefix.
+ */
+export function extractPhpUsedDependencies(
+  fileImportsByPath: Map<string, FileImports>,
+  _fileFunctionsByPath: Map<string, FileFunctions>,
+): Set<string> {
+  const out = new Set<string>();
+  // PHP top-level roots that almost always denote intra-project namespaces.
+  // Laravel/Symfony skeletons stamp these in by default.
+  const WORKSPACE_ROOTS = new Set([
+    'app',
+    'tests',
+    'test',
+    'database',
+    'storage',
+    'config',
+    'public',
+    'resources',
+    'bootstrap',
+  ]);
+
+  for (const imports of fileImportsByPath.values()) {
+    // Collect ALL maps (class, function, const) since `use` declarations
+    // populate each of them depending on the import kind. Vendor namespace
+    // is in the FQN regardless.
+    const allFqns: string[] = [
+      ...imports.classAliases.values(),
+      ...imports.functionAliases.values(),
+      ...imports.constAliases.values(),
+    ];
+    for (const fqn of allFqns) {
+      const trimmed = fqn.replace(/^\\+/, '');
+      const root = trimmed.split('\\')[0];
+      if (!root) continue;
+      const lower = root.toLowerCase();
+      if (WORKSPACE_ROOTS.has(lower)) continue;
+      out.add(lower);
+    }
+  }
+  return out;
 }

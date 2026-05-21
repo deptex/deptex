@@ -179,10 +179,22 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
   // which surface emitted it.
   const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'golang', 'pypi']);
   const isGo = jobEcosystem === 'gomod' || jobEcosystem === 'golang';
+  // cdxgen-without-`--deep` sometimes emits a sprinkle of transitive rows
+  // alongside the directs (e.g. caddy at v2.4.6 returns 31 deps with mixed
+  // is_direct flags but the real transitive closure is ~250). The old
+  // `every is_direct` gate skipped the resolver in that case. Loosen to:
+  // fire when the !is_direct ratio is suspiciously low (< 20% of all rows)
+  // — that catches the partial-shallow case while still skipping deep SBOMs
+  // where cdxgen already walked the full tree.
+  const directRatio =
+    dependencies.length > 0
+      ? dependencies.filter((d) => d.is_direct === true).length / dependencies.length
+      : 1;
+  const looksShallow = directRatio > 0.8;
   if (
     RESOLVER_ECOSYSTEMS.has(jobEcosystem) &&
     dependencies.length > 0 &&
-    dependencies.every((d) => d.is_direct === true)
+    looksShallow
   ) {
     const before = dependencies.length;
     try {
