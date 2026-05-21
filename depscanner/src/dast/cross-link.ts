@@ -17,6 +17,15 @@ export interface EntryPointRow {
   handler_name: string | null;
   file_path: string;
   line_number: number;
+  // Phase 35 (v1.1 OpenAPI synthesis): optional fields the synthesizer reads
+  // when building OpenAPI 3.1 ops + the x-deptex-handler sidecar. Optional
+  // so existing call sites + mock fixtures stay green; the SELECT in
+  // loadEntryPoints widens to pull them.
+  entry_point_type?: string;
+  classification?: string;
+  auth_mechanism?: string | null;
+  middleware_chain?: string[] | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ReachableFlowRow {
@@ -38,12 +47,36 @@ export interface ProjectDependencyRow {
   purl: string;
 }
 
+/**
+ * Per-operation handler attribution emitted by the OpenAPI synthesizer
+ * alongside the YAML. Keys are `${METHOD} ${openApiPath}` (e.g.
+ * "GET /users/{id}"); values point at the handler `(file, function, line)`.
+ *
+ * v1.1: only the synthesis path produces this. URL-imported specs fall back
+ * to today's regex matchRoute.
+ */
+export interface HandlerSidecarEntry {
+  file_path: string;
+  function_name: string | null;
+  line_number: number;
+}
+export type HandlerSidecar = Record<string, HandlerSidecarEntry>;
+
 export interface CrossLinkInput {
   finding: DastFindingRaw;
   entryPoints: EntryPointRow[];
   flows: ReachableFlowRow[];
   pdvByPurl: Map<string, PdvRow[]>;
   projectDependencyByPurl: Map<string, ProjectDependencyRow>;
+  /**
+   * Phase 35 (v1.1 OpenAPI synthesis): pre-pass attribution for findings on
+   * synthesized-spec scans. When provided, a deterministic (method, path)
+   * lookup runs BEFORE the framework-specific regex match — eliminating the
+   * URL-encoding / trailing-slash false-negative class. Falls back to regex
+   * when the sidecar key isn't found (case 4 of the test matrix: sidecar
+   * stale because handler moved).
+   */
+  sidecar?: HandlerSidecar;
 }
 
 export interface CrossLinkOutput {
@@ -55,8 +88,79 @@ export interface CrossLinkOutput {
   cross_link_metadata: Record<string, unknown>;
 }
 
+// OpenAPI `{param}` path-template → regex. Used by the sidecar matcher to
+// turn keys like "GET /users/{id}/posts/{postId}" into a check against
+// ZAP's concrete request path. Trailing slash is tolerated (some ZAP
+// shapes normalize differently). Static paths skip the regex entirely.
+function openApiPathToRegex(openApiPath: string): RegExp {
+  const escaped = openApiPath
+    // Escape regex specials EXCEPT braces (we want {param} to be replaceable).
+    .replace(/[.+?^$()|[\]\\]/g, '\\$&')
+    // {paramName} → [^/]+
+    .replace(/\{[^}]+\}/g, '[^/]+');
+  return new RegExp('^' + escaped + '/?$');
+}
+
+function urlToPath(endpointUrl: string): string | null {
+  try {
+    return new URL(endpointUrl).pathname;
+  } catch {
+    return endpointUrl.startsWith('/') ? endpointUrl.split(/[?#]/)[0] : null;
+  }
+}
+
+function matchSidecar(
+  endpointUrl: string,
+  httpMethod: string,
+  sidecar: HandlerSidecar,
+): HandlerSidecarEntry | null {
+  const path = urlToPath(endpointUrl);
+  if (!path) return null;
+  const method = httpMethod.toUpperCase();
+  for (const [key, entry] of Object.entries(sidecar)) {
+    const sp = key.indexOf(' ');
+    if (sp <= 0) continue;
+    const keyMethod = key.slice(0, sp).toUpperCase();
+    if (keyMethod !== method) continue;
+    const keyPath = key.slice(sp + 1);
+    // Fast path: exact match (static OpenAPI paths).
+    if (keyPath === path) return entry;
+    // {param}-aware regex match.
+    if (openApiPathToRegex(keyPath).test(path)) return entry;
+  }
+  return null;
+}
+
 export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
-  const { finding, entryPoints, flows, pdvByPurl, projectDependencyByPurl } = input;
+  const { finding, entryPoints, flows, pdvByPurl, projectDependencyByPurl, sidecar } = input;
+
+  // Phase 35 (v1.1) — sidecar pre-pass. Synthesized-spec scans get
+  // deterministic handler attribution via the OpenAPI sidecar. Stale
+  // sidecar (handler moved/renamed since synthesis) falls through to the
+  // regex matcher below — the test matrix's case 4.
+  if (sidecar) {
+    const hit = matchSidecar(finding.endpoint_url, finding.http_method, sidecar);
+    if (hit) {
+      // Stale-detection: if the sidecar handler's file_path is NOT in the
+      // current entryPoints set, treat it as stale and fall through to the
+      // regex matcher. The synthesizer keyed the sidecar at scan-build time;
+      // if the source has moved since, regex on live entry_points beats
+      // a dangling file path.
+      const stillExists = entryPoints.some(
+        (ep) => ep.file_path === hit.file_path,
+      );
+      if (stillExists) {
+        return {
+          handler_file_path: hit.file_path,
+          handler_function_name: hit.function_name,
+          handler_line: hit.line_number,
+          linked_sca_osv_id: null,
+          linked_sca_project_dependency_id: null,
+          cross_link_metadata: { match_method: 'sidecar', via: 'sidecar' },
+        };
+      }
+    }
+  }
 
   let matchedEp: EntryPointRow | null = null;
   for (const ep of entryPoints) {
@@ -68,6 +172,10 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
     }
   }
 
+  // `via` tags the lookup mechanism for telemetry: 'sidecar' returns above;
+  // every other branch uses regex matchRoute and reports 'regex_fallback'.
+  const via = sidecar ? 'regex_fallback' : 'regex';
+
   if (!matchedEp) {
     return {
       handler_file_path: null,
@@ -75,7 +183,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       handler_line: null,
       linked_sca_osv_id: null,
       linked_sca_project_dependency_id: null,
-      cross_link_metadata: { match_method: 'none' },
+      cross_link_metadata: { match_method: 'none', via },
     };
   }
 
@@ -92,7 +200,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       handler_line: matchedEp.line_number,
       linked_sca_osv_id: null,
       linked_sca_project_dependency_id: null,
-      cross_link_metadata: { match_method: 'route_only', framework: matchedEp.framework },
+      cross_link_metadata: { match_method: 'route_only', framework: matchedEp.framework, via },
     };
   }
 
@@ -108,6 +216,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
         match_method: 'route_and_flow_no_vuln',
         framework: matchedEp.framework,
         purl: matchedFlow.purl,
+        via,
       },
     };
   }
@@ -136,6 +245,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       framework: matchedEp.framework,
       purl: matchedFlow.purl,
       sca_candidates: pdvs.length,
+      via,
     },
   };
 }
@@ -164,7 +274,9 @@ export async function loadEntryPoints(
 ): Promise<EntryPointRow[]> {
   const { data, error } = await supabase
     .from('project_entry_points')
-    .select('framework, http_method, route_pattern, handler_name, file_path, line_number')
+    .select(
+      'framework, http_method, route_pattern, handler_name, file_path, line_number, entry_point_type, classification, auth_mechanism, middleware_chain, metadata',
+    )
     .eq('project_id', projectId)
     .eq('extraction_run_id', extractionRunId);
   if (error || !data) return [];

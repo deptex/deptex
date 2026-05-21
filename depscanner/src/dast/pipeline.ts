@@ -87,10 +87,16 @@ import {
   loadPdvsForProject,
   loadReachableFlows,
   type EntryPointRow,
+  type HandlerSidecar,
   type PdvRow,
   type ProjectDependencyRow,
   type ReachableFlowRow,
 } from './cross-link';
+import {
+  resolveSpecForJob,
+  type SpecResolveStatus,
+} from './openapi-spec-source';
+import { writeSynthesizedSpec } from './spec-storage';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -166,6 +172,11 @@ interface TargetRow {
   target_url: string;
   detected_runtime: DetectedRuntime;
   enabled: boolean;
+  // Phase 35 (v1.1) — OpenAPI spec source config. Row-driven gating: the
+  // pipeline resolves this to a spec on disk before runZapWithControlPlane.
+  // 'upload' is reserved for v1.2; v1.1 treats it the same as 'none'.
+  api_spec_source?: 'synthesized' | 'url' | 'upload' | 'none';
+  api_spec_url?: string | null;
 }
 
 interface CredentialRow {
@@ -316,7 +327,9 @@ async function loadTenantGuardRows(
     await Promise.all([
       supabase
         .from('project_dast_targets')
-        .select('id, project_id, organization_id, target_url, detected_runtime, enabled')
+        .select(
+          'id, project_id, organization_id, target_url, detected_runtime, enabled, api_spec_source, api_spec_url',
+        )
         .eq('id', targetId)
         .single(),
       supabase
@@ -639,6 +652,13 @@ interface ZapRunInputs {
   scanTimeoutMinutes: number;
   zapWorkDir: string;
   spawnImpl?: typeof import('child_process').spawn;
+  /**
+   * v1.1 (Phase 35) — absolute path on disk to a synthesized or URL-fetched
+   * OpenAPI spec. When set, the AF YAML emits an openapi: job between
+   * replacer and spider so ZAP seeds its sites tree before crawl + active
+   * scan run.
+   */
+  openApiSpecPath?: string;
 }
 
 interface ZapRunOutputs {
@@ -674,6 +694,7 @@ async function runZapWithControlPlane(
       loggedInIndicator: inputs.loggedInIndicator,
       loggedOutIndicator: inputs.loggedOutIndicator,
       scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+      openApiSpecPath: inputs.openApiSpecPath,
     });
   } catch (e) {
     if (e instanceof InvalidCredentialCharacterError) {
@@ -1459,7 +1480,12 @@ export async function runDastPipeline(
   // everything else ('dast' legacy alias, 'dast_zap') → ZAP. Both engines
   // share the cancellation-poll + heartbeat control loop.
   const engine = resolveEngine(job.type);
-  const afProfile: AfScanProfile = scanProfile === 'api' ? 'auto' : (scanProfile as AfScanProfile);
+  // v1.1 (Phase 35): AfScanProfile is widened to include 'api' as a
+  // first-class value. The prior `'api' ? 'auto'` downcast has been
+  // removed — 'api' propagates through to yaml-builder which gates
+  // activeScan on `'full' || 'api'`. Row-driven openapi: emission is
+  // independent of scanProfile (handled via openApiSpecPath).
+  const afProfile: AfScanProfile = scanProfile as AfScanProfile;
 
   const control: ScanControlOptions = {
     onHeartbeat: async () => {
@@ -1669,6 +1695,53 @@ export async function runDastPipeline(
     }
   }
 
+  // Phase 35 (v1.1) — resolve OpenAPI spec from target row BEFORE engine
+  // dispatch. Row-driven gating: target.api_spec_source decides; payload
+  // overrides are deferred to v1.2. ZAP-only (Nuclei has no openapi: AF
+  // job analogue).
+  let specResolveStatus: SpecResolveStatus = 'ok';
+  let openApiSpecPath: string | undefined;
+  let openApiSidecar: HandlerSidecar | undefined;
+  let specEndpointCount = 0;
+  let specTmpDir: string | undefined;
+  if (engine === 'zap' && target.api_spec_source && target.api_spec_source !== 'none') {
+    specTmpDir = fs.mkdtempSync(path.join(zapWorkDir, 'deptex-dast-spec-'));
+    try {
+      const resolved = await resolveSpecForJob({
+        source: target.api_spec_source,
+        api_spec_url: target.api_spec_url ?? null,
+        targetUrl: target.target_url,
+        entryPoints,
+        tmpDir: specTmpDir,
+      });
+      specResolveStatus = resolved.status;
+      openApiSpecPath = resolved.specPath;
+      openApiSidecar = resolved.sidecar;
+      specEndpointCount = resolved.endpointCount;
+      if (resolved.status !== 'ok') {
+        // Soft-fail — scan proceeds spider-only (no openapi: job). Log the
+        // mapped reason for ops visibility; the DB stores only the boolean
+        // via the post-scan row update below.
+        console.warn(
+          `${tag} spec resolve soft-fail: source=${target.api_spec_source} status=${resolved.status}`,
+        );
+      } else if (openApiSpecPath) {
+        console.log(
+          `${tag} spec resolved: source=${target.api_spec_source} ` +
+            `endpoint_count=${specEndpointCount} path=${openApiSpecPath}`,
+        );
+      }
+    } catch (e) {
+      // Defensive: any thrown exception in resolveSpecForJob (e.g. tmpDir
+      // write error) downgrades to spider-only soft-warn rather than
+      // aborting the scan — preserves the always-spider fallback.
+      specResolveStatus = 'url.fetch_failed';
+      console.warn(
+        `${tag} spec resolve threw: ${(e as Error).message}; running spider-only`,
+      );
+    }
+  }
+
   let scanFindings: DastFindingRaw[];
   let scanDurationMs: number;
   let authLostState: ZapRunOutputs['authLostState'] | null = null;
@@ -1716,6 +1789,7 @@ export async function runDastPipeline(
           scanTimeoutMinutes: timeoutMinutes,
           zapWorkDir,
           spawnImpl: options.spawnImpl,
+          openApiSpecPath,
         },
         control,
       );
@@ -1748,7 +1822,17 @@ export async function runDastPipeline(
   let crossLinkedCount = 0;
   let cveSignalCount = 0;
   const inserts: DastFindingInsert[] = scanFindings.map((f) => {
-    const link = crossLinkFinding({ finding: f, entryPoints, flows, pdvByPurl, projectDependencyByPurl });
+    const link = crossLinkFinding({
+      finding: f,
+      entryPoints,
+      flows,
+      pdvByPurl,
+      projectDependencyByPurl,
+      // v1.1 (Phase 35): synthesized-spec scans get deterministic
+      // handler attribution via the OpenAPI sidecar. URL-mode scans
+      // leave sidecar undefined → falls through to regex matchRoute.
+      sidecar: openApiSidecar,
+    });
     if (link.linked_sca_osv_id) crossLinkedCount++;
     // Nuclei findings carry their CVE ids in cross_link_metadata.nuclei.cve_ids
     // — confirm_pdvs_from_dast_run reads exactly that JSON path.
@@ -1802,6 +1886,92 @@ export async function runDastPipeline(
 
   // Step 6: atomic-commit via the target-scoped RPC.
   await commitDastTargetRun(supabase, target.id, dastRunId);
+
+  // Step 6.1 (Phase 35 v1.1) — spec persistence + row update.
+  //
+  // Storage-first ordering: write the synthesized YAML to the bucket BEFORE
+  // touching the target row. The DTO invariant
+  //   `last_synthesized_at != null ⇒ GET /spec/download succeeds`
+  // is preserved by ordering — if the bucket upload fails, the row's
+  // last_synthesized_at stays NULL and last_synthesis_ok flips to false.
+  // ZAP-only path; Nuclei has no spec to persist.
+  if (engine === 'zap' && target.api_spec_source && target.api_spec_source !== 'none') {
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (specResolveStatus === 'ok' && openApiSpecPath && openApiSidecar) {
+      // Synthesized happy path: read the YAML we already wrote to tmpDir
+      // and upload it to the bucket; ON SUCCESS, write the row.
+      try {
+        const yamlBytes = fs.readFileSync(openApiSpecPath, 'utf-8');
+        const wr = await writeSynthesizedSpec(
+          supabase,
+          target.organization_id,
+          target.id,
+          yamlBytes,
+        );
+        if (wr.ok) {
+          update.last_synthesis_ok = true;
+          update.last_synthesized_at = new Date().toISOString();
+          update.last_synthesis_endpoint_count = specEndpointCount;
+          update.last_synthesized_spec_path = wr.storagePath;
+        } else {
+          // storage.write_failed soft-fail — keep last_synthesized_at as-is
+          // (NULL or prior value) so the download invariant holds.
+          console.warn(`${tag} spec storage write failed: ${wr.reason}`);
+          update.last_synthesis_ok = false;
+        }
+      } catch (e) {
+        console.warn(`${tag} spec storage write threw: ${(e as Error).message}`);
+        update.last_synthesis_ok = false;
+      }
+    } else if (specResolveStatus === 'ok' && target.api_spec_source === 'url') {
+      // URL mode: scan ran fine; record success on the row but don't touch
+      // last_synthesized_at (that field is synthesized-mode-only).
+      update.last_synthesis_ok = true;
+    } else {
+      // Soft-fail of any flavor.
+      update.last_synthesis_ok = false;
+    }
+    try {
+      await supabase
+        .from('project_dast_targets')
+        .update(update)
+        .eq('id', target.id);
+    } catch (e) {
+      // Non-fatal: row update failure logs but doesn't fail the scan.
+      console.warn(`${tag} target row spec update failed: ${(e as Error).message}`);
+    }
+  }
+
+  // Clean up the spec tmpDir if we created one (best-effort).
+  if (specTmpDir) {
+    try {
+      fs.rmSync(specTmpDir, { recursive: true, force: true });
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  // Step 6.1.5 — observability log for sidecar telemetry (Patch 9 / opportunity-f2).
+  //
+  // Grep-friendly per-scan metric line for dogfood. Counts come from
+  // cross_link_metadata on the inserts we just made.
+  if (engine === 'zap' && target.api_spec_source && target.api_spec_source !== 'none') {
+    let sidecarHits = 0;
+    let regexFallbacks = 0;
+    let crossLinkNone = 0;
+    for (const row of dedupedInserts) {
+      const meta = row.cross_link_metadata as Record<string, unknown> | undefined;
+      const via = meta?.via;
+      if (via === 'sidecar') sidecarHits++;
+      else if (via === 'regex_fallback') regexFallbacks++;
+      const mm = meta?.match_method;
+      if (mm === 'none') crossLinkNone++;
+    }
+    console.log(
+      `[dast-openapi-metric] endpoints=${specEndpointCount} status=${specResolveStatus} ` +
+        `sidecar_hits=${sidecarHits} regex_fallbacks=${regexFallbacks} cross_link_none=${crossLinkNone}`,
+    );
+  }
 
   // Step 6.5: Nuclei runtime-confirmation cross-link batch. Only runs when the
   // engine is Nuclei and at least one inserted finding carried CVE ids; flips

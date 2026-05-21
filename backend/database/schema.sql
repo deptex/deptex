@@ -1091,7 +1091,13 @@ CREATE TABLE IF NOT EXISTS public.project_dast_targets (
   previous_dast_run_id text,
   last_scanned_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now()
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  api_spec_source text NOT NULL DEFAULT 'synthesized'::text,
+  api_spec_url text,
+  last_synthesized_spec_path text,
+  last_synthesized_at timestamp with time zone,
+  last_synthesis_endpoint_count integer,
+  last_synthesis_ok boolean
 );
 CREATE TABLE IF NOT EXISTS public.project_dependencies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -6360,6 +6366,8 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_co
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_engine_check CHECK ((engine = ANY (ARRAY['zap'::text, 'nuclei'::text, 'merged'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_status_check CHECK ((status = ANY (ARRAY['open'::text, 'suppressed'::text, 'risk_accepted'::text, 'fixed'::text])));
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_api_spec_source_check CHECK ((api_spec_source = ANY (ARRAY['synthesized'::text, 'url'::text, 'none'::text])));
+ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_api_spec_url_required CHECK (((api_spec_source <> 'url'::text) OR ((api_spec_url IS NOT NULL) AND (length(api_spec_url) > 0))));
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_detected_runtime_check CHECK ((detected_runtime = ANY (ARRAY['unknown'::text, 'classic'::text, 'spa'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));

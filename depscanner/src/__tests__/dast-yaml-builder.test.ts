@@ -332,3 +332,144 @@ describe('buildAutomationYaml — invalid input', () => {
     ).toThrow(/invalid targetUrl/);
   });
 });
+
+// Phase 35 (v1.1) — openapi: AF job + 'api' profile + user-binding convention.
+describe("buildAutomationYaml — openapi job (Phase 35 v1.1)", () => {
+  function jobsOf(doc: any): Array<Record<string, any>> {
+    return doc.jobs as Array<Record<string, any>>;
+  }
+
+  it("does NOT emit an openapi job when openApiSpecPath is unset", () => {
+    const { doc } = dumpAndParse(BASELINE_OPTS);
+    expect(jobsOf(doc).find((j) => j.type === 'openapi')).toBeUndefined();
+  });
+
+  it("emits an openapi job when openApiSpecPath is set", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+    });
+    const job = jobsOf(doc).find((j) => j.type === 'openapi');
+    expect(job).toBeDefined();
+    expect(job!.parameters.apiFile).toBe('/zap/wrk/spec.yaml');
+    expect(job!.parameters.targetUrl).toBe('https://app.example.com/');
+    expect(job!.parameters.context).toBe('deptex-dast');
+  });
+
+  it("emits openapi job AFTER replacer (when replacer present) and BEFORE spider", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+      scope: {
+        headerRules: [{ name: 'X-Test', value: '1', scope: 'all' }],
+      },
+    });
+    const types = jobsOf(doc).map((j) => j.type);
+    const openapiIdx = types.indexOf('openapi');
+    const replacerIdx = types.indexOf('replacer');
+    const spiderIdx = types.findIndex((t) => t === 'spider' || t === 'spiderAjax');
+    expect(replacerIdx).toBeGreaterThanOrEqual(0);
+    expect(openapiIdx).toBeGreaterThan(replacerIdx);
+    expect(openapiIdx).toBeLessThan(spiderIdx);
+  });
+
+  it("emits openapi job BEFORE spider/spiderAjax even without a replacer", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+    });
+    const types = jobsOf(doc).map((j) => j.type);
+    const openapiIdx = types.indexOf('openapi');
+    const spiderIdx = types.findIndex((t) => t === 'spider' || t === 'spiderAjax');
+    expect(openapiIdx).toBeGreaterThan(-1);
+    expect(spiderIdx).toBeGreaterThan(openapiIdx);
+  });
+
+  it("does NOT set parameters.user on openapi for form/jwt/cookie strategies", () => {
+    const formAuth: CredentialPayload = {
+      kind: 'form',
+      login_page_url: 'https://app.example.com/login',
+      username: 'u',
+      password: 'p',
+      username_selector: '#u',
+      password_selector: '#p',
+      submit_selector: '#go',
+    };
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+      authStrategy: 'form',
+      authPayload: formAuth,
+    });
+    const job = jobsOf(doc).find((j) => j.type === 'openapi');
+    expect(job).toBeDefined();
+    expect(job!.parameters.user).toBeUndefined();
+    expect(job!.parameters.context).toBe('deptex-dast');
+  });
+
+  it("DOES set parameters.user='deptex-dast-user' on openapi for the recorded strategy", () => {
+    const recordedAuth: CredentialPayload = {
+      kind: 'recorded',
+      login_page_url: 'https://app.example.com/login',
+      steps: [
+        { action: 'type-username', selector: '#u', value: 'user' },
+        { action: 'type-password', selector: '#p', value: 'pass' },
+        { action: 'click', selector: '#submit' },
+      ],
+    } as CredentialPayload;
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+      authStrategy: 'recorded',
+      authPayload: recordedAuth,
+    });
+    const job = jobsOf(doc).find((j) => j.type === 'openapi');
+    expect(job).toBeDefined();
+    expect(job!.parameters.user).toBe('deptex-dast-user');
+  });
+
+  it("emits activeScan when scanProfile='api' (new in v1.1)", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      scanProfile: 'api',
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+    });
+    const types = jobsOf(doc).map((j) => j.type);
+    expect(types).toContain('activeScan');
+    expect(types).toContain('openapi');
+  });
+
+  it("does NOT emit activeScan when scanProfile='auto' (even with openapi spec)", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      scanProfile: 'auto',
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+    });
+    const types = jobsOf(doc).map((j) => j.type);
+    expect(types).not.toContain('activeScan');
+    // openapi still emits — row-driven gating decouples it from profile.
+    expect(types).toContain('openapi');
+  });
+
+  it("does NOT emit openapi job in loginOnly mode", () => {
+    const recordedAuth: CredentialPayload = {
+      kind: 'recorded',
+      login_page_url: 'https://app.example.com/login',
+      steps: [
+        { action: 'type-username', selector: '#u', value: 'user' },
+        { action: 'type-password', selector: '#p', value: 'pass' },
+      ],
+    } as CredentialPayload;
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+      loginOnly: true,
+      authStrategy: 'recorded',
+      authPayload: recordedAuth,
+    });
+    const types = jobsOf(doc).map((j) => j.type);
+    expect(types).not.toContain('openapi');
+    expect(types).not.toContain('spider');
+    expect(types).not.toContain('spiderAjax');
+  });
+});

@@ -2040,6 +2040,33 @@ export const api = {
     });
   },
 
+  // Phase 35 (v1.1) — DAST OpenAPI spec config.
+  async setDastTargetSpec(
+    projectId: string,
+    targetId: string,
+    body: { api_spec_source: DastSpecSource; api_spec_url?: string },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/spec`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    );
+  },
+
+  async getDastTargetSpecDownload(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastSpecDownloadResponse | null> {
+    try {
+      return await fetchWithAuth(
+        `/api/projects/${projectId}/dast/targets/${targetId}/spec/download`,
+      );
+    } catch (e: any) {
+      const msg = String(e?.message ?? '');
+      if (msg.includes('spec_unavailable') || msg.includes('404')) return null;
+      throw e;
+    }
+  },
+
   async recheckDastTargetRuntime(
     projectId: string,
     targetId: string,
@@ -4102,6 +4129,25 @@ export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
 export type DastEngine = 'zap' | 'nuclei' | 'merged';
 
+// Phase 35 (v1.1) — OpenAPI spec source enum + per-target spec_config.
+// 'upload' is reserved for v1.2 (no v1.1 route accepts it).
+export type DastSpecSource = 'synthesized' | 'url' | 'none';
+
+export interface DastSpecConfigDTO {
+  api_spec_source: DastSpecSource;
+  api_spec_url: string | null;
+  last_synthesized_at: string | null;
+  last_synthesis_endpoint_count: number | null;
+  /**
+   * null = never synthesized (target pre-dates any scan).
+   * true = last spec resolve + scan succeeded.
+   * false = last spec resolve failed (no entries / URL fetch / URL parse /
+   *         storage). Cause is inferable from api_spec_source +
+   *         last_synthesized_at + last_synthesis_endpoint_count.
+   */
+  last_synthesis_ok: boolean | null;
+}
+
 export interface DastTargetDTO {
   id: string;
   target_url: string;
@@ -4115,6 +4161,15 @@ export interface DastTargetDTO {
   active_dast_run_id: string | null;
   last_scanned_at: string | null;
   created_at: string;
+  // Phase 35 (v1.1)
+  spec_config: DastSpecConfigDTO;
+}
+
+export interface DastSpecDownloadResponse {
+  kind: 'synthesized' | 'url';
+  url: string;
+  expires_at: string | null;
+  content_length: number | null;
 }
 
 export interface DastScopeHeaderRule {

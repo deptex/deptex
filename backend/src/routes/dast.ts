@@ -17,6 +17,14 @@ import {
   decryptCredential,
 } from '../lib/dast-encryption';
 import { createActivity } from '../lib/activities';
+import {
+  validateSpecSource,
+  validateAndFetchSpecUrl,
+} from '../lib/dast-spec-validate';
+import {
+  presignSynthesizedSpecDownload,
+  deleteAllSpecsForTarget,
+} from '../lib/dast-spec-storage';
 import type {
   DastConfigDTO,
   DastCredentialSummaryDTO,
@@ -82,6 +90,16 @@ function targetRowToDto(row: any): DastTargetDTO {
     active_dast_run_id: row.active_dast_run_id ?? null,
     last_scanned_at: row.last_scanned_at ?? null,
     created_at: row.created_at,
+    // Phase 35 (v1.1) — OpenAPI spec config. Defaults guard rows that
+    // pre-date phase35 (the migration's UPDATE only runs once, but
+    // pglite/test fixtures may not have run it).
+    spec_config: {
+      api_spec_source: (row.api_spec_source ?? 'none') as 'synthesized' | 'url' | 'none',
+      api_spec_url: row.api_spec_url ?? null,
+      last_synthesized_at: row.last_synthesized_at ?? null,
+      last_synthesis_endpoint_count: row.last_synthesis_endpoint_count ?? null,
+      last_synthesis_ok: row.last_synthesis_ok ?? null,
+    },
   };
 }
 
@@ -89,7 +107,7 @@ async function loadTargetsWithCreds(projectId: string): Promise<DastTargetDTO[]>
   const { data: targets, error } = await supabase
     .from('project_dast_targets')
     .select(
-      'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at',
+      'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at, api_spec_source, api_spec_url, last_synthesized_at, last_synthesis_endpoint_count, last_synthesis_ok',
     )
     .eq('project_id', projectId)
     .order('created_at');
@@ -411,6 +429,20 @@ router.delete('/:projectId/dast/targets/:targetId', async (req: AuthRequest, res
       console.error('[dast] DELETE target error:', error.message);
       return res.status(500).json({ error: 'Failed to delete target' });
     }
+
+    // Phase 35 (v1.1) — sweep the target's bucket prefix
+    // (`{org}/{target}/`) after the DB cascade. Best-effort: storage failures
+    // log but never bubble up — the target row is already gone.
+    try {
+      await deleteAllSpecsForTarget(access.organizationId, targetId);
+    } catch (e) {
+      console.warn(
+        `[dast] DELETE target ${targetId}: spec cleanup failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
+
     return res.status(204).send();
   } catch (e: any) {
     console.error('[dast] DELETE target exception:', e);
@@ -663,6 +695,193 @@ router.delete(
     } catch (e: any) {
       console.error('[dast] DELETE creds exception:', e);
       return res.status(500).json({ error: 'Failed to delete credentials' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// PATCH /:projectId/dast/targets/:targetId/spec                 (Phase 35 v1.1)
+//
+// Update the target's OpenAPI spec source. Body:
+//   { api_spec_source: 'synthesized' | 'url' | 'none', api_spec_url?: string }
+//
+// `url` mode triggers SSRF guard + bounded fetch + swagger-parser strict
+// validate inline. Failures map to the SPEC_ERROR_CODES canonical strings
+// (frontend mirror in frontend/src/lib/dast-error-codes.ts; CI checks parity).
+// ---------------------------------------------------------------------------
+router.patch(
+  '/:projectId/dast/targets/:targetId/spec',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const sourceCheck = validateSpecSource(req.body?.api_spec_source);
+      if (sourceCheck.ok === false) {
+        return res.status(400).json({ error: 'invalid_spec_source' });
+      }
+      const next: 'synthesized' | 'url' | 'none' = sourceCheck.value;
+
+      const update: Record<string, unknown> = {
+        api_spec_source: next,
+        updated_at: new Date().toISOString(),
+      };
+      let endpointCount: number | null = null;
+
+      if (next === 'url') {
+        const candidateUrl = typeof req.body?.api_spec_url === 'string'
+          ? req.body.api_spec_url.trim()
+          : '';
+        if (candidateUrl.length === 0) {
+          return res.status(400).json({ error: 'spec_url_required' });
+        }
+        const fetched = await validateAndFetchSpecUrl(candidateUrl);
+        if (fetched.ok === false) {
+          const err = fetched.error;
+          // Status mapping: SSRF/required → 400, network → 502, parse → 422,
+          // size cap → 413. The frontend's friendlySpecErrorMessage maps the
+          // body.error code to user-friendly copy.
+          let status = 400;
+          if (err.code === 'spec_url_unreachable') status = 502;
+          else if (err.code === 'spec_parse_failed') status = 422;
+          else if (err.code === 'spec_too_large') status = 413;
+          const body: Record<string, unknown> = { error: err.code };
+          if ('detail' in err && err.detail) body.detail = err.detail;
+          return res.status(status).json(body);
+        }
+        update.api_spec_url = candidateUrl;
+        endpointCount = fetched.endpoint_count;
+      } else {
+        // synthesized / none — clear any prior URL.
+        update.api_spec_url = null;
+      }
+
+      const { data: updated, error: updateErr } = await supabase
+        .from('project_dast_targets')
+        .update(update)
+        .eq('id', targetId)
+        .select(
+          'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at, api_spec_source, api_spec_url, last_synthesized_at, last_synthesis_endpoint_count, last_synthesis_ok',
+        )
+        .single();
+      if (updateErr || !updated) {
+        console.error('[dast] PATCH /spec update:', updateErr?.message);
+        return res.status(500).json({ error: 'Failed to update spec config' });
+      }
+
+      // Single activity type for all spec-config changes — metadata carries
+      // discriminator so the activity feed can render distinct copy without
+      // needing 4 separate types.
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_spec.configured',
+          description: 'Updated DAST OpenAPI spec config',
+          metadata: {
+            target_id: targetId,
+            from_source: guard.target.api_spec_source,
+            to_source: next,
+            has_url: next === 'url',
+            url_endpoint_count: endpointCount,
+          },
+        });
+      } catch {
+        /* non-fatal */
+      }
+
+      // Best-effort credential summary refresh — preserves the existing
+      // targetRowToDto shape callers rely on.
+      const { data: cred } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+
+      return res.json(
+        targetRowToDto({
+          ...updated,
+          has_credentials: !!cred,
+          auth_strategy: cred?.auth_strategy ?? null,
+        }),
+      );
+    } catch (e: any) {
+      console.error('[dast] PATCH /spec exception:', e);
+      return res.status(500).json({ error: 'Failed to update spec config' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /:projectId/dast/targets/:targetId/spec/download           (Phase 35 v1.1)
+//
+// Returns a signed download URL for the active spec. Synthesized mode →
+// presigned bucket URL; url mode → upstream URL passthrough (we already
+// validated it at PATCH time); none → 404 spec_unavailable.
+// ---------------------------------------------------------------------------
+router.get(
+  '/:projectId/dast/targets/:targetId/spec/download',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      // Spec download is a read; gate on view permission rather than
+      // manage. Anyone who can see DAST findings can download the spec
+      // that produced them.
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const source = guard.target.api_spec_source;
+      if (source === 'none') {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      if (source === 'url') {
+        if (!guard.target.api_spec_url) {
+          return res.status(404).json({ error: 'spec_unavailable' });
+        }
+        return res.json({
+          kind: 'url',
+          url: guard.target.api_spec_url,
+          expires_at: null,
+          content_length: null,
+        });
+      }
+      // synthesized — require at least one successful scan to have produced
+      // the bucket object.
+      if (!guard.target.last_synthesized_at) {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      const presigned = await presignSynthesizedSpecDownload(
+        access.organizationId,
+        targetId,
+      );
+      if (!presigned) {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      return res.json({
+        kind: presigned.kind,
+        url: presigned.url,
+        expires_at: presigned.expires_at,
+        content_length: null,
+      });
+    } catch (e: any) {
+      console.error('[dast] GET /spec/download exception:', e);
+      return res.status(500).json({ error: 'Failed to load spec download' });
     }
   },
 );
@@ -1010,6 +1229,17 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
           code: 'unsupported_recorded_on_nuclei',
           detail:
             'Recorded login can only be replayed by the ZAP engine. Re-run with engine=zap.',
+        });
+      }
+
+      // Phase 35 (v1.1) — Nuclei has no native OpenAPI import. Target rows
+      // configured for synthesized or url spec must run on ZAP. The
+      // api_spec_source field is on loadTargetOrDeny's widened SELECT.
+      if (guard.target.api_spec_source && guard.target.api_spec_source !== 'none') {
+        return res.status(422).json({
+          code: 'unsupported_openapi_on_nuclei',
+          detail:
+            'OpenAPI mode is currently ZAP-only. Switch engine to ZAP or set spec source to None.',
         });
       }
     }
