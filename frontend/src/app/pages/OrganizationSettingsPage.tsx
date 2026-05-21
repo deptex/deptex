@@ -4683,13 +4683,11 @@ export default function OrganizationSettingsPage() {
                         }}
                         disabled={isCreatingRole || !newRoleNameInput.trim()}
                       >
-                        {isCreatingRole ? (
-                          <>
-                            <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                            Create Role
-                          </>
-                        ) : (
-                          'Create Role'
+                        <span className={isCreatingRole ? 'invisible' : ''}>Create Role</span>
+                        {isCreatingRole && (
+                          <span className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </span>
                         )}
                       </Button>
                     </div>
@@ -4960,13 +4958,11 @@ export default function OrganizationSettingsPage() {
                               disabled={isSavingRole || !editingRoleName.trim()}
                               variant="green"
                             >
-                              {isSavingRole ? (
-                                <>
-                                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                  Save Changes
-                                </>
-                              ) : (
-                                'Save Changes'
+                              <span className={isSavingRole ? 'invisible' : ''}>Save Changes</span>
+                              {isSavingRole && (
+                                <span className="absolute inset-0 flex items-center justify-center">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                </span>
                               )}
                             </Button>
                           </>
