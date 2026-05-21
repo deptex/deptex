@@ -195,7 +195,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'members':
       return (
-        <div className="space-y-6">
+        <div className="space-y-6 pt-8">
           <div className="flex items-center justify-between">
             <div className={`h-8 w-32 ${pulse}`} />
             <div className={`h-9 w-24 ${pulse}`} />
@@ -245,7 +245,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'roles':
       return (
-        <div className="space-y-6">
+        <div className="space-y-6 pt-8">
           <div className="flex items-center justify-between">
             <div>
               <div className={`h-8 w-24 ${pulse}`} />
