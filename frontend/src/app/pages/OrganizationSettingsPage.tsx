@@ -40,7 +40,7 @@ import SLAConfigurationSection from '../../components/settings/SLAConfigurationS
 import AISection from '../../components/settings/AISection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
-import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/orgSettingsSections';
+import { VALID_SETTINGS_SECTIONS } from '../../lib/orgSettingsSections';
 
 interface OrganizationContextType {
   organization: Organization | null;
@@ -2677,8 +2677,7 @@ export default function OrganizationSettingsPage() {
     }
   };
 
-  // Section list lives in `lib/orgSettingsSections.tsx` so the sidebar drilldown renders the same items.
-  const orgSettingsSections = buildOrgSettingsSections(effectivePermissions);
+  // Sub-nav lives in the sidebar drilldown (OrgSidebar) which calls buildOrgSettingsSections directly.
 
   // Don't render if organization not loaded or permissions not checked yet — show full-page settings skeleton with tab-specific content
   if (!organization || !permissionsChecked) {

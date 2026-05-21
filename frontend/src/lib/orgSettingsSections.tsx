@@ -116,8 +116,8 @@ export function buildOrgSettingsSections(
   const canCompliance = canManageOrgCompliance(perms);
   const entries: OrgSettingsEntry[] = [];
 
-  // General category
-  entries.push({ id: 'category_general', label: 'General', isCategory: true });
+  // Workspace — org identity, people, permissions.
+  entries.push({ id: 'category_workspace', label: 'Workspace', isCategory: true });
   entries.push({ id: 'general', label: 'General', icon: <Settings className={iconClass} /> });
   if (perms.view_members) {
     entries.push({ id: 'members', label: 'Members', icon: <UserCircle className={iconClass} /> });
@@ -125,9 +125,26 @@ export function buildOrgSettingsSections(
   if (perms.edit_roles) {
     entries.push({ id: 'roles', label: 'Roles', icon: <Users className={iconClass} /> });
   }
+
+  // Configuration — how the platform analyzes code and what it does with findings.
+  entries.push({ id: 'category_configuration', label: 'Configuration', isCategory: true });
   entries.push({ id: 'ai', label: 'AI', icon: <Sparkles className={iconClass} /> });
   if (perms.manage_organization_settings) {
     entries.push({ id: 'reachability', label: 'Reachability', icon: <Network className={iconClass} /> });
+  }
+  if (canCompliance) {
+    entries.push({ id: 'policies', label: 'Policies', icon: <Shield className={iconClass} /> });
+    entries.push({ id: 'statuses', label: 'Statuses', icon: <Tag className={iconClass} /> });
+    entries.push({ id: 'security_slas', label: 'Security SLAs', icon: <Clock className={iconClass} /> });
+  }
+  if (perms.manage_organization_settings) {
+    entries.push({ id: 'malicious_allowlist', label: 'Malicious Allowlist', icon: <ShieldCheck className={iconClass} /> });
+  }
+
+  // Integrations — outbound plumbing: source-control hosts, alert sinks, webhooks.
+  const showIntegrationsCategory = perms.manage_integrations || perms.manage_notifications;
+  if (showIntegrationsCategory) {
+    entries.push({ id: 'category_integrations', label: 'Integrations', isCategory: true });
   }
   if (perms.manage_integrations) {
     entries.push({ id: 'integrations', label: 'Integrations', icon: <Plug className={iconClass} /> });
@@ -137,18 +154,10 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'notifications', label: 'Notifications', icon: <Bell className={iconClass} /> });
   }
 
-  // Security category — only render the header if the user can see at least one entry under it.
-  const showSecurityCategory = canCompliance || perms.view_activity || perms.manage_security;
-  if (showSecurityCategory) {
-    entries.push({ id: 'category_security', label: 'Security', isCategory: true });
-  }
-  if (canCompliance) {
-    entries.push({ id: 'policies', label: 'Policies', icon: <Shield className={iconClass} /> });
-    entries.push({ id: 'statuses', label: 'Statuses', icon: <Tag className={iconClass} /> });
-    entries.push({ id: 'security_slas', label: 'Security SLAs', icon: <Clock className={iconClass} /> });
-  }
-  if (perms.manage_organization_settings) {
-    entries.push({ id: 'malicious_allowlist', label: 'Malicious Allowlist', icon: <ShieldCheck className={iconClass} /> });
+  // Org Security — auth surface + audit trail, distinct from "Configuration"-style policy rules.
+  const showOrgSecurityCategory = perms.view_activity || perms.manage_security;
+  if (showOrgSecurityCategory) {
+    entries.push({ id: 'category_security', label: 'Org Security', isCategory: true });
   }
   if (perms.view_activity) {
     entries.push({ id: 'audit_logs', label: 'Audit Logs', icon: <FileText className={iconClass} /> });
@@ -159,7 +168,7 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'ip_allowlist', label: 'IP Allowlist', icon: <Globe className={iconClass} /> });
   }
 
-  // Plan category
+  // Plan — usage + billing.
   if (perms.manage_billing) {
     entries.push({ id: 'category_plan', label: 'Plan', isCategory: true });
     entries.push({ id: 'usage', label: 'Usage', icon: <BarChart className={iconClass} /> });

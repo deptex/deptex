@@ -628,7 +628,7 @@ export default function OrgSidebar({
                   {settingsGroups.map((group, groupIndex) => (
                     <Fragment key={`settings-group-${groupIndex}`}>
                       {groupIndex > 0 && (
-                        <li aria-hidden className="my-1 mx-2 border-t border-border/50" />
+                        <li aria-hidden className="my-1 mx-2 border-t border-border" />
                       )}
                       {group.items.map((item) => {
                         const isActive = settingsActiveSection === item.id;
