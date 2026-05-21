@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider, billingApi, type StripeInvoice, type Team } from '../../lib/api';
+import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, billingApi, type StripeInvoice, type Team } from '../../lib/api';
 import { usePlan, usePlanGate, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/button';
@@ -136,6 +136,26 @@ const planTiers: PlanTier[] = [
 const orgMembersCache: Record<string, OrganizationMember[]> = {};
 const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const orgIntegrationsCache: Record<string, CiCdConnection[]> = {};
+
+// Human-readable label for an integration connection — shared by the row UI
+// and the disconnect confirmation dialog so we never drift on provider names.
+function describeConnectionLabel(conn: CiCdConnection): string {
+  switch (conn.provider) {
+    case 'github': return 'GitHub';
+    case 'gitlab': return 'GitLab';
+    case 'bitbucket': return 'Bitbucket';
+    case 'slack': return 'Slack';
+    case 'discord': return 'Discord';
+    case 'email': return conn.metadata?.email || conn.display_name || 'Email';
+    case 'jira': return conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira';
+    case 'linear': return 'Linear';
+    case 'custom_notification':
+    case 'custom_ticketing':
+      return conn.metadata?.custom_name || conn.display_name || 'Custom integration';
+    default:
+      return conn.display_name || conn.provider;
+  }
+}
 
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
@@ -1612,6 +1632,14 @@ export default function OrganizationSettingsPage() {
   const [pagerDutyRoutingKey, setPagerDutyRoutingKey] = useState('');
   const [pagerDutySaving, setPagerDutySaving] = useState(false);
 
+  // Two-tone confirmation dialogs (Integrations tab). One disconnect dialog
+  // serves CI/CD, notification destinations, and ticketing; the verb + label
+  // adapt off the stored connection's provider. Regenerate-secret confirm
+  // lives on the Custom Integration details panel.
+  const [connectionToDisconnect, setConnectionToDisconnect] = useState<CiCdConnection | null>(null);
+  const [disconnectingConnection, setDisconnectingConnection] = useState(false);
+  const [showRegenerateSecretConfirm, setShowRegenerateSecretConfirm] = useState(false);
+
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
   const [notifPauseLoading, setNotifPauseLoading] = useState(false);
 
@@ -2375,6 +2403,77 @@ export default function OrganizationSettingsPage() {
       });
     } finally {
       setIsCreatingRole(false);
+    }
+  };
+
+  // Unified disconnect handler for the three flows (CI/CD, notification, ticketing).
+  // The row buttons set `connectionToDisconnect`; the shared confirm dialog calls this.
+  const handleConfirmDisconnect = async () => {
+    if (!connectionToDisconnect || !organization?.id) return;
+    const conn = connectionToDisconnect;
+    const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+    const isEmail = conn.provider === 'email';
+    const isCicd = conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket';
+    const removeVerbTitle = isCustom || isEmail ? 'Removed' : 'Disconnected';
+    const providerLabel = describeConnectionLabel(conn);
+
+    setDisconnectingConnection(true);
+    try {
+      const result = await api.deleteOrganizationConnection(organization.id, conn.id);
+
+      // CI/CD: open the host's installations / revoke page so the user can finish
+      // the uninstall on the provider side, then refresh the org payload so the
+      // sidebar's provider chips drop.
+      if (isCicd) {
+        if (result.revokeUrl) {
+          window.open(result.revokeUrl, '_blank');
+          toast({ title: `Opening ${providerLabel}`, description: 'Complete revoke in the opened tab.' });
+        } else if (result.provider === 'github' && result.installationId) {
+          window.open(`https://github.com/settings/installations/${result.installationId}`, '_blank');
+          toast({ title: 'Opening GitHub', description: 'Complete uninstall in the opened tab.' });
+        } else {
+          toast({ title: 'Disconnected', description: `${providerLabel} connection removed.` });
+        }
+        await reloadOrganization();
+      } else if (!isCustom && !isEmail && result.revokeUrl) {
+        // Slack / Discord — surface the workspace-side revoke URL.
+        window.open(result.revokeUrl, '_blank');
+        toast({ title: 'Disconnected', description: `${providerLabel} removed. Complete app removal in the opened tab.` });
+      } else {
+        toast({ title: removeVerbTitle, description: `${providerLabel} connection removed.` });
+      }
+
+      await loadConnections();
+    } catch (err) {
+      console.error('Failed to disconnect connection:', err);
+      toast({ title: 'Error', description: 'Failed to disconnect. Please try again.', variant: 'destructive' });
+    } finally {
+      setDisconnectingConnection(false);
+      setConnectionToDisconnect(null);
+    }
+  };
+
+  const handleConfirmRegenerateSecret = async () => {
+    if (!organization?.id || !customIntegrationDetailsConn) {
+      setShowRegenerateSecretConfirm(false);
+      return;
+    }
+    const conn = customIntegrationDetailsConn;
+    setCustomIntegrationRegenerating(true);
+    setCustomIntegrationSecretVisible(false);
+    try {
+      const result = await api.updateCustomIntegration(organization.id, conn.id, { regenerate_secret: true });
+      if (result.secret) {
+        setCustomIntegrationSecret(result.secret);
+        setNewlyCreatedIntegrationId(conn.id);
+        toast({ title: 'Secret regenerated', description: 'Copy the new secret above.' });
+      }
+    } catch (err) {
+      console.error('Failed to regenerate secret:', err);
+      toast({ title: 'Error', description: 'Failed to regenerate secret. Please try again.', variant: 'destructive' });
+    } finally {
+      setCustomIntegrationRegenerating(false);
+      setShowRegenerateSecretConfirm(false);
     }
   };
 
@@ -3383,13 +3482,13 @@ export default function OrganizationSettingsPage() {
 
                   {/* Permission Check */}
                   {!effectivePermissions?.manage_integrations ? (
-                    <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-                      <div className="h-16 w-16 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                        <Lock className="h-8 w-8 text-foreground-secondary" />
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-8 flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Lock className="h-5 w-5 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-lg font-semibold text-foreground mb-2">Access Denied</h3>
-                      <p className="text-sm text-foreground-secondary max-w-md">
-                        You don't have permission to manage integrations. Contact an administrator to request access.
+                      <h3 className="text-sm font-semibold text-foreground mb-1">No access to integrations</h3>
+                      <p className="text-xs text-foreground-secondary max-w-md">
+                        Ask an organization admin for the <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">manage_integrations</code> permission to connect repositories, notification destinations, or ticketing tools.
                       </p>
                     </div>
                   ) : (
@@ -3402,10 +3501,10 @@ export default function OrganizationSettingsPage() {
                           </div>
                           <div className="flex items-center gap-2">
                             {([
-                              { provider: 'github' as CiCdProvider, label: 'GitHub', icon: '/images/integrations/github.png', endpoint: 'github/install' },
-                              { provider: 'gitlab' as CiCdProvider, label: 'GitLab', icon: '/images/integrations/gitlab.png', endpoint: 'gitlab/install' },
-                              { provider: 'bitbucket' as CiCdProvider, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png', endpoint: 'bitbucket/install' },
-                            ]).map(({ provider, label, icon, endpoint }) => (
+                              { provider: 'github' as const, label: 'GitHub', icon: '/images/integrations/github.png' },
+                              { provider: 'gitlab' as const, label: 'GitLab', icon: '/images/integrations/gitlab.png' },
+                              { provider: 'bitbucket' as const, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png' },
+                            ]).map(({ provider, label, icon }) => (
                               <Button
                                 key={provider}
                                 variant="outline"
@@ -3414,25 +3513,11 @@ export default function OrganizationSettingsPage() {
                                 onClick={async () => {
                                   if (!organization?.id) return;
                                   try {
-                                    const { data: { session } } = await supabase.auth.getSession();
-                                    if (!session?.access_token) {
-                                      toast({ title: 'Error', description: 'Please log in first.', variant: 'destructive' });
-                                      return;
-                                    }
-                                    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-                                    const response = await fetch(`${API_BASE_URL}/api/integrations/${endpoint}?org_id=${organization.id}`, {
-                                      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-                                    });
-                                    if (!response.ok) {
-                                      const err = await response.json().catch(() => ({ error: `Failed to connect ${label}` }));
-                                      throw new Error(err.error || `Failed to start ${label} connection`);
-                                    }
-                                    const data = await response.json();
-                                    if (data.redirectUrl) {
-                                      window.location.href = data.redirectUrl;
-                                    }
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to connect ${label}.`, variant: 'destructive' });
+                                    const { redirectUrl } = await api.startCicdInstall(provider, organization.id);
+                                    if (redirectUrl) window.location.href = redirectUrl;
+                                  } catch (err) {
+                                    console.error(`Failed to start ${label} install:`, err);
+                                    toast({ title: 'Error', description: `Failed to start ${label} connection. Please try again.`, variant: 'destructive' });
                                   }
                                 }}
                               >
@@ -3528,24 +3613,7 @@ export default function OrganizationSettingsPage() {
                                               variant="outline"
                                               size="sm"
                                               className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                              onClick={async () => {
-                                                if (!confirm(`Disconnect this ${providerLabel} connection (${conn.display_name || conn.installation_id})?`)) return;
-                                                try {
-                                                  const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                  if (result.revokeUrl) {
-                                                    window.open(result.revokeUrl, '_blank');
-                                                    toast({ title: `Opening ${providerLabel}`, description: 'Complete revoke in the opened tab.' });
-                                                  } else if (result.provider === 'github' && result.installationId) {
-                                                    window.open(`https://github.com/settings/installations/${result.installationId}`, '_blank');
-                                                    toast({ title: 'Opening GitHub', description: 'Complete uninstall in the opened tab.' });
-                                                  }
-                                                  await reloadOrganization();
-                                                  await loadConnections();
-                                                  toast({ title: 'Disconnected', description: `${providerLabel} connection removed.` });
-                                                } catch (err: any) {
-                                                  toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                }
-                                              }}
+                                              onClick={() => setConnectionToDisconnect(conn)}
                                             >
                                               Disconnect
                                             </Button>
@@ -3780,22 +3848,7 @@ export default function OrganizationSettingsPage() {
                                                 variant="outline"
                                                 size="sm"
                                                 className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={async () => {
-                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : isEmail ? (conn.metadata?.email || 'email') : providerLabel;
-                                                  if (!confirm(`${isCustom || isEmail ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
-                                                  try {
-                                                    const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                    if (!isCustom && !isEmail && result.revokeUrl) {
-                                                      window.open(result.revokeUrl, '_blank');
-                                                      toast({ title: 'Disconnected', description: `${label} removed. Complete app removal in the opened tab.` });
-                                                    } else {
-                                                      toast({ title: isCustom || isEmail ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
-                                                    }
-                                                    await loadConnections();
-                                                  } catch (err: any) {
-                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                  }
-                                                }}
+                                                onClick={() => setConnectionToDisconnect(conn)}
                                               >
                                                 {isCustom || isEmail ? 'Remove' : 'Disconnect'}
                                               </Button>
@@ -4013,17 +4066,7 @@ export default function OrganizationSettingsPage() {
                                                 variant="outline"
                                                 size="sm"
                                                 className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={async () => {
-                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : providerLabel;
-                                                  if (!confirm(`${isCustom ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
-                                                  try {
-                                                    await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                    toast({ title: isCustom ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
-                                                    await loadConnections();
-                                                  } catch (err: any) {
-                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                  }
-                                                }}
+                                                onClick={() => setConnectionToDisconnect(conn)}
                                               >
                                                 {isCustom ? 'Remove' : 'Disconnect'}
                                               </Button>
@@ -4169,11 +4212,19 @@ export default function OrganizationSettingsPage() {
                   className="space-y-6 pt-8"
                   style={{ display: activeSection === 'webhooks' ? undefined : 'none' }}
                 >
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
-                    <p className="mt-1.5 text-sm text-foreground-secondary">
-                      Recent webhook deliveries for your projects (push, pull_request, repository, etc.). Check suite and check run events are excluded. Filter by provider, event, and status.
-                    </p>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
+                      <p className="mt-1.5 text-sm text-foreground-secondary">
+                        Recent webhook deliveries for your projects (push, pull_request, repository, etc.). Check suite and check run events are excluded. Filter by provider, event, and status.
+                      </p>
+                    </div>
+                    <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
+                      <Button variant="outline" size="sm" className="text-xs">
+                        <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                        Docs
+                      </Button>
+                    </Link>
                   </div>
 
                   {/* Filters Row */}
@@ -5255,12 +5306,17 @@ export default function OrganizationSettingsPage() {
 
                   </div>
 
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => { setShowCustomIntegrationSidepanel(false); setEditingCustomIntegration(null); setCustomIntegrationSecret(null); }}>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+                    <Button
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => { setShowCustomIntegrationSidepanel(false); setEditingCustomIntegration(null); setCustomIntegrationSecret(null); }}
+                      disabled={customIntegrationSaving}
+                    >
                       Cancel
                     </Button>
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      variant="green"
                       disabled={!customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving || !/^https:\/\/[^\s]+$/i.test(customIntegrationWebhookUrl.trim())}
                       onClick={async () => {
                         if (!organization?.id) return;
@@ -5315,8 +5371,14 @@ export default function OrganizationSettingsPage() {
                         }
                       }}
                     >
-                      {customIntegrationSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      {editingCustomIntegration ? 'Save changes' : 'Create connection'}
+                      <span className={customIntegrationSaving ? 'invisible' : ''}>
+                        {editingCustomIntegration ? 'Save changes' : 'Create connection'}
+                      </span>
+                      {customIntegrationSaving && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -5429,24 +5491,7 @@ export default function OrganizationSettingsPage() {
                               variant="outline"
                               size="sm"
                               disabled={customIntegrationRegenerating}
-                              onClick={async () => {
-                                if (!organization?.id || !customIntegrationDetailsConn) return;
-                                if (!confirm('Regenerate the signing secret? The old secret will stop working immediately.')) return;
-                                setCustomIntegrationRegenerating(true);
-                                setCustomIntegrationSecretVisible(false);
-                                try {
-                                  const result = await api.updateCustomIntegration(organization.id, customIntegrationDetailsConn.id, { regenerate_secret: true });
-                                  if (result.secret) {
-                                    setCustomIntegrationSecret(result.secret);
-                                    setNewlyCreatedIntegrationId(customIntegrationDetailsConn.id);
-                                    toast({ title: 'Secret regenerated', description: 'Copy the new secret above.' });
-                                  }
-                                } catch (err: any) {
-                                  toast({ title: 'Error', description: err.message || 'Failed to regenerate secret.', variant: 'destructive' });
-                                } finally {
-                                  setCustomIntegrationRegenerating(false);
-                                }
-                              }}
+                              onClick={() => setShowRegenerateSecretConfirm(true)}
                             >
                               {customIntegrationRegenerating ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-2" />}
                               Regenerate
@@ -5491,14 +5536,16 @@ export default function OrganizationSettingsPage() {
                       </div>
                     </div>
 
-                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                    <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                       <Button
                         variant="outline"
+                        className="!h-8 !px-3 !rounded-lg"
                         onClick={closeCustomIntegrationDetailsPanel}
                       >
                         Close
                       </Button>
                       <Button
+                        variant="green"
                         onClick={() => {
                           const conn = customIntegrationDetailsConn;
                           closeCustomIntegrationDetailsPanel();
@@ -5511,7 +5558,6 @@ export default function OrganizationSettingsPage() {
                           setCustomIntegrationSecret(null);
                           setShowCustomIntegrationSidepanel(true);
                         }}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
                         <Pencil className="h-4 w-4 mr-2" />
                         Edit
@@ -5558,10 +5604,17 @@ export default function OrganizationSettingsPage() {
                     </div>
                   </div>
 
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowJiraPatDialog(false)}>Cancel</Button>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => setShowJiraPatDialog(false)}
+                      disabled={jiraPatSaving}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="green"
                       disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
                       onClick={async () => {
                         if (!organization?.id) return;
@@ -5571,15 +5624,20 @@ export default function OrganizationSettingsPage() {
                           toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
                           setShowJiraPatDialog(false);
                           await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to connect.', variant: 'destructive' });
+                        } catch (err) {
+                          console.error('Failed to connect Jira PAT:', err);
+                          toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
                         } finally {
                           setJiraPatSaving(false);
                         }
                       }}
                     >
-                      {jiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Create connection
+                      <span className={jiraPatSaving ? 'invisible' : ''}>Create connection</span>
+                      {jiraPatSaving && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -5613,10 +5671,17 @@ export default function OrganizationSettingsPage() {
                     </div>
                   </div>
 
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowEmailDialog(false)}>Cancel</Button>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => setShowEmailDialog(false)}
+                      disabled={emailSaving}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="green"
                       disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
                       onClick={async () => {
                         if (!organization?.id) return;
@@ -5627,15 +5692,20 @@ export default function OrganizationSettingsPage() {
                           setShowEmailDialog(false);
                           setEmailToAdd('');
                           await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to add email.', variant: 'destructive' });
+                        } catch (err) {
+                          console.error('Failed to add email notification:', err);
+                          toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
                         } finally {
                           setEmailSaving(false);
                         }
                       }}
                     >
-                      {emailSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Add
+                      <span className={emailSaving ? 'invisible' : ''}>Add</span>
+                      {emailSaving && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -5677,36 +5747,134 @@ export default function OrganizationSettingsPage() {
                     </div>
                   </div>
 
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowPagerDutyDialog(false)}>Cancel</Button>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => setShowPagerDutyDialog(false)}
+                      disabled={pagerDutySaving}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="green"
                       disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
                       onClick={async () => {
-                        if (!organization?.id || !session?.access_token) return;
+                        if (!organization?.id) return;
                         setPagerDutySaving(true);
                         try {
-                          const res = await fetch(`/api/organizations/${organization.id}/pagerduty/connect`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-                            body: JSON.stringify({ service_name: pagerDutyServiceName.trim(), routing_key: pagerDutyRoutingKey.trim() }),
+                          await api.connectPagerDutyOrg(organization.id, {
+                            serviceName: pagerDutyServiceName.trim(),
+                            routingKey: pagerDutyRoutingKey.trim(),
                           });
-                          if (!res.ok) {
-                            const err = await res.json().catch(() => ({ error: 'Failed to connect' }));
-                            throw new Error(err.error || `HTTP ${res.status}`);
-                          }
                           toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
                           setShowPagerDutyDialog(false);
                           await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to connect PagerDuty.', variant: 'destructive' });
+                        } catch (err) {
+                          console.error('Failed to connect PagerDuty:', err);
+                          toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
                         } finally {
                           setPagerDutySaving(false);
                         }
                       }}
                     >
-                      {pagerDutySaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Connect
+                      <span className={pagerDutySaving ? 'invisible' : ''}>Connect</span>
+                      {pagerDutySaving && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Disconnect Confirmation Dialog — shared by CI/CD, notification, ticketing rows */}
+              <Dialog
+                open={!!connectionToDisconnect}
+                onOpenChange={(open) => { if (!open && !disconnectingConnection) setConnectionToDisconnect(null); }}
+              >
+                <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+                  {connectionToDisconnect && (() => {
+                    const conn = connectionToDisconnect;
+                    const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+                    const isEmail = conn.provider === 'email';
+                    const verb = isCustom || isEmail ? 'Remove' : 'Disconnect';
+                    const label = describeConnectionLabel(conn);
+                    return (
+                      <>
+                        <div className="px-6 pt-6 pb-4">
+                          <DialogTitle>{verb} {label}?</DialogTitle>
+                          <DialogDescription className="mt-1">
+                            {isCustom
+                              ? 'Events stop firing to this webhook URL immediately. You can re-add it later.'
+                              : isEmail
+                                ? 'This address stops receiving notification emails immediately.'
+                                : conn.provider === 'slack' || conn.provider === 'discord'
+                                  ? `Notifications stop sending to this ${label} workspace immediately. You'll be prompted to complete app removal in ${label} after closing this dialog.`
+                                  : `Scanning stops for projects linked to this ${label} connection. You'll be prompted to complete the revoke in ${label} after closing this dialog.`}
+                          </DialogDescription>
+                        </div>
+                        <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+                          <Button
+                            variant="outline"
+                            className="!h-8 !px-3 !rounded-lg"
+                            onClick={() => setConnectionToDisconnect(null)}
+                            disabled={disconnectingConnection}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={handleConfirmDisconnect}
+                            disabled={disconnectingConnection}
+                          >
+                            <span className={disconnectingConnection ? 'invisible' : ''}>{verb}</span>
+                            {disconnectingConnection && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </>
+                    );
+                  })()}
+                </DialogContent>
+              </Dialog>
+
+              {/* Regenerate Signing Secret Confirmation */}
+              <Dialog
+                open={showRegenerateSecretConfirm}
+                onOpenChange={(open) => { if (!open && !customIntegrationRegenerating) setShowRegenerateSecretConfirm(false); }}
+              >
+                <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+                  <div className="px-6 pt-6 pb-4">
+                    <DialogTitle>Regenerate signing secret?</DialogTitle>
+                    <DialogDescription className="mt-1">
+                      The old secret stops working immediately. Update every consumer of this webhook with the new secret before the next event fires.
+                    </DialogDescription>
+                  </div>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+                    <Button
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => setShowRegenerateSecretConfirm(false)}
+                      disabled={customIntegrationRegenerating}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={handleConfirmRegenerateSecret}
+                      disabled={customIntegrationRegenerating}
+                    >
+                      <span className={customIntegrationRegenerating ? 'invisible' : ''}>Regenerate</span>
+                      {customIntegrationRegenerating && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>

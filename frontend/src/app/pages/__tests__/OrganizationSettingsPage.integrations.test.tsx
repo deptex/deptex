@@ -8,7 +8,12 @@ import OrganizationSettingsPage from '../OrganizationSettingsPage';
 const mockGetOrganizationConnections = vi.fn();
 const mockDeleteOrganizationConnection = vi.fn();
 const mockConnectJiraOrg = vi.fn();
+const mockConnectJiraPatOrg = vi.fn();
 const mockConnectLinearOrg = vi.fn();
+const mockConnectPagerDutyOrg = vi.fn();
+const mockCreateEmailNotification = vi.fn();
+const mockStartCicdInstall = vi.fn();
+const mockUpdateCustomIntegration = vi.fn();
 const mockToast = vi.fn();
 const mockNavigate = vi.fn();
 const mockSetSearchParams = vi.fn();
@@ -43,9 +48,13 @@ vi.mock('../../../lib/api', () => ({
     connectSlackOrg: vi.fn().mockResolvedValue({ redirectUrl: 'https://slack.com/oauth' }),
     connectDiscordOrg: vi.fn().mockResolvedValue({ redirectUrl: 'https://discord.com/oauth' }),
     connectJiraOrg: (...args: unknown[]) => mockConnectJiraOrg(...args),
-    connectJiraPatOrg: vi.fn().mockResolvedValue({ success: true }),
+    connectJiraPatOrg: (...args: unknown[]) => mockConnectJiraPatOrg(...args),
     connectLinearOrg: (...args: unknown[]) => mockConnectLinearOrg(...args),
     connectAsanaOrg: vi.fn(),
+    connectPagerDutyOrg: (...args: unknown[]) => mockConnectPagerDutyOrg(...args),
+    createEmailNotification: (...args: unknown[]) => mockCreateEmailNotification(...args),
+    startCicdInstall: (...args: unknown[]) => mockStartCicdInstall(...args),
+    updateCustomIntegration: (...args: unknown[]) => mockUpdateCustomIntegration(...args),
     getOrganizationRoles: vi.fn().mockResolvedValue([
       {
         id: 'r1',
@@ -91,8 +100,12 @@ describe('OrganizationSettingsPage – Integrations', () => {
     mockDeleteOrganizationConnection.mockResolvedValue({ success: true, provider: 'github' });
     mockConnectJiraOrg.mockResolvedValue({ redirectUrl: 'https://atlassian.com/oauth' });
     mockConnectLinearOrg.mockResolvedValue({ redirectUrl: 'https://linear.app/oauth' });
+    mockConnectJiraPatOrg.mockResolvedValue({ success: true });
+    mockConnectPagerDutyOrg.mockResolvedValue({ success: true });
+    mockCreateEmailNotification.mockResolvedValue({ success: true, id: 'email-1' });
+    mockStartCicdInstall.mockResolvedValue({ redirectUrl: 'https://github.com/apps/deptex/installations/new' });
+    mockUpdateCustomIntegration.mockResolvedValue({ success: true, secret: 'whsec_new' });
     Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true });
-    window.confirm = vi.fn(() => true);
   });
 
   it('shows Integrations heading and CI/CD section', async () => {
@@ -173,7 +186,10 @@ describe('OrganizationSettingsPage – Integrations', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     });
+    // Row button opens the two-tone confirmation dialog
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => {
       expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-1');
     });
@@ -200,6 +216,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
       expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     });
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => {
       expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-2');
     });
@@ -226,6 +244,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
       expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     });
     await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => {
       expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-3');
     });
@@ -323,8 +343,9 @@ describe('OrganizationSettingsPage – Integrations', () => {
     await waitFor(() => {
       expect(screen.getByText('Jira')).toBeInTheDocument();
     });
-    const disconnectBtn = screen.getByRole('button', { name: 'Disconnect' });
-    await userEvent.click(disconnectBtn);
+    await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => {
       expect(mockDeleteOrganizationConnection).toHaveBeenCalledWith('org-1', 'conn-jira');
     });
@@ -368,9 +389,9 @@ describe('OrganizationSettingsPage – Integrations', () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText('Access Denied')).toBeInTheDocument();
+      expect(screen.getByText('No access to integrations')).toBeInTheDocument();
     });
-    expect(screen.getByText(/don't have permission to manage integrations/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ask an organization admin for the/i)).toBeInTheDocument();
   });
 
   it('API error on getOrganizationConnections shows empty state without crash', async () => {
@@ -381,6 +402,132 @@ describe('OrganizationSettingsPage – Integrations', () => {
     });
     await waitFor(() => {
       expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
+    });
+  });
+
+  describe('Disconnect confirmation dialog', () => {
+    it('Cancel in the disconnect dialog leaves the connection intact', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([
+        { id: 'conn-1', provider: 'github', display_name: 'My Org', status: 'connected', installation_id: '123', metadata: {} },
+      ]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      expect(mockDeleteOrganizationConnection).not.toHaveBeenCalled();
+    });
+
+    it('Disconnect dialog title and body adapt to provider', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([
+        { id: 'conn-email', provider: 'email', display_name: 'team@x.com', status: 'connected', metadata: { email: 'team@x.com' } },
+      ]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByText('Email')).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/Remove team@x\.com\?/)).toBeInTheDocument();
+      expect(within(dialog).getByText(/stops receiving notification emails/)).toBeInTheDocument();
+    });
+  });
+
+  describe('CI/CD install', () => {
+    it('Add GitHub routes through api.startCicdInstall and redirects', async () => {
+      const originalLocation = window.location;
+      const hrefSetter = vi.fn();
+      Object.defineProperty(window, 'location', {
+        writable: true,
+        value: new Proxy({} as Location, {
+          get: () => '',
+          set: (_t, k, v) => { if (k === 'href') hrefSetter(v); return true; },
+        }),
+      });
+      try {
+        mockGetOrganizationConnections.mockResolvedValue([]);
+        render(<OrganizationSettingsPage />);
+        await waitFor(() => expect(screen.getByRole('button', { name: /Add GitHub/i })).toBeInTheDocument());
+
+        await userEvent.click(screen.getByRole('button', { name: /Add GitHub/i }));
+        await waitFor(() => expect(mockStartCicdInstall).toHaveBeenCalledWith('github', 'org-1'));
+        expect(hrefSetter).toHaveBeenCalledWith('https://github.com/apps/deptex/installations/new');
+      } finally {
+        Object.defineProperty(window, 'location', { writable: true, value: originalLocation });
+      }
+    });
+
+    it('Add CI/CD failure surfaces a generic toast, never the raw error', async () => {
+      mockStartCicdInstall.mockRejectedValueOnce(new Error('Boom: internal database leak'));
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Add GitLab/i })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /Add GitLab/i }));
+      await waitFor(() => expect(mockToast).toHaveBeenCalled());
+      const errorToast = mockToast.mock.calls.find((call) => (call[0] as { variant?: string }).variant === 'destructive');
+      expect((errorToast?.[0] as { description?: string } | undefined)?.description).not.toMatch(/Boom|internal database/);
+    });
+  });
+
+  describe('Email + PagerDuty + Jira PAT dialogs', () => {
+    it('Email dialog submission calls api.createEmailNotification', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /Add Email/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText(/Email address/i), 'team@x.com');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+      await waitFor(() => expect(mockCreateEmailNotification).toHaveBeenCalledWith('org-1', 'team@x.com'));
+    });
+
+    it('Email dialog Add is disabled until input is a valid address', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /Add Email/i }));
+      const dialog = await screen.findByRole('dialog');
+      const addBtn = within(dialog).getByRole('button', { name: 'Add' });
+      expect(addBtn).toBeDisabled();
+
+      await userEvent.type(within(dialog).getByLabelText(/Email address/i), 'not-an-email');
+      expect(addBtn).toBeDisabled();
+    });
+
+    it('PagerDuty Set up button submits service + routing key through the api wrapper', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Set up PagerDuty/i })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /Set up PagerDuty/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText(/Service name/i), 'Critical Alerts');
+      await userEvent.type(within(dialog).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+
+      await waitFor(() => expect(mockConnectPagerDutyOrg).toHaveBeenCalledWith('org-1', {
+        serviceName: 'Critical Alerts',
+        routingKey: 'R0UT1NG_K3Y',
+      }));
+    });
+
+    it('Jira PAT dialog submits base url + token through api.connectJiraPatOrg', async () => {
+      mockGetOrganizationConnections.mockResolvedValue([]);
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Add Jira/i })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /Add Jira/i }));
+      await userEvent.click(await screen.findByRole('menuitem', { name: /Jira Data Center/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText(/Server URL/i), 'https://jira.acme.com');
+      await userEvent.type(within(dialog).getByLabelText(/Personal Access Token/i), 'pat_xyz');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Create connection' }));
+
+      await waitFor(() => expect(mockConnectJiraPatOrg).toHaveBeenCalledWith('org-1', 'https://jira.acme.com', 'pat_xyz'));
     });
   });
 });
