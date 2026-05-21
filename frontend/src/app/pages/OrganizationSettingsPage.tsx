@@ -207,14 +207,13 @@ function describeConnectionIdentifier(conn: CiCdConnection): { primary: string; 
   return { primary: conn.display_name || conn.installation_id || '—', secondary: null };
 }
 
-// One muted pill recipe for every type — a tiny leading dot carries the color
-// cue so the four categories stay distinguishable without saturating the table.
-// Vercel/GitHub-style: chrome stays neutral, semantics are signalled by a 6px dot.
-const INTEGRATION_TYPE_PILL: Record<IntegrationType, { label: string; dotClassName: string }> = {
-  cicd: { label: 'CI/CD', dotClassName: 'bg-blue-400' },
-  notification: { label: 'Notification', dotClassName: 'bg-emerald-400' },
-  ticketing: { label: 'Ticketing', dotClassName: 'bg-amber-400' },
-  custom: { label: 'Custom', dotClassName: 'bg-foreground-secondary/60' },
+// Single muted pill recipe for every type — chrome stays neutral; the label
+// itself carries the meaning. Same shape as the default Badge variant.
+const INTEGRATION_TYPE_PILL: Record<IntegrationType, { label: string }> = {
+  cicd: { label: 'CI/CD' },
+  notification: { label: 'Notification' },
+  ticketing: { label: 'Ticketing' },
+  custom: { label: 'Custom' },
 };
 
 // Ordering used to sort the unified table — CI/CD first (the thing without
@@ -3669,8 +3668,7 @@ export default function OrganizationSettingsPage() {
                                         </div>
                                       </td>
                                       <td className="px-4 py-3">
-                                        <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background-subtle/50 text-foreground-secondary px-2 py-0.5 text-xs font-medium">
-                                          <span className={cn('h-1.5 w-1.5 rounded-full flex-shrink-0', pill.dotClassName)} aria-hidden />
+                                        <span className="inline-flex items-center rounded-full border border-border bg-background-subtle/50 text-foreground-secondary px-2 py-0.5 text-xs font-medium">
                                           {pill.label}
                                         </span>
                                       </td>
