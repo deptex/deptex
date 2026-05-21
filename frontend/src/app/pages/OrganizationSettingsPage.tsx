@@ -3566,14 +3566,10 @@ export default function OrganizationSettingsPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                        <Button variant="outline" size="sm" className="text-xs">
-                          <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                          Docs
-                        </Button>
+                        <Button variant="outline">Docs</Button>
                       </Link>
                       {effectivePermissions?.manage_integrations && (
-                        <Button variant="green" size="sm" onClick={() => setShowAddIntegrationSidebar(true)}>
-                          <Plus className="h-3.5 w-3.5 mr-1.5" />
+                        <Button variant="green" onClick={() => setShowAddIntegrationSidebar(true)}>
                           Add
                         </Button>
                       )}
@@ -5487,12 +5483,12 @@ export default function OrganizationSettingsPage() {
                     aria-modal="true"
                     aria-labelledby="add-integration-title"
                     className={cn(
-                      'fixed right-4 top-4 bottom-4 w-full max-w-[420px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[520px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
                       addIntegrationPanelVisible ? 'translate-x-0' : 'translate-x-full'
                     )}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 bg-background-card border-b border-border">
+                    <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 border-b border-border">
                       <div>
                         <h2 id="add-integration-title" className="text-xl font-semibold text-foreground">Add integration</h2>
                         <p className="mt-1 text-sm text-foreground-secondary">
@@ -5509,7 +5505,7 @@ export default function OrganizationSettingsPage() {
                       </button>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5 bg-background-card">
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5">
                     {[
                       {
                         category: 'CI/CD',
