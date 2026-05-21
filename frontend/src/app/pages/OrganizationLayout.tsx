@@ -4,7 +4,7 @@ import OrgSidebar from '../../components/OrgSidebar';
 import { SidebarInset, SidebarProvider } from '../../components/ui/sidebar';
 import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 import { InviteMemberDialog } from '../../components/InviteMemberDialog';
-import { api, Organization, RolePermissions, Team, Project, OrganizationMember, OrganizationInvitation, OrganizationRole } from '../../lib/api';
+import { api, Organization, RolePermissions, Team, Project } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
@@ -45,10 +45,6 @@ export default function OrganizationLayout() {
   const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
   const [createProjectLockedTeam, setCreateProjectLockedTeam] = useState<Team | null>(null);
   const [showInviteMemberDialog, setShowInviteMemberDialog] = useState(false);
-  // Prefetched for Invite Member dialog so it opens instantly
-  const [inviteMembers, setInviteMembers] = useState<OrganizationMember[]>([]);
-  const [inviteInvitations, setInviteInvitations] = useState<OrganizationInvitation[]>([]);
-  const [inviteRoles, setInviteRoles] = useState<OrganizationRole[]>([]);
 
   // Prefer DB permissions, fall back to cache, then to org payload.
   const userPermissions = useMemo(() => {
@@ -148,56 +144,11 @@ export default function OrganizationLayout() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Prefetch members/invitations/roles so Invite Member dialog opens instantly
-  const refetchInviteData = useMemo(() => {
-    if (!id) return async () => {};
-    return async () => {
-      try {
-        const [membersData, invitationsData, rolesData] = await Promise.all([
-          api.getOrganizationMembers(id),
-          api.getOrganizationInvitations(id),
-          api.getOrganizationRoles(id).catch(() => []),
-        ]);
-        setInviteMembers(membersData);
-        setInviteInvitations(invitationsData);
-        setInviteRoles(rolesData);
-      } catch {
-        setInviteMembers([]);
-        setInviteInvitations([]);
-        setInviteRoles([]);
-      }
-    };
-  }, [id]);
-
-  useEffect(() => {
-    if (!id) {
-      setInviteMembers([]);
-      setInviteInvitations([]);
-      setInviteRoles([]);
-      return;
-    }
-    let cancelled = false;
-    Promise.all([
-      api.getOrganizationMembers(id),
-      api.getOrganizationInvitations(id),
-      api.getOrganizationRoles(id).catch(() => []),
-    ])
-      .then(([membersData, invitationsData, rolesData]) => {
-        if (!cancelled) {
-          setInviteMembers(membersData);
-          setInviteInvitations(invitationsData);
-          setInviteRoles(rolesData);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setInviteMembers([]);
-          setInviteInvitations([]);
-          setInviteRoles([]);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [id]);
+  // InviteMemberDialog self-fetches members/invitations/roles when it opens.
+  // We used to prefetch them here on every org page mount to make the dialog feel
+  // instant, but that fired three API calls on every navigation — including pages
+  // that never opened the dialog. The dialog has a ~50ms loading state on first
+  // open in exchange.
 
   // Tab title: "Organization name | Deptex"
   useEffect(() => {
@@ -329,11 +280,6 @@ export default function OrganizationLayout() {
           onOpenChange={setShowInviteMemberDialog}
           organizationId={id}
           organization={organization}
-          sharedMembers={inviteMembers}
-          sharedInvitations={inviteInvitations}
-          sharedTeams={teams}
-          sharedRoles={inviteRoles}
-          onSuccess={refetchInviteData}
         />
       )}
 
