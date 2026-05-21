@@ -1,20 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Check, ChevronsUpDown, Mail, LogOut } from 'lucide-react';
+import { Search, Plus, Loader2, X } from 'lucide-react';
 import { api, Organization, OrganizationInvitation } from '../lib/api';
-import { supabase } from '../lib/supabase';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Button } from './ui/button';
+import { useToast } from '../hooks/use-toast';
 import CreateOrganizationModal from './CreateOrganizationModal';
 import { RoleBadge } from './RoleBadge';
+import { OrgAvatar } from './Avatar';
 
-/** In-memory cache for org list so we don't refetch every time the dropdown opens (same pattern as settings tabs). */
-const ORG_SWITCHER_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+/** Tiny in-memory cache so rapid open → close → open doesn't re-fetch.
+ * The real "feels instant" mechanism is prefetch-on-hover; this just covers
+ * the rapid-toggle case. Keep short so role/name changes from elsewhere
+ * (org settings, role admin) clear within seconds. */
+const ORG_SWITCHER_CACHE_TTL_MS = 30 * 1000; // 30 seconds
 let orgSwitcherCache: {
   organizations: Organization[];
   invitations: OrganizationInvitation[];
@@ -31,6 +34,14 @@ function setCachedOrgList(organizations: Organization[], invitations: Organizati
   orgSwitcherCache = { organizations, invitations, fetchedAt: Date.now() };
 }
 
+// AuthContext.signOut dispatches this so the cache doesn't leak to the next
+// user that signs in within the same tab session.
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:signedOut', () => {
+    orgSwitcherCache = null;
+  });
+}
+
 /** Role label for display; fallback when role_display_name is missing. */
 function roleLabel(org: Organization): string {
   if (org.role_display_name) return org.role_display_name;
@@ -38,16 +49,16 @@ function roleLabel(org: Organization): string {
   return org.role.charAt(0).toUpperCase() + org.role.slice(1);
 }
 
-/** Default badge colors for built-in roles (match Organization Settings > Roles palette). */
+/** Default badge colors for built-in roles. Member is intentionally absent so it
+ * falls through to the neutral foreground-tinted styling in RoleBadge. */
 const DEFAULT_ROLE_COLORS: Record<string, string> = {
   owner: '#3b82f6',   // Blue
   admin: '#14b8a6',   // Teal
-  member: '#71717a',   // Muted (zinc-500)
 };
-function roleBadgeColor(org: Organization): string {
+function roleBadgeColor(org: Organization): string | null {
   if (org.role_color) return org.role_color;
   if (org.role && DEFAULT_ROLE_COLORS[org.role]) return DEFAULT_ROLE_COLORS[org.role];
-  return '#71717a'; // fallback muted
+  return null;
 }
 
 interface OrganizationSwitcherProps {
@@ -57,9 +68,6 @@ interface OrganizationSwitcherProps {
   currentOrganizationRole?: string | null;
   currentOrganizationRoleDisplayName?: string | null;
   currentOrganizationRoleColor?: string | null;
-  showOrgName?: boolean;
-  /** When "full", trigger shows avatar + name + chevron (for header). Default "icon" (chevron only). */
-  triggerVariant?: 'full' | 'icon';
 }
 
 export default function OrganizationSwitcher({
@@ -69,8 +77,6 @@ export default function OrganizationSwitcher({
   currentOrganizationRole,
   currentOrganizationRoleDisplayName,
   currentOrganizationRoleColor,
-  showOrgName = false,
-  triggerVariant = 'icon',
 }: OrganizationSwitcherProps) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([]);
@@ -78,53 +84,49 @@ export default function OrganizationSwitcher({
   const [isOpen, setIsOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [leavingOrgId, setLeavingOrgId] = useState<string | null>(null);
-  const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState(false);
-  const [orgToLeave, setOrgToLeave] = useState<{ id: string; name: string } | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [decliningId, setDecliningId] = useState<string | null>(null);
   const navigate = useNavigate();
-
-  useEffect(() => {
-    loadCurrentUser();
-  }, []);
+  const { toast } = useToast();
+  const inflightRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
-    const cached = getCachedOrgList();
-    if (cached) {
-      setOrganizations(cached.organizations);
-      setInvitations(cached.invitations);
-      return;
-    }
-    loadData();
+    void loadData();
   }, [isOpen]);
 
-  const loadCurrentUser = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUserId(user.id);
+  const loadData = async (force = false): Promise<void> => {
+    if (!force) {
+      const cached = getCachedOrgList();
+      if (cached) {
+        setOrganizations(cached.organizations);
+        setInvitations(cached.invitations);
+        return;
       }
-    } catch (error) {
-      console.error('Failed to load current user:', error);
     }
-  };
 
-  const loadData = async () => {
-    try {
-      setIsLoading(true);
-      const [orgsData, invitesData] = await Promise.all([
-        api.getOrganizations(),
-        api.getInvitations().catch(() => []), // Fallback to empty array if endpoint doesn't exist yet
-      ]);
-      setOrganizations(orgsData);
-      setInvitations(invitesData || []);
-      setCachedOrgList(orgsData, invitesData || []);
-    } catch (error) {
-      console.error('Failed to load organizations:', error);
-    } finally {
-      setIsLoading(false);
-    }
+    if (inflightRef.current) return inflightRef.current;
+
+    const promise = (async () => {
+      try {
+        setIsLoading(true);
+        const [orgsData, invitesData] = await Promise.all([
+          api.getOrganizations(),
+          api.getInvitations().catch(() => []),
+        ]);
+        setOrganizations(orgsData);
+        setInvitations(invitesData || []);
+        setCachedOrgList(orgsData, invitesData || []);
+      } catch (error) {
+        console.error('Failed to load organizations:', error);
+      } finally {
+        setIsLoading(false);
+        inflightRef.current = null;
+      }
+    })();
+
+    inflightRef.current = promise;
+    return promise;
   };
 
   const filteredOrganizations = organizations.filter(org =>
@@ -154,45 +156,59 @@ export default function OrganizationSwitcher({
     setIsOpen(false);
   };
 
-  const handleCreateSuccess = (_org?: Organization) => {
-    loadData();
+  const handleCreateSuccess = (org?: Organization) => {
+    void loadData(true);
+    if (org?.id) {
+      setIsOpen(false);
+      navigate(`/organizations/${org.id}`);
+    }
   };
 
-  const handleLeaveOrganization = (orgId: string, orgName: string) => {
-    if (!currentUserId) return;
-    setOrgToLeave({ id: orgId, name: orgName });
-    setShowLeaveConfirmModal(true);
-    setIsOpen(false); // Close the dropdown
-  };
-
-  const confirmLeaveOrganization = async () => {
-    if (!currentUserId || !orgToLeave) return;
-
+  const handleAcceptInvitation = async (invitation: OrganizationInvitation) => {
+    if (acceptingId) return;
+    setAcceptingId(invitation.id);
     try {
-      setLeavingOrgId(orgToLeave.id);
-      await api.removeMember(orgToLeave.id, currentUserId);
-
-      // Remove from local state
-      setOrganizations(orgs => orgs.filter(org => org.id !== orgToLeave.id));
-
-      // If leaving the current org, navigate to landing (OrganizationsLanding will
-      // resolve the correct default from the user's profile or fall back to orgs[0]).
-      if (orgToLeave.id === currentOrganizationId) {
-        navigate('/organizations');
-      }
-
-      setShowLeaveConfirmModal(false);
-      setOrgToLeave(null);
+      await api.acceptInvitation(invitation.organization_id, invitation.id);
+      setInvitations((prev) => prev.filter((i) => i.id !== invitation.id));
+      await loadData(true);
+      setIsOpen(false);
+      navigate(`/organizations/${invitation.organization_id}`);
+      toast({
+        title: 'Joined',
+        description: `You're now a member of ${invitation.organization_name || 'the organization'}.`,
+      });
     } catch (error: any) {
-      console.error('Failed to leave organization:', error);
-      alert(error.message || 'Failed to leave organization. Please try again.');
+      toast({
+        title: 'Failed to accept invitation',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
     } finally {
-      setLeavingOrgId(null);
+      setAcceptingId(null);
+    }
+  };
+
+  const handleDeclineInvitation = async (invitation: OrganizationInvitation) => {
+    if (decliningId) return;
+    setDecliningId(invitation.id);
+    try {
+      await api.declineInvitation(invitation.organization_id, invitation.id);
+      setInvitations((prev) => prev.filter((i) => i.id !== invitation.id));
+      // Cache had stale invitations; rewrite without bumping the orgs list.
+      setCachedOrgList(organizations, invitations.filter((i) => i.id !== invitation.id));
+    } catch (error: any) {
+      toast({
+        title: 'Failed to decline invitation',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDecliningId(null);
     }
   };
 
   const dropdownContent = (
-    <DropdownMenuContent align="start" className="w-[420px] min-h-[380px] p-0 flex flex-col">
+    <DropdownMenuContent align="start" className="w-[420px] min-h-[380px] max-h-[min(80vh,640px)] p-0 flex flex-col rounded-xl">
             {/* Search bar ingrained at top — no card, just bar + Esc */}
             <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-transparent">
               <Search className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
@@ -207,13 +223,13 @@ export default function OrganizationSwitcher({
               <button
                 type="button"
                 onClick={() => { setSearchQuery(''); setIsOpen(false); }}
-                className="flex-shrink-0 px-2 py-1 text-xs border border-border rounded text-foreground-secondary hover:text-foreground hover:bg-background-subtle/85 transition-colors"
+                className="flex-shrink-0 px-2 py-1 text-xs border border-foreground/15 rounded-lg text-foreground-secondary hover:text-foreground hover:bg-background-subtle/85 transition-colors"
               >
                 Esc
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto min-h-0 p-2">
+            <div className="flex-1 overflow-y-scroll min-h-0 p-2">
                 {isLoading ? (
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 px-3 py-2">
@@ -226,54 +242,27 @@ export default function OrganizationSwitcher({
                     {/* Current organization */}
                     {(() => {
                       const currentOrg = filteredOrganizations.find(org => org.id === currentOrganizationId);
-                      const isOwner = currentOrg?.role === 'owner';
                       const badgeColor = currentOrg ? roleBadgeColor(currentOrg) : undefined;
                       return currentOrg && (
-                        <div className="group">
-                          <button
-                            onClick={() => handleSelectOrganization(currentOrganizationId)}
-                            className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/85"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <img
-                                src={currentOrg.avatar_url || '/images/org_profile.png'}
-                                alt={currentOrganizationName}
-                                className="h-7 w-7 rounded-full object-cover bg-transparent flex-shrink-0"
-                              />
-                              <span className="text-sm font-medium text-foreground truncate">
-                                {currentOrganizationName}
-                              </span>
-                              <RoleBadge
-                                role={currentOrg.role || 'member'}
-                                roleDisplayName={roleLabel(currentOrg)}
-                                roleColor={badgeColor ?? null}
-                                className="flex-shrink-0"
-                              />
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              {!isOwner && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleLeaveOrganization(currentOrg.id, currentOrg.name);
-                                      }}
-                                      disabled={leavingOrgId === currentOrg.id}
-                                      className="p-1 rounded hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
-                                    >
-                                      <LogOut className="h-3.5 w-3.5 text-destructive" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left" sideOffset={6}>
-                                    Leave organization
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
-                              <Check className="h-4 w-4 text-white drop-shadow-md flex-shrink-0" />
-                            </div>
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => handleSelectOrganization(currentOrganizationId)}
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-left bg-background-subtle/85"
+                        >
+                          <OrgAvatar
+                            src={currentOrg.avatar_url}
+                            alt={currentOrganizationName}
+                            className="h-7 w-7 rounded-full object-cover bg-transparent flex-shrink-0"
+                          />
+                          <span className="text-sm font-medium text-foreground truncate flex-1 min-w-0">
+                            {currentOrganizationName}
+                          </span>
+                          <RoleBadge
+                            role={currentOrg.role || 'member'}
+                            roleDisplayName={roleLabel(currentOrg)}
+                            roleColor={badgeColor ?? null}
+                            className="flex-shrink-0"
+                          />
+                        </button>
                       );
                     })()}
 
@@ -281,56 +270,33 @@ export default function OrganizationSwitcher({
                     {filteredOrganizations
                       .filter(org => org.id !== currentOrganizationId)
                       .map((org) => {
-                        const isOwner = org.role === 'owner';
                         const badgeColor = roleBadgeColor(org);
                         return (
-                          <div key={org.id} className="group">
-                            <button
-                              onClick={() => handleSelectOrganization(org.id)}
-                              className="w-full flex items-center justify-between px-3 py-2 rounded-md text-left hover:bg-background-subtle/85"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <img
-                                  src={org.avatar_url || '/images/org_profile.png'}
-                                  alt={org.name}
-                                  className="h-7 w-7 rounded-full object-cover bg-transparent flex-shrink-0"
-                                />
-                                <span className="text-sm text-foreground-secondary group-hover:text-foreground transition-colors truncate">{org.name}</span>
-                                <RoleBadge
-                                  role={org.role || 'member'}
-                                  roleDisplayName={roleLabel(org)}
-                                  roleColor={badgeColor}
-                                  className="flex-shrink-0"
-                                />
-                              </div>
-                              {!isOwner && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleLeaveOrganization(org.id, org.name);
-                                      }}
-                                      disabled={leavingOrgId === org.id}
-                                      className="p-1 rounded hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
-                                    >
-                                      <LogOut className="h-3.5 w-3.5 text-destructive" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="left" sideOffset={6}>
-                                    Leave organization
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
-                            </button>
-                          </div>
+                          <button
+                            key={org.id}
+                            onClick={() => handleSelectOrganization(org.id)}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-left hover:bg-background-subtle/85"
+                          >
+                            <OrgAvatar
+                              src={org.avatar_url}
+                              alt={org.name}
+                              className="h-7 w-7 rounded-full object-cover bg-transparent flex-shrink-0"
+                            />
+                            <span className="text-sm text-foreground truncate flex-1 min-w-0">{org.name}</span>
+                            <RoleBadge
+                              role={org.role || 'member'}
+                              roleDisplayName={roleLabel(org)}
+                              roleColor={badgeColor}
+                              className="flex-shrink-0"
+                            />
+                          </button>
                         );
                       })}
 
                     {/* Empty state when no other orgs, or no search results */}
                     {!isLoading && filteredOrganizations.filter(org => org.id !== currentOrganizationId).length === 0 && (
                       <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
-                        <div className="flex items-center justify-center w-10 h-10 rounded-full bg-muted/50 text-foreground-secondary mb-3" aria-hidden>
+                        <div className="flex items-center justify-center w-10 h-10 rounded-lg border border-foreground/15 bg-background-subtle/50 text-foreground-secondary mb-3" aria-hidden>
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                             <circle cx="9" cy="7" r="4" />
@@ -358,24 +324,53 @@ export default function OrganizationSwitcher({
                       Invitations
                     </div>
                     {invitations.map((invitation) => (
-                      <button
+                      <div
                         key={invitation.id}
-                        onClick={() => {
-                          navigate(`/invite/${invitation.id}`);
-                          setIsOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md group text-left hover:bg-background-subtle/85"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-md hover:bg-background-subtle/85 transition-colors"
                       >
-                        <Mail className="h-4 w-4 text-foreground-secondary group-hover:text-foreground transition-colors" />
+                        <OrgAvatar
+                          src={invitation.organization_avatar_url}
+                          className="h-7 w-7 rounded-full object-cover bg-transparent flex-shrink-0"
+                        />
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm text-foreground-secondary group-hover:text-foreground truncate transition-colors">
+                          <div className="text-sm text-foreground truncate">
                             {invitation.organization_name || 'Organization'}
                           </div>
                           <div className="text-xs text-foreground-secondary">
                             You&apos;ve been invited • {invitation.role}
                           </div>
                         </div>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeclineInvitation(invitation)}
+                          disabled={decliningId !== null || acceptingId !== null}
+                          aria-label="Decline invitation"
+                          className="inline-flex items-center justify-center h-7 w-7 rounded-lg border border-foreground/15 text-foreground-secondary hover:text-foreground hover:bg-background-subtle/85 transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          {decliningId === invitation.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <X className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                        <Button
+                          variant="green"
+                          onClick={() => handleAcceptInvitation(invitation)}
+                          disabled={acceptingId !== null || decliningId !== null}
+                          className="!h-7 !px-2.5 !text-xs flex-shrink-0"
+                        >
+                          {acceptingId === invitation.id ? (
+                            <>
+                              <span className="invisible">Accept</span>
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              </span>
+                            </>
+                          ) : (
+                            'Accept'
+                          )}
+                        </Button>
+                      </div>
                     ))}
                   </div>
                 </>
@@ -399,124 +394,49 @@ export default function OrganizationSwitcher({
     </DropdownMenuContent>
   );
 
+  // Apply the same fallback as the dropdown rows. Returns null for member so
+  // RoleBadge falls into its neutral-styled branch.
+  const triggerBadgeColor =
+    currentOrganizationRoleColor
+    || (currentOrganizationRole && DEFAULT_ROLE_COLORS[currentOrganizationRole.toLowerCase()])
+    || null;
+
   return (
     <>
-      {triggerVariant === 'full' ? (
-        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
-            >
-              <img
-                src={currentOrganizationAvatarUrl || '/images/org_profile.png'}
-                alt=""
-                className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
-              />
-              <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
-                {currentOrganizationName}
-              </span>
-              <div className="flex items-center gap-0.5 flex-shrink-0">
-                {currentOrganizationRole && (
-                  <RoleBadge
-                    role={currentOrganizationRole}
-                    roleDisplayName={currentOrganizationRoleDisplayName}
-                    roleColor={currentOrganizationRoleColor}
-                  />
-                )}
-              </div>
-            </button>
-          </DropdownMenuTrigger>
-          {dropdownContent}
-        </DropdownMenu>
-      ) : (
-        <div className="flex items-center gap-2">
-          {showOrgName && (
-            <span className="text-foreground font-medium">{currentOrganizationName}</span>
-          )}
-          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="org-switcher-trigger flex items-center justify-center p-1 -ml-1.5 rounded hover:bg-background-subtle/85 transition-colors outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 focus-visible:outline-none focus-visible:ring-0"
-              >
-                <ChevronsUpDown className="h-4 w-4 text-foreground-secondary hover:text-foreground transition-colors" />
-              </button>
-            </DropdownMenuTrigger>
-            {dropdownContent}
-          </DropdownMenu>
-        </div>
-      )}
+      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            onMouseEnter={() => { void loadData(); }}
+            onFocus={() => { void loadData(); }}
+            className="flex items-center gap-2 w-full pl-2 pr-0.5 py-1 text-left rounded-md hover:bg-background-subtle/85 transition-colors outline-none border-0 focus-visible:outline-none focus-visible:ring-0"
+          >
+            <OrgAvatar
+              src={currentOrganizationAvatarUrl}
+              className="h-7 w-7 rounded-full object-cover flex-shrink-0 bg-transparent"
+            />
+            <span className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
+              {currentOrganizationName}
+            </span>
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              {currentOrganizationRole && (
+                <RoleBadge
+                  role={currentOrganizationRole}
+                  roleDisplayName={currentOrganizationRoleDisplayName}
+                  roleColor={triggerBadgeColor}
+                />
+              )}
+            </div>
+          </button>
+        </DropdownMenuTrigger>
+        {dropdownContent}
+      </DropdownMenu>
 
       <CreateOrganizationModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onSuccess={handleCreateSuccess}
       />
-
-      {/* Leave Organization Confirmation Modal */}
-      {showLeaveConfirmModal && orgToLeave && (
-        <div className="fixed inset-0 z-50">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setShowLeaveConfirmModal(false);
-              setOrgToLeave(null);
-            }}
-          />
-
-          {/* Modal - centered */}
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <div
-              className="bg-background border border-border rounded-lg shadow-2xl w-full max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="px-6 py-5 border-b border-border">
-                <h2 className="text-xl font-semibold text-foreground">
-                  Leave Organization
-                </h2>
-              </div>
-
-              {/* Content */}
-              <div className="px-6 py-6">
-                <p className="text-foreground-secondary">
-                  Are you sure you want to leave <strong>"{orgToLeave.name}"</strong>? You will lose access to all teams and projects in this organization.
-                </p>
-              </div>
-
-              {/* Footer */}
-              <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowLeaveConfirmModal(false);
-                    setOrgToLeave(null);
-                  }}
-                  disabled={leavingOrgId === orgToLeave.id}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={confirmLeaveOrganization}
-                  disabled={leavingOrgId === orgToLeave.id}
-                  className="bg-red-600 text-white hover:bg-red-700"
-                >
-                  {leavingOrgId === orgToLeave.id ? (
-                    <>
-                      <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                      Leaving
-                    </>
-                  ) : (
-                    'Leave Organization'
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

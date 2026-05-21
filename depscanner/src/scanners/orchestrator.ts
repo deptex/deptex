@@ -13,6 +13,7 @@ import { runCheckov } from './checkov';
 import {
   extractGhcrOwner,
   normalizeDigest,
+  parseDockerfileFinalStage,
   parseDockerfileFinalStageDetailed,
   resolveImageDigest,
   resolvePullStrategy,
@@ -36,16 +37,28 @@ import {
 } from './registry-auth';
 import {
   lookupContainerScanCache,
+  upsertBaseImageRecommendations,
   upsertContainerFindings,
   upsertContainerScanCache,
   upsertIaCFindings,
+  type BaseImageRecommendationInsert,
 } from './storage';
+import { generateRecommendation } from './base-image-advisor';
+import {
+  catalogHash,
+  loadCatalog,
+  CatalogValidationError,
+} from './base-image-catalog';
 import {
   AuthMintError,
   CredDecryptError,
   classifyContainerScanError,
 } from './scanner-errors';
 import { validateScanTimeHost } from './host-guard';
+import {
+  decorateContainerFindingsWithReachability,
+  REACHABILITY_PER_IMAGE_TIMEOUT_MS,
+} from './container-reachability';
 import type {
   ContainerFinding,
   CredentialPlaintext,
@@ -74,6 +87,26 @@ const CONTAINER_SCAN_TOTAL_BUDGET_MS = Number(
  *  tenants on the same Fly machine from a runaway loop. (Plan §M8 Step 6 /
  *  MTD-r2-6.) */
 const DECRYPT_BUDGET = Number(process.env.DEPTEX_DECRYPT_BUDGET ?? 200);
+
+/**
+ * Wall-clock budget to pass to `decorateContainerFindingsWithReachability` for
+ * the image currently being scanned, given how much of the per-step container
+ * budget has already elapsed.
+ *
+ * - Clamps to `REACHABILITY_PER_IMAGE_TIMEOUT_MS` so a fresh scan never gets a
+ *   larger budget than the per-image default.
+ * - Floors at 1 ms (never returns ≤0) so the decorator's "remaining <= 0 →
+ *   fail-closed to module" path triggers immediately on subsequent steps
+ *   rather than hanging on a zero-or-negative timeout.
+ *
+ * Exported via `_internal` for unit tests.
+ */
+export function reachabilityBudgetMs(elapsedMs: number): number {
+  return Math.min(
+    REACHABILITY_PER_IMAGE_TIMEOUT_MS,
+    Math.max(1, CONTAINER_SCAN_TOTAL_BUDGET_MS - elapsedMs)
+  );
+}
 const VERBOSE_TRIVY = process.env.DEPTEX_TRIVY_VERBOSE_LOG === '1';
 const VERBOSE_CHECKOV = process.env.DEPTEX_CHECKOV_VERBOSE_LOG === '1';
 
@@ -927,6 +960,58 @@ async function scanContainerImages(
       }
       const result = await scanOneImage(image, ctx, envelope, switches, installationLogin);
       if ('findings' in result) {
+        // Decorate findings with static OS-package reachability BEFORE they are
+        // collected for upsert. This runs here, inside the per-image loop,
+        // rather than in runIaCAndContainerScans — the DOCKER_CONFIG envelope
+        // is still alive, so crane export can authenticate against private
+        // registries. Its wall-clock cost is naturally charged against
+        // CONTAINER_SCAN_TOTAL_BUDGET_MS via this loop's budget check above.
+        if (result.findings.length > 0) {
+          const reachScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-reach-'));
+          try {
+            const reach = await decorateContainerFindingsWithReachability(result.findings, {
+              imageRef: image.imageRef,
+              scratchDir: reachScratch,
+              dockerConfigDir: envelope.dockerConfigDir,
+              // Clamp the per-image budget to the remaining per-step container
+              // budget — prevents a single late-admitted image from overshooting
+              // CONTAINER_SCAN_TOTAL_BUDGET_MS by a full 30s.
+              budgetMs: reachabilityBudgetMs(Date.now() - stepStart),
+              logger: ctx.logger,
+            });
+            // Wrap the log call itself in try/catch — a transient logger
+            // fault (e.g., extraction_logs contention) must not abort the
+            // per-image loop and skip every remaining image. Mirrors the
+            // catalog_hash log treatment below.
+            try {
+              await ctx.logger.info(
+                'container_scan.reachability',
+                `${image.imageRef}: total=${reach.total} classified=${reach.classified} ` +
+                  `module=${reach.module} unreachable=${reach.unreachable} fallback=${reach.fallback}` +
+                  (reach.fallbackReason ? ` (fallback: ${reach.fallbackReason})` : '')
+              );
+            } catch {
+              /* logging is best-effort */
+            }
+          } catch (e: any) {
+            // Decoration is best-effort — a failure leaves reachability_level
+            // null and never blocks the scan findings from being written.
+            try {
+              await ctx.logger.warn(
+                'container_scan.reachability',
+                `${image.imageRef}: ${e?.message ?? e}`
+              );
+            } catch {
+              /* logging is best-effort */
+            }
+          } finally {
+            try {
+              fs.rmSync(reachScratch, { recursive: true, force: true });
+            } catch {
+              /* best-effort */
+            }
+          }
+        }
         if (image.source === 'dockerfile_base') {
           dockerfileFindings.push(...result.findings);
         } else {
@@ -945,6 +1030,107 @@ async function scanContainerImages(
     skipped,
     warnings,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Base-image advisor — one recommendation per Dockerfile
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate and persist a base-image recommendation for every Dockerfile in the
+ * repo. Counts the live container findings per image to drive the CVE delta.
+ * Best-effort: a failure surfaces as a warning, never blocks the scan.
+ */
+export async function runBaseImageAdvisor(
+  ctx: ScannerStepContext,
+  dockerfileFindings: ContainerFinding[]
+): Promise<{ written: number; warnings: string[] }> {
+  const warnings: string[] = [];
+  const rows: BaseImageRecommendationInsert[] = [];
+  const dockerfilePaths = findDockerfiles(ctx.repoPath);
+
+  // ---- Catalog pre-flight (once, before the per-Dockerfile loop) -----------
+  // generateRecommendation() calls loadCatalog() synchronously; a bad/missing
+  // catalog YAML throws CatalogValidationError. That's a whole-run failure
+  // (the catalog is a single per-process resource), not a per-Dockerfile one
+  // — wrapping each iteration would emit N identical warnings. Load it once
+  // here so a single warning is surfaced and we can short-circuit the loop.
+  try {
+    loadCatalog();
+  } catch (e: any) {
+    const msg = e instanceof CatalogValidationError ? e.message : (e?.message ?? 'unknown');
+    warnings.push(`base_image_advisor_catalog_unavailable:${msg}`);
+    await ctx.logger.warn(
+      'base_image_advisor',
+      `catalog unavailable — skipping advisor: ${msg}`
+    );
+    return { written: 0, warnings };
+  }
+
+  // Catalog version hash + Dockerfile fan-out for observability — emitted
+  // once per scan, before any per-Dockerfile work, so catalog drift between
+  // worker deploys is greppable across runs.
+  try {
+    await ctx.logger.info(
+      'base_image_advisor',
+      `catalog_hash=${catalogHash()} dockerfile_count=${dockerfilePaths.length}`
+    );
+  } catch {
+    /* logging is best-effort */
+  }
+
+  for (const dfPath of dockerfilePaths) {
+    const relPath = path.relative(ctx.repoPath, dfPath).split(path.sep).join('/');
+    try {
+      const stage = parseDockerfileFinalStage(dfPath);
+      if (!stage) continue;
+      let text: string | null = null;
+      try {
+        text = fs.readFileSync(dfPath, 'utf8');
+      } catch {
+        text = null;
+      }
+      const imageFindings = dockerfileFindings.filter(
+        (f) => f.image_reference === stage.imageRef
+      );
+      const row = generateRecommendation({
+        project_id: ctx.projectId,
+        organization_id: ctx.organizationId,
+        extraction_run_id: ctx.runId,
+        dockerfile_path: relPath.slice(0, 1024),
+        currentImage: stage.imageRef,
+        currentImageDigest: imageFindings[0]?.image_digest ?? null,
+        currentImageFindingCount: imageFindings.length,
+        dockerfileText: text,
+      });
+      rows.push({ ...row });
+    } catch (e: any) {
+      // Per-Dockerfile failure (parse error, read error, advisor row-build
+      // error) — emit a per-file warning and continue. Other Dockerfiles
+      // still produce recommendations.
+      warnings.push(`base_image_advisor_failed:${relPath}:${e?.message ?? 'unknown'}`);
+      // Wrap the logger call — a logger fault inside the catch arm must not
+      // re-throw and abort the advisor loop. Mirrors the catalog_hash log
+      // and the reachability log treatment.
+      try {
+        await ctx.logger.warn(
+          'base_image_advisor',
+          `dockerfile ${relPath} skipped: ${e?.message ?? e}`
+        );
+      } catch {
+        /* logging is best-effort */
+      }
+    }
+  }
+
+  if (rows.length === 0) return { written: 0, warnings };
+  try {
+    const result = await upsertBaseImageRecommendations(ctx.supabase, rows);
+    return { written: result.inserted, warnings };
+  } catch (e: any) {
+    warnings.push(`base_image_advisor_upsert_failed:${e?.message ?? 'unknown'}`);
+    return { written: 0, warnings };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,6 +1328,17 @@ export async function runIaCAndContainerScans(
         'container_scan',
         `Container scan complete — ${summary.containerFindingsWritten} findings written, ${containerResult.skipped.length} images skipped`
       );
+
+      // Base-image advisor — recommendations are derived from the Dockerfile
+      // findings just written, so this runs after the container upsert.
+      const advisor = await runBaseImageAdvisor(ctx, containerResult.findings.dockerfile);
+      summary.warnings.push(...advisor.warnings);
+      if (advisor.written > 0) {
+        await ctx.logger.info(
+          'container_scan',
+          `Base-image advisor — ${advisor.written} recommendation(s) written`
+        );
+      }
     } catch (err: any) {
       summary.warnings.push(`container_failed:${err?.message ?? 'unknown'}`);
       await logStepError(ctx.supabase as any, {
@@ -1179,4 +1376,6 @@ export function ensureWorkspaceTmp(): string {
 export const _internal = {
   isPublicImage,
   scanOneImage,
+  runBaseImageAdvisor,
+  reachabilityBudgetMs,
 };

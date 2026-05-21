@@ -1,0 +1,316 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`BaseImageRecommendationCard — snapshots > matches the empty-state snapshot 1`] = `
+<div>
+  <div
+    class="rounded-lg border border-border bg-background-card p-4"
+  >
+    <div
+      class="flex items-start justify-between gap-3"
+    >
+      <div
+        class="min-w-0"
+      >
+        <div
+          class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1"
+        >
+          Dockerfile
+        </div>
+        <div
+          class="text-sm text-foreground-secondary"
+        >
+          No hardened alternative for
+           
+          <code
+            class="text-foreground"
+          >
+            node:20-bullseye
+          </code>
+           in the catalog yet.
+        </div>
+      </div>
+    </div>
+    <div
+      class="mt-3"
+    >
+      <button
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        type="button"
+      >
+        Suggest this image family
+      </button>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`BaseImageRecommendationCard — snapshots > matches the real-recommendation snapshot 1`] = `
+<div>
+  <div
+    class="rounded-lg border border-border bg-background-card p-4"
+  >
+    <div
+      class="flex items-start justify-between gap-3"
+    >
+      <div
+        class="min-w-0"
+      >
+        <div
+          class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1"
+        >
+          Dockerfile
+        </div>
+        <div
+          class="flex items-center gap-2 text-sm flex-wrap"
+        >
+          <code
+            class="text-foreground-secondary"
+          >
+            node:20-bullseye
+          </code>
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-arrow-right h-3.5 w-3.5 text-muted-foreground shrink-0"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M5 12h14"
+            />
+            <path
+              d="m12 5 7 7-7 7"
+            />
+          </svg>
+          <code
+            class="text-foreground font-medium"
+          >
+            cgr.dev/chainguard/node:20
+          </code>
+        </div>
+      </div>
+      <button
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        type="button"
+      >
+        Dismiss
+      </button>
+    </div>
+    <div
+      class="mt-3 flex flex-wrap items-center gap-1.5"
+    >
+      <span
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border bg-green-500/10 text-green-400 border-green-500/20"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-shield-check h-3 w-3"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+          />
+          <path
+            d="m9 12 2 2 4-4"
+          />
+        </svg>
+        Likely safe drop-in
+      </span>
+      <span
+        class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-green-500/10 text-green-400 border-green-500/20"
+      >
+        −
+        40
+         CVEs
+      </span>
+      <span
+        class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-foreground/5 text-foreground-secondary border-border"
+      >
+        Drop-in score 
+        85
+      </span>
+    </div>
+    <div
+      class="mt-3"
+    >
+      <button
+        class="inline-flex items-center gap-1 text-xs text-foreground-secondary hover:text-foreground transition-colors"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-chevron-down h-3.5 w-3.5 transition-transform"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m6 9 6 6 6-6"
+          />
+        </svg>
+        See
+         
+        1
+         other option
+      </button>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`BaseImageRecommendationCard — snapshots > matches the shell-required snapshot 1`] = `
+<div>
+  <div
+    class="rounded-lg border border-border bg-background-card p-4"
+  >
+    <div
+      class="flex items-start justify-between gap-3"
+    >
+      <div
+        class="min-w-0"
+      >
+        <div
+          class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1"
+        >
+          Dockerfile
+        </div>
+        <div
+          class="flex items-center gap-2 text-sm flex-wrap"
+        >
+          <code
+            class="text-foreground-secondary"
+          >
+            node:20-bullseye
+          </code>
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-arrow-right h-3.5 w-3.5 text-muted-foreground shrink-0"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M5 12h14"
+            />
+            <path
+              d="m12 5 7 7-7 7"
+            />
+          </svg>
+          <code
+            class="text-foreground font-medium"
+          >
+            cgr.dev/chainguard/node:20
+          </code>
+        </div>
+      </div>
+      <button
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        type="button"
+      >
+        Dismiss
+      </button>
+    </div>
+    <div
+      class="mt-3 flex flex-wrap items-center gap-1.5"
+    >
+      <span
+        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border bg-amber-500/10 text-amber-400 border-amber-500/20"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-shield-alert h-3 w-3"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+          />
+          <path
+            d="M12 8v4"
+          />
+          <path
+            d="M12 16h.01"
+          />
+        </svg>
+        Needs a shell — verify
+      </span>
+      <span
+        class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-green-500/10 text-green-400 border-green-500/20"
+      >
+        −
+        40
+         CVEs
+      </span>
+      <span
+        class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border bg-foreground/5 text-foreground-secondary border-border"
+      >
+        Drop-in score 
+        85
+      </span>
+    </div>
+    <div
+      class="mt-3"
+    >
+      <button
+        class="inline-flex items-center gap-1 text-xs text-foreground-secondary hover:text-foreground transition-colors"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-chevron-down h-3.5 w-3.5 transition-transform"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m6 9 6 6 6-6"
+          />
+        </svg>
+        See
+         
+        1
+         other option
+      </button>
+    </div>
+  </div>
+</div>
+`;

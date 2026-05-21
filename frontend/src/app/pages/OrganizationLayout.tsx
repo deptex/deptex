@@ -210,8 +210,12 @@ export default function OrganizationLayout() {
   useEffect(() => {
     if (id) {
       const cachedOrg = api.getCachedOrganization(id);
-      if (cachedOrg && (!organization || organization.id !== id)) {
+      if (cachedOrg) {
         setOrganization(cachedOrg);
+      } else if (organization && organization.id !== id) {
+        // Navigating to a new id with no cache entry — clear stale org so the
+        // sidebar shows the skeleton instead of the previous org's name/role.
+        setOrganization(null);
       }
       loadOrganization();
     }

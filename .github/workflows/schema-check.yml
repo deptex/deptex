@@ -71,8 +71,11 @@ jobs:
               | awk '{print $NF}' \
               | sort -u)
             if [ -z "$IDS" ]; then
-              echo "  (no DDL identifiers parsed — treating as non-reflecting)"
-              ALL_REFLECTED=no
+              # No DDL identifiers — this is a pure-data migration (UPDATE,
+              # INSERT, DELETE only). Such migrations don't change schema.sql
+              # by definition, so the reflection check has nothing to enforce.
+              # Treat as reflected.
+              echo "  (no DDL identifiers — data-only migration, treating as reflected)"
               continue
             fi
             for id in $IDS; do

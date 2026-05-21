@@ -16,6 +16,23 @@ export interface DastFindingRaw {
   payload_redacted: string | null;
   response_evidence_redacted: string | null;
   confidence: 'confirmed' | 'high' | 'medium' | 'low';
+  // ---- v2.1c — Nuclei engine fields ----
+  // All optional: ZAP findings leave them unset. The pipeline defaults
+  // `engine` to 'zap' on the ZAP path so every inserted row is tagged.
+  /** Which DAST engine produced this finding. */
+  engine?: 'zap' | 'nuclei';
+  /** Nuclei template id (mirrors rule_id for Nuclei findings). */
+  template_id?: string | null;
+  /** True when the Nuclei template is tagged `kev` (CISA Known Exploited). */
+  kev?: boolean;
+  /** CVE ids from the Nuclei template classification — drives the SCA flip. */
+  cve_ids?: string[];
+  /** EPSS score from the Nuclei template classification, when present. */
+  epss_score?: number | null;
+  /** CPE string from the Nuclei template classification, when present. */
+  cpe?: string | null;
+  /** Values extracted by the Nuclei template's extractors (redacted). */
+  extracted_values?: string[] | null;
 }
 
 export type DastScanProfile = 'auto' | 'quick' | 'full' | 'api';
@@ -114,7 +131,7 @@ const CONFIDENCE_TO_LABEL: Record<string, DastFindingRaw['confidence']> = {
   '4': 'confirmed',
 };
 
-function owaspRefForCwe(cweId: string | null): string | null {
+export function owaspRefForCwe(cweId: string | null): string | null {
   if (!cweId) return null;
   // Coarse OWASP Top 10 2021 mapping covering the most common ZAP rule classes.
   const cweNum = parseInt(cweId, 10);

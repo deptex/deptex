@@ -6,6 +6,7 @@
 // the spawn step in every test.
 
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 import { runDastPipeline, DastPipelineAbortError } from '../dast/pipeline';
 import type { ExtractionJobRow } from '../job-db';
 
@@ -23,6 +24,7 @@ interface MockSupabase {
   setRpcResponse: (resp: SupabaseResp) => void;
   recordedUpdates: Array<{ table: string; values: Record<string, unknown> }>;
   recordedRpcs: Array<{ name: string; args: Record<string, unknown> }>;
+  recordedInserts: Array<{ table: string; rows: unknown }>;
   // narrow Storage shape used by the pipeline; Storage is a duck-typed structural interface.
   client: {
     from: (table: string) => unknown;
@@ -38,6 +40,7 @@ function makeMockSupabase(): MockSupabase {
   let rpcDefault: SupabaseResp = { data: null, error: null };
   const recordedUpdates: MockSupabase['recordedUpdates'] = [];
   const recordedRpcs: MockSupabase['recordedRpcs'] = [];
+  const recordedInserts: MockSupabase['recordedInserts'] = [];
 
   function nextForTable(table: string): SupabaseResp {
     const q = tableQueues.get(table);
@@ -60,7 +63,8 @@ function makeMockSupabase(): MockSupabase {
       limit(_n: number) {
         return chain;
       },
-      insert(_rows: unknown) {
+      insert(rows: unknown) {
+        recordedInserts.push({ table, rows });
         return chain;
       },
       update(values: Record<string, unknown>) {
@@ -105,6 +109,7 @@ function makeMockSupabase(): MockSupabase {
     },
     recordedUpdates,
     recordedRpcs,
+    recordedInserts,
     client: {
       from(table: string) {
         return makeChain(table);
@@ -505,5 +510,96 @@ describe('runDastPipeline — anonymous (no credential) path', () => {
         (u.values.error_category as string).startsWith('dast_credential_'),
     );
     expect(credErrorWrites).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nuclei engine branch (v2.1c): a dast_nuclei job runs runDastPipeline end to
+// end with a faked `nuclei` process, and the runtime-confirmation RPC fires
+// only when an inserted finding carries CVE ids.
+// ---------------------------------------------------------------------------
+
+/** Fake `spawn` that emits `stdout` as one JSONL chunk then exits 0. */
+function makeFakeNucleiSpawn(stdout: string): any {
+  return () => {
+    const child: any = new EventEmitter();
+    child.pid = 5151;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+    setTimeout(() => {
+      child.stdout.emit('data', Buffer.from(stdout, 'utf-8'));
+      child.emit('close', 0, null);
+    }, 5);
+    return child;
+  };
+}
+
+const NUCLEI_KEV_LINE = JSON.stringify({
+  'template-id': 'CVE-2017-12615',
+  info: {
+    name: 'Apache Tomcat - Remote Code Execution',
+    severity: 'critical',
+    tags: ['cve', 'kev', 'rce'],
+    classification: { 'cve-id': ['CVE-2017-12615'], 'cwe-id': ['CWE-434'] },
+  },
+  type: 'http',
+  host: 'https://example.com',
+  'matched-at': 'https://example.com/evil.jsp',
+  request: 'PUT /evil.jsp HTTP/1.1',
+});
+
+const NUCLEI_NO_CVE_LINE = JSON.stringify({
+  'template-id': 'tech-detect',
+  info: { name: 'Technology detection', severity: 'info', tags: ['tech'] },
+  type: 'http',
+  'matched-at': 'https://example.com/',
+});
+
+describe('runDastPipeline — Nuclei engine branch', () => {
+  it('runs the Nuclei engine for a dast_nuclei job: engine/kev on inserts, confirm RPC fires', async () => {
+    delete process.env.DAST_CREDENTIAL_KEY;
+    const mock = makeMockSupabase();
+    const job = makeJobRow({ type: 'dast_nuclei' });
+    primeHappyPath(mock, job /* no credential — anonymous Nuclei scan */);
+
+    const result = await runDastPipeline(job, mock.client as never, {
+      spawnImpl: makeFakeNucleiSpawn(`${NUCLEI_KEV_LINE}\n`),
+      cancellationPollMs: 100_000,
+      zapWorkDir: require('os').tmpdir(),
+    });
+
+    // The dispatch resolved to Nuclei and the finding round-tripped into the
+    // insert payload with engine='nuclei' and the KEV flag set.
+    const findingInserts = mock.recordedInserts.filter((i) => i.table === 'project_dast_findings');
+    expect(findingInserts.length).toBeGreaterThan(0);
+    const rows = findingInserts[0].rows as Array<Record<string, unknown>>;
+    expect(rows[0].engine).toBe('nuclei');
+    expect(rows[0].kev).toBe(true);
+
+    // The finding carried a CVE id, so the runtime-confirmation batch ran.
+    const confirmCalls = mock.recordedRpcs.filter((r) => r.name === 'confirm_pdvs_from_dast_run');
+    expect(confirmCalls).toHaveLength(1);
+    expect(mock.recordedRpcs.filter((r) => r.name === 'commit_dast_target_run')).toHaveLength(1);
+    // The RPC mock returns null data → zero flips.
+    expect(result.runtime_confirmed_count).toBe(0);
+  });
+
+  it('skips the confirm RPC when no Nuclei finding carries a CVE id', async () => {
+    delete process.env.DAST_CREDENTIAL_KEY;
+    const mock = makeMockSupabase();
+    const job = makeJobRow({ type: 'dast_nuclei' });
+    primeHappyPath(mock, job);
+
+    const result = await runDastPipeline(job, mock.client as never, {
+      spawnImpl: makeFakeNucleiSpawn(`${NUCLEI_NO_CVE_LINE}\n`),
+      cancellationPollMs: 100_000,
+      zapWorkDir: require('os').tmpdir(),
+    });
+
+    // cveSignalCount === 0 → confirm_pdvs_from_dast_run must NOT be called
+    // (its tenancy guard would otherwise raise P0001 on every clean run).
+    expect(mock.recordedRpcs.filter((r) => r.name === 'confirm_pdvs_from_dast_run')).toHaveLength(0);
+    expect(result.runtime_confirmed_count).toBe(0);
   });
 });

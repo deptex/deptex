@@ -2333,7 +2333,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, status'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status'
       )
       .in('project_id', projectIds)
       .in('extraction_run_id', activeRunIds)
@@ -2409,6 +2409,9 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
         sla_status: r.sla_status ?? null,
         sla_deadline_at: r.sla_deadline_at ?? null,
         reachability_level: r.reachability_level ?? null,
+        runtime_confirmed_at: r.runtime_confirmed_at ?? null,
+        runtime_confirmed_dast_finding_id: r.runtime_confirmed_dast_finding_id ?? null,
+        runtime_confirmed_prior_level: r.runtime_confirmed_prior_level ?? null,
         project_id: r.project_id,
         project_name: proj?.name ?? 'Unknown',
         project_framework: proj?.framework ?? null,

@@ -820,6 +820,12 @@ export default function OrganizationVulnerabilitiesPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // Clear data from the previous org so stillShowingSkeleton (which gates on
+    // teamsWithProjects.length === 0) actually triggers and the canvas wipes
+    // before the new org's fetch lands. Otherwise the user briefly sees the
+    // prior org's nodes/teams in the new org's graph.
+    setRawTeamsWithProjects([]);
+    setTeamsById({});
 
     Promise.all([
       api.getTeams(organization.id),

@@ -1,7 +1,13 @@
-import { Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ChevronDown, Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import type { DastJobDTO, DastTargetDTO } from '../../lib/api';
 
 interface DastTargetsListProps {
@@ -12,7 +18,7 @@ interface DastTargetsListProps {
   recheckingRuntimeTargetId: string | null;
   drainModeOn: boolean;
   canManage: boolean;
-  onScan: (target: DastTargetDTO) => void;
+  onScan: (target: DastTargetDTO, engine: 'zap' | 'nuclei') => void;
   onEdit: (target: DastTargetDTO) => void;
   onRecheckRuntime: (target: DastTargetDTO) => void;
 }
@@ -140,28 +146,55 @@ export function DastTargetsList({
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {canManage ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onScan(target)}
-                          disabled={scanDisabled}
-                        >
-                          {scanningTargetId === target.id || inFlight ? (
-                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
-                          ) : (
-                            <Play className="h-3.5 w-3.5 mr-2" />
-                          )}
-                          {inFlight ? 'Running' : 'Scan'}
+                  scanDisabled ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button variant="outline" size="sm" disabled>
+                            {scanningTargetId === target.id || inFlight ? (
+                              <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                            ) : (
+                              <Play className="h-3.5 w-3.5 mr-2" />
+                            )}
+                            {inFlight ? 'Running' : 'Scan'}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {scanDisabledReason ? (
+                        <TooltipContent>{scanDisabledReason}</TooltipContent>
+                      ) : null}
+                    </Tooltip>
+                  ) : (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Play className="h-3.5 w-3.5 mr-2" />
+                          Scan
+                          <ChevronDown className="h-3.5 w-3.5 ml-1.5 -mr-0.5 opacity-60" />
                         </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {scanDisabledReason ? (
-                      <TooltipContent>{scanDisabledReason}</TooltipContent>
-                    ) : null}
-                  </Tooltip>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-60">
+                        <DropdownMenuItem
+                          onClick={() => onScan(target, 'zap')}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span className="text-sm text-foreground">ZAP</span>
+                          <span className="text-xs text-foreground-secondary">
+                            Crawl + active/passive web scan
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => onScan(target, 'nuclei')}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span className="text-sm text-foreground">Nuclei</span>
+                          <span className="text-xs text-foreground-secondary">
+                            Template-based CVE &amp; exposure checks
+                          </span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )
                 ) : null}
                 {canManage ? (
                   <Tooltip>

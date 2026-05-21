@@ -5,6 +5,31 @@ import type { ContainerFinding, IaCFinding } from './types';
 
 const BATCH_SIZE = 100;
 
+/**
+ * Multiplier applied to a container finding's severity-based depscore when the
+ * reachability classifier proved the OS package is NOT loaded by the image's
+ * entrypoint. `module` and unclassified (`null`) findings keep the full
+ * severity score — fail-closed by construction.
+ *
+ * Deliberately diverges from `depscanner/src/depscore.ts`'s
+ * `REACHABILITY_WEIGHT_UNREACHABLE = 0.0` for code-dependency findings:
+ *
+ *   - Code-dependency reachability comes from a call-graph traversal of the
+ *     project's own source. An `unreachable` verdict there is strong evidence
+ *     the package can't be invoked, so the depscore zeroes out.
+ *   - Container OS-package reachability is a static inference from DT_NEEDED
+ *     chains + dlopen literals against the image's dpkg/apk DB. The binutils
+ *     and `exec "$@"`-wrapper fallbacks both fail closed to `module`, so an
+ *     `unreachable` verdict here means "we positively determined nothing
+ *     reaches it" — a weaker signal than the code-dep call graph. We downweight
+ *     it hard but never zero it.
+ *
+ * Locked at 0.4: a HIGH `unreachable` finding lands at 28 (just below LOW=30),
+ * CRITICAL at 36 (above LOW), MEDIUM at 20. The named constant exists for
+ * future tuning, not a deferred decision.
+ */
+export const CONTAINER_UNREACHABLE_DEPSCORE_MULTIPLIER = 0.4;
+
 interface IaCRow extends Record<string, unknown> {
   project_id: string;
   extraction_run_id: string;
@@ -52,6 +77,8 @@ interface ContainerRow extends Record<string, unknown> {
   description: string | null;
   rule_doc_url: string | null;
   container_fingerprint: string | null;
+  reachability_level: 'module' | 'unreachable' | null;
+  reachability_details: Record<string, unknown> | null;
 }
 
 export interface UpsertResult {
@@ -68,6 +95,22 @@ function severityToDepscore(severity: string | null): number | null {
     case 'INFO': return 10;
     default: return null;
   }
+}
+
+/**
+ * Compute the depscore for a container finding, folding in the static OS-
+ * package reachability verdict so an `unreachable` finding ranks below a
+ * `module`/unclassified finding of equal severity. Used only by
+ * upsertContainerFindings — IaC findings have no reachability signal and
+ * continue to use `severityToDepscore` directly.
+ */
+export function containerDepscore(f: ContainerFinding): number | null {
+  const base = severityToDepscore(f.severity);
+  if (base === null) return null;
+  if (f.reachability_level === 'unreachable') {
+    return Math.round(base * CONTAINER_UNREACHABLE_DEPSCORE_MULTIPLIER);
+  }
+  return base;
 }
 
 /**
@@ -160,10 +203,12 @@ export async function upsertContainerFindings(
     is_kev: f.is_kev,
     fix_versions: f.fix_versions ?? [],
     layer_digest: f.layer_digest,
-    depscore: severityToDepscore(f.severity),
+    depscore: containerDepscore(f),
     description: f.description,
     rule_doc_url: f.rule_doc_url,
     container_fingerprint: f.container_fingerprint,
+    reachability_level: f.reachability_level ?? null,
+    reachability_details: f.reachability_details ?? null,
   }));
 
   let inserted = 0;
@@ -177,6 +222,53 @@ export async function upsertContainerFindings(
       });
     if (error) {
       throw new Error(`upsertContainerFindings batch ${i}: ${error.message}`);
+    }
+    inserted += batch.length;
+  }
+  return { inserted, staleDeleted: 0 };
+}
+
+// ============================================================================
+// project_base_image_recommendations — one card per Dockerfile per run
+// ============================================================================
+
+/** Row shape accepted by upsertBaseImageRecommendations — mirrors the advisor's
+ *  BaseImageRecommendationRow without importing the advisor module. */
+export interface BaseImageRecommendationInsert extends Record<string, unknown> {
+  project_id: string;
+  organization_id: string;
+  extraction_run_id: string;
+  dockerfile_path: string;
+  current_image: string;
+  current_image_digest: string | null;
+  current_image_cve_count: number | null;
+  recommended_image: string | null;
+  recommended_image_cve_count: number | null;
+  cve_delta: number | null;
+  alternatives: unknown;
+  shell_compat_verdict: string;
+  shell_compat_evidence: unknown;
+  drop_in_score: number;
+}
+
+/**
+ * Upsert base-image recommendations. The unique key (project, run, dockerfile)
+ * means a re-run of the same extraction replaces its prior rows; a new
+ * extraction_run_id naturally supersedes the previous run's recommendations.
+ */
+export async function upsertBaseImageRecommendations(
+  supabase: SupabaseClient,
+  rows: BaseImageRecommendationInsert[]
+): Promise<UpsertResult> {
+  if (rows.length === 0) return { inserted: 0, staleDeleted: 0 };
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const { error } = await supabase
+      .from('project_base_image_recommendations')
+      .upsert(batch, { onConflict: 'project_id,extraction_run_id,dockerfile_path' });
+    if (error) {
+      throw new Error(`upsertBaseImageRecommendations batch ${i}: ${error.message}`);
     }
     inserted += batch.length;
   }

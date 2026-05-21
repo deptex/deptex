@@ -474,18 +474,26 @@ export const api = {
     });
   },
 
-  async getInvitation(invitationId: string): Promise<{ id: string; email: string; role: string; organization_id: string; organization_name: string; expires_at: string }> {
-    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-    const response = await fetch(`${API_BASE_URL}/api/organizations/invitations/${invitationId}`);
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
-    }
-    return response.json();
+  async getInvitation(invitationId: string): Promise<{
+    id: string;
+    email: string;
+    role: string;
+    role_display_name: string | null;
+    role_color: string | null;
+    organization_id: string;
+    organization_name: string;
+    organization_avatar_url: string | null;
+    expires_at: string;
+  }> {
+    return fetchWithAuth(`/api/organizations/invitations/${invitationId}`);
   },
 
   async acceptInvitation(organizationId: string, invitationId: string): Promise<{ message: string; organization_id: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/accept`, { method: 'POST' });
+  },
+
+  async declineInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/invitations/${invitationId}/decline`, { method: 'POST' });
   },
 
   async cancelInvitation(organizationId: string, invitationId: string): Promise<{ message: string }> {
@@ -2076,7 +2084,7 @@ export const api = {
 
   async triggerDastScan(
     projectId: string,
-    body: { target_id: string },
+    body: { target_id: string; engine?: 'zap' | 'nuclei' },
   ): Promise<DastScanTriggerResponse> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
       method: 'POST',
@@ -2314,6 +2322,41 @@ export const api = {
     return fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/risk-accept`,
       { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  // ============================================================
+  // Base-image recommendations (Phase 2 — Item J)
+  // ============================================================
+
+  async getBaseImageRecommendations(
+    organizationId: string,
+    projectId: string
+  ): Promise<{ recommendations: BaseImageRecommendation[] }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations`
+    );
+  },
+
+  async dismissBaseImageRecommendation(
+    organizationId: string,
+    projectId: string,
+    recommendationId: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations/${recommendationId}/dismiss`,
+      { method: 'POST', body: JSON.stringify({}) }
+    );
+  },
+
+  async suggestBaseImage(
+    organizationId: string,
+    projectId: string,
+    sourceImage: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-suggestions`,
+      { method: 'POST', body: JSON.stringify({ source_image: sourceImage }) }
     );
   },
 
@@ -4055,6 +4098,8 @@ export interface DastFindingDTO {
   linked_sast_finding_id?: string | null;
   cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
+  /** CISA Known-Exploited flag — true only for KEV-tagged Nuclei findings. */
+  kev: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
   created_at: string;
@@ -4131,6 +4176,11 @@ export interface ProjectVulnerability {
   sla_deadline_at?: string | null;
   /** Reachability (org list rows) */
   reachability_level?: ReachabilityLevel;
+  /** v2.1c — set when a Nuclei DAST scan confirmed this vuln at runtime. */
+  runtime_confirmed_at?: string | null;
+  runtime_confirmed_dast_finding_id?: string | null;
+  /** Reachability level the row held before the runtime confirmation flipped it. */
+  runtime_confirmed_prior_level?: string | null;
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
   project_name?: string;
@@ -4798,9 +4848,35 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  /** Phase 2 — container findings rolled up by static reachability verdict.
+   *  Absent on responses from a backend that predates Phase 2. */
+  container_reachability?: { module: number; unreachable: number; unclassified: number };
   infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
+}
+
+/** Phase 2 base-image upgrade recommendation — one card per Dockerfile. */
+export interface BaseImageRecommendation {
+  id: string;
+  dockerfile_path: string;
+  current_image: string;
+  current_image_digest: string | null;
+  current_image_cve_count: number | null;
+  recommended_image: string | null;
+  recommended_image_cve_count: number | null;
+  cve_delta: number | null;
+  alternatives: Array<{
+    image: string;
+    provider: 'chainguard' | 'distroless' | 'dhi' | 'official_slim' | 'wolfi';
+    cve_count: number | null;
+    drop_in_score: number;
+  }>;
+  shell_compat_verdict: 'shell_required' | 'no_shell_required' | 'unknown';
+  shell_compat_evidence: Record<string, unknown>;
+  drop_in_score: number;
+  is_dismissed: boolean;
+  created_at: string;
 }
 
 export type RegistryType =
