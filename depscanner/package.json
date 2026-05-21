@@ -47,6 +47,7 @@
     "test:few-shot-gate2": "tsx test/few-shot-roundtrip-gate2.ts",
     "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
     "test:composition-pglite": "tsx test/composition-pglite.test.ts",
+    "e2e:iac-code-composition": "tsx scripts/e2e-iac-code-composition.ts",
     "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
     "test:dast-v2-1c-migration-pglite": "tsx test/dast-v2-1c-migration-pglite.ts",
     "test:dast-nuclei-runner": "tsx test/dast-nuclei-runner.test.ts",
