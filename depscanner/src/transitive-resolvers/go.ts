@@ -41,7 +41,12 @@ export interface TransitiveResolverResult {
   /** Module count from the resolver's raw output, before dedup. */
   rawModuleCount: number;
   /** Structured tag for telemetry. */
-  source: 'go-list-m-json-all';
+  source:
+    | 'go-list-m-json-all'
+    | 'pip-dry-run-report'
+    | 'pipdeptree-venv'
+    | 'composer-lock-parse'
+    | 'gemfile-lock-parse';
 }
 
 /** One record in a `go list -m -json all` stream. */

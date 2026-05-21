@@ -40,7 +40,7 @@ export function resolveImportToDep(
     case 'gem':
       return resolveRubygemsImport(importName, namesOf(deps));
     case 'composer':
-      return resolveComposerImport(importName, namesOf(deps));
+      return resolveComposerImport(importName, deps);
     case 'cargo':
       return resolveCargoImport(importName, namesOf(deps));
     case 'nuget':

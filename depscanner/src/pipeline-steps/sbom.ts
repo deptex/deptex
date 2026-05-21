@@ -26,6 +26,8 @@ import {
 import { recoverDirectSet, applyRecoveredDirectSet } from '../dependency-graph';
 import { resolveGoTransitives } from '../transitive-resolvers/go';
 import { resolvePypiTransitives } from '../transitive-resolvers/pypi';
+import { resolveComposerTransitives } from '../transitive-resolvers/composer';
+import { resolveRubygemsTransitives } from '../transitive-resolvers/rubygems';
 import { retry, updateStep, setError, classifyCdxgenError } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -177,8 +179,10 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
   // and `-t gomod` → `golang`-tagged PURLs too; the SBOM PURL ecosystem is
   // always `golang`, but the *job* ecosystem string varies depending on
   // which surface emitted it.
-  const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'golang', 'pypi']);
+  const RESOLVER_ECOSYSTEMS = new Set(['gomod', 'golang', 'pypi', 'composer', 'gem']);
   const isGo = jobEcosystem === 'gomod' || jobEcosystem === 'golang';
+  const isComposer = jobEcosystem === 'composer';
+  const isRubygems = jobEcosystem === 'gem';
   // cdxgen-without-`--deep` sometimes emits a sprinkle of transitive rows
   // alongside the directs (e.g. caddy at v2.4.6 returns 31 deps with mixed
   // is_direct flags but the real transitive closure is ~250). The old
@@ -200,6 +204,10 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     try {
       const result = isGo
         ? await resolveGoTransitives(workspaceRoot)
+        : isComposer
+        ? await resolveComposerTransitives(workspaceRoot)
+        : isRubygems
+        ? await resolveRubygemsTransitives(workspaceRoot)
         : await resolvePypiTransitives(workspaceRoot);
       if (result === null) {
         await log.info(
@@ -237,13 +245,25 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
         try {
           const reportsDir = path.join(workspaceRoot, 'depscan-reports');
           fs.mkdirSync(reportsDir, { recursive: true });
-          const eco = isGo ? 'golang' : 'pypi';
+          const eco = isGo
+            ? 'golang'
+            : isComposer
+            ? 'composer'
+            : isRubygems
+            ? 'gem'
+            : 'pypi';
           const extraPurls = result.deps
             .map((d) => {
               if (!d.name || !d.version) return null;
-              return isGo
-                ? `pkg:golang/${d.name}@${d.version}`
-                : `pkg:pypi/${d.name}@${d.version}`;
+              // composer PURLs require the `vendor/name` form; the
+              // composer resolver carries `namespace` for exactly this.
+              if (isComposer) {
+                if (!d.namespace) return null;
+                return `pkg:composer/${d.namespace}/${d.name}@${d.version}`;
+              }
+              if (isRubygems) return `pkg:gem/${d.name}@${d.version}`;
+              if (isGo) return `pkg:golang/${d.name}@${d.version}`;
+              return `pkg:pypi/${d.name}@${d.version}`;
             })
             .filter((p): p is string => p !== null);
           fs.writeFileSync(

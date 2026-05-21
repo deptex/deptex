@@ -45,6 +45,7 @@ const REQUIREMENTS_FILES = [
   'requirements/prod.txt',
 ];
 const PYPROJECT = 'pyproject.toml';
+const SETUP_PY = 'setup.py';
 
 /**
  * Resolve transitive pypi packages for the given repo. Returns null when
@@ -58,7 +59,11 @@ export async function resolvePypiTransitives(
   // resolver is happiest with them. pyproject.toml is the modern source
   // but the resolver path is more brittle on poetry-locked projects, so
   // we fall through to the pipdeptree path when pip can't handle it.
-  let manifest: { kind: 'requirements'; path: string } | { kind: 'pyproject'; path: string } | null = null;
+  let manifest:
+    | { kind: 'requirements'; path: string }
+    | { kind: 'pyproject'; path: string }
+    | { kind: 'setup_py'; path: string }
+    | null = null;
   for (const rel of REQUIREMENTS_FILES) {
     const full = path.join(repoRoot, rel);
     if (fs.existsSync(full)) {
@@ -70,6 +75,16 @@ export async function resolvePypiTransitives(
     const pyproj = path.join(repoRoot, PYPROJECT);
     if (fs.existsSync(pyproj)) {
       manifest = { kind: 'pyproject', path: pyproj };
+    }
+  }
+  // Legacy setuptools shape: `setup.py` (often with companion
+  // `setup.cfg` declaring install_requires). sentry-python, requests,
+  // botocore and most pre-2020 packages still ship this. pip resolves
+  // the install plan by pointing at the directory containing setup.py.
+  if (!manifest) {
+    const setupPy = path.join(repoRoot, SETUP_PY);
+    if (fs.existsSync(setupPy)) {
+      manifest = { kind: 'setup_py', path: setupPy };
     }
   }
   if (!manifest) return null;
@@ -99,14 +114,19 @@ export async function resolvePypiTransitives(
  */
 async function resolveViaPipDryRun(
   manifestPath: string,
-  kind: 'requirements' | 'pyproject',
+  kind: 'requirements' | 'pyproject' | 'setup_py',
 ): Promise<TransitiveResolverResult> {
+  // pyproject.toml + setup.py both point pip at the project DIRECTORY;
+  // requirements files point pip at the manifest file directly.
+  // For setup.py we use a non-editable install (`.` not `-e .`) because
+  // some setup.py-only packages don't declare entry points cleanly
+  // enough for editable mode (sentry-python is one).
   const args =
     kind === 'requirements'
       ? ['install', '--dry-run', '--quiet', '--report', '-', '-r', manifestPath]
-      // PEP 660 / 517 — install the project itself in editable mode so
-      // pyproject.toml's [project.dependencies] resolves transitively.
-      : ['install', '--dry-run', '--quiet', '--report', '-', '-e', path.dirname(manifestPath)];
+      : kind === 'pyproject'
+      ? ['install', '--dry-run', '--quiet', '--report', '-', '-e', path.dirname(manifestPath)]
+      : ['install', '--dry-run', '--quiet', '--report', '-', path.dirname(manifestPath)];
 
   const { stdout } = await getExecFileP()('pip', args, {
     maxBuffer: 64 * 1024 * 1024,
@@ -139,6 +159,9 @@ async function resolveViaPipdeptreeVenv(
     await getExecFileP()(pip, ['install', '--quiet', 'pipdeptree']);
     if (manifestPath.endsWith('pyproject.toml')) {
       await getExecFileP()(pip, ['install', '--quiet', '-e', path.dirname(manifestPath)]);
+    } else if (manifestPath.endsWith('setup.py')) {
+      // Non-editable install for legacy setuptools — see pip-dry-run path.
+      await getExecFileP()(pip, ['install', '--quiet', path.dirname(manifestPath)]);
     } else {
       await getExecFileP()(pip, ['install', '--quiet', '-r', manifestPath]);
     }

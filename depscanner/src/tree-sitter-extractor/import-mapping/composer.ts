@@ -15,8 +15,17 @@
  *      few common shapes: `<vendor>/<seg1>`, `<vendor>/<seg1>-<seg2>`,
  *      `<vendor>/<kebab-of-all-after-vendor>`. Skip the redundant
  *      "Component" level that Symfony uses.
- *   4. Case-insensitive match against known deps.
+ *   4. Case-insensitive match against known deps keyed `vendor/name`.
+ *
+ * IMPORTANT: cdxgen emits composer SBOM entries as `{ name: "console",
+ * group: "symfony" }`, NOT `{ name: "symfony/console" }`. The earlier
+ * implementation flattened deps to names only, which built a lookup
+ * map keyed on just `console`/`framework-bundle`/etc — so no candidate
+ * like `symfony/console` ever matched. Always key the lookup on
+ * `${namespace}/${name}` (composer's canonical PURL form).
  */
+
+import type { KnownDep } from '../languages/types';
 
 const KNOWN_INTERIOR_SEGMENTS = new Set([
   'Component', 'Contracts', 'Bundle', 'Bridge',
@@ -39,7 +48,11 @@ function candidatePackages(namespace: string): string[] {
   const out = new Set<string>();
   // Vendor-only (single-package vendors like `monolog/monolog`).
   out.add(`${vendor}/${vendor}`);
-  if (rest.length === 0) out.add(vendor);
+  // ALWAYS include the bare vendor — covers the case where the SBOM
+  // dep is recorded with namespace=null (a flat name) but the source
+  // `use Monolog\Logger` points to a vendor-only package. The bare-name
+  // lookup map indexes on dep.name for exactly this fallback.
+  out.add(vendor);
   if (rest.length >= 1) {
     out.add(`${vendor}/${kebabedRest[0]}`);
     out.add(`${vendor}/${kebabedRest.join('-')}`);
@@ -47,21 +60,41 @@ function candidatePackages(namespace: string): string[] {
   return [...out];
 }
 
+/**
+ * Resolve a PHP namespace import to a composer dep entry.
+ *
+ * Returns the *bare* dep name (matching `project_dependencies.name`) for
+ * downstream code that keys storage on name alone. The caller may need
+ * to round-trip through deps[] to recover the full vendor/name; we keep
+ * the API symmetric with the other resolvers so all `filesByDep` maps
+ * remain name-keyed.
+ */
 export function resolveComposerImport(
   importName: string,
-  knownDeps: readonly string[] = []
+  knownDeps: readonly KnownDep[] = []
 ): string | null {
   if (!importName) return null;
   const candidates = candidatePackages(importName);
   if (candidates.length === 0) return null;
-  if (knownDeps.length === 0) return candidates[0];
+  if (knownDeps.length === 0) return candidates[0].split('/').pop() ?? null;
 
-  const knownLower = new Map<string, string>();
-  for (const dep of knownDeps) knownLower.set(dep.toLowerCase(), dep);
+  // Build a lookup keyed on the canonical PURL form `vendor/name`. cdxgen
+  // emits composer SBOM entries with split `name`+`group` so we must
+  // reconstruct the full identifier here, NOT rely on `name` alone.
+  const knownLower = new Map<string, KnownDep>();
+  for (const dep of knownDeps) {
+    if (dep.namespace) {
+      knownLower.set(`${dep.namespace}/${dep.name}`.toLowerCase(), dep);
+    }
+    // Also index by bare name so vendor-only packages (rare on composer
+    // but possible) and any downstream caller passing pre-joined names
+    // still resolve.
+    knownLower.set(dep.name.toLowerCase(), dep);
+  }
 
   for (const c of candidates) {
     const hit = knownLower.get(c.toLowerCase());
-    if (hit) return hit;
+    if (hit) return hit.name;
   }
   return null;
 }
