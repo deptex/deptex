@@ -116,6 +116,9 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
   const [scanningTargetId, setScanningTargetId] = useState<string | null>(null);
   const [recheckingRuntimeTargetId, setRecheckingRuntimeTargetId] = useState<string | null>(null);
   const [activeScanDialog, setActiveScanDialog] = useState<DastTargetDTO | null>(null);
+  // Engine chosen at the moment the active-scan opt-in dialog opened, replayed
+  // when the user confirms it.
+  const [pendingScanEngine, setPendingScanEngine] = useState<'zap' | 'nuclei'>('zap');
 
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -292,13 +295,13 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     }
   };
 
-  const triggerScan = async (target: DastTargetDTO) => {
+  const triggerScan = async (target: DastTargetDTO, engine: 'zap' | 'nuclei') => {
     if (!canManage) return;
     setScanningTargetId(target.id);
     try {
-      await api.triggerDastScan(projectId, { target_id: target.id });
+      await api.triggerDastScan(projectId, { target_id: target.id, engine });
       toast({
-        title: 'Scan queued',
+        title: `${engine === 'nuclei' ? 'Nuclei' : 'ZAP'} scan queued`,
         description: 'Findings will appear in the Security tab once the scan completes.',
       });
       void refreshJobs();
@@ -312,21 +315,22 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     }
   };
 
-  const handleScan = async (target: DastTargetDTO) => {
+  const handleScan = async (target: DastTargetDTO, engine: 'zap' | 'nuclei') => {
     // ActiveScanOptInDialog gates only on profile='full'. Auto / quick / api
     // are passive — no consent dialog. localStorage memo per target after the
     // first confirmation.
     if (config.scan_profile === 'full' && !hasActiveScanOptIn(target.id)) {
+      setPendingScanEngine(engine);
       setActiveScanDialog(target);
       return;
     }
-    await triggerScan(target);
+    await triggerScan(target, engine);
   };
 
   const handleConfirmActiveScan = async () => {
     if (!activeScanDialog) return;
     recordActiveScanOptIn(activeScanDialog.id);
-    await triggerScan(activeScanDialog);
+    await triggerScan(activeScanDialog, pendingScanEngine);
   };
 
   const handleRecheckRuntime = async (target: DastTargetDTO) => {

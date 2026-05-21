@@ -1,0 +1,359 @@
+# Purpose-built reachability corpus — hand-labelled ground truth.
+#
+# WHY THIS EXISTS (separate from scripts/oss-corpus.yaml):
+#   oss-corpus.yaml is mostly *framework* repos — the wrong shape for a
+#   noise-reduction measurement, because a framework uses its own deps.
+#   This corpus uses *application* repos: an app declares a few deps directly
+#   but pulls a large transitive tree it does not all reach. Each CVE is
+#   hand-labelled reachable / unreachable after reading the repo's role and
+#   the advisory.
+#
+# SCHEMA (shared with oss-corpus.ts):
+#   repos[]: name, repo_url, ecosystem, ref?, ground_truth_cves[]
+#   ground_truth_cves[]: id, expected_reachability, source
+#     expected_reachability ∈ confirmed | data_flow | function | module | unreachable
+#       confirmed/data_flow/function = "reachable" — the false-negative gate
+#       (gate 3) forbids these from being scanned `unreachable`.
+#       module = present + used, specific vulnerable function unverified.
+#       unreachable = the vulnerable code is on no call path in this repo.
+#
+# ACCEPTANCE GATES (scripts/reachability-corpus.ts):
+#   1. corpus-wide noise reduction >= 60%  ((unreachable + 0.5*module)/observed)
+#   2. every ecosystem > 0% unreachable
+#   3. zero CVEs labelled reachable but scanned `unreachable` (false negatives)
+#
+# COVERAGE NOTE (2026-05-21): v3 covers all 8 ecosystems.
+# npm/maven/cargo are oracle-labelled (v2 carry-over); golang/pypi/composer/gem
+# are MEASUREMENT-ONLY (ground_truth_cves: []). The shallow-SBOM problem that
+# previously excluded golang/pypi is solved by the transitive resolver +
+# osv-extra-purls sidecar (see sbom.ts + osv-vuln-scan.ts) which feeds
+# resolver-added purls into the OSV vuln query.
+#
+# Repo pins for the 4 measurement-only ecos are chosen for STALE TRANSITIVES,
+# not for being notable apps: each pin is 2-4 years old so the dep tree
+# carries real CVEs that the reachability classifier can demote. Earlier
+# pins (bandit@1.7.4 / laravel/laravel@v8.6.7 / lobsters HEAD) returned 0
+# findings or hung composer install — bandit's tree was patched, lobsters
+# master tip too current, laravel skeleton triggered a cdxgen install hang.
+#
+# The `id` must be a CVE id — oss-corpus.ts matches observed findings to
+# ground truth on CVE-shaped ids (+ CVE-shaped aliases) only; RUSTSEC-/GHSA-
+# only advisories do not round-trip.
+
+repos:
+  - name: express
+    repo_url: https://github.com/expressjs/express.git
+    ecosystem: npm
+    ref: 4.18.2
+    ground_truth_cves:
+      - id: CVE-2026-2391
+        expected_reachability: function
+        source: |
+          qs prototype pollution. REACHABLE: express depends on qs and calls
+          qs.parse to parse the query string on every request (lib/request.js
+          query getter) — the vulnerable parse path is first-party-reached.
+      - id: CVE-2024-45590
+        expected_reachability: function
+        source: |
+          body-parser DoS. REACHABLE: express ships body-parser as a direct
+          dependency and re-exports it as express.json()/express.urlencoded();
+          its own test suite exercises the parser.
+      - id: CVE-2024-45296
+        expected_reachability: function
+        source: |
+          path-to-regexp ReDoS. REACHABLE: express compiles every route
+          pattern through path-to-regexp (lib/router/layer.js).
+      - id: CVE-2024-52798
+        expected_reachability: function
+        source: path-to-regexp ReDoS (later advisory) — same route-compile path.
+      - id: CVE-2024-47764
+        expected_reachability: function
+        source: |
+          cookie parsing. REACHABLE: express parses the Cookie header via the
+          cookie package in res/req cookie handling.
+      - id: CVE-2026-33916
+        expected_reachability: unreachable
+        source: |
+          handlebars. UNREACHABLE: handlebars/hbs is a devDependency used only
+          by express's examples/ view-engine demos; express's library code
+          (lib/) never invokes a template engine.
+      - id: CVE-2026-33939
+        expected_reachability: unreachable
+        source: |
+          handlebars — devDependency, examples-only, never used by express lib/.
+      - id: CVE-2026-27904
+        expected_reachability: unreachable
+        source: |
+          minimatch ReDoS. UNREACHABLE: minimatch is a transitive dependency
+          of build/test tooling (glob); express's library code never globs.
+      - id: CVE-2026-26996
+        expected_reachability: unreachable
+        source: minimatch — same transitive build-tool position.
+      - id: CVE-2024-55565
+        expected_reachability: unreachable
+        source: |
+          nanoid. UNREACHABLE: transitive dependency of the test toolchain;
+          express's library code never generates ids with nanoid.
+      - id: CVE-2025-64718
+        expected_reachability: unreachable
+        source: |
+          js-yaml. UNREACHABLE: transitive dependency of build/lint tooling;
+          express's library code parses no YAML.
+      - id: CVE-2024-33883
+        expected_reachability: unreachable
+        source: |
+          ejs template injection. UNREACHABLE: ejs is a devDependency for the
+          examples/ view-engine demos; not used by express's library code.
+      - id: CVE-2026-33940
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33938
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33941
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-33937
+        expected_reachability: unreachable
+        source: handlebars — devDependency (hbs), examples-only, not in express lib/.
+      - id: CVE-2026-27903
+        expected_reachability: unreachable
+        source: minimatch ReDoS — transitive build/test-tool dep; express lib never globs.
+      - id: CVE-2026-24001
+        expected_reachability: unreachable
+        source: diff — transitive dep of the mocha test toolchain; not in express lib/.
+      - id: CVE-2025-7339
+        expected_reachability: unreachable
+        source: |
+          on-headers. UNREACHABLE: on-headers is pulled transitively by
+          express's devDependency middleware (morgan / cookie-session /
+          express-session); express's library code never sets a response
+          header through it.
+      - id: CVE-2024-11831
+        expected_reachability: unreachable
+        source: |
+          serialize-javascript. UNREACHABLE: transitive dependency of the
+          mocha test toolchain; express's library code serializes nothing.
+      - id: CVE-2026-34043
+        expected_reachability: unreachable
+        source: serialize-javascript — same transitive mocha-toolchain position.
+      - id: CVE-2022-21681
+        expected_reachability: unreachable
+        source: |
+          marked. UNREACHABLE: marked is a devDependency used only by the
+          examples/markdown demo; express's library code parses no markdown.
+      - id: CVE-2022-21680
+        expected_reachability: unreachable
+        source: marked — devDependency, examples-only, not used by express lib/.
+      - id: CVE-2021-29469
+        expected_reachability: unreachable
+        source: |
+          redis. UNREACHABLE: redis is a transitive dependency of the
+          connect-redis devDependency (a session-store example); express's
+          library code opens no redis connection.
+
+  - name: spring-petclinic
+    repo_url: https://github.com/spring-projects/spring-petclinic.git
+    ecosystem: maven
+    # Pinned SHA, not `main` — a moving branch drifts the transitive dep set
+    # run-to-run and silently rots hand-labelled CVEs. Resolved from
+    # refs/heads/main 2026-05-18. Re-pin (and re-grep ground truth) deliberately.
+    ref: c7ee170434ec3e369fdc9201290ba2ea4c92b557
+    ground_truth_cves:
+      - id: CVE-2026-22741
+        expected_reachability: function
+        source: |
+          spring-webmvc. REACHABLE: petclinic is a Spring MVC application —
+          every @Controller request is dispatched through spring-webmvc.
+      - id: CVE-2026-22735
+        expected_reachability: function
+        source: spring-webmvc — same MVC dispatch path.
+      - id: CVE-2026-22745
+        expected_reachability: function
+        source: spring-webmvc — same MVC dispatch path.
+      - id: CVE-2026-40973
+        expected_reachability: function
+        source: |
+          spring-boot. REACHABLE: petclinic is a Spring Boot application; the
+          boot autoconfiguration/runtime is exercised on startup and request
+          handling.
+      - id: CVE-2026-22731
+        expected_reachability: function
+        source: |
+          spring-boot-starter-actuator. REACHABLE: petclinic declares the
+          actuator starter directly and exposes actuator endpoints.
+      - id: CVE-2026-34500
+        expected_reachability: data_flow
+        source: |
+          tomcat-embed-core. REACHABLE: petclinic runs on embedded Tomcat
+          (spring-boot-starter-web) — the servlet container processes every
+          HTTP request. petclinic's own .java files never `import
+          org.apache.catalina`, so the classifier's "transitive + not
+          first-party-imported" rule marks it unreachable — a false negative
+          this gate is meant to catch.
+      - id: CVE-2026-25854
+        expected_reachability: data_flow
+        source: tomcat-embed-core — same embedded-servlet-container request path.
+      - id: CVE-2026-40477
+        expected_reachability: data_flow
+        source: |
+          thymeleaf-spring6. REACHABLE: petclinic renders its UI from
+          src/main/resources/templates/*.html Thymeleaf templates on every
+          page view — the template engine is squarely on the request path.
+      - id: CVE-2026-29062
+        expected_reachability: module
+        source: |
+          jackson-core. Present via Spring's JSON handling; petclinic is
+          mostly server-rendered Thymeleaf, so whether the specific vulnerable
+          parse path is exercised is unverified — labelled module.
+      - id: CVE-2026-42198
+        expected_reachability: module
+        source: |
+          postgresql JDBC driver. petclinic ships a postgres profile but
+          defaults to H2; the driver is on the classpath but the default run
+          does not exercise it — labelled module.
+
+  - name: bat
+    repo_url: https://github.com/sharkdp/bat.git
+    ecosystem: cargo
+    ref: v0.24.0
+    ground_truth_cves:
+      - id: CVE-2024-12224
+        expected_reachability: unreachable
+        source: |
+          idna. UNREACHABLE: idna is a transitive dependency (via url); bat is
+          a cat-replacement CLI that performs no URL/IDNA parsing.
+      - id: CVE-2024-43806
+        expected_reachability: module
+        source: |
+          rustix. A low-level syscall wrapper pulled transitively; bat does
+          file I/O and terminal handling so some rustix surface is reached,
+          but the specific vulnerable path is unverified — labelled module.
+      - id: CVE-2026-25727
+        expected_reachability: module
+        source: |
+          time crate. Pulled transitively; bat formats timestamps for cached
+          assets, so the crate is used — specific vulnerable path unverified.
+
+  - name: fastify
+    repo_url: https://github.com/fastify/fastify.git
+    ecosystem: npm
+    # Pinned release tag. fastify declares 16 runtime deps but pulls a large
+    # devDependency tree (typescript-eslint, markdownlint, the release tooling)
+    # — the right application shape for measuring dev-scope noise reduction.
+    ref: v4.26.0
+    # Hand-labelled from a discovery scan: every CVE below is on a package
+    # that reaches fastify only through its devDependency tree (lint / test /
+    # release tooling), never through fastify's 16 runtime dependencies.
+    # fast-uri and fast-json-patch advisories are deliberately omitted — those
+    # packages are on fastify's production tree.
+    ground_truth_cves:
+      - id: CVE-2022-25860
+        expected_reachability: unreachable
+        source: |
+          simple-git. UNREACHABLE: simple-git reaches fastify only via the
+          branch-comparer devDependency (release tooling); fastify's library
+          code shells out to no git.
+      - id: CVE-2026-28291
+        expected_reachability: unreachable
+        source: simple-git — same branch-comparer devDependency position.
+      - id: CVE-2024-43799
+        expected_reachability: unreachable
+        source: |
+          send. UNREACHABLE: send is a direct fastify devDependency used by the
+          test suite; fastify's library code does not stream files with it.
+      - id: CVE-2026-1527
+        expected_reachability: unreachable
+        source: |
+          undici. UNREACHABLE: undici is a direct fastify devDependency (the
+          test-suite HTTP client); fastify's library code ships no HTTP client.
+      - id: CVE-2026-22036
+        expected_reachability: unreachable
+        source: undici — same direct-devDependency test-client position.
+      - id: CVE-2025-54798
+        expected_reachability: unreachable
+        source: |
+          tmp. UNREACHABLE: tmp is a transitive dependency of fastify's test
+          toolchain; fastify's library code creates no temp files.
+      - id: CVE-2026-33532
+        expected_reachability: unreachable
+        source: |
+          yaml. UNREACHABLE: yaml reaches fastify only through lint/config
+          devDependency tooling; fastify parses JSON, never YAML, at runtime.
+      - id: CVE-2024-4067
+        expected_reachability: unreachable
+        source: |
+          micromatch ReDoS. UNREACHABLE: micromatch is a transitive dependency
+          of fastify's eslint / glob devDependency tooling.
+      - id: CVE-2026-2327
+        expected_reachability: unreachable
+        source: |
+          markdown-it. UNREACHABLE: markdown-it is a transitive dependency of
+          the markdownlint-cli2 devDependency; fastify renders no markdown.
+      - id: CVE-2026-2950
+        expected_reachability: unreachable
+        source: |
+          lodash. UNREACHABLE: lodash reaches fastify only through eslint-plugin
+          devDependency tooling; fastify's library code does not depend on it.
+      - id: CVE-2026-33750
+        expected_reachability: unreachable
+        source: |
+          brace-expansion. UNREACHABLE: transitive dependency of the
+          minimatch / eslint devDependency tooling; not on fastify's runtime path.
+      - id: CVE-2025-27789
+        expected_reachability: unreachable
+        source: |
+          @babel/helpers. UNREACHABLE: Babel reaches fastify only through
+          devDependency tooling; fastify transpiles nothing at runtime.
+
+  # === v3 expansion: 4 additional ecosystems for the per-ecosystem table ===
+  # These entries are MEASUREMENT-ONLY (ground_truth_cves: []). They exercise
+  # cdxgen + OSV fallback + reachability classifier on real apps from
+  # ecosystems v2 didn't cover. Their findings feed the all-findings noise
+  # reduction metric (allFindingsNoiseReductionPct) without claiming an oracle.
+  # Refs are pinned to 2-4 year-old releases so the transitive trees carry
+  # known CVEs — the engine's noise-reduction job is exactly to classify
+  # which of those library-internal CVEs the app actually reaches.
+
+  - name: caddy
+    repo_url: https://github.com/caddyserver/caddy.git
+    ecosystem: golang
+    # Dec 2021 — pre-v2.5, transitive tree has known CVEs in golang.org/x/*
+    # and indirect deps that have since been patched.
+    ref: v2.4.6
+    ground_truth_cves: []
+
+  - name: mlflow
+    repo_url: https://github.com/mlflow/mlflow.git
+    ecosystem: pypi
+    # Sept 2021 — MLflow 1.20.0. ML platform that declares ~30 install_requires
+    # + a long tail of optional flavor providers (azure-storage-blob,
+    # google-cloud-storage, kubernetes, mleap, prophet, sqlalchemy,
+    # gunicorn, alembic, jinja2, etc.) — many of which are only imported
+    # by specific tracking-server / serving / kubernetes-deployment modes
+    # and not by the core CLI. Better shape for noise-reduction measurement
+    # than mitmproxy (where the proxy uses most of what it declares) or
+    # sentry-python (3-dep tree).
+    ref: c22889f7d4c0a1b876335571c73bb4ed33d6bf8a
+    ground_truth_cves: []
+
+  - name: symfony-demo
+    repo_url: https://github.com/symfony/demo.git
+    ecosystem: composer
+    # Dec 2020 — symfony/demo v1.5.0. Small skeleton, ~50 transitives across
+    # symfony components, twig, doctrine. Chosen specifically because the
+    # full laravel/laravel@v8.6.7 skeleton hung cdxgen's composer install
+    # for 9.7h; this minimal app finishes in minutes.
+    ref: f73440d151db697c2256f46875b899356bad6b43
+    ground_truth_cves: []
+
+  - name: discourse
+    repo_url: https://github.com/discourse/discourse.git
+    ecosystem: gem
+    # Apr 2021 — Discourse 2.5.0. Rails forum app with dozens of stale gems
+    # (rack, nokogiri, sidekiq, mini_magick, etc.) of that vintage. Chosen
+    # over the prior lobsters HEAD-of-master pin because Discourse v2.5.0
+    # carries real stale-transitive CVEs whereas lobsters' actively-maintained
+    # master returned 0 vulns.
+    ref: ad49d8feb914e3a618404444c934e9e7e14665e2
+    ground_truth_cves: []

@@ -1,0 +1,1203 @@
+-- phase25a: DAST v2.1c — Nuclei engine + URL+CVE runtime-confirmation cross-link.
+-- Additive columns + one widened CHECK + one new RPC + two carry_forward patches.
+SET lock_timeout = '5s';  -- fail fast rather than pin the scan_jobs write path
+
+-- 1. KEV signal column on project_dast_findings.
+ALTER TABLE public.project_dast_findings
+  ADD COLUMN IF NOT EXISTS kev boolean NOT NULL DEFAULT false;
+
+-- 2. Runtime-confirmed cross-link columns on PDV.
+ALTER TABLE public.project_dependency_vulnerabilities
+  ADD COLUMN IF NOT EXISTS runtime_confirmed_at timestamp with time zone,
+  ADD COLUMN IF NOT EXISTS runtime_confirmed_dast_finding_id uuid,
+  ADD COLUMN IF NOT EXISTS runtime_confirmed_prior_level text;
+
+-- 3. FK to dast_findings. ON DELETE SET NULL keeps the at + prior_level pair
+--    as durable history when the originating finding is later deleted.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'project_dependency_vulnerabilities_runtime_confirmed_dast_finding_id_fkey'
+  ) THEN
+    ALTER TABLE public.project_dependency_vulnerabilities
+      ADD CONSTRAINT project_dependency_vulnerabilities_runtime_confirmed_dast_finding_id_fkey
+      FOREIGN KEY (runtime_confirmed_dast_finding_id)
+      REFERENCES public.project_dast_findings(id)
+      ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- 4. Covering index on the FK column (DELETE-cascade performance).
+CREATE INDEX IF NOT EXISTS project_dependency_vulnerabilities_runtime_confirmed_fk
+  ON public.project_dependency_vulnerabilities (runtime_confirmed_dast_finding_id)
+  WHERE runtime_confirmed_dast_finding_id IS NOT NULL;
+
+-- 5. Widen the companion CHECK so dast_zap / dast_nuclei rows may carry
+--    target_url / scan_profile / etc. (the type-check already accepts them).
+ALTER TABLE public.scan_jobs DROP CONSTRAINT IF EXISTS scan_jobs_dast_columns_match_type;
+ALTER TABLE public.scan_jobs ADD CONSTRAINT scan_jobs_dast_columns_match_type
+  CHECK (
+    type LIKE 'dast%'
+    OR (target_url IS NULL AND scan_profile IS NULL AND timeout_minutes IS NULL
+        AND trigger_source IS NULL AND triggered_by IS NULL
+        AND error_category IS NULL AND findings_count IS NULL AND duration_seconds IS NULL)
+  );
+
+-- 6. confirm_pdvs_from_dast_run — end-of-scan cross-link batch.
+--    SECURITY INVOKER + service-role-only EXECUTE. Tenancy guard via
+--    project_dast_findings(dast_run_id, project_id) — dast_run_id is the
+--    `dast_<uuid>` text column, NOT scan_jobs.id.
+--    ONE UPDATE: confirmed-flip fields + re-review fields written together,
+--    re-review gated by CASE on the asset-tier rereview_settings carried
+--    into the matches CTE. cve_ids extracted once per finding via LATERAL.
+CREATE OR REPLACE FUNCTION public.confirm_pdvs_from_dast_run(
+  p_project_id uuid,
+  p_dast_run_id text
+) RETURNS TABLE (
+  pdv_id uuid,
+  osv_id text,
+  prior_reachability_level text,
+  new_reachability_level text
+)
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+SET statement_timeout = '5s'
+AS $function$
+BEGIN
+  -- Tenancy guard. dast_run_id belongs to project_dast_findings; require a
+  -- Nuclei finding for this run+project to exist (the caller only invokes
+  -- this after Nuclei findings are committed).
+  IF NOT EXISTS (
+    SELECT 1 FROM public.project_dast_findings
+     WHERE dast_run_id = p_dast_run_id
+       AND project_id = p_project_id
+       AND engine = 'nuclei'
+  ) THEN
+    RAISE EXCEPTION 'dast_run_id % has no Nuclei findings in project %',
+      p_dast_run_id, p_project_id USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN QUERY
+  WITH matches AS (
+    SELECT DISTINCT ON (pdv.id)
+      pdv.id  AS pdv_id,
+      pdv.osv_id,
+      pdv.reachability_level AS prior_level,
+      f.id    AS dast_finding_id,
+      COALESCE((oat.rereview_settings->>'enabled')::boolean, true)                           AS rr_enabled,
+      COALESCE((oat.rereview_settings->'triggers'->>'reachability_upgrade')::boolean, true)   AS rr_upgrade
+    FROM public.project_dast_findings f
+    CROSS JOIN LATERAL (
+      SELECT array_agg(upper(c)) AS cves
+        FROM jsonb_array_elements_text(f.cross_link_metadata->'nuclei'->'cve_ids') c
+    ) cve_set
+    JOIN public.project_dependency_vulnerabilities pdv
+      ON pdv.project_id = f.project_id
+     AND pdv.project_dependency_id = f.linked_sca_project_dependency_id
+     AND (
+       upper(pdv.osv_id) = ANY(cve_set.cves)
+       OR EXISTS (
+         SELECT 1 FROM unnest(COALESCE(pdv.aliases, ARRAY[]::text[])) a
+          WHERE upper(a) = ANY(cve_set.cves)
+       )
+     )
+    JOIN public.projects p ON p.id = pdv.project_id
+    LEFT JOIN public.organization_asset_tiers oat ON oat.id = p.asset_tier_id
+    WHERE f.project_id = p_project_id
+      AND f.dast_run_id = p_dast_run_id
+      AND f.engine = 'nuclei'
+      AND f.linked_sca_project_dependency_id IS NOT NULL
+      AND cve_set.cves IS NOT NULL
+      AND _pdv_reachability_rank(pdv.reachability_level) < _pdv_reachability_rank('confirmed')
+    ORDER BY pdv.id, _pdv_severity_rank(f.severity) DESC, f.created_at ASC
+  ),
+  updated AS (
+    UPDATE public.project_dependency_vulnerabilities pdv
+       SET reachability_level             = 'confirmed',
+           runtime_confirmed_at           = now(),
+           runtime_confirmed_dast_finding_id = m.dast_finding_id,
+           runtime_confirmed_prior_level  = m.prior_level,
+           re_review_triggered_at = CASE
+             WHEN m.rr_enabled AND m.rr_upgrade THEN now()
+             ELSE pdv.re_review_triggered_at END,
+           re_review_reasons = CASE
+             WHEN m.rr_enabled AND m.rr_upgrade THEN
+               COALESCE(pdv.re_review_reasons, '[]'::jsonb)
+                 || jsonb_build_array(jsonb_build_object(
+                      'trigger', 'reachability_upgrade',
+                      'from', m.prior_level, 'to', 'confirmed',
+                      'detected_at', now()))
+             ELSE pdv.re_review_reasons END
+      FROM matches m
+     WHERE pdv.id = m.pdv_id
+    RETURNING pdv.id, pdv.osv_id, m.prior_level AS prior_level,
+              pdv.reachability_level AS new_level
+  )
+  -- Qualify with the CTE alias: bare `osv_id` would be ambiguous against the
+  -- RETURNS TABLE OUT parameter of the same name.
+  SELECT updated.id, updated.osv_id, updated.prior_level, updated.new_level FROM updated;
+END;
+$function$;
+
+REVOKE EXECUTE ON FUNCTION public.confirm_pdvs_from_dast_run(uuid, text) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION public.confirm_pdvs_from_dast_run(uuid, text) TO service_role;
+
+-- 7. Carry-forward patch. PDV rows are extraction-run-scoped; the carry_forward
+--    block inside commit_extraction() and finalize_extraction() copies an
+--    explicit column allow-list from the prior run's PDV rows into the new
+--    run's rows. runtime_confirmed_* must be carried so a runtime confirmation
+--    survives re-extraction, and reachability_level must be forced back to
+--    'confirmed' on the new generation when runtime_confirmed_at carried
+--    non-NULL (runtime confirmation is a durable fact).
+--
+--    Both functions are re-created below verbatim from schema.sql with ONLY
+--    these additions to the `carried` CTE:
+--      - old_data SELECT: + opdv.runtime_confirmed_at,
+--                           opdv.runtime_confirmed_dast_finding_id,
+--                           opdv.runtime_confirmed_prior_level
+--      - UPDATE SET:      + runtime_confirmed_at / _dast_finding_id / _prior_level
+--                         + reachability_level CASE override
+--    Everything else is byte-identical to the pre-phase25a definitions.
+
+-- >>> CARRY_FORWARD_FUNCTIONS <<<
+
+-- ===== commit_extraction (re-created, carry_forward patched) =====
+CREATE OR REPLACE FUNCTION public.commit_extraction(p_job_id uuid, p_project_id uuid, p_extraction_run_id text, p_dependencies jsonb, p_vulnerabilities jsonb, p_semgrep_findings jsonb, p_secret_findings jsonb, p_reachable_flows jsonb, p_usage_slices jsonb, p_dependency_files jsonb, p_dependency_functions jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_prev_active TEXT;
+  v_org_id UUID;
+  v_asset_tier_id UUID;
+  v_sla_paused BOOLEAN;
+  v_rereview_settings JSONB;
+  v_triggers JSONB;
+  v_enabled BOOLEAN;
+  v_deps_inserted INTEGER := 0;
+  v_deps_updated INTEGER := 0;
+  v_deps_removed INTEGER := 0;
+  v_pdv_inserted INTEGER := 0;
+  v_pdv_carried INTEGER := 0;
+  v_pdv_new INTEGER := 0;
+  v_pdv_reopened INTEGER := 0;
+  v_pdv_critical_new INTEGER := 0;
+  v_pdv_rereview_fired INTEGER := 0;
+  v_semgrep_inserted INTEGER := 0;
+  v_secret_inserted INTEGER := 0;
+  v_sla_set INTEGER := 0;
+  v_sla_row RECORD;
+  v_sla_hours INTEGER;
+  v_sla_warn_pct INTEGER;
+  v_now TIMESTAMPTZ := NOW();
+  v_reap_result JSONB;
+BEGIN
+  SELECT p.active_extraction_run_id, p.organization_id, p.asset_tier_id,
+         (o.sla_paused_at IS NOT NULL)
+    INTO v_prev_active, v_org_id, v_asset_tier_id, v_sla_paused
+  FROM projects p
+  JOIN organizations o ON o.id = p.organization_id
+  WHERE p.id = p_project_id
+  FOR UPDATE OF p;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'commit_extraction: project % not found', p_project_id;
+  END IF;
+
+  SELECT COALESCE(
+    oat.rereview_settings,
+    '{"enabled": true, "triggers": {"depscore_delta": 5, "severity_escalation": true, "reachability_upgrade": true, "kev_added": true, "epss_delta": 0.1}}'::jsonb
+  )
+  INTO v_rereview_settings
+  FROM projects p
+  LEFT JOIN organization_asset_tiers oat ON oat.id = p.asset_tier_id
+  WHERE p.id = p_project_id;
+
+  v_enabled := COALESCE((v_rereview_settings->>'enabled')::boolean, true);
+  v_triggers := COALESCE(v_rereview_settings->'triggers', '{}'::jsonb);
+
+  WITH input_deps AS (
+    SELECT * FROM jsonb_to_recordset(p_dependencies) AS d(
+      name TEXT, version TEXT, is_direct BOOLEAN, source TEXT,
+      environment TEXT, license TEXT, dependency_id UUID,
+      files_importing_count INTEGER, is_outdated BOOLEAN, versions_behind INTEGER,
+      policy_result JSONB, dependency_version_id UUID,
+      namespace TEXT
+    )
+  ),
+  upserted AS (
+    INSERT INTO project_dependencies (
+      project_id, name, version, is_direct, source,
+      environment, license, dependency_id,
+      files_importing_count, is_outdated, versions_behind,
+      policy_result, dependency_version_id, namespace,
+      last_seen_extraction_run_id, removed_at, created_at
+    )
+    SELECT
+      p_project_id, d.name, d.version, d.is_direct, d.source,
+      d.environment, d.license, d.dependency_id,
+      COALESCE(d.files_importing_count, 0),
+      COALESCE(d.is_outdated, false),
+      COALESCE(d.versions_behind, 0),
+      d.policy_result, d.dependency_version_id, d.namespace,
+      p_extraction_run_id, NULL, v_now
+    FROM input_deps d
+    ON CONFLICT (project_id, name, version, is_direct, source) DO UPDATE SET
+      environment = EXCLUDED.environment,
+      license = EXCLUDED.license,
+      dependency_id = EXCLUDED.dependency_id,
+      files_importing_count = EXCLUDED.files_importing_count,
+      is_outdated = EXCLUDED.is_outdated,
+      versions_behind = EXCLUDED.versions_behind,
+      policy_result = EXCLUDED.policy_result,
+      dependency_version_id = EXCLUDED.dependency_version_id,
+      namespace = EXCLUDED.namespace,
+      last_seen_extraction_run_id = p_extraction_run_id,
+      removed_at = NULL
+    RETURNING (xmax = 0) AS was_inserted
+  )
+  SELECT
+    COUNT(*) FILTER (WHERE was_inserted),
+    COUNT(*) FILTER (WHERE NOT was_inserted)
+  INTO v_deps_inserted, v_deps_updated
+  FROM upserted;
+
+  UPDATE project_dependencies
+  SET removed_at = v_now
+  WHERE project_id = p_project_id
+    AND removed_at IS NULL
+    AND (last_seen_extraction_run_id IS DISTINCT FROM p_extraction_run_id);
+  GET DIAGNOSTICS v_deps_removed = ROW_COUNT;
+
+  WITH input_vulns AS (
+    SELECT * FROM jsonb_to_recordset(p_vulnerabilities) AS v(
+      dep_name TEXT, dep_version TEXT, dep_is_direct BOOLEAN, dep_source TEXT,
+      osv_id TEXT, severity TEXT, summary TEXT,
+      aliases TEXT[], fixed_versions TEXT[],
+      is_reachable BOOLEAN, epss_score NUMERIC, cvss_score NUMERIC,
+      cisa_kev BOOLEAN, depscore INTEGER, published_at TIMESTAMPTZ,
+      reachability_level TEXT, reachability_details JSONB,
+      base_depscore_no_reachability NUMERIC, epd_factor NUMERIC,
+      contextual_depscore NUMERIC, reachability_status TEXT, epd_confidence_tier TEXT
+    )
+  )
+  INSERT INTO project_dependency_vulnerabilities (
+    project_id, project_dependency_id, osv_id, severity, summary,
+    aliases, fixed_versions, is_reachable, epss_score, cvss_score,
+    cisa_kev, depscore, published_at,
+    reachability_level, reachability_details,
+    base_depscore_no_reachability, epd_factor, contextual_depscore,
+    reachability_status, epd_confidence_tier,
+    extraction_run_id, detected_at, created_at, status
+  )
+  SELECT
+    p_project_id, pd.id, v.osv_id, v.severity, v.summary,
+    v.aliases, v.fixed_versions,
+    COALESCE(v.is_reachable, true),
+    v.epss_score, v.cvss_score,
+    COALESCE(v.cisa_kev, false),
+    v.depscore, v.published_at,
+    v.reachability_level, v.reachability_details,
+    v.base_depscore_no_reachability, v.epd_factor, v.contextual_depscore,
+    v.reachability_status, v.epd_confidence_tier,
+    p_extraction_run_id, v_now, v_now, 'open'
+  FROM input_vulns v
+  JOIN project_dependencies pd
+    ON pd.project_id = p_project_id
+   AND pd.name = v.dep_name
+   AND pd.version = v.dep_version
+   AND pd.is_direct = COALESCE(v.dep_is_direct, false)
+   AND pd.source = v.dep_source
+   AND pd.last_seen_extraction_run_id = p_extraction_run_id;
+  GET DIAGNOSTICS v_pdv_inserted = ROW_COUNT;
+
+  INSERT INTO project_semgrep_findings (
+    project_id, extraction_run_id, rule_id, file_path, start_line, end_line,
+    severity, message, cwe_ids, owasp_ids, category, metadata,
+    semgrep_fingerprint, status, created_at
+  )
+  SELECT
+    p_project_id, p_extraction_run_id, s.rule_id, s.file_path, s.start_line, s.end_line,
+    s.severity, s.message, s.cwe_ids, s.owasp_ids, s.category, s.metadata,
+    s.semgrep_fingerprint, 'open', v_now
+  FROM jsonb_to_recordset(p_semgrep_findings) AS s(
+    rule_id TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER,
+    severity TEXT, message TEXT, cwe_ids TEXT[], owasp_ids TEXT[],
+    category TEXT, metadata JSONB, semgrep_fingerprint TEXT
+  );
+  GET DIAGNOSTICS v_semgrep_inserted = ROW_COUNT;
+
+  INSERT INTO project_secret_findings (
+    project_id, extraction_run_id, detector_type, file_path, start_line,
+    is_verified, description, redacted_value, status, created_at
+  )
+  SELECT
+    p_project_id, p_extraction_run_id, sf.detector_type, sf.file_path, sf.start_line,
+    COALESCE(sf.is_verified, false), sf.description, sf.redacted_value, 'open', v_now
+  FROM jsonb_to_recordset(p_secret_findings) AS sf(
+    detector_type TEXT, file_path TEXT, start_line INTEGER,
+    is_verified BOOLEAN, description TEXT, redacted_value TEXT
+  );
+  GET DIAGNOSTICS v_secret_inserted = ROW_COUNT;
+
+  -- Phase 23: extend p_reachable_flows typedef with reachability_source/osv_id/rule_id
+  INSERT INTO project_reachable_flows (
+    project_id, extraction_run_id, purl, dependency_id, flow_nodes,
+    entry_point_file, entry_point_method, entry_point_line, entry_point_tag,
+    sink_file, sink_method, sink_line, sink_is_external, flow_length, llm_prompt,
+    reachability_source, osv_id, rule_id, created_at
+  )
+  SELECT
+    p_project_id, p_extraction_run_id, rf.purl, rf.dependency_id, rf.flow_nodes,
+    rf.entry_point_file, rf.entry_point_method, rf.entry_point_line, rf.entry_point_tag,
+    rf.sink_file, rf.sink_method, rf.sink_line,
+    COALESCE(rf.sink_is_external, true), rf.flow_length, rf.llm_prompt,
+    COALESCE(rf.reachability_source, 'atom'), rf.osv_id, rf.rule_id, v_now
+  FROM jsonb_to_recordset(p_reachable_flows) AS rf(
+    purl TEXT, dependency_id UUID, flow_nodes JSONB,
+    entry_point_file TEXT, entry_point_method TEXT, entry_point_line INTEGER, entry_point_tag TEXT,
+    sink_file TEXT, sink_method TEXT, sink_line INTEGER, sink_is_external BOOLEAN,
+    flow_length INTEGER, llm_prompt TEXT,
+    reachability_source TEXT, osv_id TEXT, rule_id TEXT
+  );
+
+  INSERT INTO project_usage_slices (
+    project_id, extraction_run_id, file_path, line_number, containing_method,
+    target_name, target_type, resolved_method, usage_label, ecosystem, created_at
+  )
+  SELECT
+    p_project_id, p_extraction_run_id, u.file_path, u.line_number, u.containing_method,
+    u.target_name, u.target_type, u.resolved_method, u.usage_label, u.ecosystem, v_now
+  FROM jsonb_to_recordset(p_usage_slices) AS u(
+    file_path TEXT, line_number INTEGER, containing_method TEXT,
+    target_name TEXT, target_type TEXT, resolved_method TEXT,
+    usage_label TEXT, ecosystem TEXT
+  );
+
+  INSERT INTO project_dependency_files (
+    project_dependency_id, file_path, extraction_run_id, created_at
+  )
+  SELECT pd.id, df.file_path, p_extraction_run_id, v_now
+  FROM jsonb_to_recordset(p_dependency_files) AS df(
+    dep_name TEXT, dep_version TEXT, dep_is_direct BOOLEAN, dep_source TEXT, file_path TEXT
+  )
+  JOIN project_dependencies pd
+    ON pd.project_id = p_project_id
+   AND pd.name = df.dep_name
+   AND pd.version = df.dep_version
+   AND pd.is_direct = COALESCE(df.dep_is_direct, false)
+   AND pd.source = df.dep_source
+   AND pd.last_seen_extraction_run_id = p_extraction_run_id;
+
+  INSERT INTO project_dependency_functions (
+    project_dependency_id, function_name, extraction_run_id, created_at
+  )
+  SELECT pd.id, dfn.function_name, p_extraction_run_id, v_now
+  FROM jsonb_to_recordset(p_dependency_functions) AS dfn(
+    dep_name TEXT, dep_version TEXT, dep_is_direct BOOLEAN, dep_source TEXT, function_name TEXT
+  )
+  JOIN project_dependencies pd
+    ON pd.project_id = p_project_id
+   AND pd.name = dfn.dep_name
+   AND pd.version = dfn.dep_version
+   AND pd.is_direct = COALESCE(dfn.dep_is_direct, false)
+   AND pd.source = dfn.dep_source
+   AND pd.last_seen_extraction_run_id = p_extraction_run_id;
+
+  IF v_prev_active IS NOT NULL THEN
+    WITH carried AS (
+      UPDATE project_dependency_vulnerabilities new_pdv
+      SET
+        status = old_data.status,
+        suppressed = old_data.suppressed,
+        suppressed_by = old_data.suppressed_by,
+        suppressed_at = old_data.suppressed_at,
+        risk_accepted = old_data.risk_accepted,
+        risk_accepted_by = old_data.risk_accepted_by,
+        risk_accepted_at = old_data.risk_accepted_at,
+        risk_accepted_reason = old_data.risk_accepted_reason,
+        detected_at = COALESCE(old_data.detected_at, new_pdv.detected_at),
+        sla_status = old_data.sla_status,
+        sla_deadline_at = old_data.sla_deadline_at,
+        sla_warning_at = old_data.sla_warning_at,
+        sla_breached_at = old_data.sla_breached_at,
+        sla_met_at = old_data.sla_met_at,
+        sla_exempt_reason = old_data.sla_exempt_reason,
+        sla_warning_notified_at = old_data.sla_warning_notified_at,
+        sla_breach_notified_at = old_data.sla_breach_notified_at,
+        re_review_triggered_at = old_data.re_review_triggered_at,
+        re_review_reasons = old_data.re_review_reasons,
+        runtime_confirmed_at = old_data.runtime_confirmed_at,
+        runtime_confirmed_dast_finding_id = old_data.runtime_confirmed_dast_finding_id,
+        runtime_confirmed_prior_level = old_data.runtime_confirmed_prior_level,
+        reachability_level = CASE
+          WHEN old_data.runtime_confirmed_at IS NOT NULL THEN 'confirmed'
+          ELSE new_pdv.reachability_level END
+      FROM (
+        SELECT DISTINCT ON (npd.id, opdv.osv_id)
+          npd.id AS new_pd_id,
+          opdv.osv_id,
+          opdv.status, opdv.suppressed, opdv.suppressed_by, opdv.suppressed_at,
+          opdv.risk_accepted, opdv.risk_accepted_by, opdv.risk_accepted_at, opdv.risk_accepted_reason,
+          opdv.detected_at,
+          opdv.sla_status, opdv.sla_deadline_at, opdv.sla_warning_at,
+          opdv.sla_breached_at, opdv.sla_met_at, opdv.sla_exempt_reason,
+          opdv.sla_warning_notified_at, opdv.sla_breach_notified_at,
+          opdv.re_review_triggered_at, opdv.re_review_reasons,
+          opdv.runtime_confirmed_at, opdv.runtime_confirmed_dast_finding_id, opdv.runtime_confirmed_prior_level
+        FROM project_dependency_vulnerabilities opdv
+        JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+        JOIN project_dependencies npd
+          ON npd.project_id = opd.project_id
+         AND npd.name = opd.name
+         AND npd.last_seen_extraction_run_id = p_extraction_run_id
+        WHERE opdv.project_id = p_project_id
+          AND opdv.extraction_run_id = v_prev_active
+        ORDER BY
+          npd.id, opdv.osv_id,
+          (npd.id = opd.id) DESC,
+          (npd.version = opd.version) DESC,
+          opdv.detected_at ASC NULLS LAST
+      ) AS old_data
+      WHERE new_pdv.project_id = p_project_id
+        AND new_pdv.extraction_run_id = p_extraction_run_id
+        AND new_pdv.project_dependency_id = old_data.new_pd_id
+        AND new_pdv.osv_id = old_data.osv_id
+      RETURNING new_pdv.id
+    )
+    SELECT COUNT(*) INTO v_pdv_carried FROM carried;
+
+    IF v_enabled THEN
+      WITH trigger_calc AS (
+        SELECT DISTINCT ON (npdv.id)
+          npdv.id AS pdv_id,
+          npdv.osv_id,
+          CASE
+            WHEN (v_triggers ? 'depscore_delta')
+              AND npdv.depscore IS NOT NULL
+              AND old_pdv.depscore IS NOT NULL
+              AND (npdv.depscore - old_pdv.depscore) >= (v_triggers->>'depscore_delta')::numeric
+            THEN jsonb_build_object('trigger', 'depscore_delta', 'from', old_pdv.depscore, 'to', npdv.depscore, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_depscore,
+          CASE
+            WHEN COALESCE((v_triggers->>'severity_escalation')::boolean, false)
+              AND _pdv_severity_rank(npdv.severity) > _pdv_severity_rank(old_pdv.severity)
+            THEN jsonb_build_object('trigger', 'severity_escalation', 'from', old_pdv.severity, 'to', npdv.severity, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_severity,
+          CASE
+            WHEN COALESCE((v_triggers->>'reachability_upgrade')::boolean, false)
+              AND _pdv_reachability_rank(npdv.reachability_level) > _pdv_reachability_rank(old_pdv.reachability_level)
+            THEN jsonb_build_object('trigger', 'reachability_upgrade', 'from', old_pdv.reachability_level, 'to', npdv.reachability_level, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_reachability,
+          CASE
+            WHEN COALESCE((v_triggers->>'kev_added')::boolean, false)
+              AND npdv.cisa_kev = true
+              AND COALESCE(old_pdv.cisa_kev, false) = false
+            THEN jsonb_build_object('trigger', 'kev_added', 'from', false, 'to', true, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_kev,
+          CASE
+            WHEN (v_triggers ? 'epss_delta')
+              AND npdv.epss_score IS NOT NULL
+              AND old_pdv.epss_score IS NOT NULL
+              AND abs(npdv.epss_score - old_pdv.epss_score) >= (v_triggers->>'epss_delta')::numeric
+            THEN jsonb_build_object('trigger', 'epss_delta', 'from', old_pdv.epss_score, 'to', npdv.epss_score, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_epss,
+          CASE
+            WHEN COALESCE((v_triggers->>'became_direct')::boolean, false)
+              AND npd.is_direct = true
+              AND COALESCE(opd.is_direct, false) = false
+            THEN jsonb_build_object('trigger', 'became_direct', 'from', false, 'to', true, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_direct,
+          CASE
+            WHEN COALESCE((v_triggers->>'dev_to_prod')::boolean, false)
+              AND lower(COALESCE(npd.environment, '')) = 'prod'
+              AND lower(COALESCE(opd.environment, '')) = 'dev'
+            THEN jsonb_build_object('trigger', 'dev_to_prod', 'from', opd.environment, 'to', npd.environment, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_env
+        FROM project_dependency_vulnerabilities npdv
+        JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+        JOIN project_dependencies opd
+          ON opd.project_id = npd.project_id
+         AND opd.name = npd.name
+        JOIN project_dependency_vulnerabilities old_pdv
+          ON old_pdv.project_id = p_project_id
+         AND old_pdv.project_dependency_id = opd.id
+         AND old_pdv.osv_id = npdv.osv_id
+         AND old_pdv.extraction_run_id = v_prev_active
+        WHERE npdv.project_id = p_project_id
+          AND npdv.extraction_run_id = p_extraction_run_id
+        ORDER BY
+          npdv.id,
+          (opd.id = npd.id) DESC,
+          (opd.version = npd.version) DESC,
+          old_pdv.detected_at ASC NULLS LAST
+      ),
+      new_reasons AS (
+        SELECT
+          pdv_id,
+          osv_id,
+          jsonb_strip_nulls(jsonb_build_array(r_depscore, r_severity, r_reachability, r_kev, r_epss, r_direct, r_env)) AS reasons
+        FROM trigger_calc
+      ),
+      fired AS (
+        UPDATE project_dependency_vulnerabilities pdv
+        SET
+          re_review_triggered_at = v_now,
+          re_review_reasons = COALESCE(pdv.re_review_reasons, '[]'::jsonb) || nr.reasons
+        FROM new_reasons nr
+        WHERE pdv.id = nr.pdv_id
+          AND jsonb_array_length(nr.reasons) > 0
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
+      ),
+      event_insert AS (
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
+               jsonb_build_object('reasons', reasons),
+               v_now
+        FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
+      )
+      SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
+    END IF;
+
+    WITH unmatched AS (
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
+      FROM project_dependency_vulnerabilities npdv
+      JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+      WHERE npdv.project_id = p_project_id
+        AND npdv.extraction_run_id = p_extraction_run_id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM project_dependency_vulnerabilities opdv
+          JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+          WHERE opdv.project_id = p_project_id
+            AND opdv.extraction_run_id = v_prev_active
+            AND opd.name = npd.name
+            AND opdv.osv_id = npdv.osv_id
+        )
+    ),
+    classified AS (
+      SELECT
+        u.pdv_id,
+        u.pd_id,
+        u.osv_id,
+        u.dep_name,
+        EXISTS (
+          SELECT 1
+          FROM project_dependency_vulnerabilities opdv
+          JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+          WHERE opdv.project_id = p_project_id
+            AND opdv.extraction_run_id IS DISTINCT FROM p_extraction_run_id
+            AND opdv.extraction_run_id IS DISTINCT FROM v_prev_active
+            AND opd.name = u.dep_name
+            AND opdv.osv_id = u.osv_id
+        ) AS is_reopened
+      FROM unmatched u
+    ),
+    events_inserted AS (
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+      SELECT
+        p_project_id,
+        c.osv_id,
+        CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
+        p_extraction_run_id,
+        c.pd_id,
+        jsonb_build_object('dep_name', c.dep_name),
+        v_now
+      FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
+      RETURNING id, event_type
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE event_type = 'reopened'),
+      COUNT(*) FILTER (WHERE event_type = 'detected')
+    INTO v_pdv_reopened, v_pdv_new
+    FROM events_inserted;
+  ELSE
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
+           jsonb_build_object('dep_name', npd.name),
+           v_now
+    FROM project_dependency_vulnerabilities npdv
+    JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+    WHERE npdv.project_id = p_project_id
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
+
+    v_pdv_carried := 0;
+    v_pdv_rereview_fired := 0;
+    v_pdv_reopened := 0;
+    v_pdv_new := v_pdv_inserted;
+  END IF;
+
+  SELECT COUNT(*) INTO v_pdv_critical_new
+  FROM project_dependency_vulnerabilities npdv
+  JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+  WHERE npdv.project_id = p_project_id
+    AND npdv.extraction_run_id = p_extraction_run_id
+    AND (lower(COALESCE(npdv.severity, '')) = 'critical' OR npdv.cisa_kev = true)
+    AND (
+      v_prev_active IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM project_dependency_vulnerabilities opdv
+        JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+        WHERE opdv.project_id = p_project_id
+          AND opdv.extraction_run_id = v_prev_active
+          AND opd.name = npd.name
+          AND opdv.osv_id = npdv.osv_id
+      )
+    );
+
+  IF v_prev_active IS NOT NULL THEN
+    UPDATE project_semgrep_findings new_sf
+    SET status = old_sf.status
+    FROM project_semgrep_findings old_sf
+    WHERE new_sf.project_id = p_project_id
+      AND new_sf.extraction_run_id = p_extraction_run_id
+      AND new_sf.semgrep_fingerprint IS NOT NULL
+      AND old_sf.project_id = p_project_id
+      AND old_sf.extraction_run_id = v_prev_active
+      AND old_sf.semgrep_fingerprint = new_sf.semgrep_fingerprint;
+
+    UPDATE project_semgrep_findings new_sf
+    SET status = old_sf.status
+    FROM project_semgrep_findings old_sf
+    WHERE new_sf.project_id = p_project_id
+      AND new_sf.extraction_run_id = p_extraction_run_id
+      AND new_sf.semgrep_fingerprint IS NULL
+      AND old_sf.project_id = p_project_id
+      AND old_sf.extraction_run_id = v_prev_active
+      AND old_sf.rule_id = new_sf.rule_id
+      AND old_sf.file_path = new_sf.file_path
+      AND old_sf.start_line IS NOT DISTINCT FROM new_sf.start_line;
+
+    UPDATE project_secret_findings new_secf
+    SET status = old_secf.status
+    FROM project_secret_findings old_secf
+    WHERE new_secf.project_id = p_project_id
+      AND new_secf.extraction_run_id = p_extraction_run_id
+      AND old_secf.project_id = p_project_id
+      AND old_secf.extraction_run_id = v_prev_active
+      AND old_secf.detector_type = new_secf.detector_type
+      AND old_secf.file_path = new_secf.file_path
+      AND old_secf.redacted_value IS NOT DISTINCT FROM new_secf.redacted_value;
+  END IF;
+
+  IF NOT v_sla_paused THEN
+    FOR v_sla_row IN
+      SELECT pdv.id, pdv.severity, pdv.detected_at
+      FROM project_dependency_vulnerabilities pdv
+      WHERE pdv.project_id = p_project_id
+        AND pdv.extraction_run_id = p_extraction_run_id
+        AND pdv.sla_status IS NULL
+        AND pdv.severity IN ('critical', 'high', 'medium', 'low')
+    LOOP
+      SELECT max_hours, warning_threshold_percent INTO v_sla_hours, v_sla_warn_pct
+      FROM get_effective_sla_policy(v_org_id, v_sla_row.severity, v_asset_tier_id);
+
+      IF v_sla_hours IS NOT NULL THEN
+        UPDATE project_dependency_vulnerabilities
+        SET
+          sla_deadline_at = v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL,
+          sla_warning_at = v_sla_row.detected_at + (v_sla_hours * COALESCE(v_sla_warn_pct, 75) / 100.0 || ' hours')::INTERVAL,
+          sla_status = CASE
+            WHEN v_now > v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL THEN 'breached'
+            WHEN v_now >= v_sla_row.detected_at + (v_sla_hours * COALESCE(v_sla_warn_pct, 75) / 100.0 || ' hours')::INTERVAL THEN 'warning'
+            ELSE 'on_track'
+          END,
+          sla_breached_at = CASE
+            WHEN v_now > v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL
+            THEN v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL
+            ELSE NULL
+          END
+        WHERE id = v_sla_row.id;
+        v_sla_set := v_sla_set + 1;
+      END IF;
+    END LOOP;
+  END IF;
+
+  UPDATE projects
+  SET
+    previous_extraction_run_id = active_extraction_run_id,
+    active_extraction_run_id = p_extraction_run_id
+  WHERE id = p_project_id;
+
+  v_reap_result := reap_old_extractions(p_project_id);
+
+  RETURN jsonb_build_object(
+    'extraction_run_id', p_extraction_run_id,
+    'previous_extraction_run_id', v_prev_active,
+    'deps_inserted', v_deps_inserted,
+    'deps_updated', v_deps_updated,
+    'deps_removed', v_deps_removed,
+    'vulns_inserted', v_pdv_inserted,
+    'vulns_carried_forward', v_pdv_carried,
+    'vulns_new', v_pdv_new,
+    'vulns_reopened', v_pdv_reopened,
+    'vulns_critical_new', v_pdv_critical_new,
+    'vulns_re_review_fired', v_pdv_rereview_fired,
+    'semgrep_inserted', v_semgrep_inserted,
+    'secret_inserted', v_secret_inserted,
+    'sla_computed', v_sla_set,
+    'rereview_enabled', v_enabled,
+    'reap', v_reap_result
+  );
+END;
+$function$
+;
+
+-- ===== finalize_extraction (re-created, carry_forward patched) =====
+CREATE OR REPLACE FUNCTION public.finalize_extraction(p_job_id uuid, p_project_id uuid, p_extraction_run_id text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_prev_active TEXT;
+  v_org_id UUID;
+  v_asset_tier_id UUID;
+  v_sla_paused BOOLEAN;
+  v_rereview_settings JSONB;
+  v_triggers JSONB;
+  v_enabled BOOLEAN;
+  v_deps_removed INTEGER := 0;
+  v_pdv_carried INTEGER := 0;
+  v_pdv_new INTEGER := 0;
+  v_pdv_reopened INTEGER := 0;
+  v_pdv_critical_new INTEGER := 0;
+  v_pdv_rereview_fired INTEGER := 0;
+  v_sla_set INTEGER := 0;
+  v_sla_row RECORD;
+  v_sla_hours INTEGER;
+  v_sla_warn_pct INTEGER;
+  v_now TIMESTAMPTZ := NOW();
+  v_reap_result JSONB;
+BEGIN
+  SELECT p.active_extraction_run_id, p.organization_id, p.asset_tier_id,
+         (o.sla_paused_at IS NOT NULL)
+    INTO v_prev_active, v_org_id, v_asset_tier_id, v_sla_paused
+  FROM projects p
+  JOIN organizations o ON o.id = p.organization_id
+  WHERE p.id = p_project_id
+  FOR UPDATE OF p;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'finalize_extraction: project % not found', p_project_id;
+  END IF;
+
+  SELECT COALESCE(
+    oat.rereview_settings,
+    '{"enabled": true, "triggers": {"depscore_delta": 5, "severity_escalation": true, "reachability_upgrade": true, "kev_added": true, "epss_delta": 0.1}}'::jsonb
+  )
+  INTO v_rereview_settings
+  FROM projects p
+  LEFT JOIN organization_asset_tiers oat ON oat.id = p.asset_tier_id
+  WHERE p.id = p_project_id;
+
+  v_enabled := COALESCE((v_rereview_settings->>'enabled')::boolean, true);
+  v_triggers := COALESCE(v_rereview_settings->'triggers', '{}'::jsonb);
+
+  UPDATE project_dependencies
+  SET removed_at = v_now
+  WHERE project_id = p_project_id
+    AND removed_at IS NULL
+    AND (last_seen_extraction_run_id IS DISTINCT FROM p_extraction_run_id);
+  GET DIAGNOSTICS v_deps_removed = ROW_COUNT;
+
+  IF v_prev_active IS NOT NULL THEN
+    WITH carried AS (
+      UPDATE project_dependency_vulnerabilities new_pdv
+      SET
+        status = old_data.status,
+        suppressed = old_data.suppressed,
+        suppressed_by = old_data.suppressed_by,
+        suppressed_at = old_data.suppressed_at,
+        risk_accepted = old_data.risk_accepted,
+        risk_accepted_by = old_data.risk_accepted_by,
+        risk_accepted_at = old_data.risk_accepted_at,
+        risk_accepted_reason = old_data.risk_accepted_reason,
+        detected_at = COALESCE(old_data.detected_at, new_pdv.detected_at),
+        sla_status = old_data.sla_status,
+        sla_deadline_at = old_data.sla_deadline_at,
+        sla_warning_at = old_data.sla_warning_at,
+        sla_breached_at = old_data.sla_breached_at,
+        sla_met_at = old_data.sla_met_at,
+        sla_exempt_reason = old_data.sla_exempt_reason,
+        sla_warning_notified_at = old_data.sla_warning_notified_at,
+        sla_breach_notified_at = old_data.sla_breach_notified_at,
+        re_review_triggered_at = old_data.re_review_triggered_at,
+        re_review_reasons = old_data.re_review_reasons,
+        runtime_confirmed_at = old_data.runtime_confirmed_at,
+        runtime_confirmed_dast_finding_id = old_data.runtime_confirmed_dast_finding_id,
+        runtime_confirmed_prior_level = old_data.runtime_confirmed_prior_level,
+        reachability_level = CASE
+          WHEN old_data.runtime_confirmed_at IS NOT NULL THEN 'confirmed'
+          ELSE new_pdv.reachability_level END
+      FROM (
+        SELECT DISTINCT ON (npd.id, opdv.osv_id)
+          npd.id AS new_pd_id,
+          opdv.osv_id,
+          opdv.status, opdv.suppressed, opdv.suppressed_by, opdv.suppressed_at,
+          opdv.risk_accepted, opdv.risk_accepted_by, opdv.risk_accepted_at, opdv.risk_accepted_reason,
+          opdv.detected_at,
+          opdv.sla_status, opdv.sla_deadline_at, opdv.sla_warning_at,
+          opdv.sla_breached_at, opdv.sla_met_at, opdv.sla_exempt_reason,
+          opdv.sla_warning_notified_at, opdv.sla_breach_notified_at,
+          opdv.re_review_triggered_at, opdv.re_review_reasons,
+          opdv.runtime_confirmed_at, opdv.runtime_confirmed_dast_finding_id, opdv.runtime_confirmed_prior_level
+        FROM project_dependency_vulnerabilities opdv
+        JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+        JOIN project_dependencies npd
+          ON npd.project_id = opd.project_id
+         AND npd.name = opd.name
+         AND npd.last_seen_extraction_run_id = p_extraction_run_id
+        WHERE opdv.project_id = p_project_id
+          AND opdv.extraction_run_id = v_prev_active
+        ORDER BY
+          npd.id, opdv.osv_id,
+          (npd.id = opd.id) DESC,
+          (npd.version = opd.version) DESC,
+          opdv.detected_at ASC NULLS LAST
+      ) AS old_data
+      WHERE new_pdv.project_id = p_project_id
+        AND new_pdv.extraction_run_id = p_extraction_run_id
+        AND new_pdv.project_dependency_id = old_data.new_pd_id
+        AND new_pdv.osv_id = old_data.osv_id
+      RETURNING new_pdv.id
+    )
+    SELECT COUNT(*) INTO v_pdv_carried FROM carried;
+
+    IF v_enabled THEN
+      WITH trigger_calc AS (
+        SELECT DISTINCT ON (npdv.id)
+          npdv.id AS pdv_id,
+          npdv.osv_id,
+          CASE
+            WHEN (v_triggers ? 'depscore_delta')
+              AND npdv.depscore IS NOT NULL
+              AND old_pdv.depscore IS NOT NULL
+              AND (npdv.depscore - old_pdv.depscore) >= (v_triggers->>'depscore_delta')::numeric
+            THEN jsonb_build_object('trigger', 'depscore_delta', 'from', old_pdv.depscore, 'to', npdv.depscore, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_depscore,
+          CASE
+            WHEN COALESCE((v_triggers->>'severity_escalation')::boolean, false)
+              AND _pdv_severity_rank(npdv.severity) > _pdv_severity_rank(old_pdv.severity)
+            THEN jsonb_build_object('trigger', 'severity_escalation', 'from', old_pdv.severity, 'to', npdv.severity, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_severity,
+          CASE
+            WHEN COALESCE((v_triggers->>'reachability_upgrade')::boolean, false)
+              AND _pdv_reachability_rank(npdv.reachability_level) > _pdv_reachability_rank(old_pdv.reachability_level)
+            THEN jsonb_build_object('trigger', 'reachability_upgrade', 'from', old_pdv.reachability_level, 'to', npdv.reachability_level, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_reachability,
+          CASE
+            WHEN COALESCE((v_triggers->>'kev_added')::boolean, false)
+              AND npdv.cisa_kev = true
+              AND COALESCE(old_pdv.cisa_kev, false) = false
+            THEN jsonb_build_object('trigger', 'kev_added', 'from', false, 'to', true, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_kev,
+          CASE
+            WHEN (v_triggers ? 'epss_delta')
+              AND npdv.epss_score IS NOT NULL
+              AND old_pdv.epss_score IS NOT NULL
+              AND abs(npdv.epss_score - old_pdv.epss_score) >= (v_triggers->>'epss_delta')::numeric
+            THEN jsonb_build_object('trigger', 'epss_delta', 'from', old_pdv.epss_score, 'to', npdv.epss_score, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_epss,
+          CASE
+            WHEN COALESCE((v_triggers->>'became_direct')::boolean, false)
+              AND npd.is_direct = true
+              AND COALESCE(opd.is_direct, false) = false
+            THEN jsonb_build_object('trigger', 'became_direct', 'from', false, 'to', true, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_direct,
+          CASE
+            WHEN COALESCE((v_triggers->>'dev_to_prod')::boolean, false)
+              AND lower(COALESCE(npd.environment, '')) = 'prod'
+              AND lower(COALESCE(opd.environment, '')) = 'dev'
+            THEN jsonb_build_object('trigger', 'dev_to_prod', 'from', opd.environment, 'to', npd.environment, 'detected_at', v_now)
+            ELSE NULL
+          END AS r_env
+        FROM project_dependency_vulnerabilities npdv
+        JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+        JOIN project_dependencies opd
+          ON opd.project_id = npd.project_id
+         AND opd.name = npd.name
+        JOIN project_dependency_vulnerabilities old_pdv
+          ON old_pdv.project_id = p_project_id
+         AND old_pdv.project_dependency_id = opd.id
+         AND old_pdv.osv_id = npdv.osv_id
+         AND old_pdv.extraction_run_id = v_prev_active
+        WHERE npdv.project_id = p_project_id
+          AND npdv.extraction_run_id = p_extraction_run_id
+        ORDER BY
+          npdv.id,
+          (opd.id = npd.id) DESC,
+          (opd.version = npd.version) DESC,
+          old_pdv.detected_at ASC NULLS LAST
+      ),
+      new_reasons AS (
+        SELECT pdv_id, osv_id,
+          jsonb_strip_nulls(jsonb_build_array(r_depscore, r_severity, r_reachability, r_kev, r_epss, r_direct, r_env)) AS reasons
+        FROM trigger_calc
+      ),
+      fired AS (
+        UPDATE project_dependency_vulnerabilities pdv
+        SET
+          re_review_triggered_at = v_now,
+          re_review_reasons = COALESCE(pdv.re_review_reasons, '[]'::jsonb) || nr.reasons
+        FROM new_reasons nr
+        WHERE pdv.id = nr.pdv_id
+          AND jsonb_array_length(nr.reasons) > 0
+        RETURNING pdv.id, pdv.project_dependency_id AS pd_id, nr.osv_id, nr.reasons
+      ),
+      event_insert AS (
+        INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+        SELECT p_project_id, osv_id, 'rereview_triggered', p_extraction_run_id, pd_id,
+               jsonb_build_object('reasons', reasons),
+               v_now
+        FROM fired
+        ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+          WHERE extraction_run_id IS NOT NULL
+          DO NOTHING
+      )
+      SELECT COUNT(*) INTO v_pdv_rereview_fired FROM fired;
+    END IF;
+
+    WITH unmatched AS (
+      SELECT npdv.id AS pdv_id, npdv.project_dependency_id AS pd_id, npd.name AS dep_name, npdv.osv_id
+      FROM project_dependency_vulnerabilities npdv
+      JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+      WHERE npdv.project_id = p_project_id
+        AND npdv.extraction_run_id = p_extraction_run_id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM project_dependency_vulnerabilities opdv
+          JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+          WHERE opdv.project_id = p_project_id
+            AND opdv.extraction_run_id = v_prev_active
+            AND opd.name = npd.name
+            AND opdv.osv_id = npdv.osv_id
+        )
+    ),
+    classified AS (
+      SELECT u.pdv_id, u.pd_id, u.osv_id, u.dep_name,
+        EXISTS (
+          SELECT 1
+          FROM project_dependency_vulnerabilities opdv
+          JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+          WHERE opdv.project_id = p_project_id
+            AND opdv.extraction_run_id IS DISTINCT FROM p_extraction_run_id
+            AND opdv.extraction_run_id IS DISTINCT FROM v_prev_active
+            AND opd.name = u.dep_name
+            AND opdv.osv_id = u.osv_id
+        ) AS is_reopened
+      FROM unmatched u
+    ),
+    events_inserted AS (
+      INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+      SELECT
+        p_project_id, c.osv_id,
+        CASE WHEN c.is_reopened THEN 'reopened' ELSE 'detected' END,
+        p_extraction_run_id,
+        c.pd_id,
+        jsonb_build_object('dep_name', c.dep_name),
+        v_now
+      FROM classified c
+      ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+        WHERE extraction_run_id IS NOT NULL
+        DO NOTHING
+      RETURNING id, event_type
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE event_type = 'reopened'),
+      COUNT(*) FILTER (WHERE event_type = 'detected')
+    INTO v_pdv_reopened, v_pdv_new
+    FROM events_inserted;
+  ELSE
+    INSERT INTO project_vulnerability_events (project_id, osv_id, event_type, extraction_run_id, project_dependency_id, metadata, created_at)
+    SELECT p_project_id, npdv.osv_id, 'detected', p_extraction_run_id, npdv.project_dependency_id,
+           jsonb_build_object('dep_name', npd.name),
+           v_now
+    FROM project_dependency_vulnerabilities npdv
+    JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+    WHERE npdv.project_id = p_project_id
+      AND npdv.extraction_run_id = p_extraction_run_id
+    ON CONFLICT (project_id, osv_id, event_type, extraction_run_id, project_dependency_id)
+      WHERE extraction_run_id IS NOT NULL
+      DO NOTHING;
+
+    SELECT COUNT(*) INTO v_pdv_new
+    FROM project_dependency_vulnerabilities
+    WHERE project_id = p_project_id AND extraction_run_id = p_extraction_run_id;
+  END IF;
+
+  SELECT COUNT(*) INTO v_pdv_critical_new
+  FROM project_dependency_vulnerabilities npdv
+  JOIN project_dependencies npd ON npd.id = npdv.project_dependency_id
+  WHERE npdv.project_id = p_project_id
+    AND npdv.extraction_run_id = p_extraction_run_id
+    AND (lower(COALESCE(npdv.severity, '')) = 'critical' OR npdv.cisa_kev = true)
+    AND (
+      v_prev_active IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM project_dependency_vulnerabilities opdv
+        JOIN project_dependencies opd ON opd.id = opdv.project_dependency_id
+        WHERE opdv.project_id = p_project_id
+          AND opdv.extraction_run_id = v_prev_active
+          AND opd.name = npd.name
+          AND opdv.osv_id = npdv.osv_id
+      )
+    );
+
+  IF v_prev_active IS NOT NULL THEN
+    UPDATE project_semgrep_findings new_sf
+    SET status = old_sf.status
+    FROM project_semgrep_findings old_sf
+    WHERE new_sf.project_id = p_project_id
+      AND new_sf.extraction_run_id = p_extraction_run_id
+      AND new_sf.semgrep_fingerprint IS NOT NULL
+      AND old_sf.project_id = p_project_id
+      AND old_sf.extraction_run_id = v_prev_active
+      AND old_sf.semgrep_fingerprint = new_sf.semgrep_fingerprint;
+
+    UPDATE project_semgrep_findings new_sf
+    SET status = old_sf.status
+    FROM project_semgrep_findings old_sf
+    WHERE new_sf.project_id = p_project_id
+      AND new_sf.extraction_run_id = p_extraction_run_id
+      AND new_sf.semgrep_fingerprint IS NULL
+      AND old_sf.project_id = p_project_id
+      AND old_sf.extraction_run_id = v_prev_active
+      AND old_sf.rule_id = new_sf.rule_id
+      AND old_sf.file_path = new_sf.file_path
+      AND old_sf.start_line IS NOT DISTINCT FROM new_sf.start_line;
+
+    UPDATE project_secret_findings new_secf
+    SET status = old_secf.status
+    FROM project_secret_findings old_secf
+    WHERE new_secf.project_id = p_project_id
+      AND new_secf.extraction_run_id = p_extraction_run_id
+      AND old_secf.project_id = p_project_id
+      AND old_secf.extraction_run_id = v_prev_active
+      AND old_secf.detector_type = new_secf.detector_type
+      AND old_secf.file_path = new_secf.file_path
+      AND old_secf.redacted_value IS NOT DISTINCT FROM new_secf.redacted_value;
+
+    UPDATE project_iac_findings new_if
+    SET
+      status = old_if.status,
+      suppressed = old_if.suppressed,
+      suppressed_by = old_if.suppressed_by,
+      suppressed_at = old_if.suppressed_at,
+      risk_accepted = old_if.risk_accepted,
+      risk_accepted_by = old_if.risk_accepted_by,
+      risk_accepted_at = old_if.risk_accepted_at,
+      risk_accepted_reason = old_if.risk_accepted_reason
+    FROM project_iac_findings old_if
+    WHERE new_if.project_id = p_project_id
+      AND new_if.extraction_run_id = p_extraction_run_id
+      AND new_if.iac_fingerprint IS NOT NULL
+      AND old_if.project_id = p_project_id
+      AND old_if.extraction_run_id = v_prev_active
+      AND old_if.iac_fingerprint IS NOT NULL
+      AND old_if.scanner = new_if.scanner
+      AND old_if.iac_fingerprint = new_if.iac_fingerprint;
+
+    UPDATE project_container_findings new_cf
+    SET
+      status = old_cf.status,
+      suppressed = old_cf.suppressed,
+      suppressed_by = old_cf.suppressed_by,
+      suppressed_at = old_cf.suppressed_at,
+      risk_accepted = old_cf.risk_accepted,
+      risk_accepted_by = old_cf.risk_accepted_by,
+      risk_accepted_at = old_cf.risk_accepted_at,
+      risk_accepted_reason = old_cf.risk_accepted_reason
+    FROM project_container_findings old_cf
+    WHERE new_cf.project_id = p_project_id
+      AND new_cf.extraction_run_id = p_extraction_run_id
+      AND new_cf.container_fingerprint IS NOT NULL
+      AND old_cf.project_id = p_project_id
+      AND old_cf.extraction_run_id = v_prev_active
+      AND old_cf.container_fingerprint IS NOT NULL
+      AND old_cf.container_fingerprint = new_cf.container_fingerprint;
+  END IF;
+
+  IF NOT v_sla_paused THEN
+    FOR v_sla_row IN
+      SELECT pdv.id, pdv.severity, pdv.detected_at
+      FROM project_dependency_vulnerabilities pdv
+      WHERE pdv.project_id = p_project_id
+        AND pdv.extraction_run_id = p_extraction_run_id
+        AND pdv.sla_status IS NULL
+        AND pdv.severity IN ('critical', 'high', 'medium', 'low')
+    LOOP
+      SELECT max_hours, warning_threshold_percent INTO v_sla_hours, v_sla_warn_pct
+      FROM get_effective_sla_policy(v_org_id, v_sla_row.severity, v_asset_tier_id);
+
+      IF v_sla_hours IS NOT NULL THEN
+        UPDATE project_dependency_vulnerabilities
+        SET
+          sla_deadline_at = v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL,
+          sla_warning_at = v_sla_row.detected_at + (v_sla_hours * COALESCE(v_sla_warn_pct, 75) / 100.0 || ' hours')::INTERVAL,
+          sla_status = CASE
+            WHEN v_now > v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL THEN 'breached'
+            WHEN v_now >= v_sla_row.detected_at + (v_sla_hours * COALESCE(v_sla_warn_pct, 75) / 100.0 || ' hours')::INTERVAL THEN 'warning'
+            ELSE 'on_track'
+          END,
+          sla_breached_at = CASE
+            WHEN v_now > v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL
+            THEN v_sla_row.detected_at + (v_sla_hours || ' hours')::INTERVAL
+            ELSE NULL
+          END
+        WHERE id = v_sla_row.id;
+        v_sla_set := v_sla_set + 1;
+      END IF;
+    END LOOP;
+  END IF;
+
+  UPDATE projects
+  SET
+    previous_extraction_run_id = active_extraction_run_id,
+    active_extraction_run_id = p_extraction_run_id
+  WHERE id = p_project_id;
+
+  v_reap_result := reap_old_extractions(p_project_id);
+
+  RETURN jsonb_build_object(
+    'extraction_run_id', p_extraction_run_id,
+    'previous_extraction_run_id', v_prev_active,
+    'deps_removed', v_deps_removed,
+    'vulns_carried_forward', v_pdv_carried,
+    'vulns_new', v_pdv_new,
+    'vulns_reopened', v_pdv_reopened,
+    'vulns_critical_new', v_pdv_critical_new,
+    'vulns_re_review_fired', v_pdv_rereview_fired,
+    'sla_computed', v_sla_set,
+    'rereview_enabled', v_enabled,
+    'reap', v_reap_result
+  );
+END;
+$function$
+;
+

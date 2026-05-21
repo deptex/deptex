@@ -91,6 +91,26 @@ export interface PipelineContext {
   assetTier: AssetTier;
   tierMultiplier: number | undefined;
 
+  /**
+   * Whether the direct/transitive split on `project_dependencies` is
+   * trustworthy. True when cdxgen wired the CycloneDX graph OR the SBOM step's
+   * graph recovery rebuilt the direct set from the manifest/tree. False when
+   * cdxgen's graph was unwired AND recovery was unavailable — the reachability
+   * classifier must then floor at `module` and never emit `unreachable`.
+   * Defaults to true; only the SBOM step lowers it.
+   */
+  graphTrusted: boolean;
+
+  /**
+   * Whether cdxgen's CycloneDX `dependencies` graph was wired this run (the
+   * original `directSetTrusted` from parseSbom, before recovery). Distinct
+   * from `graphTrusted`: recovery can rebuild the direct set without rewiring
+   * the edge graph. The SBOM step sets it. deps_sync reads it to keep
+   * transitive dev-scope marks sticky when propagation was skipped — without
+   * it a flaky cdxgen graph would flip `environment` dev↔null between scans.
+   */
+  sbomGraphWired?: boolean;
+
   // === Cross-step counters used by finalize ===
   projectDepsCount: number;
   newDepsToPopulate: Array<{ dependencyId: string; name: string }>;

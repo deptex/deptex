@@ -454,6 +454,66 @@ describe('POST /api/projects/:projectId/dast/scan', () => {
     expect(r.status).toBe(409);
     expect(r.body.error).toBe('project_concurrent_dast_blocked');
   });
+
+  // --- v2.1c: engine selection ---
+
+  function stubHappyScan(): void {
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+    setTableResponse('project_dast_targets', 'maybeSingle', {
+      data: targetRowOrgA(),
+      error: null,
+    });
+    setTableResponse('project_dast_config', 'maybeSingle', {
+      data: { scan_profile: 'auto', scan_timeout_minutes: 30 },
+      error: null,
+    });
+    setRpcResponse('queue_scan_job', {
+      data: {
+        id: 'job-id-1',
+        status: 'queued',
+        target_url: 'https://app.example.com',
+        scan_profile: 'auto',
+        created_at: '2026-05-05T00:00:00Z',
+      },
+      error: null,
+    });
+  }
+
+  it('queues a Nuclei scan when engine=nuclei', async () => {
+    stubHappyScan();
+    const r = await request(makeApp())
+      .post(`/api/projects/${PROJECT_A}/dast/scan`)
+      .send({ target_id: TARGET_A, engine: 'nuclei' });
+    expect(r.status).toBe(202);
+    expect(r.body.jobId).toBe('job-id-1');
+  });
+
+  it('defaults to the ZAP engine when engine is omitted', async () => {
+    stubHappyScan();
+    const r = await request(makeApp())
+      .post(`/api/projects/${PROJECT_A}/dast/scan`)
+      .send({ target_id: TARGET_A });
+    expect(r.status).toBe(202);
+  });
+
+  it.each([
+    ['an unknown string', 'sqlmap'],
+    ['a number', 7],
+    ['an uppercase value', 'ZAP'],
+    ['the non-selectable merged engine', 'merged'],
+  ])('rejects %s with 400 unsupported_engine', async (_label, engineValue) => {
+    setProjectAccessOwner(PROJECT_A, ORG_A);
+    setTableResponse('project_dast_targets', 'maybeSingle', {
+      data: targetRowOrgA(),
+      error: null,
+    });
+    const r = await request(makeApp())
+      .post(`/api/projects/${PROJECT_A}/dast/scan`)
+      .send({ target_id: TARGET_A, engine: engineValue });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('unsupported_engine');
+    expect(r.body.supported).toEqual(['zap', 'nuclei']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -556,6 +616,22 @@ describe('Cross-tenant 404 matrix — every :targetId route', () => {
       perform: () =>
         request(makeApp()).get(
           `/api/projects/${PROJECT_A}/dast/findings?target_id=${TARGET_A}`,
+        ),
+    },
+    // Phase 35 (v1.1) — new spec routes must respect the same cross-tenant
+    // contract. Probes added per Patch 2 in the round-2 review.
+    {
+      name: 'PATCH /dast/targets/:targetId/spec',
+      perform: () =>
+        request(makeApp())
+          .patch(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/spec`)
+          .send({ api_spec_source: 'none' }),
+    },
+    {
+      name: 'GET /dast/targets/:targetId/spec/download',
+      perform: () =>
+        request(makeApp()).get(
+          `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/spec/download`,
         ),
     },
   ];

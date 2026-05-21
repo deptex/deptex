@@ -39,6 +39,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Language, Parser, type Node, type Tree } from 'web-tree-sitter';
 import { loadLanguage, makeParser } from '../../tree-sitter-extractor/parser';
+import { resolvePypiImport } from '../../tree-sitter-extractor/import-mapping/pypi';
 import type {
   Callgraph,
   CallEdge,
@@ -172,6 +173,7 @@ export async function buildPythonCallgraph(
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    usedDependencies: extractPythonUsedDependencies(parsedFiles, knownModules),
   };
 
   return callgraph;
@@ -264,6 +266,12 @@ export async function buildPythonCallgraphContext(
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    // v3 pypi precision arc — collect `import X` / `from X import …` roots,
+    // map import-root → distribution name via the curated table (PIL→Pillow,
+    // yaml→PyYAML, etc.), drop stdlib + workspace-local roots. Result lets
+    // depMatchesUsedTransitives demote pypi transitives whose dist isn't
+    // imported anywhere first-party.
+    usedDependencies: extractPythonUsedDependencies(parsedFiles, knownModules),
   };
 
   const filesContext = new Map<string, PythonFileContext>();
@@ -694,4 +702,80 @@ function collectCallEdges(
     callExpressionCount,
     resolvedCallCount,
   };
+}
+
+/**
+ * Walk every `import X` / `from X import …` in the workspace and emit the
+ * resolved PyPI distribution name. Uses `resolvePypiImport` (the curated
+ * top-PyPI-by-downloads table) to translate import roots — `PIL` → `Pillow`,
+ * `yaml` → `PyYAML`, `cv2` → `opencv-python`, etc. Stdlib imports return
+ * null and are dropped. Workspace-local imports (anything `knownModules`
+ * resolves to a file in this repo) are also dropped — we only care about
+ * external deps.
+ *
+ * The output feeds `depMatchesUsedTransitives` which does case-insensitive
+ * exact match against PDV `name` rows. PyPI distribution names are
+ * case-insensitive per PEP 503, so the lowercase pass in runner.ts is safe.
+ */
+export function extractPythonUsedDependencies(
+  parsedFiles: FileTrees[],
+  knownModules: Map<string, string>,
+): Set<string> {
+  const out = new Set<string>();
+
+  // Workspace-local module roots (any module known via local file resolution).
+  // `knownModules` keys are dotted (`foo`, `foo.bar`); the root segment of any
+  // key is a local module name that shadows an external dist.
+  const localRoots = new Set<string>();
+  for (const key of knownModules.keys()) {
+    const root = key.split('.')[0];
+    if (root) localRoots.add(root);
+  }
+
+  const consider = (importPath: string | undefined): void => {
+    if (!importPath) return;
+    const root = importPath.split('.')[0];
+    if (!root) return;
+    if (localRoots.has(root)) return;
+    const dist = resolvePypiImport(root);
+    if (!dist) return; // stdlib or unresolvable
+    out.add(dist.toLowerCase());
+  };
+
+  const visit = (node: Node, source: string): void => {
+    if (node.type === 'import_statement') {
+      // `import X`, `import X as Y`, `import X, Y`
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (!child) continue;
+        if (child.type === 'dotted_name') {
+          consider(textOf(child, source));
+        } else if (child.type === 'aliased_import') {
+          const nameNode = child.childForFieldName('name');
+          if (nameNode) consider(textOf(nameNode, source));
+        }
+      }
+    } else if (node.type === 'import_from_statement') {
+      // `from X import …`. Take the first dotted_name (the module).
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (!child) continue;
+        if (child.type === 'dotted_name') {
+          consider(textOf(child, source));
+          break; // only the FIRST dotted_name is the module
+        }
+        // relative_import → workspace-local, skip
+        if (child.type === 'relative_import') break;
+      }
+    }
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) visit(child, source);
+    }
+  };
+
+  for (const f of parsedFiles) {
+    visit(f.tree.rootNode, f.source);
+  }
+  return out;
 }

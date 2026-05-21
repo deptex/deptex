@@ -408,6 +408,188 @@ export interface UpdateReachabilityOptions {
    * `module` instead. Defaults to true so legacy callers keep prior behavior.
    */
   astParsedSuccessfully?: boolean;
+  /**
+   * Whether the direct/transitive split on `project_dependencies` is
+   * trustworthy (ctx.graphTrusted). False when cdxgen returned an unwired
+   * dependency graph AND graph recovery couldn't rebuild the direct set — in
+   * that case `is_direct` is meaningless, so the `unreachable` verdict (which
+   * keys on `!is_direct`) would hide real vulns. When false the classifier
+   * floors at `module`. Defaults to true so legacy callers keep prior behavior.
+   */
+  graphTrusted?: boolean;
+  /**
+   * osv_id → the vulnerable call patterns of every CVE-targeted FrameworkSpec
+   * sink that loaded this run (from the taint-engine step). When a PDV's
+   * osv_id has an entry, the classifier verifies whether the CVE's *specific*
+   * vulnerable symbol is on a call path — rather than the weaker "package name
+   * appears somewhere" heuristic. Absent / empty for legacy callers and for
+   * CVEs with no generated spec, which keep the package-name `function` tier.
+   */
+  cveSinkPatterns?: Map<string, string[]>;
+  /**
+   * v3 (precision arc) — lowercase set of dep package names the taint-engine
+   * callgraph confirmed are reached by at least one CallEdge from workspace
+   * code. The heuristicUnreachable branch AND-clauses with
+   * `!usedTransitives.has(depName.toLowerCase())` so a transitive dep
+   * exercised through a framework's request handler (the jackson-core case)
+   * is demoted to `module` instead of being mis-classified `unreachable`.
+   *
+   * Semantics:
+   *   - undefined / empty Set: callgraph didn't extract for this ecosystem
+   *     yet (Ruby/PHP/C#/Java/Python/Go/Rust pre-T3.2) or the engine was
+   *     rollout-gated off. Classifier falls back to v2 heuristic behavior
+   *     for every transitive — `!callgraphReachedThisDep` is vacuously true.
+   *   - Populated Set: the dep names listed get `callgraph_reached=true` —
+   *     they short-circuit the unreachable verdict on transitives. Deps
+   *     NOT in the set with the standard heuristic preconditions
+   *     (transitive, zero files importing) collapse to `unreachable` as
+   *     v2 did.
+   */
+  usedTransitives?: Set<string>;
+  /**
+   * v3 follow-up — the project's ecosystem (`composer` / `pypi` / `npm` /
+   * `gem` / etc.). When set to an explicit-import ecosystem, the
+   * `heuristicUnreachable` gate relaxes its `!isDirect` requirement and
+   * also demotes DIRECT deps that have `files_importing_count === 0` AND
+   * `!callgraphReached` — composer/pypi/npm source code MUST `use`/`import`
+   * a package to call into it, so files=0 is strong negative evidence
+   * regardless of whether the package is listed in composer.json /
+   * pyproject.toml / package.json.
+   *
+   * Excluded: `gem` (Rails autoload + Bundler.require make files=0
+   * unreliable — a Gemfile-declared gem may be used solely through
+   * Bundler-managed autoloading and never explicitly required). Also
+   * excluded: any ecosystem where the tree-sitter usage extractor
+   * doesn't reliably resolve imports (`maven`, `golang`, `cargo`,
+   * `nuget` — these keep the v2 transitive-only behavior).
+   *
+   * Undefined defaults to the legacy `!isDirect`-only gate.
+   */
+  ecosystem?: string;
+}
+
+/**
+ * Extract substring-match tokens from a CVE-targeted FrameworkSink pattern.
+ * The pattern grammar (see taint-engine/spec.ts) is `Foo.bar`, `Foo.bar.*`,
+ * or `Foo.bar(*)`. Returns the lowercased full dotted callee plus its last
+ * segment — both matched against `project_usage_slices` strings. Segments
+ * shorter than 3 chars are dropped as too generic to match reliably.
+ */
+export function extractSymbolTokens(pattern: string): string[] {
+  let p = pattern.trim().toLowerCase();
+  p = p.replace(/\(\s*\*?\s*\)\s*$/, ''); // strip trailing (*) / ()
+  p = p.replace(/\.\*$/, '');             // strip trailing .*
+  p = p.replace(/\*+$/, '').trim();
+  if (!p) return [];
+  const tokens = new Set<string>();
+  if (p.length >= 3) tokens.add(p);
+  const segs = p.split(/[.#:/]/).filter(Boolean);
+  const last = segs[segs.length - 1];
+  if (last && last.length >= 3) tokens.add(last);
+  return [...tokens];
+}
+
+/**
+ * Framework-embedded runtime components — servlet containers, embedded
+ * app-servers, reactive runtimes and template engines that a framework's
+ * starter / auto-configuration wires into the application. The app's own
+ * first-party code never `import`s them (Spring Boot embeds Tomcat; the app
+ * never imports `org.apache.catalina`), so the import-absence heuristic below
+ * would wrongly collapse them to `unreachable` — yet the servlet container is
+ * on every request path and the template engine renders every view. Never
+ * emit `unreachable` for a dep whose name matches one of these; floor it at
+ * `module` (we know it runs; we just can't pin the vulnerable function).
+ *
+ * Surfaced by the M4 reachability corpus: spring-petclinic's tomcat-embed-core
+ * and thymeleaf-spring6 were false-negative `unreachable` verdicts.
+ */
+const FRAMEWORK_EMBEDDED_RUNTIME = [
+  'tomcat-embed', 'jetty', 'undertow', 'netty', 'spring-boot-starter-tomcat',
+  'thymeleaf', 'freemarker', 'mustache', 'pebble', 'groovy-templates',
+];
+
+/** True when `depName` is a framework-embedded runtime component (see above). */
+export function isFrameworkEmbeddedRuntime(depName: string | undefined): boolean {
+  if (!depName) return false;
+  const n = depName.toLowerCase();
+  return FRAMEWORK_EMBEDDED_RUNTIME.some((p) => n.includes(p));
+}
+
+/**
+ * True when `project_dependencies.environment` marks a dependency as
+ * dev/test/build scope. A dev-scoped dependency's vulnerable code is, by
+ * definition, not on the production call path — the classifier floors it at
+ * `unreachable`. `environment` is derived from the manifest (`deps-sync.ts`)
+ * and from transitive dev-only propagation; it is the single dev-scope signal.
+ */
+export function isDevScoped(environment: string | null | undefined): boolean {
+  return environment === 'dev';
+}
+
+/**
+ * v3 precision arc — does the taint-engine callgraph's `usedDependencies`
+ * set credit this dependency as reached?
+ *
+ * Per-ecosystem matching:
+ *   - **npm** populates the set with package names (`lodash`, `@scope/x`).
+ *     A direct `.has(depName.toLowerCase())` covers it.
+ *   - **java** (maven) populates the set with FQN packages (e.g.
+ *     `com.fasterxml.jackson.databind`, `org.springframework.web`) plus
+ *     ancestors. The PDV's name is the maven artifactId (e.g.
+ *     `jackson-core`) and namespace is the groupId (e.g.
+ *     `com.fasterxml.jackson.core`). The matcher does:
+ *       (a) bidirectional dot-segmented prefix match between `namespace`
+ *           and any used-FQN — credits jackson-core for a workspace that
+ *           imports `com.fasterxml.jackson.databind` via common ancestor
+ *           `com.fasterxml.jackson`.
+ *       (b) artifactId hyphen→dot substring against any used-FQN —
+ *           fallback for artifacts whose groupId doesn't share a prefix
+ *           with the package (e.g. older shaded jars).
+ *
+ * Returns false on empty depName or empty usedTransitives. Never throws.
+ */
+export function depMatchesUsedTransitives(
+  depName: string | null | undefined,
+  depNamespace: string | null | undefined,
+  usedTransitives: Set<string>,
+): boolean {
+  if (usedTransitives.size === 0) return false;
+  const lowerName = (depName ?? '').toLowerCase();
+  // npm exact-name match (lowercase).
+  if (lowerName && usedTransitives.has(lowerName)) return true;
+
+  // maven groupId bidirectional dot-segmented prefix match.
+  // `com.fasterxml.jackson.core` ↔ `com.fasterxml.jackson.databind` via
+  // ancestor `com.fasterxml.jackson`. The Java callgraph emits both the
+  // FQN package AND every non-trivial ancestor, so the ancestor lookup
+  // succeeds with a single `.has` on `com.fasterxml.jackson`.
+  const lowerNs = (depNamespace ?? '').toLowerCase();
+  if (lowerNs) {
+    if (usedTransitives.has(lowerNs)) return true;
+    // groupId is a strict prefix of some used-FQN (e.g. groupId
+    // `org.springframework` ⊂ used `org.springframework.web`).
+    for (const used of usedTransitives) {
+      if (used.startsWith(lowerNs + '.') || lowerNs.startsWith(used + '.')) {
+        return true;
+      }
+    }
+  }
+
+  // maven artifactId hyphen→dot substring — catches e.g.
+  // `jackson-databind` mapping to FQN containing `jackson.databind`.
+  // Skip when the dot-converted token is shorter than 5 chars or has
+  // no dots (would degenerate to "anything containing `lodash`" already
+  // covered by the npm exact-match path).
+  if (lowerName.includes('-')) {
+    const dotted = lowerName.replace(/-/g, '.');
+    if (dotted.length >= 5 && dotted.includes('.')) {
+      for (const used of usedTransitives) {
+        if (used.includes(dotted)) return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export async function updateReachabilityLevels(
@@ -420,7 +602,7 @@ export async function updateReachabilityLevels(
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, osv_id')
+    .select('id, project_dependency_id, osv_id, aliases')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
@@ -431,7 +613,7 @@ export async function updateReachabilityLevels(
 
   const { data: pds, error: pdErr } = await supabase
     .from('project_dependencies')
-    .select('id, dependency_id, is_direct, files_importing_count')
+    .select('id, dependency_id, is_direct, files_importing_count, environment, dependency_version_id')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
   if (pdErr) {
@@ -439,10 +621,18 @@ export async function updateReachabilityLevels(
   }
 
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
-  const pdMetaMap = new Map<string, { isDirect: boolean; filesImporting: number }>(
+  const pdMetaMap = new Map<
+    string,
+    { isDirect: boolean; filesImporting: number; scope: string | null; versionId: string | null }
+  >(
     pds?.map((pd: any) => [
       pd.id,
-      { isDirect: !!pd.is_direct, filesImporting: Number(pd.files_importing_count ?? 0) },
+      {
+        isDirect: !!pd.is_direct,
+        filesImporting: Number(pd.files_importing_count ?? 0),
+        scope: (pd.environment ?? null) as string | null,
+        versionId: (pd.dependency_version_id ?? null) as string | null,
+      },
     ]) ?? []
   );
 
@@ -636,6 +826,20 @@ export async function updateReachabilityLevels(
     );
   }
 
+  // Second fail-open guard: `unreachable` keys on `!is_direct`, so it is only
+  // safe when the direct/transitive split is trustworthy. cdxgen sometimes
+  // returns an unwired dependency graph; when graph recovery also couldn't
+  // rebuild the direct set, every dep looks transitive and a real direct vuln
+  // could be hidden. Floor at `module` in that case.
+  const graphTrusted = options.graphTrusted ?? true;
+  if (!graphTrusted) {
+    await logger.warn(
+      'reachability',
+      'Dependency graph untrusted (cdxgen graph unwired, recovery unavailable) — ' +
+        'flooring unreachable verdicts at module',
+    );
+  }
+
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
   for (const u of usages ?? []) {
@@ -661,6 +865,10 @@ export async function updateReachabilityLevels(
   }
 
   const depNameCache = new Map<string, string>();
+  // v3 precision arc — namespace (groupId for maven) cached alongside name.
+  // Used by the callgraph-reach matcher to bridge maven artifactIds (e.g.
+  // `jackson-core`) and Java FQN packages (e.g. `com.fasterxml.jackson.*`).
+  const depNamespaceCache = new Map<string, string | null>();
   let updatedCount = 0;
   let detailsSetCount = 0;
   const levelCounts: Record<string, number> = {
@@ -675,12 +883,29 @@ export async function updateReachabilityLevels(
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
     if (!dependencyId) continue;
 
-    const matchingFlows = flowsByDep.get(dependencyId) ?? [];
-    const taintMatches = pdv.osv_id
-      ? taintByDepOsv.get(`${dependencyId}|${pdv.osv_id}`) ?? []
-      : [];
+    // A PDV's primary osv_id may be a GHSA advisory while the taint engine
+    // and CVE-targeted specs key on the CVE id. Match on the primary id plus
+    // every alias so a GHSA-primary PDV still resolves its CVE-keyed flow.
+    const candidateOsvIds: string[] = [];
+    if (pdv.osv_id) candidateOsvIds.push(pdv.osv_id);
+    if (Array.isArray(pdv.aliases)) {
+      for (const a of pdv.aliases) {
+        if (typeof a === 'string' && a && !candidateOsvIds.includes(a)) candidateOsvIds.push(a);
+      }
+    }
 
-    let level: string;
+    const matchingFlows = flowsByDep.get(dependencyId) ?? [];
+    const taintMatches: StoredFlow[] = [];
+    {
+      const seen = new Set<StoredFlow>();
+      for (const osv of candidateOsvIds) {
+        for (const f of taintByDepOsv.get(`${dependencyId}|${osv}`) ?? []) {
+          if (!seen.has(f)) { seen.add(f); taintMatches.push(f); }
+        }
+      }
+    }
+
+    let level: string = 'module';
     let details: any = null;
 
     if (taintMatches.length > 0) {
@@ -712,17 +937,76 @@ export async function updateReachabilityLevels(
         tags: [...new Set(matchingFlows.map((f) => f.entry_point_tag).filter((x): x is string => !!x))],
       };
     } else {
+      // Dependency scope out-ranks the usage heuristic: a dev/test/build-scope
+      // dependency's vulnerable code is by definition not on the production
+      // call path. A genuine taint/data_flow signal (handled above) still wins;
+      // this branch only runs when no flow was found.
+      const scopeMeta = pdMetaMap.get(pdv.project_dependency_id);
+      const devScoped = !!scopeMeta && isDevScoped(scopeMeta.scope);
+      if (devScoped) {
+        level = 'unreachable';
+        details = {
+          reason: 'dependency is dev/test/build scope — not on the production call path',
+          scope: 'dev',
+          verdict: 'dev_scope_unreachable',
+        };
+      }
+
       let depName = depNameCache.get(dependencyId);
-      if (depName === undefined) {
+      let depNamespace = depNamespaceCache.get(dependencyId);
+      if (depName === undefined || depNamespace === undefined) {
         const { data: dep } = await supabase
           .from('dependencies')
-          .select('name')
+          .select('name, namespace')
           .eq('id', dependencyId)
           .single();
         depName = dep?.name ?? '';
+        depNamespace = (dep?.namespace ?? null) as string | null;
         depNameCache.set(dependencyId, depName as string);
+        depNamespaceCache.set(dependencyId, depNamespace);
       }
 
+      // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted
+      // FrameworkSpec sink loaded for this PDV's CVE, we know the *specific*
+      // vulnerable call pattern — verify it is on a call path instead of the
+      // weaker "package name appears somewhere" heuristic below.
+      let sinkPatterns: string[] | undefined;
+      if (options.cveSinkPatterns) {
+        for (const osv of candidateOsvIds) {
+          const p = options.cveSinkPatterns.get(osv);
+          if (p && p.length > 0) { sinkPatterns = p; break; }
+        }
+      }
+      const symbolTokens = [...new Set((sinkPatterns ?? []).flatMap(extractSymbolTokens))];
+      let symbolClassified = false;
+      if (!devScoped && symbolTokens.length > 0) {
+        const matchedToken = symbolTokens.find((tok) => allUsageStrings.some((s) => s.includes(tok)));
+        const symMeta = pdMetaMap.get(pdv.project_dependency_id);
+        if (matchedToken) {
+          // The vulnerable symbol itself is referenced — a genuine function-tier hit.
+          level = 'function';
+          details = {
+            reason: `vulnerable symbol "${matchedToken}" found in project usage`,
+            vulnerable_symbols: symbolTokens,
+          };
+          symbolClassified = true;
+        } else if (usageAnalysisProducedOutput && symMeta && symMeta.filesImporting > 0) {
+          // The package is imported, but the CVE's specific vulnerable symbol
+          // is on no call path the usage extractor could see — down-rank to
+          // `unreachable`. Tunable knob: if the M4 corpus surfaces a
+          // false-negative, demote this branch to `module` instead.
+          level = 'unreachable';
+          details = {
+            reason: `vulnerable symbol(s) ${symbolTokens.join(', ')} not found on any call path`,
+            vulnerable_symbols: symbolTokens,
+          };
+          symbolClassified = true;
+        }
+        // else: usage analysis incomplete, or the dep isn't imported at all —
+        // fall through to the heuristic ladder; never invent unreachable here.
+      }
+
+      if (!devScoped && !symbolClassified) {
       if (depName && isDepUsed(depName)) {
         level = 'function';
         // Populate details with matching usage data (file, line, methods called)
@@ -769,11 +1053,65 @@ export async function updateReachabilityLevels(
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
         const meta = pdMetaMap.get(pdv.project_dependency_id);
-        if (usageAnalysisProducedOutput && meta && !meta.isDirect && meta.filesImporting === 0) {
+        // v3 precision: when the taint-engine callgraph confirms a CallEdge
+        // crossed into this dep's code, demote it from `unreachable` to
+        // `module`. Handles the jackson-vs-idna case where a framework's
+        // request handler calls jackson on every request even though the app
+        // never `import`s it directly. `callgraphRan` treats an empty Set
+        // identically to undefined — both mean "no signal", fall back to v2.
+        const callgraphRan =
+          options.usedTransitives !== undefined && options.usedTransitives.size > 0;
+        const callgraphReachedThisDep =
+          callgraphRan && depMatchesUsedTransitives(depName, depNamespace, options.usedTransitives!);
+        // Ecosystems where source code MUST `use`/`import` a package to
+        // exercise it. For these, files_importing_count === 0 is strong
+        // negative evidence even on a directly-declared dep (composer.json /
+        // pyproject.toml / package.json declares many libs the app never
+        // actually wires up — e.g. dev-only utilities, optional features
+        // gated behind feature flags, packages added for one prototype
+        // commit and never removed). Excluded: `gem` (Rails autoload +
+        // Bundler.require make files=0 unreliable), `maven`/`golang`/`cargo`/
+        // `nuget` (tree-sitter import resolution is partial — we keep the
+        // conservative transitive-only gate to avoid false negatives).
+        const EXPLICIT_IMPORT_ECOSYSTEMS = new Set(['composer', 'pypi', 'npm']);
+        const allowDirectDemotion =
+          !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
+        const heuristicUnreachable =
+          graphTrusted &&
+          usageAnalysisProducedOutput &&
+          !!meta &&
+          (!meta.isDirect || allowDirectDemotion) &&
+          meta.filesImporting === 0 &&
+          !isFrameworkEmbeddedRuntime(depName) &&
+          !callgraphReachedThisDep;
+        if (heuristicUnreachable) {
           level = 'unreachable';
+          details = {
+            reason: 'no source file imports this transitive dependency',
+            scope: 'orphan',
+            verdict: 'orphan_transitive_unreachable',
+          };
+        } else if (callgraphReachedThisDep) {
+          // The taint-engine callgraph traced a CallEdge into this dep's
+          // code. Floor at `module` and stamp provenance so downstream
+          // consumers (UI badges, EPD context, audit reports) can tell
+          // this verdict apart from a generic direct-dep or
+          // framework-embedded-runtime floor.
+          level = 'module';
+          details = {
+            reason: `taint-engine callgraph confirmed a CallEdge into ${depName}`,
+            scope: 'callgraph_reached',
+            verdict: 'callgraph_reached_transitive',
+            callgraph_evidence: { dep_name: depName },
+          };
         } else {
+          // Direct deps, deps with >=1 import, and framework-embedded runtime
+          // components (servlet container / template engine wired in by a
+          // framework starter) floor at `module` — we know they run, we just
+          // can't pin the vulnerable function to a call path.
           level = 'module';
         }
+      }
       }
     }
 

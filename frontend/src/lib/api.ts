@@ -2054,6 +2054,33 @@ export const api = {
     });
   },
 
+  // Phase 35 (v1.1) — DAST OpenAPI spec config.
+  async setDastTargetSpec(
+    projectId: string,
+    targetId: string,
+    body: { api_spec_source: DastSpecSource; api_spec_url?: string },
+  ): Promise<DastTargetDTO> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/spec`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    );
+  },
+
+  async getDastTargetSpecDownload(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastSpecDownloadResponse | null> {
+    try {
+      return await fetchWithAuth(
+        `/api/projects/${projectId}/dast/targets/${targetId}/spec/download`,
+      );
+    } catch (e: any) {
+      const msg = String(e?.message ?? '');
+      if (msg.includes('spec_unavailable') || msg.includes('404')) return null;
+      throw e;
+    }
+  },
+
   async recheckDastTargetRuntime(
     projectId: string,
     targetId: string,
@@ -2096,9 +2123,39 @@ export const api = {
     );
   },
 
+  /**
+   * v2.1d — queue a recorded-login dry-run (Test-login button).
+   * Returns the test_job_id; client polls GET /dast/jobs?id=<id> via the
+   * useJobResult hook until status is terminal.
+   */
+  async postDastLoginTest(
+    projectId: string,
+    targetId: string,
+  ): Promise<DastLoginTestResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/credentials/test`,
+      { method: 'POST' },
+    );
+  },
+
+  /**
+   * v2.1d — cancel a queued/processing scan_jobs row. Backs the editor's
+   * "Cancel running scan" affordance for the Test-login flow concurrency
+   * mitigation.
+   */
+  async cancelDastJob(
+    projectId: string,
+    jobId: string,
+  ): Promise<DastJobCancelResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/jobs/${jobId}/cancel`,
+      { method: 'POST' },
+    );
+  },
+
   async triggerDastScan(
     projectId: string,
-    body: { target_id: string },
+    body: { target_id: string; engine?: 'zap' | 'nuclei' },
   ): Promise<DastScanTriggerResponse> {
     return fetchWithAuth(`/api/projects/${projectId}/dast/scan`, {
       method: 'POST',
@@ -2336,6 +2393,41 @@ export const api = {
     return fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/container-findings/${findingId}/risk-accept`,
       { method: 'PATCH', body: JSON.stringify({ accepted, reason }) }
+    );
+  },
+
+  // ============================================================
+  // Base-image recommendations (Phase 2 — Item J)
+  // ============================================================
+
+  async getBaseImageRecommendations(
+    organizationId: string,
+    projectId: string
+  ): Promise<{ recommendations: BaseImageRecommendation[] }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations`
+    );
+  },
+
+  async dismissBaseImageRecommendation(
+    organizationId: string,
+    projectId: string,
+    recommendationId: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-recommendations/${recommendationId}/dismiss`,
+      { method: 'POST', body: JSON.stringify({}) }
+    );
+  },
+
+  async suggestBaseImage(
+    organizationId: string,
+    projectId: string,
+    sourceImage: string
+  ): Promise<{ ok: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/base-image-suggestions`,
+      { method: 'POST', body: JSON.stringify({ source_image: sourceImage }) }
     );
   },
 
@@ -3959,10 +4051,116 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
-export type DastAuthStrategy = 'form' | 'jwt' | 'cookie';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded';
+
+// v2.1d — recorded-login step authoring. Maps 1:1 to the backend type.
+export type RecordedStepAction =
+  | 'goto'
+  | 'click'
+  | 'type_username'
+  | 'type_password'
+  | 'type_totp'
+  | 'type_custom'
+  | 'wait'
+  | 'return'
+  | 'escape';
+
+export interface RecordedStep {
+  action: RecordedStepAction;
+  selector?: string;
+  selector_kind?: 'css' | 'xpath';
+  value?: string;
+  timeout_ms?: number;
+  wait_ms?: number;
+}
+
+export interface RecordedCredentialPayload {
+  kind: 'recorded';
+  login_page_url: string;
+  steps: RecordedStep[];
+  username: string;
+  password: string;
+  totp_secret?: string;
+  login_page_wait_ms?: number;
+  step_delay_ms?: number;
+  label?: string;
+  sso_origins?: string[];
+}
+
+export interface FailedAtStep {
+  step_index: number;
+  action: RecordedStepAction;
+  selector?: string;
+  reason:
+    | 'selector_not_visible_after_timeout'
+    | 'cross_origin_blocked'
+    | 'totp_generation_failed'
+    | 'browser_crashed'
+    | 'logged_in_indicator_missed'
+    | 'logged_out_indicator_present_after_login'
+    | 'unknown';
+  detail?: string;
+  dom_excerpt?: string;
+}
+
+export interface DastLoginTestResult {
+  success: boolean;
+  duration_ms: number;
+  steps_run: number;
+  step_index?: number;
+  failed_at_step?: FailedAtStep;
+  raw_log?: string;
+}
+
+// Discriminated union — FE renderers switch on `kind`. Backend type mirror.
+export type DastJobErrorPayload =
+  | {
+      kind: 'session_loss';
+      consecutive_lost_count: number;
+      last_logged_out_url?: string;
+      last_logged_out_at?: string;
+    }
+  | {
+      kind: 'pre_flight_failed';
+      failed_at_step: FailedAtStep;
+      consecutive_lost_count: 0;
+    }
+  | {
+      kind: 'test_result';
+      test_result: DastLoginTestResult;
+    };
+
+export interface DastLoginTestResponse {
+  test_job_id: string;
+  status: 'queued';
+}
+
+export interface DastJobCancelResponse {
+  job_id: string;
+  status: 'cancelled';
+}
 export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
 export type DastEngine = 'zap' | 'nuclei' | 'merged';
+
+// Phase 35 (v1.1) — OpenAPI spec source enum + per-target spec_config.
+// 'upload' is reserved for v1.2 (no v1.1 route accepts it).
+export type DastSpecSource = 'synthesized' | 'url' | 'none';
+
+export interface DastSpecConfigDTO {
+  api_spec_source: DastSpecSource;
+  api_spec_url: string | null;
+  last_synthesized_at: string | null;
+  last_synthesis_endpoint_count: number | null;
+  /**
+   * null = never synthesized (target pre-dates any scan).
+   * true = last spec resolve + scan succeeded.
+   * false = last spec resolve failed (no entries / URL fetch / URL parse /
+   *         storage). Cause is inferable from api_spec_source +
+   *         last_synthesized_at + last_synthesis_endpoint_count.
+   */
+  last_synthesis_ok: boolean | null;
+}
 
 export interface DastTargetDTO {
   id: string;
@@ -3977,6 +4175,15 @@ export interface DastTargetDTO {
   active_dast_run_id: string | null;
   last_scanned_at: string | null;
   created_at: string;
+  // Phase 35 (v1.1)
+  spec_config: DastSpecConfigDTO;
+}
+
+export interface DastSpecDownloadResponse {
+  kind: 'synthesized' | 'url';
+  url: string;
+  expires_at: string | null;
+  content_length: number | null;
 }
 
 export interface DastScopeHeaderRule {
@@ -4002,7 +4209,8 @@ export interface DastConfigDTO {
 export type DastCredentialPayloadSummary =
   | { kind: 'form'; username_masked: string }
   | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
-  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] };
+  | { kind: 'cookie'; cookie_count: number; cookie_names: string[] }
+  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string };
 
 export interface DastCredentialSummaryDTO {
   auth_strategy: DastAuthStrategy;
@@ -4025,7 +4233,8 @@ export type DastCredentialUpsertPayload =
   | {
       kind: 'cookie';
       cookies: { name: string; value: string; domain?: string; path?: string }[];
-    };
+    }
+  | RecordedCredentialPayload;
 
 export interface DastCredentialUpsertDTO {
   auth_strategy: DastAuthStrategy;
@@ -4049,6 +4258,8 @@ export interface DastJobDTO {
   completed_at: string | null;
   error: string | null;
   error_category: string | null;
+  /** v2.1d — discriminated union; FE switches on .kind. */
+  error_payload: DastJobErrorPayload | null;
   attempts: number;
   created_at: string;
 }
@@ -4077,6 +4288,8 @@ export interface DastFindingDTO {
   linked_sast_finding_id?: string | null;
   cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
+  /** CISA Known-Exploited flag — true only for KEV-tagged Nuclei findings. */
+  kev: boolean;
   status: DastFindingStatus;
   risk_accepted_reason: string | null;
   created_at: string;
@@ -4153,6 +4366,11 @@ export interface ProjectVulnerability {
   sla_deadline_at?: string | null;
   /** Reachability (org list rows) */
   reachability_level?: ReachabilityLevel;
+  /** v2.1c — set when a Nuclei DAST scan confirmed this vuln at runtime. */
+  runtime_confirmed_at?: string | null;
+  runtime_confirmed_dast_finding_id?: string | null;
+  /** Reachability level the row held before the runtime confirmation flipped it. */
+  runtime_confirmed_prior_level?: string | null;
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
   project_name?: string;
@@ -4830,9 +5048,35 @@ export interface ContainerFinding {
 export interface ScannerSummary {
   iac: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
   container: { critical: number; high: number; medium: number; low: number; info: number; ignored: number };
+  /** Phase 2 — container findings rolled up by static reachability verdict.
+   *  Absent on responses from a backend that predates Phase 2. */
+  container_reachability?: { module: number; unreachable: number; unclassified: number };
   infra_types: Array<IaCFramework>;
   last_scan_at: string | null;
   skipped_images: Array<{ image: string; reason: string }>;
+}
+
+/** Phase 2 base-image upgrade recommendation — one card per Dockerfile. */
+export interface BaseImageRecommendation {
+  id: string;
+  dockerfile_path: string;
+  current_image: string;
+  current_image_digest: string | null;
+  current_image_cve_count: number | null;
+  recommended_image: string | null;
+  recommended_image_cve_count: number | null;
+  cve_delta: number | null;
+  alternatives: Array<{
+    image: string;
+    provider: 'chainguard' | 'distroless' | 'dhi' | 'official_slim' | 'wolfi';
+    cve_count: number | null;
+    drop_in_score: number;
+  }>;
+  shell_compat_verdict: 'shell_required' | 'no_shell_required' | 'unknown';
+  shell_compat_evidence: Record<string, unknown>;
+  drop_in_score: number;
+  is_dismissed: boolean;
+  created_at: string;
 }
 
 export type RegistryType =

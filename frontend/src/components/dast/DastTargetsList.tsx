@@ -1,7 +1,13 @@
-import { Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ChevronDown, FileCode, Globe, Loader2, Pencil, Play, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import type { DastJobDTO, DastTargetDTO } from '../../lib/api';
 
 interface DastTargetsListProps {
@@ -12,7 +18,7 @@ interface DastTargetsListProps {
   recheckingRuntimeTargetId: string | null;
   drainModeOn: boolean;
   canManage: boolean;
-  onScan: (target: DastTargetDTO) => void;
+  onScan: (target: DastTargetDTO, engine: 'zap' | 'nuclei') => void;
   onEdit: (target: DastTargetDTO) => void;
   onRecheckRuntime: (target: DastTargetDTO) => void;
 }
@@ -57,10 +63,28 @@ function authChip(target: DastTargetDTO) {
       ? 'JWT'
       : target.auth_strategy === 'cookie'
         ? 'Cookie'
-        : 'Auth';
+        : target.auth_strategy === 'recorded'
+          ? 'Recorded'
+          : 'Auth';
   return (
     <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-emerald-500/30 text-emerald-500">
       <ShieldCheck className="h-3 w-3 mr-1" /> {label}
+    </Badge>
+  );
+}
+
+// Phase 35 (v1.1) — OpenAPI spec source + endpoint count chip per target row.
+function specChip(target: DastTargetDTO) {
+  const cfg = target.spec_config;
+  if (!cfg || cfg.api_spec_source === 'none') return null;
+  const count = cfg.last_synthesis_endpoint_count ?? null;
+  const label =
+    cfg.api_spec_source === 'synthesized'
+      ? `Synthesized${count !== null ? ` · ${count}` : ''}`
+      : `URL${count !== null ? ` · ${count}` : ''}`;
+  return (
+    <Badge variant="outline" className="text-[11px] px-1.5 py-0 border-sky-500/30 text-sky-500">
+      <FileCode className="h-3 w-3 mr-1" /> {label}
     </Badge>
   );
 }
@@ -113,6 +137,7 @@ export function DastTargetsList({
                   </span>
                   {runtimeBadge(target.detected_runtime)}
                   {authChip(target)}
+                  {specChip(target)}
                   {!target.enabled ? (
                     <Badge variant="outline" className="text-[11px] px-1.5 py-0 text-foreground-muted">Disabled</Badge>
                   ) : null}
@@ -140,28 +165,55 @@ export function DastTargetsList({
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {canManage ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onScan(target)}
-                          disabled={scanDisabled}
-                        >
-                          {scanningTargetId === target.id || inFlight ? (
-                            <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
-                          ) : (
-                            <Play className="h-3.5 w-3.5 mr-2" />
-                          )}
-                          {inFlight ? 'Running' : 'Scan'}
+                  scanDisabled ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button variant="outline" size="sm" disabled>
+                            {scanningTargetId === target.id || inFlight ? (
+                              <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                            ) : (
+                              <Play className="h-3.5 w-3.5 mr-2" />
+                            )}
+                            {inFlight ? 'Running' : 'Scan'}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {scanDisabledReason ? (
+                        <TooltipContent>{scanDisabledReason}</TooltipContent>
+                      ) : null}
+                    </Tooltip>
+                  ) : (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Play className="h-3.5 w-3.5 mr-2" />
+                          Scan
+                          <ChevronDown className="h-3.5 w-3.5 ml-1.5 -mr-0.5 opacity-60" />
                         </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {scanDisabledReason ? (
-                      <TooltipContent>{scanDisabledReason}</TooltipContent>
-                    ) : null}
-                  </Tooltip>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-60">
+                        <DropdownMenuItem
+                          onClick={() => onScan(target, 'zap')}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span className="text-sm text-foreground">ZAP</span>
+                          <span className="text-xs text-foreground-secondary">
+                            Crawl + active/passive web scan
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => onScan(target, 'nuclei')}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span className="text-sm text-foreground">Nuclei</span>
+                          <span className="text-xs text-foreground-secondary">
+                            Template-based CVE &amp; exposure checks
+                          </span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )
                 ) : null}
                 {canManage ? (
                   <Tooltip>

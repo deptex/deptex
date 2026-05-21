@@ -346,4 +346,61 @@ describe('updateReachabilityLevels — Phase 6.5 confirmed-tier semantics', () =
     const update = fs.updates.find((u) => u.filter.id === PDV_ID);
     expect(update?.values.reachability_level).toBe('confirmed');
   });
+
+  it('promotes a GHSA-primary PDV via its CVE alias matching a CVE-keyed flow', async () => {
+    // Real-repo confirmed-tier bug: CVE-targeted specs (and the taint engine)
+    // key on the CVE id, but a PDV's primary osv_id is often a GHSA advisory.
+    // The classifier must match the flow's CVE osv_id against the PDV's
+    // aliases, not just its primary id.
+    const fs = new FakeStorage();
+    fs.set('project_dependency_vulnerabilities', [
+      {
+        id: PDV_ID,
+        project_dependency_id: PD_ID,
+        project_id: PROJECT_ID,
+        extraction_run_id: RUN_ID,
+        osv_id: 'GHSA-35jh-r3h4-6jhm', // primary id is a GHSA advisory
+        aliases: [CVE], // the CVE lives in aliases
+      },
+    ]);
+    fs.set('project_dependencies', [
+      {
+        id: PD_ID,
+        project_id: PROJECT_ID,
+        last_seen_extraction_run_id: RUN_ID,
+        dependency_id: DEP_ID,
+        is_direct: true,
+        files_importing_count: 1,
+      },
+    ]);
+    fs.set('project_usage_slices', []);
+    fs.set('project_reachable_flows', [
+      {
+        project_id: PROJECT_ID,
+        extraction_run_id: RUN_ID,
+        dependency_id: DEP_ID,
+        reachability_source: 'taint_engine',
+        osv_id: CVE, // engine stamped the CVE id, not the GHSA id
+        rule_id: null,
+        flow_signature_hash: 'd'.repeat(64),
+        entry_point_file: 'src/server.ts',
+        entry_point_line: 7,
+        entry_point_tag: null,
+        sink_method: 'lodash.template',
+      },
+    ]);
+    fs.set('project_reachable_flow_suppressions', []);
+
+    await updateReachabilityLevels(
+      PROJECT_ID,
+      RUN_ID,
+      fs as unknown as Storage,
+      log as any,
+      undefined,
+      { validOsvIds: new Set([CVE]), organizationId: ORG_ID },
+    );
+
+    const update = fs.updates.find((u) => u.filter.id === PDV_ID);
+    expect(update?.values.reachability_level).toBe('confirmed');
+  });
 });

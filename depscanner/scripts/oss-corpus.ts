@@ -54,7 +54,10 @@ import * as os from 'node:os';
 
 interface GroundTruthCve {
   id: string;
-  expected_reachability: 'confirmed' | 'data_flow' | 'function' | 'module';
+  // `unreachable` is used by the purpose-built reachability corpus
+  // (scripts/reachability-corpus.yaml) — a CVE hand-labelled as not on any
+  // call path. The original oss-corpus.yaml only uses the reachable tiers.
+  expected_reachability: 'confirmed' | 'data_flow' | 'function' | 'module' | 'unreachable';
   source: string;
 }
 
@@ -84,6 +87,10 @@ interface RepoResult {
   scan_duration_ms?: number;
   total_findings?: number;
   reachable_findings?: number;
+  /** Reachability-level counts across ALL observed findings (not just the
+   *  hand-labelled ground-truth allowlist) — lets the gate report an
+   *  all-findings noise-reduction number that exposes allowlist selection bias. */
+  by_reachability?: Record<string, number>;
   ai_cost_usd?: number;
   ground_truth_total: number;
   ground_truth_matched: GroundTruthMatch[];
@@ -283,19 +290,29 @@ async function cloneRepo(
   if (fs.existsSync(workspaceDir)) {
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
-  fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
 
-  // Always shallow clone. If a ref is pinned, fetch that ref specifically.
-  const args = ['clone', '--depth=1'];
-  if (repo.ref) args.push('--branch', repo.ref);
-  args.push(repo.repo_url, workspaceDir);
-
-  const res = await execCapture('git', args, { timeoutMs: 180_000 });
-  if (res.code !== 0) {
-    return {
-      ok: false,
-      reason: `git clone exited ${res.code}: ${res.stderr.split('\n').slice(-3).join(' | ')}`,
-    };
+  // Shallow-fetch the pinned ref directly. `git clone --branch` rejects
+  // commit SHAs, so we use init + fetch + checkout instead: this one path
+  // accepts a branch name, a tag, or a 40-char commit SHA, and fetches only
+  // the pinned ref (no wasteful default-branch clone first). A bare `HEAD`
+  // ref resolves to the remote's default branch. SHA fetches rely on
+  // GitHub's allowReachableSHA1InWant — fine for these public corpus repos.
+  const ref = repo.ref || 'HEAD';
+  const steps: Array<{ args: string[]; label: string }> = [
+    { args: ['init', '--quiet'], label: 'git init' },
+    { args: ['remote', 'add', 'origin', repo.repo_url], label: 'git remote add' },
+    { args: ['fetch', '--depth=1', '--quiet', 'origin', ref], label: `git fetch ${ref}` },
+    { args: ['checkout', '--quiet', 'FETCH_HEAD'], label: 'git checkout' },
+  ];
+  for (const step of steps) {
+    const res = await execCapture('git', step.args, { cwd: workspaceDir, timeoutMs: 180_000 });
+    if (res.code !== 0) {
+      return {
+        ok: false,
+        reason: `${step.label} exited ${res.code}: ${res.stderr.split('\n').slice(-3).join(' | ')}`,
+      };
+    }
   }
   return { ok: true };
 }
@@ -437,6 +454,11 @@ function analyse(input: AnalysisInput): RepoResult {
 
   base.total_findings = vulns.length;
   base.reachable_findings = vulns.filter((v) => v?.is_reachable).length;
+  base.by_reachability = vulns.reduce((acc: Record<string, number>, v) => {
+    const lvl = (v?.reachability_level ?? 'unknown') as string;
+    acc[lvl] = (acc[lvl] ?? 0) + 1;
+    return acc;
+  }, {});
   base.dependencies_count = deps.length;
   base.semgrep_count = semgrep.length;
   base.secrets_count = secrets.length;

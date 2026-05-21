@@ -1,0 +1,36 @@
+openapi: "3.1.0"
+info:
+  title: "Smoke test spec"
+  version: "1.0.0"
+servers:
+  - url: "https://example.com"
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      responses:
+        default:
+          description: Default
+    post:
+      operationId: createUser
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        default:
+          description: Default
+  /users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        default:
+          description: Default

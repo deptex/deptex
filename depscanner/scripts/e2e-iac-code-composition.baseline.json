@@ -1,0 +1,11 @@
+{
+  "edges_written": 2,
+  "pdvs_updated": 2,
+  "dropped_pdv_finals": [
+    28.8,
+    80
+  ],
+  "partnerable_pcf": 2,
+  "partnerable_pdv": 3,
+  "suppressions_to_zero": 0
+}

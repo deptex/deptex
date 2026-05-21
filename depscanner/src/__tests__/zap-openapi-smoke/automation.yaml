@@ -1,0 +1,25 @@
+env:
+  contexts:
+    - name: smoke
+      urls:
+        - "https://example.com"
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+jobs:
+  - type: addOns
+    parameters:
+      install:
+        - openapi
+        - pscanrules
+  - type: openapi
+    parameters:
+      apiFile: /work/spec.yaml
+      targetUrl: https://example.com
+      context: smoke
+  - type: report
+    parameters:
+      template: traditional-json
+      reportDir: /work
+      reportFile: zap-report.json

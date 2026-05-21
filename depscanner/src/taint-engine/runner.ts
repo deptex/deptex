@@ -208,6 +208,17 @@ export interface RunEngineResult {
    * `flowsAfterFilter`.
    */
   detectorFlows: Flow[];
+  /**
+   * v3 (precision arc): set of dep package names the callgraph confirmed
+   * are reached by at least one CallEdge from workspace code (npm `pkg` /
+   * `@scope/name` for JS; per-language extractors populate this for their
+   * own ecosystem in follow-up commits). The reachability classifier uses
+   * this set to demote called-but-not-imported transitives from
+   * `unreachable` to `module` (jackson-vs-idna fix). Undefined when the
+   * callgraph for this language doesn't ship extraction yet — the
+   * classifier treats undefined as "no signal" and stays on v2 behavior.
+   */
+  usedDependencies?: Set<string>;
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -371,7 +382,23 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     flowsAfterFilter,
     aiFilter,
     detectorFlows,
+    // Lowercase npm package names the JS callgraph credited as reached.
+    // For other languages this is undefined until their per-language
+    // extractor lands (T3.2-Python / -Go / -Rust / -Java follow-ups).
+    usedDependencies: lowercaseSet(propagation.callgraph.usedDependencies),
   };
+}
+
+/**
+ * Pass through a Set lowercasing every entry. Returns undefined when input
+ * is undefined so callers can distinguish "callgraph didn't run extraction"
+ * (undefined) from "callgraph ran but found nothing called" (empty Set).
+ */
+function lowercaseSet(s: Set<string> | undefined): Set<string> | undefined {
+  if (s === undefined) return undefined;
+  const out = new Set<string>();
+  for (const v of s) out.add(v.toLowerCase());
+  return out;
 }
 
 function runDetectors(

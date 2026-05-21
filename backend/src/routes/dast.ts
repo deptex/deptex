@@ -10,12 +10,21 @@ import {
 import { loadTargetOrDeny, isLoadTargetDeny } from '../lib/dast-tenant-guard';
 import { validateScopeConfig } from '../lib/dast-scope-validate';
 import { detectRuntime, nextRuntimeTtlIso } from '../lib/dast-spa-detect';
-import { validateAndPrepareCredential, summarizePayload } from '../lib/dast-credential-validate';
+import { validateAndPrepareCredential, summarizePayload, validateDastJobPayload } from '../lib/dast-credential-validate';
 import {
   encryptCredential,
   isDastEncryptionConfigured,
   decryptCredential,
 } from '../lib/dast-encryption';
+import { createActivity } from '../lib/activities';
+import {
+  validateSpecSource,
+  validateAndFetchSpecUrl,
+} from '../lib/dast-spec-validate';
+import {
+  presignSynthesizedSpecDownload,
+  deleteAllSpecsForTarget,
+} from '../lib/dast-spec-storage';
 import type {
   DastConfigDTO,
   DastCredentialSummaryDTO,
@@ -31,7 +40,7 @@ router.use(authenticateUser);
 const VALID_SCAN_PROFILES: ReadonlySet<DastScanProfile> = new Set(['auto', 'quick', 'full', 'api']);
 const TIMEOUT_MIN = 5;
 const TIMEOUT_MAX = 60;
-const DAST_SCAN_TYPES = ['dast', 'dast_zap', 'dast_nuclei'];
+const DAST_SCAN_TYPES = ['dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run'];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,6 +90,16 @@ function targetRowToDto(row: any): DastTargetDTO {
     active_dast_run_id: row.active_dast_run_id ?? null,
     last_scanned_at: row.last_scanned_at ?? null,
     created_at: row.created_at,
+    // Phase 35 (v1.1) — OpenAPI spec config. Defaults guard rows that
+    // pre-date phase35 (the migration's UPDATE only runs once, but
+    // pglite/test fixtures may not have run it).
+    spec_config: {
+      api_spec_source: (row.api_spec_source ?? 'none') as 'synthesized' | 'url' | 'none',
+      api_spec_url: row.api_spec_url ?? null,
+      last_synthesized_at: row.last_synthesized_at ?? null,
+      last_synthesis_endpoint_count: row.last_synthesis_endpoint_count ?? null,
+      last_synthesis_ok: row.last_synthesis_ok ?? null,
+    },
   };
 }
 
@@ -88,7 +107,7 @@ async function loadTargetsWithCreds(projectId: string): Promise<DastTargetDTO[]>
   const { data: targets, error } = await supabase
     .from('project_dast_targets')
     .select(
-      'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at',
+      'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at, api_spec_source, api_spec_url, last_synthesized_at, last_synthesis_endpoint_count, last_synthesis_ok',
     )
     .eq('project_id', projectId)
     .order('created_at');
@@ -410,6 +429,20 @@ router.delete('/:projectId/dast/targets/:targetId', async (req: AuthRequest, res
       console.error('[dast] DELETE target error:', error.message);
       return res.status(500).json({ error: 'Failed to delete target' });
     }
+
+    // Phase 35 (v1.1) — sweep the target's bucket prefix
+    // (`{org}/{target}/`) after the DB cascade. Best-effort: storage failures
+    // log but never bubble up — the target row is already gone.
+    try {
+      await deleteAllSpecsForTarget(access.organizationId, targetId);
+    } catch (e) {
+      console.warn(
+        `[dast] DELETE target ${targetId}: spec cleanup failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
+
     return res.status(204).send();
   } catch (e: any) {
     console.error('[dast] DELETE target exception:', e);
@@ -667,6 +700,481 @@ router.delete(
 );
 
 // ---------------------------------------------------------------------------
+// PATCH /:projectId/dast/targets/:targetId/spec                 (Phase 35 v1.1)
+//
+// Update the target's OpenAPI spec source. Body:
+//   { api_spec_source: 'synthesized' | 'url' | 'none', api_spec_url?: string }
+//
+// `url` mode triggers SSRF guard + bounded fetch + swagger-parser strict
+// validate inline. Failures map to the SPEC_ERROR_CODES canonical strings
+// (frontend mirror in frontend/src/lib/dast-error-codes.ts; CI checks parity).
+// ---------------------------------------------------------------------------
+router.patch(
+  '/:projectId/dast/targets/:targetId/spec',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const sourceCheck = validateSpecSource(req.body?.api_spec_source);
+      if (sourceCheck.ok === false) {
+        return res.status(400).json({ error: 'invalid_spec_source' });
+      }
+      const next: 'synthesized' | 'url' | 'none' = sourceCheck.value;
+
+      const update: Record<string, unknown> = {
+        api_spec_source: next,
+        updated_at: new Date().toISOString(),
+      };
+      let endpointCount: number | null = null;
+
+      if (next === 'url') {
+        const candidateUrl = typeof req.body?.api_spec_url === 'string'
+          ? req.body.api_spec_url.trim()
+          : '';
+        if (candidateUrl.length === 0) {
+          return res.status(400).json({ error: 'spec_url_required' });
+        }
+        const fetched = await validateAndFetchSpecUrl(candidateUrl);
+        if (fetched.ok === false) {
+          const err = fetched.error;
+          // Status mapping: SSRF/required → 400, network → 502, parse → 422,
+          // size cap → 413. The frontend's friendlySpecErrorMessage maps the
+          // body.error code to user-friendly copy.
+          let status = 400;
+          if (err.code === 'spec_url_unreachable') status = 502;
+          else if (err.code === 'spec_parse_failed') status = 422;
+          else if (err.code === 'spec_too_large') status = 413;
+          const body: Record<string, unknown> = { error: err.code };
+          if ('detail' in err && err.detail) body.detail = err.detail;
+          return res.status(status).json(body);
+        }
+        update.api_spec_url = candidateUrl;
+        endpointCount = fetched.endpoint_count;
+      } else {
+        // synthesized / none — clear any prior URL.
+        update.api_spec_url = null;
+      }
+
+      const { data: updated, error: updateErr } = await supabase
+        .from('project_dast_targets')
+        .update(update)
+        .eq('id', targetId)
+        .select(
+          'id, target_url, label, enabled, detected_runtime, detected_runtime_at, detected_runtime_ttl_at, active_dast_run_id, last_scanned_at, created_at, api_spec_source, api_spec_url, last_synthesized_at, last_synthesis_endpoint_count, last_synthesis_ok',
+        )
+        .single();
+      if (updateErr || !updated) {
+        console.error('[dast] PATCH /spec update:', updateErr?.message);
+        return res.status(500).json({ error: 'Failed to update spec config' });
+      }
+
+      // Single activity type for all spec-config changes — metadata carries
+      // discriminator so the activity feed can render distinct copy without
+      // needing 4 separate types.
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_spec.configured',
+          description: 'Updated DAST OpenAPI spec config',
+          metadata: {
+            target_id: targetId,
+            from_source: guard.target.api_spec_source,
+            to_source: next,
+            has_url: next === 'url',
+            url_endpoint_count: endpointCount,
+          },
+        });
+      } catch {
+        /* non-fatal */
+      }
+
+      // Best-effort credential summary refresh — preserves the existing
+      // targetRowToDto shape callers rely on.
+      const { data: cred } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+
+      return res.json(
+        targetRowToDto({
+          ...updated,
+          has_credentials: !!cred,
+          auth_strategy: cred?.auth_strategy ?? null,
+        }),
+      );
+    } catch (e: any) {
+      console.error('[dast] PATCH /spec exception:', e);
+      return res.status(500).json({ error: 'Failed to update spec config' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /:projectId/dast/targets/:targetId/spec/download           (Phase 35 v1.1)
+//
+// Returns a signed download URL for the active spec. Synthesized mode →
+// presigned bucket URL; url mode → upstream URL passthrough (we already
+// validated it at PATCH time); none → 404 spec_unavailable.
+// ---------------------------------------------------------------------------
+router.get(
+  '/:projectId/dast/targets/:targetId/spec/download',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      // Spec download is a read; gate on view permission rather than
+      // manage. Anyone who can see DAST findings can download the spec
+      // that produced them.
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const source = guard.target.api_spec_source;
+      if (source === 'none') {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      if (source === 'url') {
+        if (!guard.target.api_spec_url) {
+          return res.status(404).json({ error: 'spec_unavailable' });
+        }
+        return res.json({
+          kind: 'url',
+          url: guard.target.api_spec_url,
+          expires_at: null,
+          content_length: null,
+        });
+      }
+      // synthesized — require at least one successful scan to have produced
+      // the bucket object.
+      if (!guard.target.last_synthesized_at) {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      const presigned = await presignSynthesizedSpecDownload(
+        access.organizationId,
+        targetId,
+      );
+      if (!presigned) {
+        return res.status(404).json({ error: 'spec_unavailable' });
+      }
+      return res.json({
+        kind: presigned.kind,
+        url: presigned.url,
+        expires_at: presigned.expires_at,
+        content_length: null,
+      });
+    } catch (e: any) {
+      console.error('[dast] GET /spec/download exception:', e);
+      return res.status(500).json({ error: 'Failed to load spec download' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /:projectId/dast/targets/:targetId/credentials/test     (v2.1d)
+// Queues a dry-run dast_zap job carrying `payload.dry_run: true`. The worker
+// branches on that flag and runs the recorded-login probe ONLY (no spider,
+// no active-scan, no findings emit, no PDV mutation), writing the test
+// result into scan_jobs.error_payload under {kind:'test_result', …}. The
+// FE polls GET /dast/jobs?id=<test_job_id> until status is terminal.
+//
+// 422 wrong-strategy: only recorded credentials are testable; form/jwt/
+// cookie use the inline route-side probe at PUT time.
+// 503 fly_machine_unavailable: cold worker fails to start within the 60s
+// p50 budget — the route deletes the just-queued row so it doesn't sit as
+// "queued forever".
+// ---------------------------------------------------------------------------
+router.post(
+  '/:projectId/dast/targets/:targetId/credentials/test',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+      if (!guard.target.enabled) {
+        return res.status(409).json({ error: 'target_disabled' });
+      }
+
+      // Only `recorded` credentials are testable. Form/JWT/cookie validate
+      // inline at PUT time via probeFormLogin / JWT exp / shape checks.
+      const { data: credRow } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+      if (!credRow) {
+        return res.status(404).json({ error: 'credentials_not_set' });
+      }
+      if (credRow.auth_strategy !== 'recorded') {
+        return res.status(422).json({
+          code: 'unsupported_strategy_for_test',
+          detail: 'Only recorded credentials use the Test-login flow; form/jwt/cookie validate at save time.',
+        });
+      }
+
+      // SPA-detect refresh — same pattern as POST /scan so the test job runs
+      // on the right Fly machine shape.
+      let detectedRuntime = guard.target.detected_runtime;
+      const ttl = guard.target.detected_runtime_ttl_at;
+      if (!ttl || new Date(ttl).getTime() < Date.now()) {
+        const probe = await detectRuntime(guard.target.target_url);
+        if (probe.runtime !== 'unknown') {
+          detectedRuntime = probe.runtime;
+          await supabase
+            .from('project_dast_targets')
+            .update({
+              detected_runtime: probe.runtime,
+              detected_runtime_at: new Date().toISOString(),
+              detected_runtime_ttl_at: nextRuntimeTtlIso(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', targetId);
+        }
+      }
+
+      // Read project DAST config for scan_timeout — same as /scan.
+      const { data: cfg } = await supabase
+        .from('project_dast_config')
+        .select('scan_profile, scan_timeout_minutes')
+        .eq('project_id', projectId)
+        .maybeSingle();
+      const scanProfile = cfg?.scan_profile ?? 'auto';
+      const scanTimeoutMinutes = cfg?.scan_timeout_minutes ?? 30;
+
+      // v2.1d /criticalreview SVED-1: Queue type='dast_zap_dry_run' (NOT
+      // type='dast_zap' + payload.dry_run). The new type is the dispatch
+      // discriminator; old workers don't advertise it so claim_scan_job will
+      // skip them and a stale worker can never accidentally run a full real
+      // scan in place of a Test-login probe. payload.dry_run is retained
+      // transitionally for backwards compat and will be removed in v2.1e.
+      const testPayload = {
+        source: 'credential_test',
+        detected_runtime: detectedRuntime,
+        dry_run: true,
+      };
+      // v2.1d /criticalreview RH-1: validateDastJobPayload runs at queue time
+      // AND at worker startup. Defense against typo'd keys (dryRun vs
+      // dry_run) and against any future internal caller that bypasses the
+      // hard-coded literal below. The worker also re-validates after job
+      // load — the route layer's check fails fast with a 400 instead of
+      // burning a Fly cold start before discovering the typo.
+      const payloadGuard = validateDastJobPayload(testPayload);
+      if ('__error' in payloadGuard) {
+        console.error('[dast] credentials/test invalid payload:', payloadGuard.__error);
+        return res.status(400).json({ error: 'invalid_payload', detail: payloadGuard.__error });
+      }
+      const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
+        p_project_id: projectId,
+        p_organization_id: access.organizationId,
+        p_type: 'dast_zap_dry_run',
+        p_payload: testPayload,
+        p_target_id: targetId,
+        p_target_url: guard.target.target_url,
+        p_scan_profile: scanProfile,
+        p_timeout_minutes: scanTimeoutMinutes,
+        p_trigger_source: 'manual',
+        p_triggered_by: userId,
+      });
+
+      if (queueError) {
+        const detail = queueError.message ?? 'Failed to queue test';
+        if (detail.includes('project_concurrent_dast_blocked')) {
+          // v2.1d /criticalreview BAD-3 + RSS-2 fix: look up the conflicting
+          // job_id and return it in the 409 body so the FE's "Cancel running
+          // scan" affordance has a real id to call POST /jobs/:jobId/cancel
+          // with. Previously the FE set conflictJobId='unknown' and the
+          // Cancel button was gated on `conflictJobId !== 'unknown'`, so the
+          // affordance was dead UI.
+          const { data: conflict } = await supabase
+            .from('scan_jobs')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('organization_id', access.organizationId)
+            .in('type', DAST_SCAN_TYPES)
+            .in('status', ['queued', 'processing'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          return res.status(409).json({
+            error: 'project_concurrent_dast_blocked',
+            detail,
+            conflict_job_id: conflict?.id ?? null,
+          });
+        }
+        if (detail.includes('org_concurrent_dast_cap')) {
+          return res.status(409).json({ error: 'org_concurrent_dast_cap', detail });
+        }
+        if (detail.includes('tenant drift')) {
+          return res.status(404).json({ error: 'target_not_found' });
+        }
+        console.error('[dast] queue_scan_job(test) error:', detail);
+        return res.status(500).json({ error: 'Failed to queue test' });
+      }
+
+      const job = Array.isArray(queued) ? queued[0] : queued;
+      if (!job?.id) {
+        console.error('[dast] queue_scan_job(test) returned no row');
+        return res.status(500).json({ error: 'Failed to queue test' });
+      }
+
+      // Test-login budget (≤60s p50) is unforgiving of Fly cold-start
+      // failure. Surface as 503 synchronously AND clean up the queued row
+      // so it doesn't sit as "queued forever" — the FE retries on 503.
+      try {
+        await startDastMachine(detectedRuntime);
+      } catch (e: any) {
+        console.error(
+          `[dast] startDastMachine(test) failed (cleaning up queued row): ${e?.message ?? e}`,
+        );
+        // Best-effort delete; we own the row by ID and it's still 'queued'.
+        await supabase.from('scan_jobs').delete().eq('id', job.id);
+        return res.status(503).json({ error: 'fly_machine_unavailable' });
+      }
+
+      // Audit-log entry (best-effort; activities table is gitignored from
+      // failure cascades — never break the user-facing 202 over a log write).
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_login_test.run',
+          description: 'Started recorded-login test',
+          metadata: { test_job_id: job.id, target_id: targetId },
+        });
+      } catch {
+        /* createActivity already swallows; this catch is defensive */
+      }
+
+      return res.status(202).json({
+        test_job_id: job.id,
+        status: 'queued',
+      });
+    } catch (e: any) {
+      console.error('[dast] POST credentials/test exception:', e);
+      return res.status(500).json({ error: 'Failed to trigger test' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /:projectId/dast/jobs/:jobId/cancel                     (v2.1d)
+// User-initiated cancellation of a queued/processing scan_jobs row. Backs
+// the editor's "Cancel running scan" affordance for the Test-login flow
+// concurrency mitigation: a user blocked by a long real scan can cancel
+// it, freeing the 1/project DAST cap so Test-login becomes available.
+//
+// Delegates to the phase34 cancel_scan_job(p_job_id, p_organization_id) RPC
+// — atomic UPDATE scoped to the caller's org. RPC empty-return → 404 (cross-
+// org or missing) OR 409 (job not in cancellable state) — distinguished by
+// a follow-up status lookup.
+// ---------------------------------------------------------------------------
+router.post(
+  '/:projectId/dast/jobs/:jobId/cancel',
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, jobId } = req.params;
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+
+      // v2.1d /criticalreview HEH-1 fix: pass projectId so the RPC AND-binds
+      // project_id (and filters type to the DAST family). Without this, an
+      // org-level manage_integrations holder could cancel scans in projects
+      // they have no team access to.
+      const { data: cancelled, error: cancelErr } = await supabase.rpc('cancel_scan_job', {
+        p_job_id: jobId,
+        p_organization_id: access.organizationId,
+        p_project_id: projectId,
+      });
+      if (cancelErr) {
+        console.error('[dast] cancel_scan_job RPC error:', cancelErr.message);
+        return res.status(500).json({ error: 'Failed to cancel scan' });
+      }
+
+      const row = Array.isArray(cancelled) ? cancelled[0] : cancelled;
+      if (!row) {
+        // Empty return — distinguish 404 (missing / cross-project / cross-org
+        // / non-DAST type) from 409 (job exists in caller's project but not
+        // in cancellable state). The probe must scope by project_id AND
+        // organization_id AND DAST type so a cross-project caller still
+        // returns 404 without leaking current_status of foreign rows.
+        // Destructure error so a transient supabase blip doesn't silently
+        // return 404 (per /criticalreview EHA-4).
+        const { data: probe, error: probeErr } = await supabase
+          .from('scan_jobs')
+          .select('status')
+          .eq('id', jobId)
+          .eq('organization_id', access.organizationId)
+          .eq('project_id', projectId)
+          .in('type', DAST_SCAN_TYPES)
+          .maybeSingle();
+        if (probeErr) {
+          console.error('[dast] cancel probe error:', probeErr.message);
+          return res.status(500).json({ error: 'Failed to look up scan status' });
+        }
+        if (!probe) {
+          return res.status(404).json({ error: 'job_not_found' });
+        }
+        return res.status(409).json({
+          code: 'job_not_cancellable',
+          current_status: probe.status,
+        });
+      }
+
+      // Audit-log entry. Best-effort.
+      try {
+        await createActivity({
+          organization_id: access.organizationId,
+          user_id: userId,
+          activity_type: 'dast_scan.cancelled',
+          description: 'Cancelled DAST scan',
+          metadata: { job_id: jobId, prior_status: row.status === 'cancelled' ? null : row.status },
+        });
+      } catch {
+        /* swallow */
+      }
+
+      return res.json({ job_id: jobId, status: 'cancelled' });
+    } catch (e: any) {
+      console.error('[dast] POST cancel exception:', e);
+      return res.status(500).json({ error: 'Failed to cancel scan' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /:projectId/dast/scan
 // Body: { target_id }. Pre-flight SSRF + SPA-detect refresh; queue_scan_job
 // with p_target_id. INTERNAL_DAST_PAUSED → 503 handled by middleware.
@@ -693,6 +1201,47 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
     if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
     if (!guard.target.enabled) {
       return res.status(409).json({ error: 'target_disabled' });
+    }
+
+    // Engine selection. Validated AFTER the permission + target-tenant guards
+    // so an unsupported engine value cannot probe target existence. Defaults
+    // to 'zap'; maps to the scan_jobs.type the worker dispatches on.
+    const engine = req.body?.engine ?? 'zap';
+    if (engine !== 'zap' && engine !== 'nuclei') {
+      return res.status(400).json({ code: 'unsupported_engine', supported: ['zap', 'nuclei'] });
+    }
+    const scanJobType = engine === 'nuclei' ? 'dast_nuclei' : 'dast_zap';
+
+    // v2.1d — Nuclei + recorded credential is structurally unsupported:
+    // Nuclei is a template engine with no auth-replay execution model.
+    // Reject before queue so the user gets a fast, actionable error. We
+    // fetch auth_strategy via a SECOND guarded query (not via
+    // loadTargetOrDeny) to preserve loadTargetOrDeny's single-SELECT timing-
+    // side-channel posture.
+    if (engine === 'nuclei') {
+      const { data: credForEngine } = await supabase
+        .from('project_dast_credentials')
+        .select('auth_strategy')
+        .eq('target_id', targetId)
+        .maybeSingle();
+      if (credForEngine?.auth_strategy === 'recorded') {
+        return res.status(400).json({
+          code: 'unsupported_recorded_on_nuclei',
+          detail:
+            'Recorded login can only be replayed by the ZAP engine. Re-run with engine=zap.',
+        });
+      }
+
+      // Phase 35 (v1.1) — Nuclei has no native OpenAPI import. Target rows
+      // configured for synthesized or url spec must run on ZAP. The
+      // api_spec_source field is on loadTargetOrDeny's widened SELECT.
+      if (guard.target.api_spec_source && guard.target.api_spec_source !== 'none') {
+        return res.status(422).json({
+          code: 'unsupported_openapi_on_nuclei',
+          detail:
+            'OpenAPI mode is currently ZAP-only. Switch engine to ZAP or set spec source to None.',
+        });
+      }
     }
 
     // Re-validate URL (SSRF + DNS pinning).
@@ -731,11 +1280,21 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       }
     }
 
+    const scanPayload = { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine };
+    // v2.1d /criticalreview RH-1: defense-in-depth payload validation at
+    // queue time. The hard-coded literal above is safe today; the validator
+    // catches any future caller (cron, Aegis tool, webhook) that constructs
+    // a malformed payload.
+    const scanPayloadGuard = validateDastJobPayload(scanPayload);
+    if ('__error' in scanPayloadGuard) {
+      console.error('[dast] /scan invalid payload:', scanPayloadGuard.__error);
+      return res.status(400).json({ error: 'invalid_payload', detail: scanPayloadGuard.__error });
+    }
     const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
       p_project_id: projectId,
       p_organization_id: access.organizationId,
-      p_type: 'dast_zap',
-      p_payload: { source: 'manual_dast_scan', detected_runtime: detectedRuntime },
+      p_type: scanJobType,
+      p_payload: scanPayload,
       p_target_id: targetId,
       p_target_url: guard.target.target_url,
       p_scan_profile: scanProfile,
@@ -825,7 +1384,7 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
     let query = supabase
       .from('scan_jobs')
       .select(
-        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, attempts, created_at',
+        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, error_payload, attempts, created_at',
       )
       .eq('project_id', projectId)
       .in('type', DAST_SCAN_TYPES)
@@ -852,6 +1411,10 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
       completed_at: row.completed_at,
       error: row.error,
       error_category: row.error_category,
+      // v2.1d — discriminated union, FE switches on .kind for the recorded-
+      // login outcome (test_result / pre_flight_failed / session_loss).
+      // Always JSONB-shaped; null when no auth-failure / no test result.
+      error_payload: row.error_payload ?? null,
       attempts: row.attempts ?? 0,
       created_at: row.created_at,
     }));
@@ -904,7 +1467,7 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
     const query = supabase
       .from('project_dast_findings')
       .select(
-        'id, target_id, auth_state, engine, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
+        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
       )
       .eq('project_id', projectId)
       .eq('target_id', filterTargetId)
@@ -922,7 +1485,8 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
       id: row.id,
       target_id: row.target_id ?? null,
       auth_state: row.auth_state ?? null,
-      engine: row.engine ?? null,
+      engine: row.engine ?? 'zap',
+      kev: row.kev ?? false,
       endpoint_url: row.endpoint_url,
       http_method: row.http_method,
       vulnerability_type: row.vulnerability_type,

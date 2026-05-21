@@ -222,6 +222,12 @@ export async function buildRubyCallgraphContext(
     fileStats,
     buildMs: Date.now() - start,
     fileCount: fileStats.length,
+    // v3 gem precision arc — collect `require 'gemname'` and
+    // `require_relative …` declarations; the former are external gem
+    // requires, the latter are intra-workspace and dropped. Maps common
+    // gem-name-vs-require-path quirks (`active_support` → `activesupport`,
+    // `rspec/rails` → `rspec-rails`).
+    usedDependencies: extractRubyUsedDependencies(parsedFiles),
   };
 
   const filesContext = new Map<string, RubyFileContext>();
@@ -766,3 +772,98 @@ function collectCallEdges(
     resolvedCallCount,
   };
 }
+
+/**
+ * Walk every `require 'X'` / `require "X"` and emit the gem name. Uses the
+ * shared `resolveRubygemsImport` table (active_support → activesupport,
+ * rest_client → rest-client, etc.) and falls back to emitting both hyphen
+ * and underscore variants for the long tail. `require_relative` is skipped —
+ * those are intra-workspace.
+ */
+export function extractRubyUsedDependencies(parsedFiles: FileTrees[]): Set<string> {
+  const out = new Set<string>();
+
+  const STDLIB_REQUIRES = new Set([
+    'json', 'yaml', 'csv', 'set', 'time', 'date', 'fileutils', 'pathname',
+    'tempfile', 'tmpdir', 'logger', 'open-uri', 'open3', 'uri', 'cgi',
+    'net/http', 'net/https', 'net/smtp', 'net/ftp', 'net/pop', 'net/imap',
+    'digest', 'digest/md5', 'digest/sha1', 'digest/sha2', 'openssl',
+    'base64', 'securerandom', 'erb', 'optparse', 'singleton', 'forwardable',
+    'observer', 'delegate', 'monitor', 'thread', 'timeout', 'fiber',
+    'socket', 'ipaddr', 'resolv', 'stringio', 'strscan',
+    'rbconfig', 'etc', 'find', 'pp', 'irb',
+    'minitest', 'minitest/autorun', 'test/unit', // ship in stdlib
+  ]);
+
+  const consider = (requirePath: string): void => {
+    if (!requirePath) return;
+    if (STDLIB_REQUIRES.has(requirePath)) return;
+    const root = requirePath.split('/')[0];
+    if (!root) return;
+    if (STDLIB_REQUIRES.has(root)) return;
+    // Curated map → canonical gem name.
+    const mapped = REQUIRE_TO_GEM_LOCAL[root];
+    if (mapped) {
+      out.add(mapped.toLowerCase());
+      return;
+    }
+    // Long tail: emit both spellings so PDV's hyphenated or underscored
+    // form matches via depMatchesUsedTransitives' npm exact-name path.
+    out.add(root.toLowerCase());
+    if (root.includes('_')) out.add(root.replace(/_/g, '-').toLowerCase());
+    if (root.includes('-')) out.add(root.replace(/-/g, '_').toLowerCase());
+  };
+
+  const visit = (node: Node, source: string): void => {
+    // tree-sitter ruby surfaces `require 'foo'` as a `call` node where the
+    // method identifier is 'require' and the argument is a string literal.
+    if (node.type === 'call') {
+      const methodNode = node.childForFieldName('method');
+      const methodName = methodNode ? textOf(methodNode, source) : '';
+      if (methodName === 'require' || methodName === 'require_dependency') {
+        const args = node.childForFieldName('arguments');
+        if (args) {
+          for (let i = 0; i < args.namedChildCount; i++) {
+            const arg = args.namedChild(i);
+            if (!arg) continue;
+            if (arg.type === 'string' || arg.type === 'string_literal') {
+              const raw = textOf(arg, source);
+              // Strip surrounding quotes.
+              const stripped = raw.replace(/^['"]|['"]$/g, '');
+              consider(stripped);
+            }
+          }
+        }
+      }
+      // require_relative is intentionally skipped — workspace-local.
+    }
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) visit(child, source);
+    }
+  };
+
+  for (const f of parsedFiles) {
+    visit(f.tree.rootNode, f.source);
+  }
+  return out;
+}
+
+/** Local copy of the require-path → gem-name table (subset). Kept here to
+ *  avoid pulling the full rubygems import-mapping module's `knownDeps`
+ *  validation, which would require passing the SBOM through. */
+const REQUIRE_TO_GEM_LOCAL: Record<string, string> = {
+  active_support: 'activesupport',
+  active_record: 'activerecord',
+  active_job: 'activejob',
+  active_model: 'activemodel',
+  action_controller: 'actionpack',
+  action_view: 'actionpack',
+  action_mailer: 'actionmailer',
+  action_cable: 'actioncable',
+  action_dispatch: 'actionpack',
+  rest_client: 'rest-client',
+  net_http_persistent: 'net-http-persistent',
+  google_api_client: 'google-api-client',
+  aws_sdk: 'aws-sdk',
+};

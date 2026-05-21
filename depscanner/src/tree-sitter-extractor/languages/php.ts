@@ -35,6 +35,10 @@ export const phpModule: LanguageModule = {
     }
     try {
     const depNames = ctx.deps.map((d) => d.name);
+    // resolveComposerImport now needs full KnownDep[] (namespace + name)
+    // to build vendor/name lookup keys — cdxgen emits composer entries
+    // with split name+group, so flat names alone never resolve.
+    const knownDeps = ctx.deps;
     const imports: ImportBinding[] = [];
     const usages: UsageSlice[] = [];
 
@@ -108,7 +112,7 @@ export const phpModule: LanguageModule = {
           const methodName = textOf(name, source);
           const fqn = simpleToFqn.get(className);
           if (fqn) {
-            const depName = resolveComposerImport(fqn, depNames);
+            const depName = resolveComposerImport(fqn, knownDeps);
             if (depName) {
               usages.push({
                 filePath,
@@ -129,7 +133,7 @@ export const phpModule: LanguageModule = {
           const typeName = textOf(typeNode, source);
           const fqn = simpleToFqn.get(typeName);
           if (fqn) {
-            const depName = resolveComposerImport(fqn, depNames);
+            const depName = resolveComposerImport(fqn, knownDeps);
             if (depName) {
               usages.push({
                 filePath,
@@ -153,7 +157,7 @@ export const phpModule: LanguageModule = {
           const type = varToType.get(varName);
           const fqn = type ? simpleToFqn.get(type) : null;
           if (fqn) {
-            const depName = resolveComposerImport(fqn, depNames);
+            const depName = resolveComposerImport(fqn, knownDeps);
             if (depName) {
               usages.push({
                 filePath,

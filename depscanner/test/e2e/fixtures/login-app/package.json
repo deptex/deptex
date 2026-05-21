@@ -1,0 +1,13 @@
+{
+  "name": "deptex-dast-recorded-login-fixture",
+  "version": "0.0.1",
+  "description": "Minimal Express login fixture for the v2.1d recorded-login e2e harness. Three routes: GET /login (form), POST /login (auth), GET /dashboard (auth-protected). Deps pinned for determinism — change versions only with a corresponding fixture-log refresh.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.21.2"
+  }
+}

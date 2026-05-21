@@ -12,7 +12,9 @@ import {
   type DastCredentialSummaryDTO,
   type DastCredentialUpsertDTO,
   type DastCredentialUpsertPayload,
+  type RecordedCredentialPayload,
 } from '../../lib/api';
+import { RecordedStrategyEditor } from './RecordedStrategyEditor';
 
 interface DastAuthPanelProps {
   projectId: string;
@@ -38,6 +40,10 @@ interface DraftState {
   token: string;
   // cookie
   cookies: CookieDraft[];
+  // recorded — owned by the inline RecordedStrategyEditor component which
+  // emits an assembled payload via onChange. Stored here so buildPayload can
+  // assemble the upsert request from one source of truth.
+  recordedPayload: RecordedCredentialPayload | null;
   // common
   loggedInIndicator: string;
   loggedOutIndicator: string;
@@ -47,6 +53,7 @@ const STRATEGY_OPTIONS: { value: DastAuthStrategy; label: string }[] = [
   { value: 'form', label: 'Form login' },
   { value: 'jwt', label: 'JWT bearer' },
   { value: 'cookie', label: 'Session cookies' },
+  { value: 'recorded', label: 'Recorded login (v2.1d)' },
 ];
 
 function emptyDraft(strategy: DastAuthStrategy): DraftState {
@@ -59,6 +66,7 @@ function emptyDraft(strategy: DastAuthStrategy): DraftState {
     password: '',
     token: '',
     cookies: [{ name: '', value: '' }],
+    recordedPayload: null,
     loggedInIndicator: '',
     loggedOutIndicator: '',
   };
@@ -79,6 +87,9 @@ function buildPayload(draft: DraftState): DastCredentialUpsertPayload | null {
   if (draft.strategy === 'jwt') {
     if (!draft.token) return null;
     return { kind: 'jwt', token: draft.token.trim() };
+  }
+  if (draft.strategy === 'recorded') {
+    return draft.recordedPayload;
   }
   const validCookies = draft.cookies
     .map((c) => ({ name: c.name.trim(), value: c.value }))
@@ -199,6 +210,14 @@ export function DastAuthPanel({
       {draft.strategy === 'cookie' && (
         <CookieStrategyFields draft={draft} setDraft={setDraft} disabled={disabled || saving} />
       )}
+      {draft.strategy === 'recorded' && (
+        <RecordedStrategyEditor
+          projectId={projectId}
+          targetId={targetId}
+          onChange={(payload) => setDraft((d) => ({ ...d, recordedPayload: payload }))}
+          disabled={disabled || saving}
+        />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
@@ -305,6 +324,9 @@ function CurrentCredentialSummary({ summary }: { summary: DastCredentialSummaryD
     detail = `Form login as ${summary.payload_summary.username_masked}`;
   } else if (summary.payload_summary.kind === 'jwt') {
     detail = `JWT (${summary.payload_summary.token_prefix}, expires in ${summary.payload_summary.expires_in_minutes}m)`;
+  } else if (summary.payload_summary.kind === 'recorded') {
+    const labelStr = summary.payload_summary.label ? `${summary.payload_summary.label} — ` : '';
+    detail = `${labelStr}${summary.payload_summary.step_count}-step recorded login on ${summary.payload_summary.login_page_url_host}${summary.payload_summary.has_totp ? ' (with TOTP)' : ''}`;
   } else {
     detail = `${summary.payload_summary.cookie_count} cookie${summary.payload_summary.cookie_count === 1 ? '' : 's'}`;
   }

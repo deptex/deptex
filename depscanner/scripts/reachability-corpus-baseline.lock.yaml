@@ -1,0 +1,59 @@
+# Frozen pre-feature reachability labels — baseline lock.
+#
+# WHY THIS FILE EXISTS:
+#   The dependency-scope noise-reduction feature (v2) and the Layer-3 corpus
+#   expansion both edit reachability-corpus.yaml. This file pins every
+#   `expected_reachability` label that existed *before* that work, so the
+#   gate (scripts/reachability-corpus.ts) can prove no pre-existing label was
+#   quietly changed to flatter the noise-reduction number. The honest-
+#   decomposition claim (full-weight `unreachable` rate, reported next to the
+#   module-weighted Gate-1 number) depends on these labels being stable —
+#   an enforced lock, not a code comment.
+#
+# GATE BEHAVIOUR:
+#   For every CVE listed here, the live reachability-corpus.yaml must still
+#   carry it with the same `expected_reachability`. A changed label, or a
+#   deleted CVE, fails the run (exit 1). CVEs added by the Layer-3 expansion
+#   are intentionally NOT listed — the lock enforces only the frozen set, it
+#   does not forbid growth.
+#
+# Frozen 2026-05-19 — the 31-CVE M4 corpus (express 4.18.2 / spring-petclinic
+# @c7ee170 / bat v0.24.0), the baseline that entered Layer 3.
+
+labels:
+  # --- express 4.18.2 (npm) ---
+  CVE-2026-2391: function
+  CVE-2024-45590: function
+  CVE-2024-45296: function
+  CVE-2024-52798: function
+  CVE-2024-47764: function
+  CVE-2026-33916: unreachable
+  CVE-2026-33939: unreachable
+  CVE-2026-27904: unreachable
+  CVE-2026-26996: unreachable
+  CVE-2024-55565: unreachable
+  CVE-2025-64718: unreachable
+  CVE-2024-33883: unreachable
+  CVE-2026-33940: unreachable
+  CVE-2026-33938: unreachable
+  CVE-2026-33941: unreachable
+  CVE-2026-33937: unreachable
+  CVE-2026-27903: unreachable
+  CVE-2026-24001: unreachable
+
+  # --- spring-petclinic @c7ee170 (maven) ---
+  CVE-2026-22741: function
+  CVE-2026-22735: function
+  CVE-2026-22745: function
+  CVE-2026-40973: function
+  CVE-2026-22731: function
+  CVE-2026-34500: data_flow
+  CVE-2026-25854: data_flow
+  CVE-2026-40477: data_flow
+  CVE-2026-29062: module
+  CVE-2026-42198: module
+
+  # --- bat v0.24.0 (cargo) ---
+  CVE-2024-12224: unreachable
+  CVE-2024-43806: module
+  CVE-2026-25727: module

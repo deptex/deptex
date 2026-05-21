@@ -1,0 +1,186 @@
+# Independent reachability oracle for the corpus.
+#
+# WHY THIS FILE EXISTS:
+#   reachability-corpus.yaml is hand-labelled by the same person shipping the
+#   dependency-scope rule, so the classifier reproducing a manifest scope is
+#   definitionally true and proves little. This file is a SECOND, independent
+#   pass: each corpus CVE is judged purely on the production-call-path
+#   question — "does this repo's shipped runtime code cause the vulnerable
+#   code to execute?" — with NO reference to which manifest section declared
+#   the dependency. It catches mis-scoped deps: a manifest-dev dependency that
+#   is actually loaded by shipped code, or a manifest-prod dependency that is
+#   dead.
+#
+# VERDICTS:
+#   reachable   — shipped runtime code drives execution into the package.
+#   module      — the package is loaded/used at runtime, but whether THIS
+#                 advisory's vulnerable path is exercised is unverified.
+#   unreachable — no production call path reaches the package; it is present
+#                 only to serve build / test / lint / release tooling.
+#
+# GATE BEHAVIOUR (scripts/reachability-corpus.ts):
+#   If the oracle says `reachable` and the scan observed `unreachable`, that is
+#   an oracle-disagreement false negative and fails the run — the same severity
+#   as a hand-label false negative. `module` verdicts never trigger the gate
+#   (a module-labelled dep observed `unreachable` is an accepted
+#   over-classification, not a safety failure).
+#
+# Authored 2026-05-19. NOTE: a single author wrote both this file and the
+# corpus labels; genuine independence needs a second reviewer — flagged in the
+# plan STATUS as a follow-up.
+
+verdicts:
+  # ── express 4.18.2 ──────────────────────────────────────────────────────
+  - id: CVE-2026-2391
+    verdict: reachable
+    call_path: express parses every request query string through qs.parse.
+  - id: CVE-2024-45590
+    verdict: reachable
+    call_path: express re-exports body-parser as express.json()/urlencoded().
+  - id: CVE-2024-45296
+    verdict: reachable
+    call_path: express compiles every route pattern through path-to-regexp.
+  - id: CVE-2024-52798
+    verdict: reachable
+    call_path: path-to-regexp — same route-compile path on every request.
+  - id: CVE-2024-47764
+    verdict: reachable
+    call_path: express parses the Cookie header through the cookie package.
+  - id: CVE-2026-33916
+    verdict: unreachable
+    call_path: handlebars runs only in the examples/ view-engine demos; express's lib/ invokes no template engine.
+  - id: CVE-2026-33939
+    verdict: unreachable
+    call_path: handlebars — examples-only template engine, never on a request path.
+  - id: CVE-2026-33940
+    verdict: unreachable
+    call_path: handlebars — examples-only template engine, never on a request path.
+  - id: CVE-2026-33938
+    verdict: unreachable
+    call_path: handlebars — examples-only template engine, never on a request path.
+  - id: CVE-2026-33941
+    verdict: unreachable
+    call_path: handlebars — examples-only template engine, never on a request path.
+  - id: CVE-2026-33937
+    verdict: unreachable
+    call_path: handlebars — examples-only template engine, never on a request path.
+  - id: CVE-2026-27904
+    verdict: unreachable
+    call_path: minimatch runs under the mocha/glob test toolchain; express's lib/ globs nothing.
+  - id: CVE-2026-26996
+    verdict: unreachable
+    call_path: minimatch — test-toolchain globbing only.
+  - id: CVE-2026-27903
+    verdict: unreachable
+    call_path: minimatch — test-toolchain globbing only.
+  - id: CVE-2024-55565
+    verdict: unreachable
+    call_path: nanoid runs under the test toolchain; express's lib/ generates no ids.
+  - id: CVE-2025-64718
+    verdict: unreachable
+    call_path: js-yaml runs under build/lint tooling; express's lib/ parses no YAML.
+  - id: CVE-2024-33883
+    verdict: unreachable
+    call_path: ejs renders the examples/ view-engine demo; not on any express request path.
+  - id: CVE-2026-24001
+    verdict: unreachable
+    call_path: diff runs inside the mocha reporter; never executed by express's lib/.
+  - id: CVE-2025-7339
+    verdict: unreachable
+    call_path: on-headers runs only under the example logging/session middleware; express's lib/ does not call it.
+  - id: CVE-2024-11831
+    verdict: unreachable
+    call_path: serialize-javascript runs inside the mocha test toolchain; express serializes nothing at runtime.
+  - id: CVE-2026-34043
+    verdict: unreachable
+    call_path: serialize-javascript — same test-toolchain position.
+  - id: CVE-2022-21681
+    verdict: unreachable
+    call_path: marked renders the examples/markdown demo; express's lib/ parses no markdown.
+  - id: CVE-2022-21680
+    verdict: unreachable
+    call_path: marked — examples-only markdown rendering.
+  - id: CVE-2021-29469
+    verdict: unreachable
+    call_path: redis backs a session-store example; express's lib/ opens no redis connection.
+
+  # ── spring-petclinic @c7ee170 ───────────────────────────────────────────
+  - id: CVE-2026-22741
+    verdict: reachable
+    call_path: every petclinic @Controller request is dispatched through spring-webmvc.
+  - id: CVE-2026-22735
+    verdict: reachable
+    call_path: spring-webmvc — same MVC dispatch path.
+  - id: CVE-2026-22745
+    verdict: reachable
+    call_path: spring-webmvc — same MVC dispatch path.
+  - id: CVE-2026-40973
+    verdict: reachable
+    call_path: spring-boot autoconfiguration and runtime execute on startup and every request.
+  - id: CVE-2026-22731
+    verdict: reachable
+    call_path: petclinic exposes Spring Boot actuator endpoints, which serve over the actuator runtime.
+  - id: CVE-2026-34500
+    verdict: reachable
+    call_path: embedded Tomcat processes every HTTP request into the petclinic app.
+  - id: CVE-2026-25854
+    verdict: reachable
+    call_path: embedded Tomcat — same servlet-container request path.
+  - id: CVE-2026-40477
+    verdict: reachable
+    call_path: Thymeleaf renders petclinic's HTML views on every page request.
+  - id: CVE-2026-29062
+    verdict: module
+    call_path: jackson is loaded by Spring's JSON message converters, but petclinic is server-rendered Thymeleaf so the specific vulnerable parse path is unverified.
+  - id: CVE-2026-42198
+    verdict: module
+    call_path: the postgresql JDBC driver is on the classpath but petclinic defaults to H2; the driver loads only under the postgres profile.
+
+  # ── bat v0.24.0 ─────────────────────────────────────────────────────────
+  - id: CVE-2024-12224
+    verdict: unreachable
+    call_path: idna serves URL parsing; bat is a cat-clone CLI that performs no URL/IDNA work.
+  - id: CVE-2024-43806
+    verdict: module
+    call_path: rustix wraps syscalls that bat's file I/O and terminal handling reach, but the specific vulnerable call is unverified.
+  - id: CVE-2026-25727
+    verdict: module
+    call_path: bat formats cached-asset timestamps through the time crate, so it is used, but the vulnerable path is unverified.
+
+  # ── fastify v4.26.0 ─────────────────────────────────────────────────────
+  - id: CVE-2022-25860
+    verdict: unreachable
+    call_path: simple-git runs only inside the branch-comparer release tooling; fastify's library code shells out to no git.
+  - id: CVE-2026-28291
+    verdict: unreachable
+    call_path: simple-git — same release-tooling position.
+  - id: CVE-2024-43799
+    verdict: unreachable
+    call_path: send is exercised only by fastify's HTTP test suite; fastify's library code streams no files with it.
+  - id: CVE-2026-1527
+    verdict: unreachable
+    call_path: undici is the HTTP client fastify's tests use; fastify itself ships no HTTP client.
+  - id: CVE-2026-22036
+    verdict: unreachable
+    call_path: undici — same test-client position.
+  - id: CVE-2025-54798
+    verdict: unreachable
+    call_path: tmp is reached only by fastify's test toolchain; fastify's library code creates no temp files.
+  - id: CVE-2026-33532
+    verdict: unreachable
+    call_path: yaml runs under fastify's lint/config tooling; fastify parses JSON, never YAML, at runtime.
+  - id: CVE-2024-4067
+    verdict: unreachable
+    call_path: micromatch runs under fastify's eslint/glob tooling; not on any runtime path.
+  - id: CVE-2026-2327
+    verdict: unreachable
+    call_path: markdown-it runs under markdownlint-cli2; fastify renders no markdown at runtime.
+  - id: CVE-2026-2950
+    verdict: unreachable
+    call_path: lodash is reached only through fastify's eslint-plugin tooling.
+  - id: CVE-2026-33750
+    verdict: unreachable
+    call_path: brace-expansion runs under fastify's minimatch/eslint tooling; not on a runtime path.
+  - id: CVE-2025-27789
+    verdict: unreachable
+    call_path: "@babel/helpers is reached only through fastify's devDependency tooling; fastify transpiles nothing at runtime."
