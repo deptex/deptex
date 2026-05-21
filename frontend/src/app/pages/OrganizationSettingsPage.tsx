@@ -3848,8 +3848,7 @@ export default function OrganizationSettingsPage() {
                                           )}
                                           <Button
                                             variant="outline"
-                                            size="sm"
-                                            className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                            className="!h-8 !px-3 !rounded-lg hover:bg-destructive/10 hover:border-destructive/30"
                                             onClick={() => setConnectionToDisconnect(conn)}
                                           >
                                             {isCustom || isEmail ? 'Remove' : 'Disconnect'}
