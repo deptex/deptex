@@ -772,7 +772,76 @@ export interface ValidateAndPrepareOptions {
   // Whether to run the login probe synchronously. Default true; tests pass
   // false to skip the network round-trip.
   runFormProbe?: boolean;
+  // Whether to run the recorded-strategy SSRF/IMDS guard on login_page_url +
+  // goto step values + sso_origins. Default true; tests pass false to skip
+  // DNS round-trips. Mirrors runFormProbe's posture for the form path.
+  runRecordedSsrfGuard?: boolean;
+  // Override for the SSRF helper — defaults to validateExternalUrl from
+  // ./url-guard. Tests stub it to avoid hitting real DNS.
+  validateUrl?: typeof validateExternalUrl;
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * v2.1d SSRF/IMDS guard for the recorded strategy. The structural
+ * validateRecordedSteps check passes URL.parse + protocol=='https:' on
+ * login_page_url, each goto step's value, and each sso_origins entry — but
+ * does NOT resolve hostnames against the private-IP block list. Without this
+ * second pass a tenant member can point Firefox at 169.254.169.254, fdaa::/16
+ * (Fly internal mesh), 127.0.0.1, or any RFC1918 host from inside the
+ * depscanner container when Test-login or a real scan runs.
+ *
+ * This helper runs once at PUT-credential time (route layer); the worker
+ * re-runs the same check at scan time against the credential's effective
+ * loginPageUrl as defense-in-depth for DNS rebinding.
+ */
+export async function validateRecordedSsrf(
+  payload: RecordedCredentialPayload,
+  guard: typeof validateExternalUrl = validateExternalUrl,
+): Promise<CredentialValidateError | null> {
+  // login_page_url
+  const loginGuard = await guard(payload.login_page_url);
+  if (loginGuard.valid === false) {
+    return {
+      error_code: 'login_url_invalid',
+      detail: `login_page_url rejected: ${loginGuard.reason}`,
+    };
+  }
+
+  // Every `goto` step's value (today only valid at steps[0], per
+  // validateRecordedSteps; the auth-config layer collapses it into
+  // loginPageUrl). Validate defensively so a future relaxation of the
+  // goto-only-at-0 rule doesn't open a hole.
+  for (let i = 0; i < payload.steps.length; i++) {
+    const step = payload.steps[i];
+    if (step.action === 'goto' && typeof step.value === 'string') {
+      const r = await guard(step.value);
+      if (r.valid === false) {
+        return {
+          error_code: 'login_url_invalid',
+          detail: `step ${i} goto value rejected: ${r.reason}`,
+        };
+      }
+    }
+  }
+
+  // sso_origins are reserved for forward-compat (M0 Spike-2 yellow path —
+  // see the runbook). Validate them anyway so an operator who later wires
+  // them into the AF context's includePaths can't smuggle a private host.
+  if (Array.isArray(payload.sso_origins)) {
+    for (const o of payload.sso_origins) {
+      if (typeof o !== 'string') continue;
+      const r = await guard(o);
+      if (r.valid === false) {
+        return {
+          error_code: 'login_url_invalid',
+          detail: `sso_origins entry rejected: ${r.reason}`,
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function validateAndPrepareCredential(
@@ -794,6 +863,12 @@ export async function validateAndPrepareCredential(
       loggedInIndicator: dto.logged_in_indicator,
       loggedOutIndicator: dto.logged_out_indicator,
     });
+    if (err) return { ok: false, error: err };
+  } else if (dto.payload.kind === 'recorded' && opts.runRecordedSsrfGuard !== false) {
+    const err = await validateRecordedSsrf(
+      dto.payload as RecordedCredentialPayload,
+      opts.validateUrl ?? validateExternalUrl,
+    );
     if (err) return { ok: false, error: err };
   }
 

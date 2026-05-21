@@ -166,6 +166,83 @@ export function RecordedStrategyEditor({
     });
   }
 
+  // v2.1d /criticalreview EHA-2 (P2): map every known backend error code +
+  // HTTP-status fallback to a friendly user-facing message. Without this,
+  // 422/409 responses that carry `code`+`detail` (no `error` field) surface
+  // as the literal "HTTP error! status: 422" from fetchWithAuth, and slug
+  // responses like 'target_not_found' surface verbatim. Per memory
+  // feedback_no_raw_errors_to_users.md, user-facing errors must be generic
+  // and friendly while the raw cause goes to console.error.
+  function friendlyTestErrorMessage(rawMessage: string, fallback: string): {
+    message: string;
+    isConflict: boolean;
+  } {
+    // Slug-shaped backend errors come through fetchWithAuth's body.error
+    // field. Map every shape the routes can emit.
+    if (rawMessage.includes('project_concurrent_dast_blocked')) {
+      return {
+        message: 'A scan is running on this target. Cancel it to test your login.',
+        isConflict: true,
+      };
+    }
+    if (rawMessage.includes('fly_machine_unavailable')) {
+      return { message: 'Worker unavailable — try again in 30 seconds.', isConflict: false };
+    }
+    if (rawMessage.includes('target_not_found')) {
+      return { message: "This target is no longer available.", isConflict: false };
+    }
+    if (rawMessage.includes('target_disabled')) {
+      return {
+        message: 'This target is disabled. Enable it in target settings to run a Test-login.',
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('credentials_not_set')) {
+      return {
+        message: 'Save the credential first, then click Test login.',
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('org_concurrent_dast_cap')) {
+      return {
+        message: 'Your organization is at the 5-concurrent DAST scan cap. Wait for one to finish.',
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('unsupported_strategy_for_test')) {
+      return {
+        message: "Test login only supports the 'recorded' auth strategy.",
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('login_url_invalid')) {
+      return {
+        message: 'The login page URL points to a private or unreachable host.',
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('invalid_payload')) {
+      return {
+        message: 'The Test-login request was malformed — refresh and try again.',
+        isConflict: false,
+      };
+    }
+    if (rawMessage.includes('permission')) {
+      return {
+        message: "You don't have permission to run Test login on this project.",
+        isConflict: false,
+      };
+    }
+    // HTTP-status fallback: fetchWithAuth emits 'HTTP error! status: NNN'
+    // when the response has no `error` field (e.g. 422/409 responses that
+    // use `code`+`detail`). Surface a generic friendly message and log the
+    // raw text for ops diagnosis.
+    if (/HTTP error! status:\s*\d{3}/.test(rawMessage)) {
+      return { message: fallback, isConflict: false };
+    }
+    return { message: fallback, isConflict: false };
+  }
+
   // Test-login flow.
   async function startTest() {
     setTesting(true);
@@ -176,19 +253,25 @@ export function RecordedStrategyEditor({
       const r = await api.postDastLoginTest(projectId, targetId);
       setTestJobId(r.test_job_id);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // The route returns 409 with body.error = 'project_concurrent_dast_blocked'
-      // when a real scan holds the cap. Surface a Cancel affordance.
-      if (msg.includes('project_concurrent_dast_blocked')) {
-        setTestError('A scan is running on this target. Cancel it to test your login.');
-        // The route's 409 body doesn't carry the conflicting job id; the
-        // user has to cancel from the scans list OR we'd need a second
-        // lookup. v1 surfaces the message; v1.x adds the inline cancel.
-        setConflictJobId('unknown');
-      } else if (msg.includes('fly_machine_unavailable')) {
-        setTestError('Worker unavailable — try again in 30 seconds.');
-      } else {
-        setTestError(msg || 'Failed to start test login.');
+      const rawMessage = e instanceof Error ? e.message : String(e);
+      // Log the raw cause for ops; never display it to the user.
+      // eslint-disable-next-line no-console
+      console.error('[recorded-strategy-editor] Test-login failed:', rawMessage);
+      const { message, isConflict } = friendlyTestErrorMessage(
+        rawMessage,
+        'Test login could not be started. Try again in a moment.',
+      );
+      setTestError(message);
+      if (isConflict) {
+        // 409 body carries conflict_job_id (v2.1d /criticalreview BAD-3 +
+        // RSS-2 fix). fetchWithAuth attaches the parsed body as
+        // responseBody on the thrown Error; read it for the conflicting
+        // job id. Fall back to 'unknown' if the backend hasn't shipped the
+        // new field yet (during a partial rollout, the Cancel button stays
+        // hidden but the banner still shows).
+        const body = (e as Error & { responseBody?: { conflict_job_id?: string | null } })
+          .responseBody;
+        setConflictJobId(body?.conflict_job_id ?? 'unknown');
       }
     } finally {
       setTesting(false);
@@ -204,7 +287,14 @@ export function RecordedStrategyEditor({
       setConflictJobId(null);
       await startTest();
     } catch (e: unknown) {
-      setTestError(e instanceof Error ? e.message : String(e));
+      const rawMessage = e instanceof Error ? e.message : String(e);
+      // eslint-disable-next-line no-console
+      console.error('[recorded-strategy-editor] Cancel-running-scan failed:', rawMessage);
+      const { message } = friendlyTestErrorMessage(
+        rawMessage,
+        "Couldn't cancel the running scan. Refresh and try again.",
+      );
+      setTestError(message);
     } finally {
       setCancellingScan(false);
     }

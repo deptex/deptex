@@ -10,7 +10,7 @@ import {
 import { loadTargetOrDeny, isLoadTargetDeny } from '../lib/dast-tenant-guard';
 import { validateScopeConfig } from '../lib/dast-scope-validate';
 import { detectRuntime, nextRuntimeTtlIso } from '../lib/dast-spa-detect';
-import { validateAndPrepareCredential, summarizePayload } from '../lib/dast-credential-validate';
+import { validateAndPrepareCredential, summarizePayload, validateDastJobPayload } from '../lib/dast-credential-validate';
 import {
   encryptCredential,
   isDastEncryptionConfigured,
@@ -32,7 +32,7 @@ router.use(authenticateUser);
 const VALID_SCAN_PROFILES: ReadonlySet<DastScanProfile> = new Set(['auto', 'quick', 'full', 'api']);
 const TIMEOUT_MIN = 5;
 const TIMEOUT_MAX = 60;
-const DAST_SCAN_TYPES = ['dast', 'dast_zap', 'dast_nuclei'];
+const DAST_SCAN_TYPES = ['dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run'];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -748,17 +748,33 @@ router.post(
       const scanProfile = cfg?.scan_profile ?? 'auto';
       const scanTimeoutMinutes = cfg?.scan_timeout_minutes ?? 30;
 
-      // Queue a regular dast_zap job — the worker reads payload.dry_run=true
-      // and branches into the login-only path. No new scan_jobs.type required.
+      // v2.1d /criticalreview SVED-1: Queue type='dast_zap_dry_run' (NOT
+      // type='dast_zap' + payload.dry_run). The new type is the dispatch
+      // discriminator; old workers don't advertise it so claim_scan_job will
+      // skip them and a stale worker can never accidentally run a full real
+      // scan in place of a Test-login probe. payload.dry_run is retained
+      // transitionally for backwards compat and will be removed in v2.1e.
+      const testPayload = {
+        source: 'credential_test',
+        detected_runtime: detectedRuntime,
+        dry_run: true,
+      };
+      // v2.1d /criticalreview RH-1: validateDastJobPayload runs at queue time
+      // AND at worker startup. Defense against typo'd keys (dryRun vs
+      // dry_run) and against any future internal caller that bypasses the
+      // hard-coded literal below. The worker also re-validates after job
+      // load — the route layer's check fails fast with a 400 instead of
+      // burning a Fly cold start before discovering the typo.
+      const payloadGuard = validateDastJobPayload(testPayload);
+      if ('__error' in payloadGuard) {
+        console.error('[dast] credentials/test invalid payload:', payloadGuard.__error);
+        return res.status(400).json({ error: 'invalid_payload', detail: payloadGuard.__error });
+      }
       const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
         p_project_id: projectId,
         p_organization_id: access.organizationId,
-        p_type: 'dast_zap',
-        p_payload: {
-          source: 'credential_test',
-          detected_runtime: detectedRuntime,
-          dry_run: true,
-        },
+        p_type: 'dast_zap_dry_run',
+        p_payload: testPayload,
         p_target_id: targetId,
         p_target_url: guard.target.target_url,
         p_scan_profile: scanProfile,
@@ -770,7 +786,27 @@ router.post(
       if (queueError) {
         const detail = queueError.message ?? 'Failed to queue test';
         if (detail.includes('project_concurrent_dast_blocked')) {
-          return res.status(409).json({ error: 'project_concurrent_dast_blocked', detail });
+          // v2.1d /criticalreview BAD-3 + RSS-2 fix: look up the conflicting
+          // job_id and return it in the 409 body so the FE's "Cancel running
+          // scan" affordance has a real id to call POST /jobs/:jobId/cancel
+          // with. Previously the FE set conflictJobId='unknown' and the
+          // Cancel button was gated on `conflictJobId !== 'unknown'`, so the
+          // affordance was dead UI.
+          const { data: conflict } = await supabase
+            .from('scan_jobs')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('organization_id', access.organizationId)
+            .in('type', DAST_SCAN_TYPES)
+            .in('status', ['queued', 'processing'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          return res.status(409).json({
+            error: 'project_concurrent_dast_blocked',
+            detail,
+            conflict_job_id: conflict?.id ?? null,
+          });
         }
         if (detail.includes('org_concurrent_dast_cap')) {
           return res.status(409).json({ error: 'org_concurrent_dast_cap', detail });
@@ -854,9 +890,14 @@ router.post(
         return res.status(403).json({ error: 'You do not have permission to manage integrations' });
       }
 
+      // v2.1d /criticalreview HEH-1 fix: pass projectId so the RPC AND-binds
+      // project_id (and filters type to the DAST family). Without this, an
+      // org-level manage_integrations holder could cancel scans in projects
+      // they have no team access to.
       const { data: cancelled, error: cancelErr } = await supabase.rpc('cancel_scan_job', {
         p_job_id: jobId,
         p_organization_id: access.organizationId,
+        p_project_id: projectId,
       });
       if (cancelErr) {
         console.error('[dast] cancel_scan_job RPC error:', cancelErr.message);
@@ -865,15 +906,25 @@ router.post(
 
       const row = Array.isArray(cancelled) ? cancelled[0] : cancelled;
       if (!row) {
-        // Empty return — distinguish 404 (cross-org / missing) from 409
-        // (job exists but not in cancellable state). Read scan_jobs status
-        // scoped to org so a cross-org probe still returns 404.
-        const { data: probe } = await supabase
+        // Empty return — distinguish 404 (missing / cross-project / cross-org
+        // / non-DAST type) from 409 (job exists in caller's project but not
+        // in cancellable state). The probe must scope by project_id AND
+        // organization_id AND DAST type so a cross-project caller still
+        // returns 404 without leaking current_status of foreign rows.
+        // Destructure error so a transient supabase blip doesn't silently
+        // return 404 (per /criticalreview EHA-4).
+        const { data: probe, error: probeErr } = await supabase
           .from('scan_jobs')
           .select('status')
           .eq('id', jobId)
           .eq('organization_id', access.organizationId)
+          .eq('project_id', projectId)
+          .in('type', DAST_SCAN_TYPES)
           .maybeSingle();
+        if (probeErr) {
+          console.error('[dast] cancel probe error:', probeErr.message);
+          return res.status(500).json({ error: 'Failed to look up scan status' });
+        }
         if (!probe) {
           return res.status(404).json({ error: 'job_not_found' });
         }
@@ -999,11 +1050,21 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       }
     }
 
+    const scanPayload = { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine };
+    // v2.1d /criticalreview RH-1: defense-in-depth payload validation at
+    // queue time. The hard-coded literal above is safe today; the validator
+    // catches any future caller (cron, Aegis tool, webhook) that constructs
+    // a malformed payload.
+    const scanPayloadGuard = validateDastJobPayload(scanPayload);
+    if ('__error' in scanPayloadGuard) {
+      console.error('[dast] /scan invalid payload:', scanPayloadGuard.__error);
+      return res.status(400).json({ error: 'invalid_payload', detail: scanPayloadGuard.__error });
+    }
     const { data: queued, error: queueError } = await supabase.rpc('queue_scan_job', {
       p_project_id: projectId,
       p_organization_id: access.organizationId,
       p_type: scanJobType,
-      p_payload: { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine },
+      p_payload: scanPayload,
       p_target_id: targetId,
       p_target_url: guard.target.target_url,
       p_scan_profile: scanProfile,

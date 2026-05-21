@@ -29,6 +29,9 @@ describe('getSupportedJobTypes', () => {
     expect(types).toContain('dast');
     expect(types).toContain('dast_zap');
     expect(types).toContain('dast_nuclei');
+    // v2.1d /criticalreview SVED-1 fix: Test-login queues a distinct type
+    // so old workers can't accidentally claim it and run a real scan.
+    expect(types).toContain('dast_zap_dry_run');
   });
 
   it('returns only extraction when DAST_CREDENTIAL_KEY is empty string', () => {

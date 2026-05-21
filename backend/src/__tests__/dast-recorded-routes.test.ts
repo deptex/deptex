@@ -291,6 +291,39 @@ describe('POST /:projectId/dast/jobs/:jobId/cancel', () => {
     );
     expect(r.status).toBe(403);
   });
+
+  it('returns 404 when jobId belongs to a different project in the same org (/criticalreview HEH-1)', async () => {
+    // The RPC now AND-binds project_id, so a cross-project cancel attempt
+    // from the same-org caller returns empty. The probe also scopes by
+    // project_id and DAST type — a foreign-project row no longer matches,
+    // so we return 404 (NOT 409 with leaked current_status).
+    setProjectAccessOwner();
+    setRpcResponse('cancel_scan_job', { data: null, error: null });
+    setTableResponse('scan_jobs', 'maybeSingle', { data: null, error: null });
+
+    const r = await request(makeApp()).post(
+      `/api/projects/${PROJECT_A}/dast/jobs/${JOB_A}/cancel`,
+    );
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('job_not_found');
+  });
+
+  it('returns 500 when the 404/409 probe itself errors (/criticalreview EHA-4)', async () => {
+    // Pre-fix: a transient supabase blip during the probe yielded a
+    // misleading 404. Post-fix: probe errors surface as a 500 so the caller
+    // can retry rather than treating the job as missing.
+    setProjectAccessOwner();
+    setRpcResponse('cancel_scan_job', { data: null, error: null });
+    setTableResponse('scan_jobs', 'maybeSingle', {
+      data: null,
+      error: { message: 'connection reset by peer' },
+    });
+
+    const r = await request(makeApp()).post(
+      `/api/projects/${PROJECT_A}/dast/jobs/${JOB_A}/cancel`,
+    );
+    expect(r.status).toBe(500);
+  });
 });
 
 // ===========================================================================
