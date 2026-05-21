@@ -108,43 +108,46 @@ describe('OrganizationSettingsPage – Integrations', () => {
     Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true });
   });
 
-  it('shows Integrations heading and CI/CD section', async () => {
+  it('shows Integrations heading + Docs + Add buttons', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Integrations' })).toBeInTheDocument();
     });
-    expect(screen.getByText('CI/CD')).toBeInTheDocument();
-    expect(screen.getByText(/Source code|repositories/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Docs/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument();
   });
 
-  it('when connections are loading, shows CI/CD section and eventually resolves', async () => {
-    let resolveConnections: (value: unknown[]) => void;
-    mockGetOrganizationConnections.mockImplementation(() => new Promise((r) => { resolveConnections = r; }));
-    render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByText('CI/CD')).toBeInTheDocument();
-    });
-    // Table may render without animate-pulse depending on layout; assert Provider when table exists
-    const tables = screen.queryAllByRole('table');
-    if (tables.length > 0) {
-      expect(within(tables[0]).getByText('Provider')).toBeInTheDocument();
-    }
-    resolveConnections!([]);
-    await waitFor(() => {
-      expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
-    });
-  });
-
-  it('when connections loaded empty, shows No source code integrations and Add buttons', async () => {
+  it('connections resolve to the empty state when no integrations exist', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
+      expect(screen.getByText(/No integrations yet/)).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /Add GitHub/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add GitLab/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add Bitbucket/i })).toBeInTheDocument();
+    // Both Docs + Add buttons remain in the header during the empty state
+    expect(screen.getByRole('link', { name: /Docs/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument();
+  });
+
+  it('empty state surfaces an Add CTA that opens the Add Integration sidebar', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([]);
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText(/No integrations yet/)).toBeInTheDocument();
+    });
+
+    // Both header Add and inline Add-integration CTA should open the sidebar
+    await userEvent.click(screen.getByRole('button', { name: /Add integration/i }));
+    const dialog = await screen.findByRole('dialog');
+    // Sidebar shows category headers and a couple of representative items
+    expect(within(dialog).getByText('CI/CD')).toBeInTheDocument();
+    expect(within(dialog).getByText('Notifications')).toBeInTheDocument();
+    expect(within(dialog).getByText('Ticketing')).toBeInTheDocument();
+    expect(within(dialog).getByText('Custom')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /GitHub/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Slack/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Linear/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Custom notification/ })).toBeInTheDocument();
   });
 
   it('when connections loaded with one connection, shows table row and Disconnect button', async () => {
@@ -252,54 +255,63 @@ describe('OrganizationSettingsPage – Integrations', () => {
     expect(mockWindowOpen).toHaveBeenCalledWith('https://bitbucket.org/account/settings/applications/', '_blank');
   });
 
-  it('integrations skeleton shows CI/CD, Notifications, and Ticketing sections when loading', async () => {
-    vi.mocked(useOutletContext).mockReturnValue({
-      organization: null,
-      reloadOrganization: mockReloadOrganization,
-    } as never);
+  it('the unified table has Type pills that bucket each connection (CI/CD, Notification, Ticketing, Custom)', async () => {
+    mockGetOrganizationConnections.mockResolvedValue([
+      { id: 'c-gh', provider: 'github', display_name: 'My Org', status: 'connected', installation_id: '123', metadata: {} },
+      { id: 'c-slk', provider: 'slack', display_name: 'My Workspace', status: 'connected', metadata: { team_name: 'My Workspace' } },
+      { id: 'c-jira', provider: 'jira', display_name: 'acme.atlassian.net', status: 'connected', metadata: {} },
+      { id: 'c-cust', provider: 'custom_notification', display_name: 'My Webhook', status: 'connected', metadata: { custom_name: 'My Webhook', webhook_url: 'https://hooks.example.com/x' } },
+    ]);
     render(<OrganizationSettingsPage />);
-    expect(screen.getByRole('heading', { name: 'Integrations' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('GitHub')).toBeInTheDocument();
+    });
+    // All four Type-column labels render
     expect(screen.getByText('CI/CD')).toBeInTheDocument();
-    expect(screen.getByText('Notifications')).toBeInTheDocument();
+    expect(screen.getByText('Notification')).toBeInTheDocument();
     expect(screen.getByText('Ticketing')).toBeInTheDocument();
+    expect(screen.getByText('Custom')).toBeInTheDocument();
   });
 
-  it('when connections loaded empty, Ticketing shows No ticketing integrations message', async () => {
+  it('Add sidebar → Jira Data Center hands off to the PAT dialog', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+    const sidebar = await screen.findByRole('dialog');
+    await userEvent.click(within(sidebar).getByRole('button', { name: /Jira Data Center/i }));
+
+    // PAT dialog opens
     await waitFor(() => {
-      expect(screen.getByText(/No ticketing integrations/)).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Jira Data Center/i })).toBeInTheDocument();
     });
   });
 
-  it('Ticketing section has Add Jira dropdown with Jira Cloud and Jira Data Center options', async () => {
+  it('Add sidebar → Linear triggers OAuth redirect', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
-    mockConnectJiraOrg.mockResolvedValue({ redirectUrl: 'https://atlassian.com/oauth' });
-    render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByText('Add Jira')).toBeInTheDocument();
+    const hrefSetter = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: new Proxy({} as Location, {
+        get: () => '',
+        set: (_t, k, v) => { if (k === 'href') hrefSetter(v); return true; },
+      }),
     });
-    const addJiraButton = screen.getByRole('button', { name: /Add Jira/i });
-    await userEvent.click(addJiraButton);
-    await waitFor(() => {
-      expect(screen.getByRole('menuitem', { name: 'Jira Cloud (OAuth)' })).toBeInTheDocument();
-    });
-    expect(screen.getByRole('menuitem', { name: 'Jira Data Center (PAT)' })).toBeInTheDocument();
-  });
+    try {
+      render(<OrganizationSettingsPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-  it('Add Linear triggers OAuth redirect', async () => {
-    mockGetOrganizationConnections.mockResolvedValue([]);
-    const mockLocation = { href: '', assign: vi.fn() };
-    Object.defineProperty(window, 'location', { value: mockLocation, writable: true });
-    render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Add Linear/i })).toBeInTheDocument();
-    });
-    await userEvent.click(screen.getByRole('button', { name: /Add Linear/i }));
-    await waitFor(() => {
-      expect(mockConnectLinearOrg).toHaveBeenCalledWith('org-1');
-    });
-    expect(mockLocation.href).toBe('https://linear.app/oauth');
+      await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+      const sidebar = await screen.findByRole('dialog');
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Linear/i }));
+
+      await waitFor(() => expect(mockConnectLinearOrg).toHaveBeenCalledWith('org-1'));
+      expect(hrefSetter).toHaveBeenCalledWith('https://linear.app/oauth');
+    } finally {
+      Object.defineProperty(window, 'location', { writable: true, value: originalLocation });
+    }
   });
 
   it('when ticketing connections exist, shows provider labels and Disconnect', async () => {
@@ -351,16 +363,19 @@ describe('OrganizationSettingsPage – Integrations', () => {
     });
   });
 
-  it('Notifications section has Add Email, Add Slack, Add Discord, Add Custom buttons', async () => {
+  it('Add sidebar exposes every notification destination (Slack, Discord, Email, PagerDuty) + custom rows', async () => {
     mockGetOrganizationConnections.mockResolvedValue([]);
     render(<OrganizationSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Add Slack/i })).toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add Discord/i })).toBeInTheDocument();
-    const addCustomButtons = screen.getAllByRole('button', { name: /Add Custom/i });
-    expect(addCustomButtons.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+    const sidebar = await screen.findByRole('dialog');
+    expect(within(sidebar).getByRole('button', { name: /Slack/ })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: /Discord/ })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: /^Email/ })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: /PagerDuty/ })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: /Custom notification/ })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: /Custom ticketing/ })).toBeInTheDocument();
   });
 
   it('user without manage_integrations sees Access Denied on integrations tab', async () => {
@@ -401,7 +416,7 @@ describe('OrganizationSettingsPage – Integrations', () => {
       expect(mockGetOrganizationConnections).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.getByText(/No source code integrations/)).toBeInTheDocument();
+      expect(screen.getByText(/No integrations yet/)).toBeInTheDocument();
     });
   });
 
@@ -425,7 +440,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
         { id: 'conn-email', provider: 'email', display_name: 'team@x.com', status: 'connected', metadata: { email: 'team@x.com' } },
       ]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByText('Email')).toBeInTheDocument());
+      // The Provider column renders the email address as the label; the Type pill says "Notification".
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument());
 
       await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
       const dialog = await screen.findByRole('dialog');
@@ -434,8 +450,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
     });
   });
 
-  describe('CI/CD install', () => {
-    it('Add GitHub routes through api.startCicdInstall and redirects', async () => {
+  describe('CI/CD install via the Add sidebar', () => {
+    it('GitHub row routes through api.startCicdInstall and redirects', async () => {
       const originalLocation = window.location;
       const hrefSetter = vi.fn();
       Object.defineProperty(window, 'location', {
@@ -448,9 +464,11 @@ describe('OrganizationSettingsPage – Integrations', () => {
       try {
         mockGetOrganizationConnections.mockResolvedValue([]);
         render(<OrganizationSettingsPage />);
-        await waitFor(() => expect(screen.getByRole('button', { name: /Add GitHub/i })).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-        await userEvent.click(screen.getByRole('button', { name: /Add GitHub/i }));
+        await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+        const sidebar = await screen.findByRole('dialog');
+        await userEvent.click(within(sidebar).getByRole('button', { name: /GitHub/ }));
         await waitFor(() => expect(mockStartCicdInstall).toHaveBeenCalledWith('github', 'org-1'));
         expect(hrefSetter).toHaveBeenCalledWith('https://github.com/apps/deptex/installations/new');
       } finally {
@@ -458,56 +476,67 @@ describe('OrganizationSettingsPage – Integrations', () => {
       }
     });
 
-    it('Add CI/CD failure surfaces a generic toast, never the raw error', async () => {
+    it('GitLab row failure surfaces a generic toast, never the raw error', async () => {
       mockStartCicdInstall.mockRejectedValueOnce(new Error('Boom: internal database leak'));
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Add GitLab/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('button', { name: /Add GitLab/i }));
+      await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+      const sidebar = await screen.findByRole('dialog');
+      await userEvent.click(within(sidebar).getByRole('button', { name: /GitLab/ }));
       await waitFor(() => expect(mockToast).toHaveBeenCalled());
       const errorToast = mockToast.mock.calls.find((call) => (call[0] as { variant?: string }).variant === 'destructive');
       expect((errorToast?.[0] as { description?: string } | undefined)?.description).not.toMatch(/Boom|internal database/);
     });
   });
 
-  describe('Email + PagerDuty + Jira PAT dialogs', () => {
-    it('Email dialog submission calls api.createEmailNotification', async () => {
+  describe('Email + PagerDuty + Jira PAT dialogs (opened from Add sidebar)', () => {
+    async function openAddSidebar() {
+      await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
+      return await screen.findByRole('dialog');
+    }
+
+    it('Email row opens the email dialog and submission calls api.createEmailNotification', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('button', { name: /Add Email/i }));
-      const dialog = await screen.findByRole('dialog');
-      await userEvent.type(within(dialog).getByLabelText(/Email address/i), 'team@x.com');
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Email/ }));
+      // Email dialog opens; addressing it by the new active dialog
+      const emailDialog = await screen.findByRole('dialog');
+      await userEvent.type(within(emailDialog).getByLabelText(/Email address/i), 'team@x.com');
+      await userEvent.click(within(emailDialog).getByRole('button', { name: 'Add' }));
       await waitFor(() => expect(mockCreateEmailNotification).toHaveBeenCalledWith('org-1', 'team@x.com'));
     });
 
     it('Email dialog Add is disabled until input is a valid address', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Add Email/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('button', { name: /Add Email/i }));
-      const dialog = await screen.findByRole('dialog');
-      const addBtn = within(dialog).getByRole('button', { name: 'Add' });
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Email/ }));
+      const emailDialog = await screen.findByRole('dialog');
+      const addBtn = within(emailDialog).getByRole('button', { name: 'Add' });
       expect(addBtn).toBeDisabled();
 
-      await userEvent.type(within(dialog).getByLabelText(/Email address/i), 'not-an-email');
+      await userEvent.type(within(emailDialog).getByLabelText(/Email address/i), 'not-an-email');
       expect(addBtn).toBeDisabled();
     });
 
-    it('PagerDuty Set up button submits service + routing key through the api wrapper', async () => {
+    it('PagerDuty row opens the PD dialog; submission routes through the api wrapper', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Set up PagerDuty/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('button', { name: /Set up PagerDuty/i }));
-      const dialog = await screen.findByRole('dialog');
-      await userEvent.type(within(dialog).getByLabelText(/Service name/i), 'Critical Alerts');
-      await userEvent.type(within(dialog).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /PagerDuty/ }));
+      const pdDialog = await screen.findByRole('dialog');
+      await userEvent.type(within(pdDialog).getByLabelText(/Service name/i), 'Critical Alerts');
+      await userEvent.type(within(pdDialog).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
+      await userEvent.click(within(pdDialog).getByRole('button', { name: 'Connect' }));
 
       await waitFor(() => expect(mockConnectPagerDutyOrg).toHaveBeenCalledWith('org-1', {
         serviceName: 'Critical Alerts',
@@ -515,17 +544,17 @@ describe('OrganizationSettingsPage – Integrations', () => {
       }));
     });
 
-    it('Jira PAT dialog submits base url + token through api.connectJiraPatOrg', async () => {
+    it('Jira Data Center row opens the PAT dialog; submission routes through api.connectJiraPatOrg', async () => {
       mockGetOrganizationConnections.mockResolvedValue([]);
       render(<OrganizationSettingsPage />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Add Jira/i })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('button', { name: /Add Jira/i }));
-      await userEvent.click(await screen.findByRole('menuitem', { name: /Jira Data Center/i }));
-      const dialog = await screen.findByRole('dialog');
-      await userEvent.type(within(dialog).getByLabelText(/Server URL/i), 'https://jira.acme.com');
-      await userEvent.type(within(dialog).getByLabelText(/Personal Access Token/i), 'pat_xyz');
-      await userEvent.click(within(dialog).getByRole('button', { name: 'Create connection' }));
+      const sidebar = await openAddSidebar();
+      await userEvent.click(within(sidebar).getByRole('button', { name: /Jira Data Center/i }));
+      const patDialog = await screen.findByRole('dialog');
+      await userEvent.type(within(patDialog).getByLabelText(/Server URL/i), 'https://jira.acme.com');
+      await userEvent.type(within(patDialog).getByLabelText(/Personal Access Token/i), 'pat_xyz');
+      await userEvent.click(within(patDialog).getByRole('button', { name: 'Create connection' }));
 
       await waitFor(() => expect(mockConnectJiraPatOrg).toHaveBeenCalledWith('org-1', 'https://jira.acme.com', 'pat_xyz'));
     });

@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -156,6 +156,76 @@ function describeConnectionLabel(conn: CiCdConnection): string {
       return conn.display_name || conn.provider;
   }
 }
+
+// Bucket an integration into one of four type categories — drives the Type
+// pill on each row and the sort order on the unified table.
+type IntegrationType = 'cicd' | 'notification' | 'ticketing' | 'custom';
+function describeConnectionType(conn: CiCdConnection): IntegrationType {
+  if (conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket') return 'cicd';
+  if (conn.provider === 'slack' || conn.provider === 'discord' || conn.provider === 'email' || conn.provider === 'pagerduty') return 'notification';
+  if (conn.provider === 'jira' || conn.provider === 'linear') return 'ticketing';
+  return 'custom';
+}
+
+// Provider icon URL (null for icon-less providers — Email, PagerDuty, Custom).
+function describeConnectionIcon(conn: CiCdConnection): string | null {
+  switch (conn.provider) {
+    case 'github': return '/images/integrations/github.png';
+    case 'gitlab': return '/images/integrations/gitlab.png';
+    case 'bitbucket': return '/images/integrations/bitbucket.png';
+    case 'slack': return '/images/integrations/slack.png';
+    case 'discord': return '/images/integrations/discord.png';
+    case 'jira': return '/images/integrations/jira.png';
+    case 'linear': return '/images/integrations/linear.png';
+    case 'custom_notification':
+    case 'custom_ticketing':
+      return conn.metadata?.icon_url || null;
+    default:
+      return null;
+  }
+}
+
+// Secondary identifier — the "Connection" column on the table. For Slack
+// this is "#channel" under the workspace name; everything else is a single line.
+function describeConnectionIdentifier(conn: CiCdConnection): { primary: string; secondary: string | null } {
+  if (conn.provider === 'slack') {
+    const channel = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
+    const channelFormatted = channel ? (channel.startsWith('#') ? channel : `#${channel}`) : null;
+    return { primary: conn.display_name || conn.metadata?.team_name || 'Slack Workspace', secondary: channelFormatted };
+  }
+  if (conn.provider === 'discord') {
+    const fallback = conn.metadata?.guild_name || 'Discord Server';
+    return { primary: conn.display_name && conn.display_name !== 'Discord Server' ? conn.display_name : fallback, secondary: null };
+  }
+  if (conn.provider === 'email') {
+    return { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null };
+  }
+  if (conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') {
+    const fromUrl = conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook';
+    return { primary: conn.metadata?.custom_name || conn.display_name || fromUrl, secondary: null };
+  }
+  return { primary: conn.display_name || conn.installation_id || '—', secondary: null };
+}
+
+// Tailwind classes for the Type pill — CI/CD blue, Notification amber,
+// Ticketing violet, Custom muted. Subtle background + saturated text so the
+// pill reads at table scale without dominating the row.
+const INTEGRATION_TYPE_PILL: Record<IntegrationType, { label: string; className: string }> = {
+  cicd: { label: 'CI/CD', className: 'bg-sky-500/10 text-sky-300 border-sky-500/30' },
+  notification: { label: 'Notification', className: 'bg-amber-500/10 text-amber-300 border-amber-500/30' },
+  ticketing: { label: 'Ticketing', className: 'bg-violet-500/10 text-violet-300 border-violet-500/30' },
+  custom: { label: 'Custom', className: 'bg-background-subtle text-foreground-secondary border-border' },
+};
+
+// Ordering used to sort the unified table — CI/CD first (the thing without
+// which nothing else has data to alert on), then Notification, then Ticketing,
+// then Custom. Within a type we secondary-sort by created_at desc.
+const INTEGRATION_TYPE_ORDER: Record<IntegrationType, number> = {
+  cicd: 0,
+  notification: 1,
+  ticketing: 2,
+  custom: 3,
+};
 
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
@@ -1477,14 +1547,6 @@ export default function OrganizationSettingsPage() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>(() => getCachedIntegrations(id ?? '') ?? []);
   const [loadingConnections, setLoadingConnections] = useState(false);
-  const notificationConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord' || c.provider === 'custom_notification' || c.provider === 'email'),
-    [cicdConnections]
-  );
-  const ticketingConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'jira' || c.provider === 'linear' || c.provider === 'custom_ticketing'),
-    [cicdConnections]
-  );
   // Initialize isOwner/isAdmin from cached permissions
   const [isOwner, setIsOwner] = useState(() => {
     const cached = organization?.permissions || (() => {
@@ -1639,6 +1701,9 @@ export default function OrganizationSettingsPage() {
   const [connectionToDisconnect, setConnectionToDisconnect] = useState<CiCdConnection | null>(null);
   const [disconnectingConnection, setDisconnectingConnection] = useState(false);
   const [showRegenerateSecretConfirm, setShowRegenerateSecretConfirm] = useState(false);
+  // Add-integration sidebar — the single CTA on the Integrations header opens this;
+  // each row inside hands off to the matching OAuth start / dialog open / sidepanel open.
+  const [showAddIntegrationSidebar, setShowAddIntegrationSidebar] = useState(false);
 
   const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
   const [notifPauseLoading, setNotifPauseLoading] = useState(false);
@@ -3462,22 +3527,30 @@ export default function OrganizationSettingsPage() {
               {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}
               {(activeSection === 'integrations' || hasVisitedIntegrations) && (
                 <div
-                  className="space-y-8 pt-8"
+                  className="space-y-6 pt-8"
                   style={{ display: activeSection === 'integrations' ? undefined : 'none' }}
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-4">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
                       <p className="mt-1.5 text-sm text-foreground-secondary">
-                        Manage your organization&apos;s integrations for syncing projects and sending notifications to Slack, Discord, Jira, and more.
+                        Source-control hosts, notification destinations, and ticketing tools — all in one list. Use Add to wire up a new connection.
                       </p>
                     </div>
-                    <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                      <Button variant="outline" size="sm" className="text-xs">
-                        <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                        Docs
-                      </Button>
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
+                        <Button variant="outline" size="sm" className="text-xs">
+                          <BookOpen className="h-3.5 w-3.5 mr-1.5" />
+                          Docs
+                        </Button>
+                      </Link>
+                      {effectivePermissions?.manage_integrations && (
+                        <Button variant="green" size="sm" onClick={() => setShowAddIntegrationSidebar(true)}>
+                          <Plus className="h-3.5 w-3.5 mr-1.5" />
+                          Add
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Permission Check */}
@@ -3492,595 +3565,178 @@ export default function OrganizationSettingsPage() {
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-8">
-                      {/* CI/CD Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {([
-                              { provider: 'github' as const, label: 'GitHub', icon: '/images/integrations/github.png' },
-                              { provider: 'gitlab' as const, label: 'GitLab', icon: '/images/integrations/gitlab.png' },
-                              { provider: 'bitbucket' as const, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png' },
-                            ]).map(({ provider, label, icon }) => (
-                              <Button
-                                key={provider}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await api.startCicdInstall(provider, organization.id);
-                                    if (redirectUrl) window.location.href = redirectUrl;
-                                  } catch (err) {
-                                    console.error(`Failed to start ${label} install:`, err);
-                                    toast({ title: 'Error', description: `Failed to start ${label} connection. Please try again.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                                Add {label}
-                              </Button>
-                            ))}
-                          </div>
+                    <>
+                      {loadingConnections ? (
+                        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                          <table className="w-full table-fixed">
+                            <colgroup>
+                              <col className="w-[220px]" />
+                              <col className="w-[140px]" />
+                              <col />
+                              <col className="w-[160px]" />
+                            </colgroup>
+                            <thead className="bg-background-card-header border-b border-border">
+                              <tr>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {[1, 2, 3, 4].map((i) => (
+                                <tr key={i}>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                                      <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3"><div className="h-5 w-16 bg-muted animate-pulse rounded-full" /></td>
+                                  <td className="px-4 py-3"><div className="h-4 w-32 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3 text-right"><div className="h-7 w-20 bg-muted animate-pulse rounded ml-auto" /></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[120px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2, 3, 4].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-28 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                      ) : cicdConnections.length === 0 ? (
+                        <div className="bg-background-card border border-border rounded-lg px-4 py-10 flex flex-col items-center justify-center text-center">
+                          <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                            <Plug className="h-5 w-5 text-foreground-secondary" />
                           </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[120px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No source code integrations. Connect a Git provider above to start scanning repositories.
-                                    </td>
-                                  </tr>
-                                ) : cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').map((conn) => {
-                                      const providerIcon = conn.provider === 'github' ? '/images/integrations/github.png'
-                                        : conn.provider === 'gitlab' ? '/images/integrations/gitlab.png'
-                                        : '/images/integrations/bitbucket.png';
-                                      const providerLabel = conn.provider === 'github' ? 'GitHub'
-                                        : conn.provider === 'gitlab' ? 'GitLab' : 'Bitbucket';
-                                      const accountAvatarUrl = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <div className="flex items-center gap-2.5 min-w-0">
-                                              {accountAvatarUrl ? <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" /> : null}
-                                              <span className="text-sm text-foreground truncate">{conn.display_name || conn.installation_id || '-'}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                              onClick={() => setConnectionToDisconnect(conn)}
-                                            >
-                                              Disconnect
-                                            </Button>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Notifications Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setEmailToAdd('');
-                                setShowEmailDialog(true);
-                              }}
-                            >
-                              <Mail className="h-3.5 w-3.5 mr-1.5" />
-                              Add Email
-                            </Button>
-                            {([
-                              { provider: 'slack' as const, label: 'Slack', icon: '/images/integrations/slack.png', getRedirect: api.connectSlackOrg },
-                              { provider: 'discord' as const, label: 'Discord', icon: '/images/integrations/discord.png', getRedirect: api.connectDiscordOrg },
-                            ]).map(({ provider, label, icon, getRedirect }) => (
-                              <Button
-                                key={provider}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await getRedirect(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                Add {label}
-                              </Button>
-                            ))}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setPagerDutyServiceName('');
-                                setPagerDutyRoutingKey('');
-                                setShowPagerDutyDialog(true);
-                              }}
-                            >
-                              <span className="mr-1.5 text-sm leading-none">🚨</span>
-                              Set up PagerDuty
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setCustomIntegrationType('notification');
-                                setEditingCustomIntegration(null);
-                                setCustomIntegrationName('');
-                                setCustomIntegrationWebhookUrl('');
-                                setCustomIntegrationIconFile(null);
-                                setCustomIntegrationIconPreview(null);
-                                setCustomIntegrationSecret(null);
-                                setShowCustomIntegrationSidepanel(true);
-                              }}
-                            >
-                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                              Add Custom
-                            </Button>
-                          </div>
+                          <h3 className="text-sm font-semibold text-foreground mb-1">No integrations yet</h3>
+                          <p className="text-xs text-foreground-secondary max-w-md mb-4">
+                            Connect a repository, wire up an alert destination, or set up a ticketing tool. Open the Add menu to see what's available.
+                          </p>
+                          <Button variant="green" size="sm" onClick={() => setShowAddIntegrationSidebar(true)}>
+                            <Plus className="h-3.5 w-3.5 mr-1.5" />
+                            Add integration
+                          </Button>
                         </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2, 3].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="h-4 w-28 bg-muted animate-pulse rounded" />
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {notificationConnections.length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No notification integrations. Add Slack, Discord, or Email above to receive alerts.
-                                    </td>
-                                  </tr>
-                                ) : notificationConnections.map((conn) => {
-                                      const isCustom = conn.provider === 'custom_notification';
-                                      const isEmail = conn.provider === 'email';
-                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
-                                      const providerLabel = isCustom
-                                        ? 'Custom'
-                                        : isEmail ? 'Email' : conn.provider === 'slack' ? 'Slack' : 'Discord';
-                                      const providerIconSrc = !isCustom && !isEmail
-                                        ? (conn.provider === 'slack' ? '/images/integrations/slack.png' : '/images/integrations/discord.png')
-                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
-
-                                      const channelRaw = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
-                                      const channelFormatted = channelRaw ? (channelRaw.startsWith('#') ? channelRaw : `#${channelRaw}`) : null;
-                                      const connectionDisplay = conn.provider === 'slack'
-                                        ? { primary: conn.display_name || conn.metadata?.team_name || 'Slack Workspace', secondary: channelFormatted }
-                                        : conn.provider === 'discord'
-                                          ? { primary: conn.display_name !== 'Discord Server' ? conn.display_name : (conn.metadata?.guild_name || conn.display_name || 'Discord Server'), secondary: null }
-                                          : isEmail
-                                            ? { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null }
-                                            : isCustom
-                                              ? { primary: (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook')), secondary: null }
-                                              : { primary: conn.display_name || 'Connected', secondary: null };
-
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              {providerIconSrc ? (
-                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
-                                              ) : isEmail ? (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Mail className="h-3.5 w-3.5" />
-                                                </div>
-                                              ) : (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Webhook className="h-3.5 w-3.5" />
-                                                </div>
-                                              )}
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
+                      ) : (
+                        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                          <table className="w-full table-fixed">
+                            <colgroup>
+                              <col className="w-[220px]" />
+                              <col className="w-[140px]" />
+                              <col />
+                              <col className="w-[160px]" />
+                            </colgroup>
+                            <thead className="bg-background-card-header border-b border-border">
+                              <tr>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {[...cicdConnections]
+                                .sort((a, b) => {
+                                  const at = INTEGRATION_TYPE_ORDER[describeConnectionType(a)];
+                                  const bt = INTEGRATION_TYPE_ORDER[describeConnectionType(b)];
+                                  if (at !== bt) return at - bt;
+                                  return (b.created_at || '').localeCompare(a.created_at || '');
+                                })
+                                .map((conn) => {
+                                  const type = describeConnectionType(conn);
+                                  const pill = INTEGRATION_TYPE_PILL[type];
+                                  const iconSrc = describeConnectionIcon(conn);
+                                  const label = describeConnectionLabel(conn);
+                                  const identifier = describeConnectionIdentifier(conn);
+                                  const accountAvatarUrl = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
+                                  const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+                                  const isEmail = conn.provider === 'email';
+                                  const isCicd = conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket';
+                                  const showAvatar = isCicd && accountAvatarUrl;
+                                  return (
+                                    <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
+                                      <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          {iconSrc ? (
+                                            <img src={iconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
+                                          ) : isEmail ? (
+                                            <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                              <Mail className="h-3.5 w-3.5" />
                                             </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <div className={cn(
-                                              "flex flex-col gap-0.5 truncate",
-                                              connectionDisplay.secondary ? "min-w-0" : ""
-                                            )}>
-                                              <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
-                                              {connectionDisplay.secondary && (
-                                                <span className="text-xs text-foreground-secondary truncate">{connectionDisplay.secondary}</span>
-                                              )}
+                                          ) : (
+                                            <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                              <Webhook className="h-3.5 w-3.5" />
                                             </div>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                              {isCustom && !isEmail && (
-                                                <>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setCustomIntegrationDetailsConn(conn);
-                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
-                                                      setShowCustomIntegrationDetailsSidebar(true);
-                                                    }}
-                                                    title="View details"
-                                                  >
-                                                    <Eye className="h-3.5 w-3.5" />
-                                                  </button>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setEditingCustomIntegration(conn);
-                                                      setCustomIntegrationType('notification');
-                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                      setCustomIntegrationIconFile(null);
-                                                      setCustomIntegrationSecret(null);
-                                                      setShowCustomIntegrationSidepanel(true);
-                                                    }}
-                                                    title="Edit"
-                                                  >
-                                                    <Pencil className="h-3.5 w-3.5" />
-                                                  </button>
-                                                </>
-                                              )}
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={() => setConnectionToDisconnect(conn)}
+                                          )}
+                                          <span className="text-sm font-medium text-foreground truncate">{label}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3">
+                                        <span className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium', pill.className)}>
+                                          {pill.label}
+                                        </span>
+                                      </td>
+                                      <td className="px-4 py-3 min-w-0">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          {showAvatar ? (
+                                            <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" />
+                                          ) : null}
+                                          <div className={cn('flex flex-col gap-0.5 min-w-0', identifier.secondary ? '' : 'justify-center')}>
+                                            <span className="text-sm text-foreground truncate">{identifier.primary}</span>
+                                            {identifier.secondary && (
+                                              <span className="text-xs text-foreground-secondary truncate">{identifier.secondary}</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          {isCustom && (
+                                            <>
+                                              <button
+                                                className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                onClick={() => {
+                                                  setCustomIntegrationDetailsConn(conn);
+                                                  setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
+                                                  setShowCustomIntegrationDetailsSidebar(true);
+                                                }}
+                                                title="View details"
                                               >
-                                                {isCustom || isEmail ? 'Remove' : 'Disconnect'}
-                                              </Button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Ticketing Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="text-xs">
-                                  <img src="/images/integrations/jira.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                  Add Jira
-                                  <ChevronDown className="h-3 w-3 ml-1" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await api.connectJiraOrg(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || 'Failed to start Jira connection.', variant: 'destructive' });
-                                  }
-                                }}>
-                                  Jira Cloud (OAuth)
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => {
-                                  setJiraPatBaseUrl('');
-                                  setJiraPatToken('');
-                                  setShowJiraPatDialog(true);
-                                }}>
-                                  Jira Data Center (PAT)
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {([
-                              { label: 'Linear', icon: '/images/integrations/linear.png', getRedirect: api.connectLinearOrg },
-                            ]).map(({ label, icon, getRedirect }) => (
-                              <Button
-                                key={label}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await getRedirect(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                Add {label}
-                              </Button>
-                            ))}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setCustomIntegrationType('ticketing');
-                                setEditingCustomIntegration(null);
-                                setCustomIntegrationName('');
-                                setCustomIntegrationWebhookUrl('');
-                                setCustomIntegrationIconFile(null);
-                                setCustomIntegrationIconPreview(null);
-                                setCustomIntegrationSecret(null);
-                                setShowCustomIntegrationSidepanel(true);
-                              }}
-                            >
-                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                              Add Custom
-                            </Button>
-                          </div>
-                        </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                    <td className="px-4 py-3 text-right"><div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" /></td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {ticketingConnections.length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No ticketing integrations. Add Jira or Linear above to create issues automatically.
-                                    </td>
-                                  </tr>
-                                ) : ticketingConnections.map((conn) => {
-                                      const isCustom = conn.provider === 'custom_ticketing';
-                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
-                                      const providerLabel = isCustom
-                                        ? 'Custom'
-                                        : conn.provider === 'jira'
-                                          ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira')
-                                          : conn.provider === 'linear' ? 'Linear' : conn.provider;
-                                      const providerIconSrc = !isCustom
-                                        ? (conn.provider === 'jira' ? '/images/integrations/jira.png'
-                                          : conn.provider === 'linear' ? '/images/integrations/linear.png'
-                                          : null)
-                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
-
-                                      const connectionDisplay = isCustom
-                                        ? (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook'))
-                                        : (conn.display_name || 'Connected');
-
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              {providerIconSrc ? (
-                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
-                                              ) : (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Webhook className="h-3.5 w-3.5" />
-                                                </div>
-                                              )}
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <span className="text-sm text-foreground truncate block">{connectionDisplay}</span>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                              {isCustom && (
-                                                <>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setCustomIntegrationDetailsConn(conn);
-                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
-                                                      setShowCustomIntegrationDetailsSidebar(true);
-                                                    }}
-                                                    title="View details"
-                                                  >
-                                                    <Eye className="h-3.5 w-3.5" />
-                                                  </button>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setEditingCustomIntegration(conn);
-                                                      setCustomIntegrationType('ticketing');
-                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                      setCustomIntegrationIconFile(null);
-                                                      setCustomIntegrationSecret(null);
-                                                      setShowCustomIntegrationSidepanel(true);
-                                                    }}
-                                                    title="Edit"
-                                                  >
-                                                    <Pencil className="h-3.5 w-3.5" />
-                                                  </button>
-                                                </>
-                                              )}
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={() => setConnectionToDisconnect(conn)}
+                                                <Eye className="h-3.5 w-3.5" />
+                                              </button>
+                                              <button
+                                                className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                onClick={() => {
+                                                  setEditingCustomIntegration(conn);
+                                                  setCustomIntegrationType(conn.provider === 'custom_ticketing' ? 'ticketing' : 'notification');
+                                                  setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                  setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                  setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                  setCustomIntegrationIconFile(null);
+                                                  setCustomIntegrationSecret(null);
+                                                  setShowCustomIntegrationSidepanel(true);
+                                                }}
+                                                title="Edit"
                                               >
-                                                {isCustom ? 'Remove' : 'Disconnect'}
-                                              </Button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                                                <Pencil className="h-3.5 w-3.5" />
+                                              </button>
+                                            </>
+                                          )}
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
+                                            onClick={() => setConnectionToDisconnect(conn)}
+                                          >
+                                            {isCustom || isEmail ? 'Remove' : 'Disconnect'}
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -5786,6 +5442,196 @@ export default function OrganizationSettingsPage() {
                       )}
                     </Button>
                   </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
+              {/* Add Integration Sidebar — single CTA hands off to OAuth start / dialog open / sidepanel open */}
+              <Dialog open={showAddIntegrationSidebar} onOpenChange={setShowAddIntegrationSidebar}>
+                <DialogContent
+                  hideClose
+                  className="fixed left-auto right-4 top-4 bottom-4 translate-x-0 translate-y-0 w-full max-w-[420px] h-auto bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden p-0 gap-0 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-[420px]"
+                >
+                  <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 border-b border-border">
+                    <div>
+                      <DialogTitle className="text-lg font-semibold">Add integration</DialogTitle>
+                      <DialogDescription className="mt-1 text-sm">
+                        Pick a provider to connect. We'll redirect to the host's install flow or open a setup form.
+                      </DialogDescription>
+                    </div>
+                    <button
+                      type="button"
+                      className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                      onClick={() => setShowAddIntegrationSidebar(false)}
+                      aria-label="Close"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5">
+                    {[
+                      {
+                        category: 'CI/CD',
+                        items: [
+                          { key: 'github', label: 'GitHub', description: 'Connect repositories for scanning', icon: <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('github', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start GitHub install:', err);
+                              toast({ title: 'Error', description: 'Failed to start GitHub connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'gitlab', label: 'GitLab', description: 'OAuth + webhook for push and merge events', icon: <img src="/images/integrations/gitlab.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('gitlab', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start GitLab install:', err);
+                              toast({ title: 'Error', description: 'Failed to start GitLab connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'bitbucket', label: 'Bitbucket', description: 'OAuth + webhook for push and pull request events', icon: <img src="/images/integrations/bitbucket.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('bitbucket', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Bitbucket install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Bitbucket connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Notifications',
+                        items: [
+                          { key: 'slack', label: 'Slack', description: 'Real-time alerts to a workspace channel', icon: <img src="/images/integrations/slack.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectSlackOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Slack install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Slack connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'discord', label: 'Discord', description: 'Send alerts to a Discord channel', icon: <img src="/images/integrations/discord.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectDiscordOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Discord install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Discord connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'email', label: 'Email', description: 'Notification emails to a single address', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Mail className="h-4 w-4" /></div>, onClick: () => {
+                            setShowAddIntegrationSidebar(false);
+                            setEmailToAdd('');
+                            setShowEmailDialog(true);
+                          } },
+                          { key: 'pagerduty', label: 'PagerDuty', description: 'Page on-call for critical security events', icon: <span className="h-5 w-5 flex items-center justify-center text-sm leading-none">🚨</span>, onClick: () => {
+                            setShowAddIntegrationSidebar(false);
+                            setPagerDutyServiceName('');
+                            setPagerDutyRoutingKey('');
+                            setShowPagerDutyDialog(true);
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Ticketing',
+                        items: [
+                          { key: 'jira-cloud', label: 'Jira Cloud', description: 'OAuth — create issues automatically', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectJiraOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Jira install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Jira connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'jira-dc', label: 'Jira Data Center', description: 'Self-hosted Jira via personal access token', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: () => {
+                            setShowAddIntegrationSidebar(false);
+                            setJiraPatBaseUrl('');
+                            setJiraPatToken('');
+                            setShowJiraPatDialog(true);
+                          } },
+                          { key: 'linear', label: 'Linear', description: 'Sync issues with a Linear workspace', icon: <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectLinearOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Linear install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Linear connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Custom',
+                        items: [
+                          { key: 'custom-notification', label: 'Custom notification webhook', description: 'HMAC-signed POST for security events', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, onClick: () => {
+                            setShowAddIntegrationSidebar(false);
+                            setCustomIntegrationType('notification');
+                            setEditingCustomIntegration(null);
+                            setCustomIntegrationName('');
+                            setCustomIntegrationWebhookUrl('');
+                            setCustomIntegrationIconFile(null);
+                            setCustomIntegrationIconPreview(null);
+                            setCustomIntegrationSecret(null);
+                            setShowCustomIntegrationSidepanel(true);
+                          } },
+                          { key: 'custom-ticketing', label: 'Custom ticketing webhook', description: 'HMAC-signed POST for issue routing', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, onClick: () => {
+                            setShowAddIntegrationSidebar(false);
+                            setCustomIntegrationType('ticketing');
+                            setEditingCustomIntegration(null);
+                            setCustomIntegrationName('');
+                            setCustomIntegrationWebhookUrl('');
+                            setCustomIntegrationIconFile(null);
+                            setCustomIntegrationIconPreview(null);
+                            setCustomIntegrationSecret(null);
+                            setShowCustomIntegrationSidepanel(true);
+                          } },
+                        ],
+                      },
+                    ].map((group) => (
+                      <div key={group.category}>
+                        <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-secondary">
+                          {group.category}
+                        </div>
+                        <ul className="space-y-0.5">
+                          {group.items.map((item) => (
+                            <li key={item.key}>
+                              <button
+                                type="button"
+                                onClick={item.onClick}
+                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md hover:bg-background-subtle transition-colors text-left group"
+                              >
+                                <span className="flex-shrink-0">{item.icon}</span>
+                                <span className="flex-1 min-w-0">
+                                  <span className="block text-sm font-medium text-foreground truncate">{item.label}</span>
+                                  <span className="block text-xs text-foreground-secondary truncate">{item.description}</span>
+                                </span>
+                                <ChevronRight className="h-4 w-4 text-foreground-secondary opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
                 </DialogContent>
               </Dialog>
 
