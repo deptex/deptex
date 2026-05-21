@@ -4,6 +4,8 @@
 .tmp-results/
 .test-results/
 extraction-results/
+extraction-out-smoke/
+smoke-fixture/
 test-*-results/
 test-output-*/
 out/

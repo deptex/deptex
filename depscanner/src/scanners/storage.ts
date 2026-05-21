@@ -229,6 +229,85 @@ export async function upsertContainerFindings(
 }
 
 // ============================================================================
+// project_native_bindings — SONAME bridge rows (Item G)
+// ============================================================================
+// Two scopes share one table:
+//   'language' — Python wheel / Node native module → DT_NEEDED soname.
+//   'os'       — dpkg-managed binary's own DT_SONAME.
+// composition.ts pairs them on `soname` to derive PCF↔PDV edges.
+
+type NativeBindingScope = 'language' | 'os';
+type NativeBindingLinkMethod =
+  | 'elf_needed'
+  | 'dpkg_soname'
+  | 'elf_dlopen'
+  | 'ctypes_grep'
+  | 'apk_provided'
+  | 'rpm_provided';
+
+export interface NativeBindingInsert {
+  scope: NativeBindingScope;
+  package_identifier: string;
+  package_ecosystem: string | null;
+  soname: string;
+  install_path: string;
+  link_method: NativeBindingLinkMethod;
+}
+
+interface NativeBindingRow extends Record<string, unknown> {
+  project_id: string;
+  extraction_run_id: string;
+  scope: NativeBindingScope;
+  package_identifier: string;
+  package_ecosystem: string | null;
+  soname: string;
+  install_path: string;
+  link_method: NativeBindingLinkMethod;
+  extractor_version: string;
+}
+
+/**
+ * Bulk upsert SONAME bridge rows. Tenant-derived organization_id is set
+ * by the `project_native_bindings_enforce_org_id` trigger from projects.
+ */
+export async function upsertNativeBindings(
+  supabase: SupabaseClient,
+  projectId: string,
+  runId: string,
+  bindings: NativeBindingInsert[],
+  extractorVersion = 'v1'
+): Promise<UpsertResult> {
+  if (bindings.length === 0) return { inserted: 0, staleDeleted: 0 };
+  const rows: NativeBindingRow[] = bindings.map((b) => ({
+    project_id: projectId,
+    extraction_run_id: runId,
+    scope: b.scope,
+    package_identifier: b.package_identifier,
+    package_ecosystem: b.package_ecosystem,
+    soname: b.soname,
+    // empty string sentinel — see migration comment in phase30
+    install_path: b.install_path ?? '',
+    link_method: b.link_method,
+    extractor_version: extractorVersion,
+  }));
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const { error } = await supabase
+      .from('project_native_bindings')
+      .upsert(batch, {
+        onConflict:
+          'extraction_run_id,scope,package_identifier,soname,install_path',
+      });
+    if (error) {
+      throw new Error(`upsertNativeBindings batch ${i}: ${error.message}`);
+    }
+    inserted += batch.length;
+  }
+  return { inserted, staleDeleted: 0 };
+}
+
+// ============================================================================
 // project_base_image_recommendations — one card per Dockerfile per run
 // ============================================================================
 

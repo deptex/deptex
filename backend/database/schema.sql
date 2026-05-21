@@ -958,6 +958,19 @@ CREATE TABLE IF NOT EXISTS public.project_commits (
   provider_url text,
   created_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.project_composition_partners (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  container_finding_id uuid NOT NULL,
+  pdv_id uuid NOT NULL,
+  container_reachability_multiplier numeric(4,3) NOT NULL,
+  code_reachability_multiplier numeric(4,3) NOT NULL,
+  composition_factor numeric(4,3) NOT NULL,
+  bindings_evidence jsonb NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_configured_images (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -983,7 +996,7 @@ CREATE TABLE IF NOT EXISTS public.project_container_findings (
   os_package_ecosystem text,
   osv_id text,
   cve_id text,
-  vulnerability_id text NOT NULL,
+  vulnerability_id text NOT NULL GENERATED ALWAYS AS (COALESCE(osv_id, cve_id, ('unknown:'::text || md5(((((image_digest || ':'::text) || os_package_name) || ':'::text) || os_package_version))))) STORED,
   severity text,
   cvss_score numeric(4,1),
   epss_score numeric(8,6),
@@ -1172,7 +1185,8 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_vulnerabilities (
   re_review_reasons jsonb,
   runtime_confirmed_at timestamp with time zone,
   runtime_confirmed_dast_finding_id uuid,
-  runtime_confirmed_prior_level text
+  runtime_confirmed_prior_level text,
+  composition_factor numeric(4,3)
 );
 CREATE TABLE IF NOT EXISTS public.project_entry_points (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1203,7 +1217,7 @@ CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   framework text NOT NULL,
   file_path text NOT NULL,
   start_line integer,
-  start_line_key integer NOT NULL,
+  start_line_key integer NOT NULL GENERATED ALWAYS AS (COALESCE(start_line, '-1'::integer)) STORED,
   end_line integer,
   severity text,
   depscore integer,
@@ -1274,6 +1288,20 @@ CREATE TABLE IF NOT EXISTS public.project_members (
   role_id uuid NOT NULL,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.project_native_bindings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  scope text NOT NULL,
+  package_identifier text NOT NULL,
+  package_ecosystem text,
+  soname text NOT NULL,
+  install_path text NOT NULL DEFAULT ''::text,
+  link_method text NOT NULL,
+  extractor_version text NOT NULL DEFAULT 'v1'::text,
+  discovered_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_notification_rules (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1999,6 +2027,37 @@ BEGIN
   END IF;
   
   RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.apply_composition_results(p_project_id uuid, p_run_id text, p_updates jsonb)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+DECLARE
+  updated_count integer;
+BEGIN
+  WITH updates AS (
+    SELECT (e->>'pdv_id')::uuid  AS pdv_id,
+           (e->>'factor')::numeric AS factor
+      FROM jsonb_array_elements(p_updates) e
+  ),
+  result AS (
+    UPDATE public.project_dependency_vulnerabilities pdv
+       SET composition_factor = u.factor,
+           contextual_depscore = ROUND(pdv.contextual_depscore * u.factor, 4)
+      FROM updates u
+     WHERE pdv.id = u.pdv_id
+       AND pdv.project_id = p_project_id
+       AND pdv.extraction_run_id = p_run_id
+       AND pdv.contextual_depscore IS NOT NULL
+    RETURNING 1
+  )
+  SELECT count(*) INTO updated_count FROM result;
+  RETURN updated_count;
 END;
 $function$
 ;
@@ -3542,6 +3601,27 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.enforce_composition_same_project()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  pcf_project UUID;
+  pdv_project UUID;
+BEGIN
+  SELECT project_id INTO pcf_project FROM public.project_container_findings WHERE id = NEW.container_finding_id;
+  SELECT project_id INTO pdv_project FROM public.project_dependency_vulnerabilities WHERE id = NEW.pdv_id;
+  IF pcf_project IS NULL OR pdv_project IS NULL THEN
+    RAISE EXCEPTION 'composition partner finding not found (pcf=% pdv=%)', NEW.container_finding_id, NEW.pdv_id;
+  END IF;
+  IF pcf_project != pdv_project OR pcf_project != NEW.project_id THEN
+    RAISE EXCEPTION 'composition partner findings must belong to same project';
+  END IF;
+  RETURN NEW;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.enforce_finding_org_id()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -4180,7 +4260,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.get_project_vulnerabilities_from_pdv(p_project_id uuid)
- RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, entry_point_classification text, epd_status text, sla_status text, sla_deadline_at timestamp with time zone)
+ RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, entry_point_classification text, epd_status text, sla_status text, sla_deadline_at timestamp with time zone, composition_factor numeric)
  LANGUAGE sql
  STABLE
 AS $function$
@@ -4209,7 +4289,8 @@ AS $function$
     pdv.entry_point_classification,
     pdv.epd_status,
     pdv.sla_status,
-    pdv.sla_deadline_at
+    pdv.sla_deadline_at,
+    pdv.composition_factor
   FROM project_dependency_vulnerabilities pdv
   INNER JOIN project_dependencies pd
     ON pd.id = pdv.project_dependency_id
@@ -4892,7 +4973,11 @@ AS $function$
         ELSE c.data_type
       END ||
       CASE WHEN c.is_nullable = 'NO' THEN ' NOT NULL' ELSE '' END ||
-      COALESCE(' DEFAULT ' || c.column_default, ''),
+      CASE
+        WHEN c.is_generated = 'ALWAYS' AND c.generation_expression IS NOT NULL
+          THEN ' GENERATED ALWAYS AS (' || c.generation_expression || ') STORED'
+        ELSE COALESCE(' DEFAULT ' || c.column_default, '')
+      END,
       E',\n' ORDER BY c.ordinal_position) || E'\n);' AS ddl
   FROM information_schema.columns c
   WHERE c.table_schema = 'public'
@@ -6075,6 +6160,7 @@ ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_
 ALTER TABLE public.policy_evaluation_jobs ADD CONSTRAINT policy_evaluation_jobs_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_base_image_recommendations ADD CONSTRAINT project_base_image_recommendations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_pkey PRIMARY KEY (id);
@@ -6090,6 +6176,7 @@ ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_policy_exceptions ADD CONSTRAINT project_policy_exceptions_pkey PRIMARY KEY (id);
@@ -6172,6 +6259,7 @@ ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key U
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
 ALTER TABLE public.project_base_image_recommendations ADD CONSTRAINT pbir_uniq UNIQUE (project_id, extraction_run_id, dockerfile_path);
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_extraction_run_id_container_fi_key UNIQUE (extraction_run_id, container_finding_id, pdv_id);
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_target_id_key UNIQUE (target_id);
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_project_id_target_url_key UNIQUE (project_id, target_url);
@@ -6182,6 +6270,7 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extract
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_extraction_run_id_scope_package_ide_key UNIQUE (extraction_run_id, scope, package_identifier, soname, install_path);
 ALTER TABLE public.project_pr_guardrails ADD CONSTRAINT project_pr_guardrails_project_id_key UNIQUE (project_id);
 ALTER TABLE public.project_reachable_flow_suppressions ADD CONSTRAINT project_reachable_flow_suppressions_unique UNIQUE (project_id, flow_signature_hash);
 ALTER TABLE public.project_reachable_flows ADD CONSTRAINT project_reachable_flows_source_dedup_key UNIQUE NULLS NOT DISTINCT (project_id, extraction_run_id, purl, entry_point_file, entry_point_line, sink_method, osv_id, rule_id);
@@ -6281,6 +6370,8 @@ ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scan
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_reachability_chk CHECK (((reachability_level IS NULL) OR (reachability_level = ANY (ARRAY['unimported'::text, 'imported_unused'::text, 'module'::text, 'function'::text]))));
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_scanner_check CHECK ((scanner = ANY (ARRAY['feed'::text, 'guarddog'::text, 'maintainer'::text])));
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_link_method_check CHECK ((link_method = ANY (ARRAY['elf_needed'::text, 'dpkg_soname'::text, 'elf_dlopen'::text, 'ctypes_grep'::text, 'apk_provided'::text, 'rpm_provided'::text])));
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_scope_check CHECK ((scope = ANY (ARRAY['language'::text, 'os'::text])));
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['weekly_digest'::text, 'custom_code_pipeline'::text])));
 ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_code_type_check CHECK ((code_type = ANY (ARRAY['package_policy'::text, 'project_status'::text, 'pr_check'::text])));
 ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])));
@@ -6426,6 +6517,10 @@ ALTER TABLE public.project_base_image_recommendations ADD CONSTRAINT project_bas
 ALTER TABLE public.project_base_image_recommendations ADD CONSTRAINT project_base_image_recommendations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_base_image_recommendations ADD CONSTRAINT project_base_image_recommendations_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_commits ADD CONSTRAINT project_commits_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_container_finding_id_fkey FOREIGN KEY (container_finding_id) REFERENCES project_container_findings(id) ON DELETE CASCADE;
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_pdv_id_fkey FOREIGN KEY (pdv_id) REFERENCES project_dependency_vulnerabilities(id) ON DELETE CASCADE;
+ALTER TABLE public.project_composition_partners ADD CONSTRAINT project_composition_partners_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_configured_images ADD CONSTRAINT pci_credentials_same_org_fk FOREIGN KEY (credentials_id, organization_id) REFERENCES organization_registry_credentials(id, organization_id) ON DELETE SET NULL;
 ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_configured_images ADD CONSTRAINT project_configured_images_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -6468,6 +6563,8 @@ ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_f
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES project_roles(id) ON DELETE RESTRICT;
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_notification_rules ADD CONSTRAINT project_notification_rules_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_policy_changes ADD CONSTRAINT project_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6703,6 +6800,9 @@ CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (
 CREATE INDEX idx_pci_credentials_id ON public.project_configured_images USING btree (credentials_id, organization_id) WHERE (credentials_id IS NOT NULL);
 CREATE INDEX idx_pci_org ON public.project_configured_images USING btree (organization_id);
 CREATE INDEX idx_pci_project_enabled ON public.project_configured_images USING btree (project_id, enabled) WHERE (enabled = true);
+CREATE INDEX idx_pcp_pdv_factor ON public.project_composition_partners USING btree (pdv_id, composition_factor);
+CREATE INDEX idx_pcp_run_pcf ON public.project_composition_partners USING btree (extraction_run_id, container_finding_id);
+CREATE INDEX idx_pcp_run_pdv ON public.project_composition_partners USING btree (extraction_run_id, pdv_id);
 CREATE INDEX idx_pd_namespace ON public.project_dependencies USING btree (namespace) WHERE (namespace IS NOT NULL);
 CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
@@ -6729,6 +6829,9 @@ CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btr
 CREATE INDEX idx_pmf_project_run ON public.project_malicious_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pmf_reachability ON public.project_malicious_findings USING btree (project_id, reachability_level) WHERE ((suppressed = false) AND (risk_accepted = false));
 CREATE INDEX idx_pms_lookup ON public.package_maintainer_snapshots USING btree (package_name, ecosystem, version, observed_at DESC);
+CREATE INDEX idx_pnb_run_language_pkg ON public.project_native_bindings USING btree (extraction_run_id, package_identifier) WHERE (scope = 'language'::text);
+CREATE INDEX idx_pnb_run_os_pkg ON public.project_native_bindings USING btree (extraction_run_id, package_identifier) WHERE (scope = 'os'::text);
+CREATE INDEX idx_pnb_run_soname ON public.project_native_bindings USING btree (extraction_run_id, soname text_pattern_ops);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
@@ -6914,10 +7017,13 @@ CREATE TRIGGER create_team_roles_trigger AFTER INSERT ON public.teams FOR EACH R
 CREATE TRIGGER organization_integrations_updated_at BEFORE UPDATE ON public.organization_integrations FOR EACH ROW EXECUTE FUNCTION update_organization_integrations_updated_at();
 CREATE TRIGGER pbir_set_org_id BEFORE INSERT OR UPDATE ON public.project_base_image_recommendations FOR EACH ROW EXECUTE FUNCTION enforce_pbir_org_scope();
 CREATE TRIGGER pmf_enforce_org_consistency BEFORE INSERT OR UPDATE OF organization_id, project_id ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION enforce_pmf_org_consistency();
+CREATE TRIGGER project_composition_partners_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_composition_partners FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
+CREATE TRIGGER project_composition_partners_enforce_same_project BEFORE INSERT OR UPDATE OF container_finding_id, pdv_id, project_id ON public.project_composition_partners FOR EACH ROW EXECUTE FUNCTION enforce_composition_same_project();
 CREATE TRIGGER project_configured_images_enforce_org_id BEFORE INSERT OR UPDATE ON public.project_configured_images FOR EACH ROW EXECUTE FUNCTION enforce_pci_org_id_and_null_creds();
 CREATE TRIGGER project_container_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_iac_findings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_integrations_updated_at BEFORE UPDATE ON public.project_integrations FOR EACH ROW EXECUTE FUNCTION update_project_integrations_updated_at();
+CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF project_id, organization_id ON public.project_native_bindings FOR EACH ROW EXECUTE FUNCTION enforce_finding_org_id();
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();

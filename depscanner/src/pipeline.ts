@@ -32,6 +32,7 @@ import { doRuleGeneration } from './pipeline-steps/rule-generation';
 import { doTaintEngine } from './pipeline-steps/taint-engine';
 import { doReachabilityAndEpd } from './pipeline-steps/reachability';
 import { doIaCContainer } from './pipeline-steps/iac-container';
+import { doComposition } from './pipeline-steps/composition';
 import { doMaliciousScan } from './pipeline-steps/malicious';
 import { doSemgrep } from './pipeline-steps/semgrep';
 import { doTruffleHog } from './pipeline-steps/trufflehog';
@@ -165,6 +166,15 @@ export async function runPipeline(
       // === IaC + Container scanning (OPTIONAL) ===
       if (checkCancelled && await checkCancelled()) return;
       scannerSummary = await doIaCContainer(ctx);
+
+      // === IaC↔Code reachability composition (OPTIONAL, Item G) ===
+      // Folds container OS-package reachability with code-side PDV
+      // reachability into PDV.contextual_depscore via the
+      // apply_composition_results RPC. Soft-fail: a failure here only
+      // affects PDV ranking on already-classified rows; the underlying
+      // contextual_depscore stays at its EPD-finalized value.
+      if (checkCancelled && await checkCancelled()) return;
+      await doComposition(ctx, scannerSummary);
 
       // === Malicious-package scan (OPTIONAL, soft-fail) ===
       if (checkCancelled && await checkCancelled()) return;
