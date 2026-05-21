@@ -182,19 +182,19 @@ jobs:
   reachability-corpus:
     # Scans the hand-labelled reachability corpus (8 ecosystems, 521 findings)
     # and evaluates the three acceptance gates (noise reduction >= 60%, every
-    # ecosystem > 0% unreachable, zero false negatives). Promoted from
-    # workflow_dispatch-only to PR-triggered when depscanner/** changes —
-    # the corpus is now populated across 8 ecosystems and the gates pass at
-    # 76.8% mw aggregate (v3 shipped in PR #48). `continue-on-error` is
-    # retained for a shakeout window; flip to required once we've seen it
-    # stable on a few PRs (no network flakiness from GitHub clones / OSV).
+    # ecosystem > 0% unreachable, zero false negatives).
+    #
+    # MANUAL-TRIGGER ONLY. Tried promoting to PR-triggered and it failed on
+    # the first PR (chore/ci-path-filters): 4 of 8 repos timed out / failed
+    # without a warm dep-scan VDB cache, and the 4 that completed observed
+    # 174 findings but matched 0 of the hand-labelled CVE IDs — most likely
+    # CI's cold-downloaded VDB lacks the GHSA→CVE-2026-* alias chains the
+    # corpus expects. Making this CI-honest needs real infra work: either
+    # bake the ~38GB VDB into the Docker image (image bloat) or shard the
+    # VDB into multiple GHA caches (10GB/cache, 10GB/repo limits) or pin a
+    # known-good OSV snapshot. Until that's done, this stays manual.
     name: Reachability corpus (informational)
-    needs: changes
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        (needs.changes.outputs.depscanner == 'true' ||
-         needs.changes.outputs.workflow == 'true'))
+    if: github.event_name == 'workflow_dispatch'
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
