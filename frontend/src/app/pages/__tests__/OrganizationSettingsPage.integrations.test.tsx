@@ -534,7 +534,8 @@ describe('OrganizationSettingsPage – Integrations', () => {
       await userEvent.click(within(sidebar).getByRole('button', { name: /PagerDuty/ }));
       await userEvent.type(within(sidebar).getByLabelText(/Service name/i), 'Critical Alerts');
       await userEvent.type(within(sidebar).getByLabelText(/Routing key/i), 'R0UT1NG_K3Y');
-      await userEvent.click(within(sidebar).getByRole('button', { name: 'Connect' }));
+      // Single in-row "Add" CTA — the per-provider label was normalized.
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
 
       await waitFor(() => expect(mockConnectPagerDutyOrg).toHaveBeenCalledWith('org-1', {
         serviceName: 'Critical Alerts',
@@ -551,7 +552,7 @@ describe('OrganizationSettingsPage – Integrations', () => {
       await userEvent.click(within(sidebar).getByRole('button', { name: /Jira Data Center/i }));
       await userEvent.type(within(sidebar).getByLabelText(/Server URL/i), 'https://jira.acme.com');
       await userEvent.type(within(sidebar).getByLabelText(/Personal Access Token/i), 'pat_xyz');
-      await userEvent.click(within(sidebar).getByRole('button', { name: 'Create connection' }));
+      await userEvent.click(within(sidebar).getByRole('button', { name: 'Add' }));
 
       await waitFor(() => expect(mockConnectJiraPatOrg).toHaveBeenCalledWith('org-1', 'https://jira.acme.com', 'pat_xyz'));
     });
@@ -563,11 +564,17 @@ describe('OrganizationSettingsPage – Integrations', () => {
 
       const sidebar = await openAddSidebar();
       const emailRow = within(sidebar).getByRole('button', { name: /Email/ });
-      await userEvent.click(emailRow);
-      expect(within(sidebar).getByLabelText(/Email address/i)).toBeInTheDocument();
+      // Inputs stay mounted for the open/close animation — assert visibility via
+      // the wrapper's data-state attribute, not DOM presence.
+      const emailInput = within(sidebar).getByLabelText(/Email address/i);
+      const wrapper = emailInput.closest('[data-state]') as HTMLElement | null;
+      expect(wrapper).not.toBeNull();
 
       await userEvent.click(emailRow);
-      expect(within(sidebar).queryByLabelText(/Email address/i)).not.toBeInTheDocument();
+      expect(wrapper).toHaveAttribute('data-state', 'open');
+
+      await userEvent.click(emailRow);
+      expect(wrapper).toHaveAttribute('data-state', 'closed');
     });
   });
 });

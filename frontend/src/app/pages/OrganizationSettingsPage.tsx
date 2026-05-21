@@ -2406,6 +2406,59 @@ export default function OrganizationSettingsPage() {
     }, 150);
   };
 
+  // Inline-form submit handlers — each calls its api wrapper, toasts the
+  // outcome, reloads the connections table, and animates the sidebar out.
+  const handleInlineEmailSubmit = async () => {
+    if (!organization?.id) return;
+    setEmailSaving(true);
+    try {
+      await api.createEmailNotification(organization.id, emailToAdd.trim());
+      toast({ title: 'Added', description: 'Email notification added successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to add email notification:', err);
+      toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const handleInlinePagerDutySubmit = async () => {
+    if (!organization?.id) return;
+    setPagerDutySaving(true);
+    try {
+      await api.connectPagerDutyOrg(organization.id, {
+        serviceName: pagerDutyServiceName.trim(),
+        routingKey: pagerDutyRoutingKey.trim(),
+      });
+      toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to connect PagerDuty:', err);
+      toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
+    } finally {
+      setPagerDutySaving(false);
+    }
+  };
+
+  const handleInlineJiraDcSubmit = async () => {
+    if (!organization?.id) return;
+    setJiraPatSaving(true);
+    try {
+      await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
+      toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to connect Jira PAT:', err);
+      toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
+    } finally {
+      setJiraPatSaving(false);
+    }
+  };
+
   const closeAddRolePanel = () => {
     setAddRolePanelVisible(false);
     if (addRoleCloseTimeoutRef.current) clearTimeout(addRoleCloseTimeoutRef.current);
@@ -5435,14 +5488,42 @@ export default function OrganizationSettingsPage() {
                         </div>
                         <ul className="space-y-0.5">
                           {group.items.map((item) => {
-                            const isExpanded = 'expandKey' in item && expandedAddItem === item.expandKey;
+                            const expandKey = (item as { expandKey?: 'email' | 'pagerduty' | 'jira-dc' }).expandKey;
+                            const isExpandable = expandKey !== undefined;
+                            const isExpanded = isExpandable && expandedAddItem === expandKey;
+                            // Per-expansion submit metadata — drives both the in-row Add CTA and
+                            // the disabled-validation logic when the form is open.
+                            let submitDisabled = false;
+                            let submitSaving = false;
+                            let submitFn: (() => Promise<void>) | null = null;
+                            if (expandKey === 'email') {
+                              submitDisabled = !emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving;
+                              submitSaving = emailSaving;
+                              submitFn = handleInlineEmailSubmit;
+                            } else if (expandKey === 'pagerduty') {
+                              submitDisabled = !pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving;
+                              submitSaving = pagerDutySaving;
+                              submitFn = handleInlinePagerDutySubmit;
+                            } else if (expandKey === 'jira-dc') {
+                              submitDisabled = !jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving;
+                              submitSaving = jiraPatSaving;
+                              submitFn = handleInlineJiraDcSubmit;
+                            }
+
                             return (
                               <li key={item.key}>
-                                <button
-                                  type="button"
+                                <div
+                                  role="button"
+                                  tabIndex={0}
                                   onClick={item.onClick}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      item.onClick();
+                                    }
+                                  }}
                                   className={cn(
-                                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-md hover:bg-background-subtle transition-colors text-left group',
+                                    'w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-background-subtle transition-colors text-left cursor-pointer group',
                                     isExpanded && 'bg-background-subtle'
                                   )}
                                 >
@@ -5451,189 +5532,104 @@ export default function OrganizationSettingsPage() {
                                     <span className="block text-sm font-medium text-foreground truncate">{item.label}</span>
                                     <span className="block text-xs text-foreground-secondary truncate">{item.description}</span>
                                   </span>
-                                  <ChevronRight
+                                  {isExpanded && submitFn ? (
+                                    <Button
+                                      variant="green"
+                                      disabled={submitDisabled}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (submitFn) void submitFn();
+                                      }}
+                                    >
+                                      <span className={submitSaving ? 'invisible' : ''}>Add</span>
+                                      {submitSaving && (
+                                        <span className="absolute inset-0 flex items-center justify-center">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        </span>
+                                      )}
+                                    </Button>
+                                  ) : (
+                                    <ChevronRight
+                                      className={cn(
+                                        'h-4 w-4 text-foreground-secondary transition-all flex-shrink-0',
+                                        isExpanded ? 'opacity-100 rotate-90' : 'opacity-0 group-hover:opacity-100'
+                                      )}
+                                    />
+                                  )}
+                                </div>
+
+                                {isExpandable && (
+                                  <div
+                                    data-state={isExpanded ? 'open' : 'closed'}
                                     className={cn(
-                                      'h-4 w-4 text-foreground-secondary transition-all flex-shrink-0',
-                                      isExpanded ? 'opacity-100 rotate-90' : 'opacity-0 group-hover:opacity-100'
+                                      'grid transition-[grid-template-rows] duration-200 ease-out',
+                                      isExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
                                     )}
-                                  />
-                                </button>
-
-                                {isExpanded && (
-                                  <div className="ml-8 mr-1 mt-2 mb-3 space-y-3">
-                                    {item.expandKey === 'email' && (
-                                      <>
-                                        <div className="grid gap-1.5">
-                                          <Label htmlFor="inline-email-to-add" className="text-xs">Email address</Label>
-                                          <Input
-                                            id="inline-email-to-add"
-                                            type="email"
-                                            value={emailToAdd}
-                                            onChange={(e) => setEmailToAdd(e.target.value)}
-                                            autoFocus
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-end gap-2">
-                                          <Button
-                                            variant="outline"
-                                            className="!h-8 !px-3 !rounded-lg"
-                                            onClick={() => setExpandedAddItem(null)}
-                                            disabled={emailSaving}
-                                          >
-                                            Cancel
-                                          </Button>
-                                          <Button
-                                            variant="green"
-                                            disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
-                                            onClick={async () => {
-                                              if (!organization?.id) return;
-                                              setEmailSaving(true);
-                                              try {
-                                                await api.createEmailNotification(organization.id, emailToAdd.trim());
-                                                toast({ title: 'Added', description: 'Email notification added successfully.' });
-                                                await loadConnections();
-                                                closeAddIntegrationSidebar();
-                                              } catch (err) {
-                                                console.error('Failed to add email notification:', err);
-                                                toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
-                                              } finally {
-                                                setEmailSaving(false);
-                                              }
-                                            }}
-                                          >
-                                            <span className={emailSaving ? 'invisible' : ''}>Add</span>
-                                            {emailSaving && (
-                                              <span className="absolute inset-0 flex items-center justify-center">
-                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                              </span>
-                                            )}
-                                          </Button>
-                                        </div>
-                                      </>
-                                    )}
-
-                                    {item.expandKey === 'pagerduty' && (
-                                      <>
-                                        <div className="grid gap-1.5">
-                                          <Label htmlFor="inline-pd-service-name" className="text-xs">Service name</Label>
-                                          <Input
-                                            id="inline-pd-service-name"
-                                            value={pagerDutyServiceName}
-                                            onChange={(e) => setPagerDutyServiceName(e.target.value)}
-                                            autoFocus
-                                          />
-                                        </div>
-                                        <div className="grid gap-1.5">
-                                          <Label htmlFor="inline-pd-routing-key" className="text-xs">Routing key</Label>
-                                          <Input
-                                            id="inline-pd-routing-key"
-                                            type="password"
-                                            value={pagerDutyRoutingKey}
-                                            onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
-                                          />
-                                          <p className="text-[11px] text-foreground-secondary">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
-                                        </div>
-                                        <div className="flex items-center justify-end gap-2">
-                                          <Button
-                                            variant="outline"
-                                            className="!h-8 !px-3 !rounded-lg"
-                                            onClick={() => setExpandedAddItem(null)}
-                                            disabled={pagerDutySaving}
-                                          >
-                                            Cancel
-                                          </Button>
-                                          <Button
-                                            variant="green"
-                                            disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
-                                            onClick={async () => {
-                                              if (!organization?.id) return;
-                                              setPagerDutySaving(true);
-                                              try {
-                                                await api.connectPagerDutyOrg(organization.id, {
-                                                  serviceName: pagerDutyServiceName.trim(),
-                                                  routingKey: pagerDutyRoutingKey.trim(),
-                                                });
-                                                toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
-                                                await loadConnections();
-                                                closeAddIntegrationSidebar();
-                                              } catch (err) {
-                                                console.error('Failed to connect PagerDuty:', err);
-                                                toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
-                                              } finally {
-                                                setPagerDutySaving(false);
-                                              }
-                                            }}
-                                          >
-                                            <span className={pagerDutySaving ? 'invisible' : ''}>Connect</span>
-                                            {pagerDutySaving && (
-                                              <span className="absolute inset-0 flex items-center justify-center">
-                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                              </span>
-                                            )}
-                                          </Button>
-                                        </div>
-                                      </>
-                                    )}
-
-                                    {item.expandKey === 'jira-dc' && (
-                                      <>
-                                        <div className="grid gap-1.5">
-                                          <Label htmlFor="inline-jira-url" className="text-xs">Server URL</Label>
-                                          <Input
-                                            id="inline-jira-url"
-                                            type="url"
-                                            value={jiraPatBaseUrl}
-                                            onChange={(e) => setJiraPatBaseUrl(e.target.value)}
-                                            autoFocus
-                                          />
-                                        </div>
-                                        <div className="grid gap-1.5">
-                                          <Label htmlFor="inline-jira-pat" className="text-xs">Personal Access Token</Label>
-                                          <Input
-                                            id="inline-jira-pat"
-                                            type="password"
-                                            value={jiraPatToken}
-                                            onChange={(e) => setJiraPatToken(e.target.value)}
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-end gap-2">
-                                          <Button
-                                            variant="outline"
-                                            className="!h-8 !px-3 !rounded-lg"
-                                            onClick={() => setExpandedAddItem(null)}
-                                            disabled={jiraPatSaving}
-                                          >
-                                            Cancel
-                                          </Button>
-                                          <Button
-                                            variant="green"
-                                            disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
-                                            onClick={async () => {
-                                              if (!organization?.id) return;
-                                              setJiraPatSaving(true);
-                                              try {
-                                                await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
-                                                toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
-                                                await loadConnections();
-                                                closeAddIntegrationSidebar();
-                                              } catch (err) {
-                                                console.error('Failed to connect Jira PAT:', err);
-                                                toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
-                                              } finally {
-                                                setJiraPatSaving(false);
-                                              }
-                                            }}
-                                          >
-                                            <span className={jiraPatSaving ? 'invisible' : ''}>Create connection</span>
-                                            {jiraPatSaving && (
-                                              <span className="absolute inset-0 flex items-center justify-center">
-                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                              </span>
-                                            )}
-                                          </Button>
-                                        </div>
-                                      </>
-                                    )}
+                                  >
+                                    <div className="overflow-hidden">
+                                      <div className="px-3 pt-2 pb-3 space-y-3">
+                                        {expandKey === 'email' && (
+                                          <div className="grid gap-1.5">
+                                            <Label htmlFor="inline-email-to-add" className="text-xs">Email address</Label>
+                                            <Input
+                                              id="inline-email-to-add"
+                                              type="email"
+                                              value={emailToAdd}
+                                              onChange={(e) => setEmailToAdd(e.target.value)}
+                                              className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                            />
+                                          </div>
+                                        )}
+                                        {expandKey === 'pagerduty' && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-pd-service-name" className="text-xs">Service name</Label>
+                                              <Input
+                                                id="inline-pd-service-name"
+                                                value={pagerDutyServiceName}
+                                                onChange={(e) => setPagerDutyServiceName(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-pd-routing-key" className="text-xs">Routing key</Label>
+                                              <Input
+                                                id="inline-pd-routing-key"
+                                                type="password"
+                                                value={pagerDutyRoutingKey}
+                                                onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                              <p className="text-[11px] text-foreground-secondary">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
+                                            </div>
+                                          </>
+                                        )}
+                                        {expandKey === 'jira-dc' && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-jira-url" className="text-xs">Server URL</Label>
+                                              <Input
+                                                id="inline-jira-url"
+                                                type="url"
+                                                value={jiraPatBaseUrl}
+                                                onChange={(e) => setJiraPatBaseUrl(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-jira-pat" className="text-xs">Personal Access Token</Label>
+                                              <Input
+                                                id="inline-jira-pat"
+                                                type="password"
+                                                value={jiraPatToken}
+                                                onChange={(e) => setJiraPatToken(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
                                 )}
                               </li>
