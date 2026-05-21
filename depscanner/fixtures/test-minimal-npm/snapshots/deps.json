@@ -11,6 +11,7 @@
     "is_outdated": false,
     "versions_behind": 0,
     "policy_result": null,
-    "namespace": ""
+    "namespace": "",
+    "callgraph_reached": false
   }
 ]
