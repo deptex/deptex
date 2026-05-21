@@ -166,7 +166,7 @@ describe('diffSnapshots bootstrap behavior', () => {
     update: false,
     diffOnly: false,
     maxDiff: DEFAULT_MAX_DIFF,
-    fixtureIgnore: new Set<string>(),
+    fixtureIgnore: { fields: new Set<string>(), files: new Set<string>() },
   };
 
   beforeEach(() => {

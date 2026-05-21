@@ -1,4 +1,6 @@
 {
-  "_comment": "Per-fixture ignore list (merged with DEFAULT_IGNORE_FIELDS in test/snapshot.ts). `active` and `previous` appear only inside finalize_summary.reap and are run-id strings the CLI mints fresh on every invocation (see schema.sql reap_old_extractions). The top-level *_extraction_run_id columns are already ignored globally; these are aliased copies inside the reap JSONB.",
-  "ignore_fields": ["active", "previous"]
+  "_comment_fields": "Per-fixture ignore list (merged with DEFAULT_IGNORE_FIELDS in test/snapshot.ts). `active` and `previous` appear only inside finalize_summary.reap and are run-id strings the CLI mints fresh on every invocation (see schema.sql reap_old_extractions). The top-level *_extraction_run_id columns are already ignored globally; these are aliased copies inside the reap JSONB. `vulnerabilities_count` and `vulns_new` are stripped because the vuln count depends on live OSV / dep-scan VDB data the CI environment cannot reliably reach — see ignore_files note below.",
+  "_comment_files": "test-minimal-npm scans lodash@4.17.20 for vulnerabilities. Locally with a warm ~/.deptex/vdb (~38GB) this finds 5 lodash CVEs. In CI without that cache the lookup returns empty, so vulns.json drifts to length 0 in CI but length 5 locally. Skipping vulns.json entirely keeps the rest of the snapshot (SBOM, reachability, semgrep, secrets, finalize summary) under test while removing the live-data dependency. Same CI-vs-local data-source asymmetry we documented for reachability-corpus.",
+  "ignore_fields": ["active", "previous", "vulnerabilities_count", "vulns_new"],
+  "ignore_files": ["vulns.json"]
 }

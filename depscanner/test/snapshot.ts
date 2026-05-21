@@ -435,7 +435,7 @@ export interface DiffOptions {
   diffOnly: boolean;
   /** Per-file diff truncation cap. 0 = unlimited. */
   maxDiff: number;
-  fixtureIgnore: Set<string>;
+  fixtureIgnore: FixtureIgnore;
 }
 
 export interface DiffResult {
@@ -453,6 +453,7 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
   const outputs = fs
     .readdirSync(resultDir)
     .filter((f) => f.endsWith('.json'))
+    .filter((f) => !opts.fixtureIgnore.files.has(f))
     .sort();
 
   if (opts.update) {
@@ -460,7 +461,7 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
     for (const file of outputs) {
       const src = path.join(resultDir, file);
       const dst = path.join(snapshotDir, file);
-      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore);
+      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore.fields);
       writeJson(dst, redacted);
     }
     return { ok: true, message: `updated ${outputs.length} snapshot(s)` };
@@ -492,7 +493,7 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
     for (const file of outputs) {
       const src = path.join(resultDir, file);
       const dst = path.join(snapshotDir, file);
-      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore);
+      const redacted = stripIgnored(readJson(src), opts.fixtureIgnore.fields);
       writeJson(dst, redacted);
     }
     return {
@@ -507,7 +508,7 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
   for (const file of outputs) {
     const actual = stripIgnored(
       readJson(path.join(resultDir, file)),
-      opts.fixtureIgnore,
+      opts.fixtureIgnore.fields,
     );
     const expectedPath = path.join(snapshotDir, file);
     if (!fs.existsSync(expectedPath)) {
@@ -524,7 +525,10 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
       }
       continue;
     }
-    const expected = readJson(expectedPath);
+    // Strip the expected snapshot with the same ignore list as `actual` so a
+    // newly-added ignore_fields/ignore_files entry takes effect immediately,
+    // without requiring contributors to rewrite every committed snapshot.
+    const expected = stripIgnored(readJson(expectedPath), opts.fixtureIgnore.fields);
     const diff = diffJson(expected, actual);
     if (diff.length > 0) {
       changedFiles++;
@@ -560,17 +564,32 @@ export function diffSnapshots(resultDir: string, snapshotDir: string, opts: Diff
   return { ok: true, message: `${outputs.length} file(s) match snapshot` };
 }
 
-function loadFixtureIgnore(workspacePath: string): Set<string> {
+interface FixtureIgnore {
+  /** Field names stripped from every JSON before diffing. */
+  fields: Set<string>;
+  /** Output filenames skipped entirely — for outputs that depend on
+   *  live data the CI environment can't reach (e.g. vulns.json on a
+   *  fixture whose value is "scan against live OSV"; CI without warm
+   *  dep-scan VDB returns empty where local returns N findings). */
+  files: Set<string>;
+}
+
+function loadFixtureIgnore(workspacePath: string): FixtureIgnore {
+  const empty: FixtureIgnore = { fields: new Set(), files: new Set() };
   const ignorePath = path.join(workspacePath, 'snapshot-ignore.json');
-  if (!fs.existsSync(ignorePath)) return new Set();
+  if (!fs.existsSync(ignorePath)) return empty;
   try {
     const raw = JSON.parse(fs.readFileSync(ignorePath, 'utf8')) as {
       ignore_fields?: string[];
+      ignore_files?: string[];
     };
-    return new Set(raw.ignore_fields ?? []);
+    return {
+      fields: new Set(raw.ignore_fields ?? []),
+      files: new Set(raw.ignore_files ?? []),
+    };
   } catch (e: any) {
     console.warn(`  warn: failed to parse ${ignorePath}: ${e.message}`);
-    return new Set();
+    return empty;
   }
 }
 
