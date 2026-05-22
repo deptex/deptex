@@ -76,14 +76,16 @@ frontend/src/
 
 ## RBAC & Permissions
 
-**Organization roles** (`organization_roles.permissions` JSONB):
-- `manage_teams_and_projects`, `view_all_teams_and_projects`, `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `view_activities`
+**Roles are permission bundles, not a fixed ladder.** Each role is a row in `organization_roles` (org-scoped) carrying a `permissions` JSONB; `organization_members.role` stores the role *name*. `owner` is the only structural role — all permissions, cannot be removed. Org creation seeds exactly two default roles, `owner` and `member`; **there is no built-in `admin` role**, and orgs add/rename/delete their own roles freely. Authorize by checking the relevant permission key in the role's `permissions` JSONB (`owner` always passes) — never by matching a role *name* (`role === 'admin'` is a legacy bug: a non-existent role name).
+
+**Organization permission keys** (`organization_roles.permissions` JSONB):
+- `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `manage_teams_and_projects`, `view_all_teams_and_projects`, `view_settings`, `view_activity`, `view_members`, `add_members`, `kick_members`, `edit_roles`, `edit_permissions`
 - AI & Aegis: `interact_with_aegis`, `manage_aegis`, `trigger_fix`, `view_ai_spending`, `manage_incidents`
 
 **Team roles** (`team_roles.permissions` JSONB):
 - `manage_projects`, `manage_members`, `manage_settings`, `manage_integrations`, `manage_notifications`
 
-**Defaults:** Owner (all), Admin (all except transfer), Member (view only)
+Note: `owner` is the only role guaranteed by name. The org-identity edits in General settings (name / avatar / transfer / delete) are owner-only.
 
 ---
 
@@ -145,6 +147,7 @@ PR -> check runs + smart comments + policy engine + PR tracking
 | Variable | Purpose |
 |----------|---------|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` | Database, auth, realtime, storage |
+| `SUPABASE_JWT_SECRET` | Project JWT secret (HS256). When set, the auth middleware verifies access tokens locally instead of calling the Supabase auth server — one fewer round trip per request. Falls back to `getUser` when unset. |
 | `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` | Async job dispatch |
 | `UPSTASH_REDIS_URL`, `UPSTASH_REDIS_TOKEN` | Caching, job queues |
 | `FLY_API_TOKEN`, `FLY_DEPSCANNER_APP` (fallback: `FLY_EXTRACTION_APP`), `FLY_FIX_APP` | Worker machine management |

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
-import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Plus, X, Loader2 } from 'lucide-react';
+import { Search, Link as LinkIcon, MoreVertical, Mail, Check, Loader2, Users } from 'lucide-react';
 import { api, OrganizationMember, OrganizationInvitation, Team, Organization, OrganizationRole, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
+import { UserAvatar } from '../../components/Avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -67,6 +68,10 @@ export default function MembersPage({
   const [inviting, setInviting] = useState(false);
   const [changingRole, setChangingRole] = useState(false);
   const [addingToTeam, setAddingToTeam] = useState(false);
+  // Per-invitation set of IDs currently being resent — drives the
+  // "Resending..." spinner in the status cell and disables the dropdown item
+  // so a long network trip can't be triggered twice in a row.
+  const [resendingInvitationIds, setResendingInvitationIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string>('all');
@@ -197,10 +202,11 @@ export default function MembersPage({
         }
       }
     } catch (error: any) {
-      console.error('Failed to load data:', error);
+      console.error('Failed to load members data:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to load data',
+        description: 'Failed to load members. Please refresh the page.',
+        variant: 'destructive',
       });
     } finally {
       setLoading(false);
@@ -208,12 +214,16 @@ export default function MembersPage({
   };
 
   const getAllRoles = () => {
+    // customRoles comes from organization_roles in the DB and carries the
+    // `color` + `display_name` + `permissions` fields that the badge renderer
+    // needs. Put it FIRST in the dedup so the DB record wins over the
+    // bare-bones defensive fallback below — otherwise the dropdown loses
+    // its badge colors for owner/member, which DO exist in the DB.
     const defaultRoles = [
       { name: 'owner', is_default: true },
       { name: 'member', is_default: true },
     ];
-    // Combine and deduplicate by name
-    const allRoles = [...defaultRoles, ...customRoles];
+    const allRoles = [...customRoles, ...defaultRoles];
     const uniqueRoles = allRoles.filter((role, index, self) =>
       index === self.findIndex(r => r.name === role.name)
     );
@@ -334,7 +344,8 @@ export default function MembersPage({
         description: 'Invitation sent successfully',
       });
     } catch (error: any) {
-      // Check if it's a duplicate invitation error
+      // Surface the duplicate case in friendly copy; bury anything else as a
+      // generic toast and log the real error.
       if (error.message?.includes('Already invited this person')) {
         toast({
           title: 'Already Invited',
@@ -342,9 +353,10 @@ export default function MembersPage({
           variant: 'destructive',
         });
       } else {
+        console.error('Failed to send invitation:', error);
         toast({
           title: 'Error',
-          description: error.message || 'Failed to send invitation',
+          description: 'Failed to send invitation. Please try again.',
           variant: 'destructive',
         });
       }
@@ -373,6 +385,7 @@ export default function MembersPage({
     try {
       await api.cancelInvitation(id, invitationId);
     } catch (error: any) {
+      console.error('Failed to cancel invitation:', error);
       // Restore invitation on error
       setInvitations(prev => {
         // Check if it's not already there (avoid duplicates)
@@ -386,7 +399,7 @@ export default function MembersPage({
 
       toast({
         title: 'Error',
-        description: error.message || 'Failed to cancel invitation',
+        description: 'Failed to cancel invitation. Please try again.',
         variant: 'destructive',
       });
     }
@@ -417,9 +430,10 @@ export default function MembersPage({
         description: 'Member role updated successfully',
       });
     } catch (error: any) {
+      console.error('Failed to update member role:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to update member role',
+        description: 'Failed to update member role. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -473,9 +487,10 @@ export default function MembersPage({
         description: `Member added to ${selectedTeamIds.length} team${selectedTeamIds.length > 1 ? 's' : ''}`,
       });
     } catch (error: any) {
+      console.error('Failed to add member to teams:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to add member to teams',
+        description: 'Failed to add member to teams. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -505,9 +520,14 @@ export default function MembersPage({
       return;
     }
 
-    // For removing others, use optimistic update
-    // Optimistically remove member immediately
-    setMembers(prev => prev.filter(member => member.user_id !== memberToRemove.user_id));
+    // For removing others, use optimistic update.
+    // Mirror the optimistic state into the parent so its members cache
+    // (orgMembersCache + localStorage) doesn't keep the removed row.
+    setMembers(prev => {
+      const next = prev.filter(member => member.user_id !== memberToRemove.user_id);
+      onMembersUpdate?.(next);
+      return next;
+    });
 
     // Show success immediately
     toast({
@@ -523,20 +543,19 @@ export default function MembersPage({
     try {
       await api.removeMember(id, memberToRemove.user_id);
     } catch (error: any) {
+      console.error('Failed to remove member:', error);
       // Restore member on error
       setMembers(prev => {
-        // Check if it's not already there (avoid duplicates)
-        if (!prev.find(m => m.user_id === memberToRemove.user_id)) {
-          return [...prev, memberToRemove].sort((a, b) =>
-            a.email.localeCompare(b.email)
-          );
-        }
-        return prev;
+        const restored = prev.find(m => m.user_id === memberToRemove.user_id)
+          ? prev
+          : [...prev, memberToRemove].sort((a, b) => a.email.localeCompare(b.email));
+        onMembersUpdate?.(restored);
+        return restored;
       });
 
       toast({
         title: 'Error',
-        description: error.message || 'Failed to remove member',
+        description: 'Failed to remove member. Please try again.',
         variant: 'destructive',
       });
     }
@@ -544,6 +563,13 @@ export default function MembersPage({
 
   const handleResendInvitation = async (invitationId: string) => {
     if (!id) return;
+    if (resendingInvitationIds.has(invitationId)) return; // guard against double-tap
+
+    setResendingInvitationIds(prev => {
+      const next = new Set(prev);
+      next.add(invitationId);
+      return next;
+    });
 
     try {
       await api.resendInvitation(id, invitationId);
@@ -553,9 +579,17 @@ export default function MembersPage({
         description: 'Invitation resent',
       });
     } catch (error: any) {
+      console.error('Failed to resend invitation:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to resend invitation',
+        description: 'Failed to resend invitation. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setResendingInvitationIds(prev => {
+        const next = new Set(prev);
+        next.delete(invitationId);
+        return next;
       });
     }
   };
@@ -636,11 +670,7 @@ export default function MembersPage({
             </button>
           </div>
           {!isSettingsSubpage && (
-            <Button
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
-              disabled
-            >
-              <Plus className="h-4 w-4 mr-2" />
+            <Button variant="green" className="mb-1" disabled>
               Invite
             </Button>
           )}
@@ -750,9 +780,9 @@ export default function MembersPage({
         {!isSettingsSubpage && (
           <Button
             onClick={() => setShowInviteModal(true)}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm mb-1"
+            variant="green"
+            className="mb-1"
           >
-            <Plus className="h-4 w-4 mr-2" />
             Invite
           </Button>
         )}
@@ -775,7 +805,7 @@ export default function MembersPage({
                 searchInputRef.current?.blur();
               }
             }}
-            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${searchQuery ? 'pr-14' : 'pr-4'}`}
+            className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input ${searchQuery ? 'pr-14' : 'pr-4'}`}
           />
           {searchQuery && (
             <button
@@ -856,23 +886,37 @@ export default function MembersPage({
               </thead>
               <tbody className="divide-y divide-border">
               {filteredMembers.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                    No members matched this search.
+                // data-no-hover opts out of the global `table tbody tr:hover`
+                // rule in Main.css — that selector has higher specificity than
+                // any Tailwind hover utility so `!important` alone can't beat
+                // it; we extend its :not() chain instead.
+                <tr data-no-hover>
+                  <td colSpan={3} className="px-4 py-8">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Users className="h-5 w-5 text-foreground-secondary" />
+                      </div>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">
+                        {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                          ? 'No members match your filters'
+                          : 'No members yet'}
+                      </h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        {searchQuery || selectedRoleFilter !== 'all' || selectedTeamFilter !== 'all'
+                          ? 'Try a different search or clear the filters.'
+                          : 'Invite teammates to join this organization.'}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : filteredMembers.map((member) => (
                 <tr key={member.user_id} className="hover:bg-table-hover transition-colors">
                   <td className="px-4 py-3 min-w-0 overflow-hidden">
                     <div className="flex items-center gap-3 min-w-0">
-                      <img
-                        src={member.avatar_url || '/images/blank_profile_image.png'}
+                      <UserAvatar
+                        src={member.avatar_url}
                         alt={member.full_name || member.email}
                         className="h-10 w-10 rounded-full object-cover border border-border"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          e.currentTarget.src = '/images/blank_profile_image.png';
-                        }}
                       />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-foreground truncate flex items-center gap-2">
@@ -905,10 +949,14 @@ export default function MembersPage({
                   {/* Only show dropdown if there are actions available */
                     (() => {
                       const isCurrentUser = user && member.user_id === user.id;
-                      // Fallback for permissions if user is owner (as owner should have all permissions)
+                      // Owner short-circuits every permission check.
                       const isOrgOwner = organization?.role === 'owner';
                       const canEditRoles = isOrgOwner || userRolePermissions?.edit_roles;
                       const canKickMembers = isOrgOwner || userRolePermissions?.kick_members;
+                      // Add-to-Team is a team-membership op, not a role edit — gate it
+                      // on manage_teams_and_projects (the same key the rest of the
+                      // team/project CRUD surface uses).
+                      const canManageTeamsProjects = isOrgOwner || userRolePermissions?.manage_teams_and_projects;
 
                       // Hierarchy check: user's rank vs member's rank
                       const userRank = organization?.user_rank ?? 0;
@@ -916,11 +964,13 @@ export default function MembersPage({
                       // Can only manage members with rank > user's rank (higher number = lower rank)
                       const canManageThisMember = memberRank > userRank;
 
-                      // Check if there are any actions available for this member
-                      // Current user can only leave, others can be managed if user has permissions and hierarchy allows
+                      // Check if there are any actions available for this member.
+                      // Current user can only leave; others can be managed when the
+                      // user has the matching permission and the hierarchy allows.
                       const hasActions = isCurrentUser ||
-                        (canEditRoles && canManageThisMember) || // For Add to Team & Change Role
-                        (canKickMembers && canManageThisMember); // For Remove Member
+                        (canManageTeamsProjects && canManageThisMember) ||
+                        (canEditRoles && canManageThisMember) ||
+                        (canKickMembers && canManageThisMember);
 
                       if (!hasActions) return null;
 
@@ -934,7 +984,7 @@ export default function MembersPage({
                           <DropdownMenuContent align="end">
                             {isCurrentUser ? (
                               <>
-                                {isOrgOwner && (
+                                {canManageTeamsProjects && (
                                   <DropdownMenuItem onClick={() => handleAddToTeam(member)}>
                                     Add to Team
                                   </DropdownMenuItem>
@@ -963,7 +1013,7 @@ export default function MembersPage({
                               </>
                             ) : (
                               <>
-                                {canEditRoles && canManageThisMember && (
+                                {canManageTeamsProjects && canManageThisMember && (
                                   <DropdownMenuItem onClick={() => handleAddToTeam(member)}>
                                     Add to Team
                                   </DropdownMenuItem>
@@ -990,7 +1040,16 @@ export default function MembersPage({
               </tbody>
             </table>
           ) : (
-            <table className="w-full">
+            <table className="w-full table-fixed">
+              {/* Pin Role/Teams + Status + Action widths so the row doesn't
+                  reflow when the Status chip swaps between "Pending" and
+                  "Resending" mid-call. */}
+              <colgroup>
+                <col style={{ width: 'auto' }} />
+                <col style={{ width: '240px' }} />
+                <col style={{ width: '120px' }} />
+                <col style={{ width: '40px' }} />
+              </colgroup>
               <thead className="bg-background-card-header border-b border-border">
                 <tr>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
@@ -1002,14 +1061,26 @@ export default function MembersPage({
                   <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="w-10"></th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
               {filteredInvitations.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-foreground-secondary">
-                    {searchQuery ? 'No invitations matched this search.' : 'No pending invitations.'}
+                <tr data-no-hover>
+                  <td colSpan={4} className="px-4 py-8">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Mail className="h-5 w-5 text-foreground-secondary" />
+                      </div>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">
+                        {searchQuery ? 'No invitations match your search' : 'No pending invitations'}
+                      </h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        {searchQuery
+                          ? 'Try a different search or clear the filter.'
+                          : "When you invite teammates, they'll show up here until they accept."}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : filteredInvitations.map((invitation) => (
@@ -1041,9 +1112,16 @@ export default function MembersPage({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
-                      Pending
-                    </span>
+                    {resendingInvitationIds.has(invitation.id) ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground-secondary">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Resending
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-foreground">
+                        Pending
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                   <DropdownMenu>
@@ -1053,7 +1131,10 @@ export default function MembersPage({
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleResendInvitation(invitation.id)}>
+                      <DropdownMenuItem
+                        onClick={() => handleResendInvitation(invitation.id)}
+                        disabled={resendingInvitationIds.has(invitation.id)}
+                      >
                         Resend Invitation
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleCancelInvitation(invitation.id)}>
@@ -1077,15 +1158,15 @@ export default function MembersPage({
           setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
-          <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
             <DialogTitle>Invite new member</DialogTitle>
             <DialogDescription className="mt-1">
               Invite new members to your organization by email. You can assign them a role and optionally add them to a team.
             </DialogDescription>
           </div>
 
-          <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+          <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
             <div className="grid gap-2">
               <label htmlFor="invite-email" className="text-sm font-medium text-foreground">Email Address</label>
               <input
@@ -1094,7 +1175,7 @@ export default function MembersPage({
                 placeholder=""
                 value={inviteForms[0]?.email || ''}
                 onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-                className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className="w-full px-3 py-2 bg-background-card-header border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && inviteForms[0]?.email) {
                     handleSendInvites();
@@ -1138,18 +1219,17 @@ export default function MembersPage({
             <div className="pt-2">
               <Button
                 variant="outline"
-                size="sm"
                 onClick={handleCopyShareLink}
-                className="text-xs"
+                className="!h-8 !px-3 !rounded-lg"
               >
                 {shareLinkCopied ? (
                   <>
-                    <Check className="h-3 w-3 mr-1" />
+                    <Check />
                     Copied!
                   </>
                 ) : (
                   <>
-                    <LinkIcon className="h-3 w-3 mr-1" />
+                    <LinkIcon />
                     Copy Invite Link
                   </>
                 )}
@@ -1157,9 +1237,10 @@ export default function MembersPage({
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 bg-background">
+          <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
             <Button
               variant="outline"
+              className="!h-8 !px-3 !rounded-lg"
               onClick={() => {
                 setShowInviteModal(false);
                 setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
@@ -1169,11 +1250,15 @@ export default function MembersPage({
             </Button>
             <Button
               onClick={handleSendInvites}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+              variant="green"
               disabled={inviting}
             >
-              {inviting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-              Send Invitation
+              <span className={inviting ? 'invisible' : ''}>Send Invitation</span>
+              {inviting && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1186,25 +1271,22 @@ export default function MembersPage({
           setSelectedMember(null);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
-              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+              <div className="px-6 pt-6 pb-4 flex-shrink-0">
                 <DialogTitle>Change Role</DialogTitle>
                 <DialogDescription className="mt-1">
                   Select a new role for {selectedMember.full_name || selectedMember.email.split('@')[0]}.
                 </DialogDescription>
               </div>
 
-              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+              <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
-                  <img
-                    src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
+                  <UserAvatar
+                    src={selectedMember.avatar_url}
                     alt={selectedMember.full_name || selectedMember.email}
                     className="h-10 w-10 rounded-full object-cover border border-border"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-foreground truncate">
@@ -1240,9 +1322,10 @@ export default function MembersPage({
                 </div>
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background">
+              <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                 <Button
                   variant="outline"
+                  className="!h-8 !px-3 !rounded-lg"
                   onClick={() => {
                     setShowRoleSidebar(false);
                     setSelectedMember(null);
@@ -1252,11 +1335,15 @@ export default function MembersPage({
                 </Button>
                 <Button
                   onClick={handleUpdateRole}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  variant="green"
                   disabled={changingRole}
                 >
-                  {changingRole ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
-                  Update Role
+                  <span className={changingRole ? 'invisible' : ''}>Update Role</span>
+                  {changingRole && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
                 </Button>
               </DialogFooter>
             </>
@@ -1272,25 +1359,22 @@ export default function MembersPage({
           setSelectedTeamIds([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           {selectedMember && (
             <>
-              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+              <div className="px-6 pt-6 pb-4 flex-shrink-0">
                 <DialogTitle>Add to Team</DialogTitle>
                 <DialogDescription className="mt-1">
                   Select one or more teams to add {selectedMember.full_name || selectedMember.email.split('@')[0]} to.
                 </DialogDescription>
               </div>
 
-              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+              <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
                 <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
-                  <img
-                    src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
+                  <UserAvatar
+                    src={selectedMember.avatar_url}
                     alt={selectedMember.full_name || selectedMember.email}
                     className="h-10 w-10 rounded-full object-cover border border-border"
-                    onError={(e) => {
-                      e.currentTarget.src = '/images/blank_profile_image.png';
-                    }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-foreground truncate">
@@ -1334,9 +1418,10 @@ export default function MembersPage({
                 )}
               </div>
 
-              <DialogFooter className="px-6 py-4 bg-background">
+              <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                 <Button
                   variant="outline"
+                  className="!h-8 !px-3 !rounded-lg"
                   onClick={() => {
                     setShowAddToTeamSidebar(false);
                     setSelectedMember(null);
@@ -1348,10 +1433,16 @@ export default function MembersPage({
                 <Button
                   onClick={handleAddToTeams}
                   disabled={selectedTeamIds.length === 0 || addingToTeam}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                  variant="green"
                 >
-                  {addingToTeam ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                  {`Add to Team${selectedTeamIds.length > 1 ? 's' : ''}`}
+                  <span className={addingToTeam ? 'invisible' : ''}>
+                    {`Add to Team${selectedTeamIds.length > 1 ? 's' : ''}`}
+                  </span>
+                  {addingToTeam && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
+                  )}
                 </Button>
               </DialogFooter>
             </>
@@ -1360,45 +1451,34 @@ export default function MembersPage({
       </Dialog>
 
       {/* Remove Member Dialog */}
-      {showRemoveDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-background-card border border-border rounded-lg shadow-lg w-full max-w-md">
-            <div className="p-6 border-b border-border">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-foreground">
-                  {user && selectedMember?.user_id === user.id
-                    ? 'Leave Organization'
-                    : 'Remove Member'}
-                </h2>
-                <button
-                  onClick={() => setShowRemoveDialog(false)}
-                  className="p-1 text-foreground-secondary hover:text-foreground transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-foreground-secondary">
-                {user && selectedMember && selectedMember.user_id === user.id
-                  ? `Are you sure you want to leave ${organization?.name || 'this organization'}? You will lose access to all organization resources.`
-                  : `Are you sure you want to remove ${selectedMember?.full_name || selectedMember?.email || 'this member'} from the organization? This action cannot be undone.`}
-              </p>
-            </div>
-            <div className="p-6 border-t border-border flex items-center justify-end gap-3">
-              <Button variant="outline" onClick={() => setShowRemoveDialog(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleConfirmRemove}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {user && selectedMember && selectedMember.user_id === user.id ? 'Leave' : 'Remove'}
-              </Button>
-            </div>
+      <Dialog open={showRemoveDialog} onOpenChange={(open) => { if (!open) setShowRemoveDialog(false); }}>
+        <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+          <div className="px-6 pt-6 pb-4">
+            <DialogTitle>
+              {user && selectedMember?.user_id === user.id
+                ? 'Leave Organization'
+                : 'Remove Member'}
+            </DialogTitle>
+            <DialogDescription className="mt-1">
+              {user && selectedMember && selectedMember.user_id === user.id
+                ? `Are you sure you want to leave ${organization?.name || 'this organization'}? You will lose access to all organization resources.`
+                : `Are you sure you want to remove ${selectedMember?.full_name || selectedMember?.email || 'this member'} from the organization? This action cannot be undone.`}
+            </DialogDescription>
           </div>
-        </div>
-      )}
+          <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+            <Button
+              variant="outline"
+              className="!h-8 !px-3 !rounded-lg"
+              onClick={() => setShowRemoveDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmRemove}>
+              {user && selectedMember && selectedMember.user_id === user.id ? 'Leave' : 'Remove'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

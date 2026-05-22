@@ -17,3 +17,10 @@ jest.mock('jsonwebtoken', () => ({
   }),
   decode: jest.fn(() => ({ sub: 'mock-user-id' })),
 }));
+
+// The auth middleware verifies JWTs locally only when SUPABASE_JWT_SECRET is
+// set; tests mock supabase.auth.getUser, so pin them to that fallback path
+// regardless of what the loaded .env contains.
+beforeEach(() => {
+  delete process.env.SUPABASE_JWT_SECRET;
+});

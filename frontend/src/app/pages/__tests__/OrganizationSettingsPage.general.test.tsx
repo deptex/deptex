@@ -289,6 +289,75 @@ describe('OrganizationSettingsPage – General', () => {
     });
   });
 
+  it('Save is disabled when the org name is unchanged', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+    expect(saveBtn).toBeDisabled();
+  });
+
+  it('editing the org name enables Save', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+    expect(saveBtn).toBeDisabled();
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed Org');
+
+    expect(saveBtn).not.toBeDisabled();
+  });
+
+  it('Save calls api.updateOrganization with the trimmed new name', async () => {
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, '  Renamed Org  ');
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockUpdateOrganization).toHaveBeenCalledWith('org-1', { name: 'Renamed Org' });
+    });
+  });
+
+  it('Save keeps its label during saving', async () => {
+    let resolveUpdate: (value: unknown) => void;
+    mockUpdateOrganization.mockImplementation(() => new Promise((r) => { resolveUpdate = r; }));
+
+    render(<OrganizationSettingsPage />);
+    const saveBtn = await screen.findByRole('button', { name: 'Save' }, { timeout: 5000 });
+
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed Org');
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(saveBtn).toHaveTextContent('Save');
+    });
+    resolveUpdate!({});
+  });
+
+  it('non-owner cannot edit the org name field', async () => {
+    mockOrgContext.organization = {
+      id: 'org-1',
+      name: 'Test Org',
+      role: 'admin',
+      permissions: { view_settings: true },
+    };
+    mockGetOrganizationMembers.mockResolvedValue([ownerMember, otherMember]);
+
+    render(<OrganizationSettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Organization details', level: 3 })).toBeInTheDocument();
+    });
+    const nameInput = screen.getByPlaceholderText('Enter organization name');
+    await userEvent.type(nameInput, 'hacked');
+    expect(nameInput).toHaveValue('Test Org');
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
   it('Transfer calls api.transferOrganizationOwnership with correct params when member selected', async () => {
     mockGetOrganizationMembers.mockResolvedValue([ownerMember, otherMember]);
 
@@ -307,5 +376,36 @@ describe('OrganizationSettingsPage – General', () => {
     await waitFor(() => {
       expect(mockTransferOrganizationOwnership).toHaveBeenCalledWith('org-1', 'user-2', expect.any(String));
     });
+  });
+
+  it('Transfer member dropdown renders a long member list and filters by search', async () => {
+    const manyMembers = [
+      ownerMember,
+      ...Array.from({ length: 24 }, (_, i) => ({
+        user_id: `user-${i + 10}`,
+        email: `member${i + 10}@test.com`,
+        full_name: `Member ${i + 10}`,
+        role: 'member',
+      })),
+    ];
+    mockGetOrganizationMembers.mockResolvedValue(manyMembers);
+
+    render(<OrganizationSettingsPage />);
+    const memberDropdown = await screen.findByRole('button', { name: /Select a member/ }, { timeout: 5000 });
+    await userEvent.click(memberDropdown);
+
+    // The full list is rendered (first and last non-owner members both present).
+    await waitFor(() => {
+      expect(screen.getByText('Member 10')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Member 33')).toBeInTheDocument();
+
+    // Searching narrows the list to the matching member only.
+    const search = screen.getByPlaceholderText('Search members...');
+    await userEvent.type(search, 'Member 21');
+    await waitFor(() => {
+      expect(screen.queryByText('Member 10')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Member 21')).toBeInTheDocument();
   });
 });

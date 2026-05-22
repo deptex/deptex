@@ -10,7 +10,6 @@ import { getOpenAIClient } from '../lib/openai';
 import { getPlatformProvider } from '../lib/ai/provider';
 import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
-import { seedOrganizationPolicyDefaults } from '../lib/policy-seed';
 import { emitEvent } from '../lib/event-bus';
 import { getActiveExtractionId, getActiveExtractionIds } from '../lib/active-extraction';
 
@@ -73,6 +72,44 @@ async function getRoleRank(organizationId: string, roleName: string): Promise<nu
     .single();
 
   return role?.display_order ?? null;
+}
+
+/**
+ * Check whether a user holds a specific organization permission.
+ *
+ * Roles are permission bundles (see RBAC section of CLAUDE.md): each role
+ * carries a `permissions` JSONB and `organization_members.role` stores the
+ * role *name*. `owner` short-circuits to true (it has every permission and
+ * can't be removed). Returns false on any lookup miss — never throws.
+ *
+ * NOTE: never gate on a role *name* (`role === 'admin'` is a legacy bug — no
+ * `admin` role is seeded). Always go through this helper or read permissions
+ * directly.
+ */
+async function hasOrgPermission(
+  organizationId: string,
+  userId: string,
+  permissionKey: string,
+): Promise<{ allowed: boolean; role: string | null }> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return { allowed: false, role: null };
+  if (membership.role === 'owner') return { allowed: true, role: 'owner' };
+
+  const { data: role } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', membership.role)
+    .single();
+
+  const allowed = role?.permissions?.[permissionKey] === true;
+  return { allowed, role: membership.role };
 }
 
 // GET /api/organizations - List user's organizations
@@ -220,64 +257,47 @@ router.post('/', async (req: AuthRequest, res) => {
       throw orgError;
     }
 
-    // Create organization_plans row (single source of truth for plan tier and billing)
-    const { error: planError } = await supabase
-      .from('organization_plans')
-      .insert({ organization_id: organization.id, plan_tier: 'free' });
+    // The plan row, owner membership, default roles, and the seed data
+    // (statuses, asset tiers, policy code) all only need organization.id and
+    // are mutually independent — insert them in one parallel batch instead of
+    // ~8 sequential round trips.
+    const defaultRolePermissions = {
+      view_settings: true,
+      manage_billing: true,
+      manage_security: true,
+      view_activity: true,
+      manage_compliance: true,
+      manage_statuses: true,
+      interact_with_aegis: true,
+      trigger_fix: true,
+      manage_aegis: true,
+      view_ai_spending: true,
+      manage_incidents: true,
+      view_members: true,
+      add_members: true,
+      edit_roles: true,
+      edit_permissions: true,
+      kick_members: true,
+      manage_teams_and_projects: true,
+      manage_integrations: true,
+      manage_notifications: true,
+      manage_organization_settings: true,
+    };
 
-    if (planError) {
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw planError;
-    }
-
-    // Add creator as owner
-    const { error: memberError } = await supabase
-      .from('organization_members')
-      .insert({
-        organization_id: organization.id,
-        user_id: userId,
-        role: 'owner',
-      });
-
-    if (memberError) {
-      // Rollback organization creation
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw memberError;
-    }
-
-    // Create default roles (owner and member)
-    const { error: rolesError } = await supabase
-      .from('organization_roles')
-      .insert([
+    const seedResults = await Promise.all([
+      supabase.from('organization_plans')
+        .insert({ organization_id: organization.id, plan_tier: 'free' }),
+      supabase.from('organization_members')
+        .insert({ organization_id: organization.id, user_id: userId, role: 'owner' }),
+      supabase.from('organization_roles').insert([
         {
           organization_id: organization.id,
           name: 'owner',
           display_name: 'Owner',
           display_order: 0,
           is_default: true,
-          color: '#f59e0b', // Amber/orange color
-          permissions: {
-            view_settings: true,
-            manage_billing: true,
-            manage_security: true,
-            view_activity: true,
-            manage_compliance: true,
-            manage_statuses: true,
-            interact_with_aegis: true,
-            trigger_fix: true,
-            manage_aegis: true,
-            view_ai_spending: true,
-            manage_incidents: true,
-            view_members: true,
-            add_members: true,
-            edit_roles: true,
-            edit_permissions: true,
-            kick_members: true,
-            manage_teams_and_projects: true,
-            manage_integrations: true,
-            manage_notifications: true,
-            manage_organization_settings: true,
-          },
+          color: '#f59e0b',
+          permissions: defaultRolePermissions,
         },
         {
           organization_id: organization.id,
@@ -285,72 +305,30 @@ router.post('/', async (req: AuthRequest, res) => {
           display_name: 'Member',
           display_order: 2,
           is_default: true,
-          permissions: {
-            view_settings: true,
-            manage_billing: true,
-            manage_security: true,
-            view_activity: true,
-            manage_compliance: true,
-            manage_statuses: true,
-            interact_with_aegis: true,
-            trigger_fix: true,
-            manage_aegis: true,
-            view_ai_spending: true,
-            manage_incidents: true,
-            view_members: true,
-            add_members: true,
-            edit_roles: true,
-            edit_permissions: true,
-            kick_members: true,
-            manage_teams_and_projects: true,
-            manage_integrations: true,
-            manage_notifications: true,
-            manage_organization_settings: true,
-          },
+          permissions: defaultRolePermissions,
         },
-      ]);
-
-    if (rolesError) {
-      // Rollback organization and member creation
-      await supabase.from('organization_members').delete().eq('organization_id', organization.id);
-      await supabase.from('organizations').delete().eq('id', organization.id);
-      throw rolesError;
-    }
-
-    // Seed default statuses
-    await supabase.from('organization_statuses').insert(
-      DEFAULT_STATUSES.map(s => ({ ...s, organization_id: organization.id }))
-    );
-
-    // Seed default asset tiers
-    await supabase.from('organization_asset_tiers').insert(
-      DEFAULT_ASSET_TIERS.map(t => ({ ...t, organization_id: organization.id }))
-    );
-
-    // Seed default policy code tables
-    await Promise.all([
-      supabase.from('organization_package_policies').insert({
-        organization_id: organization.id,
-        package_policy_code: DEFAULT_PACKAGE_POLICY_CODE,
-        updated_by_id: userId,
-      }),
-      supabase.from('organization_status_codes').insert({
-        organization_id: organization.id,
-        project_status_code: DEFAULT_PROJECT_STATUS_CODE,
-        updated_by_id: userId,
-      }),
-      supabase.from('organization_pr_checks').insert({
-        organization_id: organization.id,
-        pr_check_code: DEFAULT_PR_CHECK_CODE,
-        updated_by_id: userId,
-      }),
+      ]),
+      supabase.from('organization_statuses')
+        .insert(DEFAULT_STATUSES.map((s) => ({ ...s, organization_id: organization.id }))),
+      supabase.from('organization_asset_tiers')
+        .insert(DEFAULT_ASSET_TIERS.map((t) => ({ ...t, organization_id: organization.id }))),
+      supabase.from('organization_package_policies')
+        .insert({ organization_id: organization.id, package_policy_code: DEFAULT_PACKAGE_POLICY_CODE, updated_by_id: userId }),
+      supabase.from('organization_status_codes')
+        .insert({ organization_id: organization.id, project_status_code: DEFAULT_PROJECT_STATUS_CODE, updated_by_id: userId }),
+      supabase.from('organization_pr_checks')
+        .insert({ organization_id: organization.id, pr_check_code: DEFAULT_PR_CHECK_CODE, updated_by_id: userId }),
     ]);
 
-    // Seed default statuses, asset tiers, and policy templates
-    await seedOrganizationPolicyDefaults(organization.id);
+    const seedError = seedResults.find((r) => r.error)?.error;
+    if (seedError) {
+      // Roll back — the organizations FK cascade removes whatever did insert.
+      await supabase.from('organizations').delete().eq('id', organization.id);
+      throw seedError;
+    }
 
-    // Create activity log
-    await createActivity({
+    // Activity logging is non-critical — fire it after the response.
+    void createActivity({
       organization_id: organization.id,
       user_id: userId,
       activity_type: 'created_org',
@@ -389,31 +367,25 @@ router.get('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Get organization details
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('id', id)
-      .single();
+    // Org details, plan tier, and the caller's role are independent reads.
+    const [
+      { data: organization, error: orgError },
+      { data: planRow },
+      { data: roleData },
+    ] = await Promise.all([
+      supabase.from('organizations').select('*').eq('id', id).single(),
+      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
+      supabase
+        .from('organization_roles')
+        .select('display_name, color, display_order, permissions')
+        .eq('organization_id', id)
+        .eq('name', membership.role)
+        .single(),
+    ]);
 
     if (orgError || !organization) {
       return res.status(404).json({ error: 'Organization not found' });
     }
-
-    // Plan tier comes from organization_plans (single source of truth)
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    // Get role display name, color, and rank (display_order)
-    const { data: roleData } = await supabase
-      .from('organization_roles')
-      .select('display_name, color, display_order, permissions')
-      .eq('organization_id', id)
-      .eq('name', membership.role)
-      .single();
 
     res.json({
       ...organization,
@@ -528,22 +500,29 @@ router.get('/:id/members', async (req: AuthRequest, res) => {
             };
           }
 
-          // Get user profile from user_profiles table
-          const { data: profile } = await supabase
-            .from('user_profiles')
-            .select('avatar_url, full_name')
-            .eq('user_id', m.user_id)
-            .single();
-
-          // Get avatar URL with priority:
-          // 1. Database profile (user_profiles table)
-          // 2. OAuth metadata picture (from raw_user_meta_data.picture)
-          // 3. OAuth metadata avatar_url (from raw_user_meta_data.avatar_url)
-          const avatarUrl = profile?.avatar_url
-            || user.user_metadata?.picture
-            || user.user_metadata?.avatar_url
-            || null;
-          const fullName = profile?.full_name || user.user_metadata?.full_name || null;
+          // Resolve avatar + name from the auth user. Identity lives on
+          // user_metadata after the user_profiles refactor; prefer a
+          // custom-uploaded avatar, then the OAuth picture, then the raw
+          // identity_data (Supabase doesn't always merge OAuth fields into
+          // user_metadata on the first session after sign-up).
+          const meta = user.user_metadata;
+          const idData = user.identities?.[0]?.identity_data as
+            | { picture?: string; avatar_url?: string; full_name?: string; name?: string }
+            | undefined;
+          const avatarUrl =
+            meta?.custom_avatar_url
+            ?? meta?.picture
+            ?? meta?.avatar_url
+            ?? idData?.picture
+            ?? idData?.avatar_url
+            ?? null;
+          const fullName =
+            meta?.custom_full_name
+            ?? meta?.full_name
+            ?? meta?.name
+            ?? idData?.full_name
+            ?? idData?.name
+            ?? null;
 
           return {
             user_id: m.user_id,
@@ -676,20 +655,13 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Permission gate — owner short-circuits, otherwise needs `add_members`.
+    const perm = await hasOrgPermission(id, userId, 'add_members');
+    if (!perm.role) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins and owners can invite members' });
+    if (!perm.allowed) {
+      return res.status(403).json({ error: 'You do not have permission to invite members' });
     }
 
     // Get organization name and inviter info
@@ -749,23 +721,18 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
       teamNames.push(...teams.map(t => t.name));
     }
 
-    // Validate role (default or custom)
-    const defaultRoles = ['owner', 'admin', 'member'];
+    // Validate role: must match an existing role for this org. Only `owner`
+    // and `member` are seeded by default; everything else is a custom role on
+    // this org. `admin` is NOT a real role (see hasOrgPermission notes).
     const roleToUse = (role || 'member').toLowerCase();
-    const isValidDefault = defaultRoles.includes(roleToUse);
-
-    if (!isValidDefault) {
-      // Check if it's a custom role
-      const { data: customRole } = await supabase
-        .from('organization_roles')
-        .select('id')
-        .eq('organization_id', id)
-        .eq('name', roleToUse)
-        .single();
-
-      if (!customRole) {
-        return res.status(400).json({ error: 'Invalid role. Role must be owner, admin, member, or a custom role defined for this organization' });
-      }
+    const { data: roleRow } = await supabase
+      .from('organization_roles')
+      .select('id')
+      .eq('organization_id', id)
+      .eq('name', roleToUse)
+      .single();
+    if (!roleRow) {
+      return res.status(400).json({ error: 'Invalid role for this organization' });
     }
 
     // Create invitation (keep team_id for backward compatibility, but prefer junction table)
@@ -1075,20 +1042,13 @@ router.delete('/:id/invitations/:invitationId', async (req: AuthRequest, res) =>
     const userId = req.user!.id;
     const { id, invitationId } = req.params;
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Permission gate — owner short-circuits, otherwise needs `add_members`.
+    const perm = await hasOrgPermission(id, userId, 'add_members');
+    if (!perm.role) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins and owners can cancel invitations' });
+    if (!perm.allowed) {
+      return res.status(403).json({ error: 'You do not have permission to cancel invitations' });
     }
 
     // Get invitation info for activity log
@@ -1138,20 +1098,13 @@ router.post('/:id/invitations/:invitationId/resend', async (req: AuthRequest, re
     const userId = req.user!.id;
     const { id, invitationId } = req.params;
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Permission gate — owner short-circuits, otherwise needs `add_members`.
+    const perm = await hasOrgPermission(id, userId, 'add_members');
+    if (!perm.role) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins and owners can resend invitations' });
+    if (!perm.allowed) {
+      return res.status(403).json({ error: 'You do not have permission to resend invitations' });
     }
 
     // Get invitation
@@ -1407,34 +1360,27 @@ router.put('/:id/members/:userId/role', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Role is required' });
     }
 
-    // Check if role is valid (default or custom)
-    const defaultRoles = ['owner', 'admin', 'member'];
-    const isValidDefault = defaultRoles.includes(role.toLowerCase());
-
-    if (!isValidDefault) {
-      // Check if it's a custom role
-      const { data: customRole } = await supabase
-        .from('organization_roles')
-        .select('id')
-        .eq('organization_id', id)
-        .eq('name', role.toLowerCase())
-        .single();
-
-      if (!customRole) {
-        return res.status(400).json({ error: 'Invalid role. Role must be owner, admin, member, or a custom role defined for this organization' });
-      }
+    // Validate the target role exists on this org (only `owner`/`member` are
+    // seeded; everything else is custom). `admin` is NOT a real role name.
+    const roleToUse = role.toLowerCase();
+    const { data: roleRow } = await supabase
+      .from('organization_roles')
+      .select('id')
+      .eq('organization_id', id)
+      .eq('name', roleToUse)
+      .single();
+    if (!roleRow) {
+      return res.status(400).json({ error: 'Invalid role for this organization' });
     }
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Permission gate — owner short-circuits, otherwise needs `edit_roles`.
+    // (Self role-change is still blocked by the rank check below.)
+    const perm = await hasOrgPermission(id, userId, 'edit_roles');
+    if (!perm.role) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+    if (!perm.allowed) {
+      return res.status(403).json({ error: 'You do not have permission to change member roles' });
     }
 
     // Get the acting user's rank
@@ -1488,14 +1434,20 @@ router.put('/:id/members/:userId/role', async (req: AuthRequest, res) => {
 
     const { data: { user: targetUser } } = await supabase.auth.admin.getUserById(targetUserId);
 
-    // Get user profile for full name
-    const { data: targetProfile } = await supabase
-      .from('user_profiles')
-      .select('full_name')
-      .eq('user_id', targetUserId)
-      .single();
-
-    const targetDisplayName = targetProfile?.full_name || targetUser?.user_metadata?.full_name || targetUser?.email || targetUserId;
+    // Resolve display name from auth user metadata (the user_profiles table is
+    // deprecated — see members-listing route). Match the same precedence the
+    // org-create + members-listing routes use so activity descriptions render
+    // the same name the UI shows.
+    const targetMeta = targetUser?.user_metadata ?? {};
+    const targetIdData = targetUser?.identities?.[0]?.identity_data ?? {};
+    const targetDisplayName =
+      targetMeta.custom_full_name ||
+      targetMeta.full_name ||
+      targetMeta.name ||
+      targetIdData.full_name ||
+      targetIdData.name ||
+      targetUser?.email ||
+      targetUserId;
 
     // Update member role
     const { error: updateError } = await supabase
@@ -1537,16 +1489,29 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id, userId: targetUserId } = req.params;
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    // Self-removal (leave org) is always allowed; otherwise owner short-circuits
+    // and other members need `kick_members`. The rank check below still applies
+    // — you can have `kick_members` and still be unable to remove someone above
+    // your rank.
+    if (userId !== targetUserId) {
+      const perm = await hasOrgPermission(id, userId, 'kick_members');
+      if (!perm.role) {
+        return res.status(404).json({ error: 'Organization not found or access denied' });
+      }
+      if (!perm.allowed) {
+        return res.status(403).json({ error: 'You do not have permission to remove members' });
+      }
+    } else {
+      // Even for self-removal we need to confirm membership exists.
+      const { data: membership, error: membershipError } = await supabase
+        .from('organization_members')
+        .select('role')
+        .eq('organization_id', id)
+        .eq('user_id', userId)
+        .single();
+      if (membershipError || !membership) {
+        return res.status(404).json({ error: 'Organization not found or access denied' });
+      }
     }
 
     // If removing yourself, allow it (leave organization)
@@ -1609,14 +1574,19 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res) => {
     // Get user info for activity log
     const { data: { user: targetUser } } = await supabase.auth.admin.getUserById(targetUserId);
 
-    // Get user profile for full name
-    const { data: targetProfile } = await supabase
-      .from('user_profiles')
-      .select('full_name')
-      .eq('user_id', targetUserId)
-      .single();
-
-    const targetDisplayName = targetProfile?.full_name || targetUser?.user_metadata?.full_name || targetUser?.email || targetUserId;
+    // Resolve display name from auth user metadata (user_profiles is
+    // deprecated; mirror the org-create + members-listing precedence so
+    // activity descriptions match the name the UI shows).
+    const targetMeta = targetUser?.user_metadata ?? {};
+    const targetIdData = targetUser?.identities?.[0]?.identity_data ?? {};
+    const targetDisplayName =
+      targetMeta.custom_full_name ||
+      targetMeta.full_name ||
+      targetMeta.name ||
+      targetIdData.full_name ||
+      targetIdData.name ||
+      targetUser?.email ||
+      targetUserId;
 
     // Delete all dependency notes authored by this user in this organization's projects
     const { data: orgProjects } = await supabase
@@ -1696,33 +1666,39 @@ router.put('/:id', async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { name, avatar_url } = req.body;
 
-    // Check if user is admin or owner
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
+    // Validate input up front — fail fast, before spending any DB round trip.
+    let normalizedName: string | undefined;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json({ error: 'Organization name must be a non-empty string' });
+      }
+      normalizedName = name.trim();
+    }
+
+    // Membership (the owner gate), the plan tier (needed for the response),
+    // and the current name (for the activity log) are independent reads —
+    // run them as one parallel batch instead of three sequential trips.
+    const [
+      { data: membership, error: membershipError },
+      { data: planRow },
+      { data: currentOrg },
+    ] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
+      supabase.from('organizations').select('name').eq('id', id).single(),
+    ]);
 
     if (membershipError || !membership) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    if (membership.role !== 'owner' && membership.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins and owners can update organization' });
+    if (membership.role !== 'owner') {
+      return res.status(403).json({ error: 'Only the organization owner can update organization' });
     }
 
-    // Get current organization data for activity logs
-    const { data: currentOrg } = await supabase
-      .from('organizations')
-      .select('name')
-      .eq('id', id)
-      .single();
-
-    const updateData: any = {};
-    if (name !== undefined) updateData.name = name;
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (normalizedName !== undefined) updateData.name = normalizedName;
     if (avatar_url !== undefined) updateData.avatar_url = avatar_url;
-    updateData.updated_at = new Date().toISOString();
 
     const { data: organization, error: updateError } = await supabase
       .from('organizations')
@@ -1735,19 +1711,22 @@ router.put('/:id', async (req: AuthRequest, res) => {
       throw updateError;
     }
 
-    // Create activity logs
-    if (name !== undefined && name !== currentOrg?.name) {
-      await createActivity({
+    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+
+    // Activity logging is non-critical — fire it after the response so it
+    // never adds a round trip to the caller's save.
+    if (normalizedName !== undefined && normalizedName !== currentOrg?.name) {
+      void createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_org_name',
-        description: `updated organization name from "${currentOrg?.name}" to "${name}"`,
-        metadata: { old_name: currentOrg?.name, new_name: name },
+        description: `updated organization name from "${currentOrg?.name}" to "${normalizedName}"`,
+        metadata: { old_name: currentOrg?.name, new_name: normalizedName },
       });
     }
 
     if (avatar_url !== undefined) {
-      await createActivity({
+      void createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'changed_org_profile_image',
@@ -1755,14 +1734,6 @@ router.put('/:id', async (req: AuthRequest, res) => {
         metadata: { organization_name: organization.name },
       });
     }
-
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
   } catch (error: any) {
     console.error('Error updating organization:', error);
     res.status(500).json({ error: error.message || 'Failed to update organization' });
@@ -6291,31 +6262,12 @@ async function hasManageIntegrations(orgId: string, userId: string): Promise<boo
 // EPD (reachability AI verification) org settings
 // ============================================================
 
-async function hasOrgPermission(orgId: string, userId: string, perm: string): Promise<boolean> {
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', orgId)
-    .eq('user_id', userId)
-    .single();
-  if (!membership) return false;
-
-  const { data: role } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', orgId)
-    .eq('name', membership.role)
-    .single();
-
-  return role?.permissions?.[perm] === true;
-}
-
 // GET /api/organizations/:id/ai-settings -- EPD contextual scoring knobs
 router.get('/:id/ai-settings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to view AI settings' });
     }
 
@@ -6337,7 +6289,7 @@ router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
     }
 
@@ -6506,7 +6458,7 @@ router.patch('/:id/ai-default-provider', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
     }
 
@@ -6587,7 +6539,7 @@ router.patch('/:id/ai-models', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'manage_organization_settings')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to manage organization settings' });
     }
 
@@ -6639,7 +6591,7 @@ router.get('/:id/ai-usage/daily', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to view AI spending' });
     }
 
@@ -6682,7 +6634,7 @@ router.get('/:id/aegis-tools/breakdown', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const orgId = req.params.id;
-    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending'))) {
+    if (!(await hasOrgPermission(orgId, userId, 'view_ai_spending')).allowed) {
       return res.status(403).json({ error: 'You do not have permission to view AI spending' });
     }
 

@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { Edit2, Loader2, Trash2 } from 'lucide-react';
+import { Edit2, Loader2 } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Skeleton } from '../../components/ui/skeleton';
 import { UserAvatar, OrgAvatar } from '../../components/Avatar';
@@ -359,7 +359,7 @@ export default function AccountSettingsPage() {
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Enter your display name"
                         maxLength={32}
-                        className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-ring transition-colors"
+                        className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                       />
                     </div>
                   </div>
@@ -476,10 +476,8 @@ export default function AccountSettingsPage() {
                     <Button
                       onClick={handleOpenDeleteConfirm}
                       variant="destructive"
-                      size="sm"
                       className="flex-shrink-0"
                     >
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
                       Delete
                     </Button>
                   )}
@@ -517,26 +515,24 @@ export default function AccountSettingsPage() {
                           onChange={(e) => setDeleteConfirmInput(e.target.value)}
                           placeholder={user?.email ?? ''}
                           autoFocus
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                         />
                         <div className="flex gap-2">
                           <Button
                             onClick={handleDeleteAccount}
                             variant="destructive"
-                            size="sm"
                             disabled={
                               deleting ||
                               !user?.email ||
                               deleteConfirmInput.trim().toLowerCase() !== user.email.toLowerCase()
                             }
-                            className="h-8"
                           >
-                            {deleting ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            <span className={deleting ? 'invisible' : ''}>Delete Forever</span>
+                            {deleting && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
                             )}
-                            Delete Forever
                           </Button>
                           <Button onClick={handleCancelDelete} variant="ghost" size="sm" className="h-8">
                             Cancel

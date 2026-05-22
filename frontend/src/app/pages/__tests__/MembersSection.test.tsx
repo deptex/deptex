@@ -113,7 +113,7 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => {
-      expect(screen.getByText('No pending invitations.')).toBeInTheDocument();
+      expect(screen.getByText('No pending invitations')).toBeInTheDocument();
     });
   });
 
@@ -123,7 +123,7 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => {
-      expect(screen.getByText('No pending invitations.')).toBeInTheDocument();
+      expect(screen.getByText('No pending invitations')).toBeInTheDocument();
     });
   });
 
@@ -138,7 +138,7 @@ describe('MembersPage', () => {
     const filterInput = screen.getByPlaceholderText('Filter...');
     await userEvent.type(filterInput, 'other');
     await waitFor(() => {
-      expect(screen.getByText('No invitations matched this search.')).toBeInTheDocument();
+      expect(screen.getByText('No invitations match your search')).toBeInTheDocument();
     });
   });
 
@@ -174,6 +174,38 @@ describe('MembersPage', () => {
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Resend Invitation' })).toBeInTheDocument());
     await userEvent.click(screen.getByRole('menuitem', { name: 'Resend Invitation' }));
     expect(mockResendInvitation).toHaveBeenCalledWith('org-1', 'inv-1');
+  });
+
+  it('shows a Resending... status while the resend API call is in flight, then settles back to Pending', async () => {
+    mockGetOrganizationInvitations.mockResolvedValue([
+      { id: 'inv-1', email: 'invited@example.com', role: 'member', status: 'pending', created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 7 * 864e5).toISOString() },
+    ]);
+    // Hold the resend promise open so we can assert the in-flight UI.
+    let resolveResend: (v: unknown) => void = () => {};
+    mockResendInvitation.mockImplementation(() => new Promise(resolve => { resolveResend = resolve; }));
+
+    render(<MembersPage />);
+    await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
+    await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
+
+    const row = screen.getByText('invited@example.com').closest('tr')!;
+    expect(within(row).getByText('Pending')).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole('button'));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Resend Invitation' }));
+
+    // While in flight, status cell flips to "Resending..."
+    await waitFor(() => {
+      expect(within(row).getByText('Resending')).toBeInTheDocument();
+    });
+    expect(within(row).queryByText('Pending')).not.toBeInTheDocument();
+
+    // Resolve and confirm the cell settles back to Pending.
+    resolveResend({ message: 'Invitation resent', invitation: {} });
+    await waitFor(() => {
+      expect(within(row).getByText('Pending')).toBeInTheDocument();
+    });
   });
 
   it('invite modal opens with email input, role dropdown, Copy Invite Link', async () => {
@@ -362,7 +394,7 @@ describe('MembersPage', () => {
       });
     });
 
-    it('shows No members matched when filter matches nothing', async () => {
+    it('shows the empty state when filter matches nothing', async () => {
       const membersWithMultiple = [
         { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
       ];
@@ -372,7 +404,7 @@ describe('MembersPage', () => {
       const filterInput = screen.getByPlaceholderText('Filter...');
       await userEvent.type(filterInput, 'nonexistent');
       await waitFor(() => {
-        expect(screen.getByText('No members matched this search.')).toBeInTheDocument();
+        expect(screen.getByText('No members match your filters')).toBeInTheDocument();
       });
     });
   });
@@ -391,6 +423,218 @@ describe('MembersPage', () => {
         expect(mockNavigate).toHaveBeenCalledWith('/organizations/org-1/projects', { replace: true });
       });
       mockUseOutletContext.mockReturnValue(stableOrgContext);
+    });
+  });
+
+  describe('Invite guards', () => {
+    it('blocks invites to an existing member and never calls createInvitation', async () => {
+      mockGetOrganizationMembers.mockResolvedValue([
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+      ]);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Invite/i }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      await userEvent.type(screen.getByLabelText('Email Address'), 'owner@example.com');
+      await userEvent.click(screen.getByRole('button', { name: /Send Invitation/i }));
+      // Guard fires synchronously; the API call must not happen.
+      expect(mockCreateInvitation).not.toHaveBeenCalled();
+    });
+
+    it('blocks invites to an already-pending email and never calls createInvitation', async () => {
+      mockGetOrganizationInvitations.mockResolvedValue([
+        { id: 'inv-1', email: 'pending@example.com', role: 'member', status: 'pending', created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 7 * 864e5).toISOString() },
+      ]);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Invite/i }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+      await userEvent.type(screen.getByLabelText('Email Address'), 'pending@example.com');
+      await userEvent.click(screen.getByRole('button', { name: /Send Invitation/i }));
+      expect(mockCreateInvitation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Optimistic rollback', () => {
+    it('restores the cancelled invitation when the API call fails', async () => {
+      mockGetOrganizationInvitations.mockResolvedValue([
+        { id: 'inv-1', email: 'invited@example.com', role: 'member', status: 'pending', created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 7 * 864e5).toISOString() },
+      ]);
+      mockCancelInvitation.mockRejectedValue(new Error('boom'));
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
+      await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
+
+      const row = screen.getByText('invited@example.com').closest('tr')!;
+      await userEvent.click(within(row).getByRole('button'));
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Cancel Invitation' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Cancel Invitation' }));
+
+      // Optimistic remove + rollback puts the row back.
+      await waitFor(() => {
+        expect(screen.getByText('invited@example.com')).toBeInTheDocument();
+      });
+    });
+
+    it('restores the removed member and notifies the parent cache when the API call fails', async () => {
+      const onMembersUpdate = vi.fn();
+      mockGetOrganizationMembers.mockResolvedValue([
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', created_at: new Date().toISOString(), rank: 1 },
+      ]);
+      mockRemoveMember.mockRejectedValue(new Error('boom'));
+      render(<MembersPage isSettingsSubpage onMembersUpdate={onMembersUpdate} />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+
+      const row = screen.getByText('member@example.com').closest('tr')!;
+      await userEvent.click(within(row).getByRole('button'));
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Remove Member' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Remove Member' }));
+      await waitFor(() => expect(screen.getByText(/Are you sure you want to remove/)).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+      // Row reappears; parent cache should have been called twice — once for the
+      // optimistic remove, once for the rollback restore.
+      await waitFor(() => {
+        expect(screen.getByText('member@example.com')).toBeInTheDocument();
+      });
+      const lastCall = onMembersUpdate.mock.calls[onMembersUpdate.mock.calls.length - 1];
+      const restored = lastCall?.[0];
+      expect(restored?.some((m: any) => m.user_id === 'user-2')).toBe(true);
+    });
+  });
+
+  describe('Self-leave', () => {
+    it('blocks the last owner from leaving and surfaces a toast', async () => {
+      mockGetOrganizationMembers.mockResolvedValue([
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+      ]);
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+
+      const row = screen.getByText('owner@example.com').closest('tr')!;
+      await userEvent.click(within(row).getByRole('button'));
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: /Leave Organization/i })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('menuitem', { name: /Leave Organization/i }));
+
+      // The frontend guard fires *before* the confirmation dialog opens, so no
+      // dialog should appear and the API must not be called.
+      await waitFor(() => {
+        expect(screen.queryByText(/Are you sure you want to leave/)).not.toBeInTheDocument();
+      });
+      expect(mockRemoveMember).not.toHaveBeenCalled();
+    });
+
+    it('navigates away immediately when a non-last-owner leaves', async () => {
+      mockGetOrganizationMembers.mockResolvedValue([
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+        { user_id: 'user-3', email: 'other-owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+      ]);
+      mockRemoveMember.mockResolvedValue({});
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+
+      const row = screen.getByText('owner@example.com').closest('tr')!;
+      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(screen.getByRole('menuitem', { name: /Leave Organization/i }));
+      await waitFor(() => expect(screen.getByText(/Are you sure you want to leave/)).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: 'Leave' }));
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/organizations');
+      });
+    });
+  });
+
+  describe('Add to Team permission gating', () => {
+    it('non-owner without manage_teams_and_projects sees no Add to Team item', async () => {
+      // Set the caller to a non-owner whose custom role has edit_roles +
+      // kick_members but NOT manage_teams_and_projects — they should see
+      // Change Role and Remove Member, but no Add to Team.
+      mockUseOutletContext.mockReturnValue({
+        ...stableOrgContext,
+        organization: {
+          ...stableOrgContext.organization,
+          role: 'manager' as any,
+          user_rank: 1,
+          permissions: { view_members: true, add_members: true, edit_roles: true, kick_members: true, manage_teams_and_projects: false } as any,
+        },
+      });
+      const rolesWithManager = [
+        { id: 'r0', name: 'owner', display_name: 'Owner', is_default: true, display_order: 0, permissions: { view_members: true, edit_roles: true, kick_members: true, manage_teams_and_projects: true } },
+        { id: 'r1', name: 'manager', display_name: 'Manager', is_default: false, display_order: 1, permissions: { view_members: true, edit_roles: true, kick_members: true, manage_teams_and_projects: false } },
+        { id: 'r2', name: 'member', display_name: 'Member', is_default: true, display_order: 2, permissions: { view_members: true } },
+      ];
+      mockGetOrganizationRoles.mockResolvedValue(rolesWithManager);
+      mockGetOrganizationMembers.mockResolvedValue([
+        { user_id: 'user-1', email: 'owner@example.com', role: 'manager', created_at: new Date().toISOString(), rank: 1 },
+        { user_id: 'user-2', email: 'member@example.com', role: 'member', created_at: new Date().toISOString(), rank: 2 },
+      ]);
+      mockGetTeams.mockResolvedValue([{ id: 'team-1', name: 'Team A', description: '', created_at: new Date().toISOString() }]);
+
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
+
+      const row = screen.getByText('member@example.com').closest('tr')!;
+      await userEvent.click(within(row).getByRole('button'));
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Change Role' })).toBeInTheDocument());
+      expect(screen.queryByRole('menuitem', { name: 'Add to Team' })).not.toBeInTheDocument();
+
+      mockUseOutletContext.mockReturnValue(stableOrgContext);
+    });
+  });
+
+  describe('Settings-subpage shared-data path', () => {
+    it('skips the members + roles fetch when sharedDataLoaded is true', async () => {
+      const sharedMembers = [
+        { user_id: 'user-1', email: 'owner@example.com', role: 'owner', created_at: new Date().toISOString(), rank: 0 },
+      ];
+      const sharedRoles = [
+        { id: 'r1', name: 'owner', display_name: 'Owner', is_default: true, display_order: 0, permissions: { view_members: true } },
+        { id: 'r2', name: 'member', display_name: 'Member', is_default: true, display_order: 1, permissions: { view_members: true } },
+      ];
+      render(
+        <MembersPage
+          isSettingsSubpage
+          sharedMembers={sharedMembers as any}
+          sharedRoles={sharedRoles as any}
+          sharedDataLoaded
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+
+      // The shared-data path fetches only invitations + teams — not members or roles.
+      expect(mockGetOrganizationMembers).not.toHaveBeenCalled();
+      expect(mockGetOrganizationRoles).not.toHaveBeenCalled();
+      expect(mockGetOrganizationInvitations).toHaveBeenCalled();
+    });
+  });
+
+  describe('Copy invite link', () => {
+    it('writes a teams= query param when teams are selected', async () => {
+      mockGetTeams.mockResolvedValue([
+        { id: 'team-1', name: 'Team A', description: '', created_at: new Date().toISOString() },
+      ]);
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+
+      render(<MembersPage />);
+      await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /Invite/i }));
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+
+      // Open the teams multi-select and pick Team A.
+      const selectTeamsBtn = screen.getByRole('button', { name: /Select teams/i });
+      await userEvent.click(selectTeamsBtn);
+      const teamOption = await screen.findByRole('button', { name: /Team A/i });
+      await userEvent.click(teamOption);
+
+      await userEvent.click(screen.getByRole('button', { name: /Copy Invite Link/i }));
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const url = writeText.mock.calls[0][0] as string;
+      expect(url).toMatch(/\/join\/org-1\?teams=team-1$/);
     });
   });
 });

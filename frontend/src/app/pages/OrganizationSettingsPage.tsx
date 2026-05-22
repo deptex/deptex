@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type CiCdProvider, billingApi, type StripeInvoice, type Team } from '../../lib/api';
+import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, billingApi, type StripeInvoice, type Team } from '../../lib/api';
 import { usePlan, usePlanGate, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/button';
@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Settings, CreditCard, Users, Save, Trash2, UserPlus, X, Plus, ChevronDown, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Bell, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, FileCheck, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, PauseCircle, Sparkles } from 'lucide-react';
+import { Settings, CreditCard, Users, Save, Trash2, X, Plus, ChevronDown, ChevronRight, Check, Edit2, GripVertical, Lock, Shield, BarChart, Tag, Palette, Search, Plug, Loader2, Upload, Copy, Webhook, Pencil, BookOpen, Mail, Eye, EyeOff, Send, RefreshCw, Zap, Info, LogIn, Smartphone, ExternalLink, Clock, AlertTriangle, Sparkles } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
@@ -24,6 +24,7 @@ import { Progress } from '../../components/ui/progress';
 import { cn } from '../../lib/utils';
 import { RoleDropdown } from '../../components/RoleDropdown';
 import { RoleBadge } from '../../components/RoleBadge';
+import { UserAvatar, OrgAvatar } from '../../components/Avatar';
 import { Badge } from '../../components/ui/badge';
 import { Switch } from '../../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
@@ -32,19 +33,17 @@ import MembersPage from './MembersSection';
 import AuditLogsSection from './AuditLogsSection';
 import PoliciesPage from './PoliciesPage';
 import StatusesSection from '@/components/StatusesSection';
-import NotificationRulesSection from './NotificationRulesSection';
-import NotificationHistorySection from './NotificationHistorySection';
 import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import SLAConfigurationSection from '../../components/settings/SLAConfigurationSection';
 import AISection from '../../components/settings/AISection';
+import AISpendingSection from '../../components/settings/AISpendingSection';
 import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
-import { VALID_SETTINGS_SECTIONS, buildOrgSettingsSections } from '../../lib/orgSettingsSections';
-import PageHeader from '../../components/PageHeader';
+import { VALID_SETTINGS_SECTIONS } from '../../lib/orgSettingsSections';
 
 interface OrganizationContextType {
   organization: Organization | null;
-  reloadOrganization: () => Promise<void>;
+  reloadOrganization: (patch?: Partial<Organization>) => Promise<void>;
 }
 
 interface PlanFeature {
@@ -137,22 +136,157 @@ const orgMembersCache: Record<string, OrganizationMember[]> = {};
 const orgRolesCache: Record<string, OrganizationRole[]> = {};
 const orgIntegrationsCache: Record<string, CiCdConnection[]> = {};
 
+// Human-readable label for an integration connection — shared by the row UI
+// and the disconnect confirmation dialog so we never drift on provider names.
+function describeConnectionLabel(conn: CiCdConnection): string {
+  switch (conn.provider) {
+    case 'github': return 'GitHub';
+    case 'gitlab': return 'GitLab';
+    case 'bitbucket': return 'Bitbucket';
+    case 'slack': return 'Slack';
+    case 'discord': return 'Discord';
+    case 'email': return conn.metadata?.email || conn.display_name || 'Email';
+    case 'jira': return conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira';
+    case 'linear': return 'Linear';
+    case 'custom_notification':
+    case 'custom_ticketing':
+      return conn.metadata?.custom_name || conn.display_name || 'Custom integration';
+    default:
+      return conn.display_name || conn.provider;
+  }
+}
+
+// Bucket an integration into one of four type categories — drives the Type
+// pill on each row and the sort order on the unified table.
+type IntegrationType = 'cicd' | 'notification' | 'ticketing' | 'custom';
+function describeConnectionType(conn: CiCdConnection): IntegrationType {
+  if (conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket') return 'cicd';
+  if (conn.provider === 'slack' || conn.provider === 'discord' || conn.provider === 'email' || conn.provider === 'pagerduty') return 'notification';
+  if (conn.provider === 'jira' || conn.provider === 'linear') return 'ticketing';
+  return 'custom';
+}
+
+// Provider icon URL (null for icon-less providers — Email, PagerDuty, Custom).
+function describeConnectionIcon(conn: CiCdConnection): string | null {
+  switch (conn.provider) {
+    case 'github': return '/images/integrations/github.png';
+    case 'gitlab': return '/images/integrations/gitlab.png';
+    case 'bitbucket': return '/images/integrations/bitbucket.png';
+    case 'slack': return '/images/integrations/slack.png';
+    case 'discord': return '/images/integrations/discord.png';
+    case 'jira': return '/images/integrations/jira.png';
+    case 'linear': return '/images/integrations/linear.png';
+    case 'custom_notification':
+    case 'custom_ticketing':
+      return conn.metadata?.icon_url || null;
+    default:
+      return null;
+  }
+}
+
+// Secondary identifier — the "Connection" column on the table. For Slack
+// this is "#channel" under the workspace name; everything else is a single line.
+function describeConnectionIdentifier(conn: CiCdConnection): { primary: string; secondary: string | null } {
+  if (conn.provider === 'slack') {
+    const channel = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
+    const channelFormatted = channel ? (channel.startsWith('#') ? channel : `#${channel}`) : null;
+    return { primary: conn.display_name || conn.metadata?.team_name || 'Slack Workspace', secondary: channelFormatted };
+  }
+  if (conn.provider === 'discord') {
+    const fallback = conn.metadata?.guild_name || 'Discord Server';
+    return { primary: conn.display_name && conn.display_name !== 'Discord Server' ? conn.display_name : fallback, secondary: null };
+  }
+  if (conn.provider === 'email') {
+    return { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null };
+  }
+  if (conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') {
+    const fromUrl = conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook';
+    return { primary: conn.metadata?.custom_name || conn.display_name || fromUrl, secondary: null };
+  }
+  return { primary: conn.display_name || conn.installation_id || '—', secondary: null };
+}
+
+// Single muted pill recipe for every type — chrome stays neutral; the label
+// itself carries the meaning. Same shape as the default Badge variant.
+const INTEGRATION_TYPE_PILL: Record<IntegrationType, { label: string }> = {
+  cicd: { label: 'CI/CD' },
+  notification: { label: 'Notification' },
+  ticketing: { label: 'Ticketing' },
+  custom: { label: 'Custom' },
+};
+
+// Ordering used to sort the unified table — CI/CD first (the thing without
+// which nothing else has data to alert on), then Notification, then Ticketing,
+// then Custom. Within a type we secondary-sort by created_at desc.
+const INTEGRATION_TYPE_ORDER: Record<IntegrationType, number> = {
+  cicd: 0,
+  notification: 1,
+  ticketing: 2,
+  custom: 3,
+};
+
 const CACHE_KEY_MEMBERS = (orgId: string) => `org_members_${orgId}`;
 const CACHE_KEY_ROLES = (orgId: string) => `org_roles_${orgId}`;
 const CACHE_KEY_INTEGRATIONS = (orgId: string) => `org_integrations_${orgId}`;
-const CACHE_KEY_WEBHOOKS = (orgId: string) => `org_webhooks_${orgId}`;
 
-type WebhookCacheSnapshot = {
-  provider: string;
-  status: string;
-  event: string;
-  timeframe: string;
-  page: number;
-  deliveries: any[];
-  totalCount: number;
+type WebhookStatus = 'received' | 'processed' | 'skipped' | 'error';
+type WebhookTimeframe = '1H' | '24H' | '7D' | '30D';
+
+interface WebhookDelivery {
+  id?: string;
+  provider?: string;
+  event_type?: string;
+  repo_full_name?: string;
+  processing_status?: WebhookStatus | string;
+  status?: WebhookStatus | string;
+  processing_duration_ms?: number | null;
+  duration_ms?: number | null;
+  payload_size_bytes?: number | null;
+  received_at?: string | null;
+  created_at?: string | null;
+  error_message?: string | null;
+  request_headers?: Record<string, string> | null;
+  payload_preview?: string | null;
+}
+
+const WEBHOOK_PROVIDER_LABEL: Record<string, string> = {
+  all: 'All Providers',
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  bitbucket: 'Bitbucket',
 };
-const orgWebhooksCache: Record<string, WebhookCacheSnapshot> = {};
 
+const WEBHOOK_STATUS_LABEL: Record<string, string> = {
+  all: 'All Statuses',
+  received: 'Queued',
+  processed: 'Processed',
+  skipped: 'Skipped',
+  error: 'Error',
+};
+
+const WEBHOOK_STATUS_TOOLTIP: Record<string, string> = {
+  received: 'Delivery received; pipeline has not yet run.',
+  processed: 'Delivery accepted and pipeline ran successfully.',
+  skipped: 'Delivery accepted but no action required (e.g. unrelated branch).',
+  error: 'Delivery failed to process. See detail for error message.',
+};
+
+const WEBHOOK_EVENT_LABEL: Record<string, string> = {
+  all: 'All Events',
+  push: 'Push',
+  pull_request: 'Pull Request',
+  repository: 'Repository',
+};
+
+const WEBHOOK_TIMEFRAME_LABEL: Record<string, string> = {
+  '1H': 'Last Hour',
+  '24H': '24 Hours',
+  '7D': '7 Days',
+  '30D': '30 Days',
+};
+
+const webhookEventLabel = (eventType: string) =>
+  WEBHOOK_EVENT_LABEL[eventType] ?? (eventType ? eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—');
 
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
@@ -160,31 +294,42 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
   switch (section) {
     case 'general':
       return (
-        <div className="space-y-6">
-          <div>
-            <div className={`h-8 w-48 ${pulse}`} />
-          </div>
+        <div className="space-y-6 pt-8">
+          {/* Organization details card — name input + avatar + Save footer */}
           <div className="bg-background-card border border-border rounded-lg overflow-hidden">
             <div className="p-6">
-              <div className={`h-4 w-40 ${pulse} mb-2`} />
-              <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
-              <div className={`h-10 w-full max-w-md ${pulse}`} />
+              <div className={`h-5 w-44 ${pulse} mb-4`} />
+              <div className="flex flex-col sm:flex-row items-start gap-6">
+                <div className="flex-1 w-full sm:w-auto">
+                  <div className={`h-[42px] w-full max-w-md ${pulse}`} />
+                </div>
+                <div className="h-20 w-20 rounded-full bg-muted animate-pulse flex-shrink-0" />
+              </div>
+            </div>
+            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+              <div className={`h-8 w-20 ${pulse}`} />
             </div>
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="p-6 flex items-start gap-6">
-              <div className="flex-1">
-                <div className={`h-4 w-36 ${pulse} mb-2`} />
-                <div className={`h-3 w-full max-w-sm ${pulse}`} />
+          {/* Danger Zone card */}
+          <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+            <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+              <div className={`h-4 w-28 ${pulse}`} />
+            </div>
+            <div className="p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 space-y-2">
+                  <div className={`h-5 w-48 ${pulse}`} />
+                  <div className={`h-3 w-full max-w-xl ${pulse}`} />
+                </div>
+                <div className={`h-8 w-20 ${pulse} flex-shrink-0`} />
               </div>
-              <div className="h-20 w-20 rounded-full bg-muted animate-pulse" />
             </div>
           </div>
         </div>
       );
     case 'members':
       return (
-        <div className="space-y-6">
+        <div className="space-y-6 pt-8">
           <div className="flex items-center justify-between">
             <div className={`h-8 w-32 ${pulse}`} />
             <div className={`h-9 w-24 ${pulse}`} />
@@ -234,7 +379,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'roles':
       return (
-        <div className="space-y-6">
+        <div className="space-y-6 pt-8">
           <div className="flex items-center justify-between">
             <div>
               <div className={`h-8 w-24 ${pulse}`} />
@@ -394,36 +539,6 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-        </div>
-      );
-    case 'notifications':
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className={`h-8 w-36 ${pulse}`} />
-            <div className={`h-9 w-28 ${pulse}`} />
-          </div>
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-            <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-              <div className={`h-4 w-28 ${pulse}`} />
-            </div>
-            <div className="divide-y divide-border">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="px-4 py-3 flex items-center gap-3 animate-pulse">
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
-                    <div className="h-5 w-5 rounded-sm bg-muted flex-shrink-0" />
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    <div className={`h-4 w-32 ${pulse}`} />
-                    <div className={`h-3 w-48 ${pulse}`} />
-                  </div>
-                  <div className="h-6 w-6 rounded-full bg-muted flex-shrink-0 hidden sm:block" />
-                  <div className="h-6 w-6 rounded bg-muted flex-shrink-0" />
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -1417,18 +1532,6 @@ function getCachedIntegrations(orgId: string): CiCdConnection[] | null {
   }
 }
 
-function getCachedWebhooks(orgId: string): WebhookCacheSnapshot | null {
-  if (orgWebhooksCache[orgId]) return orgWebhooksCache[orgId];
-  try {
-    const raw = localStorage.getItem(CACHE_KEY_WEBHOOKS(orgId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as WebhookCacheSnapshot;
-    orgWebhooksCache[orgId] = parsed;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 export default function OrganizationSettingsPage() {
   const { id, section: sectionParam } = useParams<{ id: string; section?: string }>();
@@ -1446,14 +1549,6 @@ export default function OrganizationSettingsPage() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [cicdConnections, setCicdConnections] = useState<CiCdConnection[]>(() => getCachedIntegrations(id ?? '') ?? []);
   const [loadingConnections, setLoadingConnections] = useState(false);
-  const notificationConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'slack' || c.provider === 'discord' || c.provider === 'custom_notification' || c.provider === 'email'),
-    [cicdConnections]
-  );
-  const ticketingConnections = useMemo(
-    () => cicdConnections.filter(c => c.provider === 'jira' || c.provider === 'linear' || c.provider === 'custom_ticketing'),
-    [cicdConnections]
-  );
   // Initialize isOwner/isAdmin from cached permissions
   const [isOwner, setIsOwner] = useState(() => {
     const cached = organization?.permissions || (() => {
@@ -1521,9 +1616,6 @@ export default function OrganizationSettingsPage() {
   const [membersInviteModalOpen, setMembersInviteModalOpen] = useState(false);
   const [hasVisitedMembers, setHasVisitedMembers] = useState(false);
   const [hasVisitedIntegrations, setHasVisitedIntegrations] = useState(false);
-  const [hasVisitedWebhooks, setHasVisitedWebhooks] = useState(false);
-  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
-  const [notifSubTab, setNotifSubTab] = useState<'rules' | 'history'>('rules');
   const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
   const [hasVisitedStatuses, setHasVisitedStatuses] = useState(false);
   const [selectedRoleForSettings, setSelectedRoleForSettings] = useState<OrganizationRole | null>(null);
@@ -1536,7 +1628,6 @@ export default function OrganizationSettingsPage() {
     manage_security: false,
     view_activity: false,
     manage_compliance: false,
-    interact_with_security_agent: false,
     interact_with_aegis: false,
     manage_aegis: false,
     view_members: false,
@@ -1584,42 +1675,46 @@ export default function OrganizationSettingsPage() {
   const [customIntegrationDetailsClosing, setCustomIntegrationDetailsClosing] = useState(false);
   const [customIntegrationSecretVisible, setCustomIntegrationSecretVisible] = useState(false);
   const customIntegrationDetailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const notifCreateRuleRef = useRef<(() => void) | null>(null);
 
-  // Jira PAT dialog state
-  const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
+  // Inline credential-form state for the Add Integration sidebar — each form
+  // expands in place inside the sidebar rather than opening its own dialog.
   const [jiraPatBaseUrl, setJiraPatBaseUrl] = useState('');
   const [jiraPatToken, setJiraPatToken] = useState('');
   const [jiraPatSaving, setJiraPatSaving] = useState(false);
 
-  // Email notification dialog state
-  const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [emailToAdd, setEmailToAdd] = useState('');
   const [emailSaving, setEmailSaving] = useState(false);
 
-  const [showPagerDutyDialog, setShowPagerDutyDialog] = useState(false);
   const [pagerDutyServiceName, setPagerDutyServiceName] = useState('');
   const [pagerDutyRoutingKey, setPagerDutyRoutingKey] = useState('');
   const [pagerDutySaving, setPagerDutySaving] = useState(false);
 
-  const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
-  const [notifPauseLoading, setNotifPauseLoading] = useState(false);
+  // Two-tone confirmation dialogs (Integrations tab). One disconnect dialog
+  // serves CI/CD, notification destinations, and ticketing; the verb + label
+  // adapt off the stored connection's provider. Regenerate-secret confirm
+  // lives on the Custom Integration details panel.
+  const [connectionToDisconnect, setConnectionToDisconnect] = useState<CiCdConnection | null>(null);
+  const [disconnectingConnection, setDisconnectingConnection] = useState(false);
+  const [showRegenerateSecretConfirm, setShowRegenerateSecretConfirm] = useState(false);
+  // Add-integration sidebar — the single CTA on the Integrations header opens this;
+  // each row inside either hands off to an OAuth redirect, expands inline to collect
+  // credentials, or opens the larger Custom Integration form sidepanel.
+  // Same slide-in pattern as the Add Role sidebar: a separate "visible" flag drives
+  // the transform/opacity transition so we get a real slide-in/out instead of the
+  // Dialog primitive's zoom-from-center default.
+  const [showAddIntegrationSidebar, setShowAddIntegrationSidebar] = useState(false);
+  const [addIntegrationPanelVisible, setAddIntegrationPanelVisible] = useState(false);
+  const addIntegrationCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which row in the Add sidebar is currently expanded showing its credential form.
+  // Only one at a time (accordion). Null when nothing is expanded.
+  const [expandedAddItem, setExpandedAddItem] = useState<'email' | 'pagerduty' | 'jira-dc' | 'custom-notification' | 'custom-ticketing' | null>(null);
 
   // Usage screen state
   const [usageData, setUsageData] = useState<{ teamMembers: number; projectsCreated: number } | null>(null);
   const [loadingUsage, setLoadingUsage] = useState(false);
 
-  // Webhooks section state
-  const [webhookDeliveries, setWebhookDeliveries] = useState<any[]>([]);
-  const [webhookTotalCount, setWebhookTotalCount] = useState(0);
-  const [webhookLoading, setWebhookLoading] = useState(false);
-  const [webhookLoadMoreLoading, setWebhookLoadMoreLoading] = useState(false);
-  const [webhookProvider, setWebhookProvider] = useState('all');
-  const [webhookStatus, setWebhookStatus] = useState('all');
-  const [webhookEvent, setWebhookEvent] = useState('all');
-  const [webhookTimeframe, setWebhookTimeframe] = useState('30D');
-  const [webhookPage, setWebhookPage] = useState(1);
-  const WEBHOOK_PER_PAGE = 50;
+  // Latest delivery per git provider — folded into Integrations rows for at-a-glance health.
+  const [latestDeliveryByProvider, setLatestDeliveryByProvider] = useState<Record<string, WebhookDelivery | null>>({});
 
   // Get cached or organization permissions
   const getCachedPermissions = (): RolePermissions | null => {
@@ -1654,7 +1749,6 @@ export default function OrganizationSettingsPage() {
     manage_security: true,
     view_activity: true,
     manage_compliance: true,
-    interact_with_security_agent: true,
     interact_with_aegis: true,
     manage_aegis: true,
     view_ai_spending: true,
@@ -1711,6 +1805,20 @@ export default function OrganizationSettingsPage() {
       setAddRolePanelVisible(false);
     }
   }, [showAddRoleSidepanel]);
+
+  // Add integration sidebar: same RAF-double-tick trick so the panel mounts
+  // off-screen and then slides in on the next paint.
+  useEffect(() => {
+    if (showAddIntegrationSidebar) {
+      setAddIntegrationPanelVisible(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAddIntegrationPanelVisible(true));
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setAddIntegrationPanelVisible(false);
+    }
+  }, [showAddIntegrationSidebar]);
 
   // Role Settings sidebar: animate in on open, animate out before unmount
   useEffect(() => {
@@ -1778,9 +1886,17 @@ export default function OrganizationSettingsPage() {
   useEffect(() => {
     if (organization && permissionsChecked) {
       setOrgName(organization.name);
-      loadRoles();
     }
   }, [organization, id, permissionsChecked]);
+
+  // Fetch roles only when the user lands on the Roles tab. Other tabs read the
+  // cached list seeded above; the Transfer Ownership flow in General is fine
+  // with stale role badges (it only needs the role name to submit).
+  useEffect(() => {
+    if (activeSection === 'roles' && id && permissionsChecked) {
+      loadRoles();
+    }
+  }, [activeSection, id, permissionsChecked]);
 
   // Cleanup avatar preview URL on unmount
   useEffect(() => {
@@ -1817,19 +1933,13 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  // Track when user visits Members/Integrations/Webhooks/Notifications/Policies tabs so we can keep them mounted (cached) when switching away
+  // Track when user visits Members/Integrations/Policies/Statuses tabs so we can keep them mounted (cached) when switching away
   useEffect(() => {
     if (activeSection === 'members') setHasVisitedMembers(true);
     if (activeSection === 'integrations') setHasVisitedIntegrations(true);
-    if (activeSection === 'webhooks') setHasVisitedWebhooks(true);
-    if (activeSection === 'notifications') setHasVisitedNotifications(true);
     if (activeSection === 'policies') setHasVisitedPolicies(true);
     if (activeSection === 'statuses') setHasVisitedStatuses(true);
   }, [activeSection]);
-
-  useEffect(() => {
-    setNotifPausedUntil((organization as any)?.notifications_paused_until ?? null);
-  }, [organization]);
 
   const loadUsage = async () => {
     if (!id) return;
@@ -1863,137 +1973,49 @@ export default function OrganizationSettingsPage() {
     }
   }, [activeSection, id]);
 
-  const loadWebhookDeliveries = async (opts?: { silent?: boolean; page?: number }) => {
-    if (!id) return;
-    const silent = opts?.silent ?? false;
-    const page = opts?.page ?? webhookPage;
-    if (!silent) setWebhookLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const params = new URLSearchParams({
-        timeframe: webhookTimeframe,
-        page: String(page),
-        per_page: String(WEBHOOK_PER_PAGE),
-      });
-      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
-      if (webhookStatus !== 'all') params.set('status', webhookStatus);
-      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const deliveries = data.deliveries ?? data.items ?? data ?? [];
-        const totalCount = data.total ?? data.total_count ?? 0;
-        setWebhookDeliveries(deliveries);
-        setWebhookTotalCount(totalCount);
-        setWebhookPage(page);
-        const snapshot: WebhookCacheSnapshot = {
-          provider: webhookProvider,
-          status: webhookStatus,
-          event: webhookEvent,
-          timeframe: webhookTimeframe,
-          page,
-          deliveries,
-          totalCount,
-        };
-        orgWebhooksCache[id] = snapshot;
-        try {
-          localStorage.setItem(CACHE_KEY_WEBHOOKS(id), JSON.stringify(snapshot));
-        } catch { /* ignore */ }
-      }
-    } catch { /* ignore */ } finally {
-      if (!silent) setWebhookLoading(false);
-    }
-  };
-
-  const loadMoreWebhookDeliveries = async () => {
-    if (!id || webhookLoadMoreLoading) return;
-    const nextPage = webhookPage + 1;
-    setWebhookLoadMoreLoading(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      const params = new URLSearchParams({
-        timeframe: webhookTimeframe,
-        page: String(nextPage),
-        per_page: String(WEBHOOK_PER_PAGE),
-      });
-      if (webhookProvider !== 'all') params.set('provider', webhookProvider);
-      if (webhookStatus !== 'all') params.set('status', webhookStatus);
-      if (webhookEvent !== 'all') params.set('event_type', webhookEvent);
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?${params}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const more = data.deliveries ?? data.items ?? data ?? [];
-        const totalCount = data.total ?? data.total_count ?? webhookTotalCount;
-        setWebhookDeliveries((prev) => [...prev, ...more]);
-        setWebhookTotalCount(totalCount);
-        setWebhookPage(nextPage);
-      }
-    } catch { /* ignore */ } finally {
-      setWebhookLoadMoreLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeSection === 'webhooks' && id) {
-      const cached = getCachedWebhooks(id);
-      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
-      if (paramsMatch && cached.deliveries.length >= 0) {
-        setWebhookDeliveries(cached.deliveries);
-        setWebhookTotalCount(cached.totalCount);
-        setWebhookPage(cached.page ?? 1);
-        loadWebhookDeliveries({ silent: true, page: 1 });
-      } else {
-        loadWebhookDeliveries({ page: 1 });
-      }
-    }
-  }, [activeSection, id, webhookTimeframe]);
-
-  useEffect(() => {
-    if (activeSection === 'webhooks' && id) {
-      const cached = getCachedWebhooks(id);
-      const paramsMatch = cached && cached.provider === webhookProvider && cached.status === webhookStatus && cached.event === webhookEvent && cached.timeframe === webhookTimeframe && cached.page === webhookPage;
-      if (paramsMatch && cached.deliveries.length >= 0) {
-        setWebhookDeliveries(cached.deliveries);
-        setWebhookTotalCount(cached.totalCount);
-        setWebhookPage(cached.page ?? 1);
-        loadWebhookDeliveries({ silent: true, page: 1 });
-      } else {
-        loadWebhookDeliveries({ page: 1 });
-      }
-    }
-  }, [webhookProvider, webhookStatus, webhookEvent]);
-
   const formatWebhookTime = (dateString: string | null): string => {
     if (!dateString) return '—';
     const date = new Date(dateString);
     const now = new Date();
     const diffS = Math.floor((now.getTime() - date.getTime()) / 1000);
-    if (diffS < 60) return 'Just now';
+    if (diffS < 60) return 'just now';
     if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
     if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;
     if (diffS < 2592000) return `${Math.floor(diffS / 86400)}d ago`;
     return date.toLocaleDateString();
   };
 
-  const webhookStatusDot = (status: string) => {
-    switch (status) {
-      case 'processed': return 'bg-green-500';
-      case 'skipped': return 'bg-amber-400';
-      case 'error': return 'bg-red-500';
-      default: return 'bg-foreground-secondary';
-    }
+  // Fetch the latest delivery for each connected git provider, used by the
+  // small health badge on Integrations rows.
+  const loadLatestDeliveriesPerProvider = async () => {
+    if (!id) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+      const providers: Array<'github' | 'gitlab' | 'bitbucket'> = ['github', 'gitlab', 'bitbucket'];
+      const results = await Promise.all(providers.map(async (provider) => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/organizations/${id}/webhook-deliveries?timeframe=30D&provider=${provider}&page=1&per_page=1`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (!res.ok) return [provider, null] as const;
+          const data = await res.json();
+          const first: WebhookDelivery | undefined = (data.deliveries ?? data.items ?? data ?? [])[0];
+          return [provider, first ?? null] as const;
+        } catch {
+          return [provider, null] as const;
+        }
+      }));
+      setLatestDeliveryByProvider(Object.fromEntries(results));
+    } catch { /* ignore */ }
   };
 
-  const webhookEventLabel = (eventType: string) =>
-    eventType ? eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
+  useEffect(() => {
+    if (activeSection === 'integrations' && id) {
+      loadLatestDeliveriesPerProvider();
+    }
+  }, [activeSection, id]);
 
   // Handle integration connection callbacks (GitHub, GitLab, Bitbucket)
   useEffect(() => {
@@ -2049,13 +2071,20 @@ export default function OrganizationSettingsPage() {
       setIsOwner(owner);
       // Admin has view_settings + view_members
       setIsAdmin(owner || (userRolePermissions.view_settings === true && userRolePermissions.view_members === true));
-
-      // Load members if user can view them
-      if ((owner || userRolePermissions.view_members) && id) {
-        loadMembers();
-      }
     }
   }, [userRolePermissions, organization, id]);
+
+  // Load members as soon as the org permissions say so — don't wait for the lazy
+  // loadRoles() pass to populate userRolePermissions, since Transfer Ownership in
+  // General needs the members list immediately. effectivePermissions falls back
+  // to organization.permissions when userRolePermissions hasn't loaded yet.
+  useEffect(() => {
+    if (!id || !organization || !permissionsChecked) return;
+    const canViewMembers = isOrgOwner || effectivePermissions?.view_members === true;
+    if (canViewMembers) {
+      loadMembers();
+    }
+  }, [id, organization, permissionsChecked, isOrgOwner, effectivePermissions?.view_members]);
 
   // Settings access is not gated by view_settings; section-level permissions handle access
 
@@ -2142,15 +2171,16 @@ export default function OrganizationSettingsPage() {
     try {
       setIsSavingOrgName(true);
       await api.updateOrganization(id, { name: orgName.trim() });
-      await reloadOrganization();
+      await reloadOrganization({ name: orgName.trim() });
       toast({
         title: 'Organization name updated',
         description: 'The organization name has been updated successfully.',
       });
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error updating organization name:', error);
       toast({
         title: 'Update failed',
-        description: error.message || 'Failed to update organization name.',
+        description: 'Failed to update organization name. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2230,7 +2260,7 @@ export default function OrganizationSettingsPage() {
 
       // Update organization
       await api.updateOrganization(id, { avatar_url: publicUrl });
-      await reloadOrganization();
+      await reloadOrganization({ avatar_url: publicUrl });
 
       if (pendingAvatarPreview) {
         URL.revokeObjectURL(pendingAvatarPreview);
@@ -2242,15 +2272,124 @@ export default function OrganizationSettingsPage() {
         title: 'Avatar updated',
         description: 'The organization avatar has been updated successfully.',
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error uploading avatar:', error);
       toast({
         title: 'Upload failed',
-        description: error.message || 'Failed to upload avatar. Please try again.',
+        description: 'Failed to upload avatar. Please try again.',
         variant: 'destructive',
       });
     } finally {
       setIsUploadingAvatar(false);
+    }
+  };
+
+  const closeAddIntegrationSidebar = () => {
+    setAddIntegrationPanelVisible(false);
+    if (addIntegrationCloseTimeoutRef.current) clearTimeout(addIntegrationCloseTimeoutRef.current);
+    addIntegrationCloseTimeoutRef.current = setTimeout(() => {
+      addIntegrationCloseTimeoutRef.current = null;
+      setShowAddIntegrationSidebar(false);
+      setExpandedAddItem(null);
+      setEmailToAdd('');
+      setPagerDutyServiceName('');
+      setPagerDutyRoutingKey('');
+      setJiraPatBaseUrl('');
+      setJiraPatToken('');
+      setCustomIntegrationName('');
+      setCustomIntegrationWebhookUrl('');
+    }, 150);
+  };
+
+  // Inline-form submit handlers — each calls its api wrapper, toasts the
+  // outcome, reloads the connections table, and animates the sidebar out.
+  const handleInlineEmailSubmit = async () => {
+    if (!organization?.id) return;
+    setEmailSaving(true);
+    try {
+      await api.createEmailNotification(organization.id, emailToAdd.trim());
+      toast({ title: 'Added', description: 'Email notification added successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to add email notification:', err);
+      toast({ title: 'Error', description: 'Failed to add email. Please try again.', variant: 'destructive' });
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const handleInlinePagerDutySubmit = async () => {
+    if (!organization?.id) return;
+    setPagerDutySaving(true);
+    try {
+      await api.connectPagerDutyOrg(organization.id, {
+        serviceName: pagerDutyServiceName.trim(),
+        routingKey: pagerDutyRoutingKey.trim(),
+      });
+      toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to connect PagerDuty:', err);
+      toast({ title: 'Error', description: 'Failed to connect PagerDuty. Please try again.', variant: 'destructive' });
+    } finally {
+      setPagerDutySaving(false);
+    }
+  };
+
+  const handleInlineJiraDcSubmit = async () => {
+    if (!organization?.id) return;
+    setJiraPatSaving(true);
+    try {
+      await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
+      toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to connect Jira PAT:', err);
+      toast({ title: 'Error', description: 'Failed to connect Jira. Please try again.', variant: 'destructive' });
+    } finally {
+      setJiraPatSaving(false);
+    }
+  };
+
+  // Inline Custom Notification / Custom Ticketing submit. Icon upload + the
+  // post-create signing-secret reveal stays on the Details panel — this just
+  // collects name + webhook URL, creates the row, then opens the Details
+  // panel with the generated secret pre-populated.
+  const handleInlineCustomSubmit = async (type: 'notification' | 'ticketing') => {
+    if (!organization?.id) return;
+    setCustomIntegrationSaving(true);
+    try {
+      const result = await api.createCustomIntegration(organization.id, {
+        name: customIntegrationName.trim(),
+        type,
+        webhook_url: customIntegrationWebhookUrl.trim(),
+        icon_url: undefined,
+      });
+      setNewlyCreatedIntegrationId(result.id);
+      setCustomIntegrationSecret(result.secret);
+      const newConn: CiCdConnection = {
+        id: result.id,
+        display_name: customIntegrationName.trim(),
+        metadata: { custom_name: customIntegrationName.trim(), webhook_url: customIntegrationWebhookUrl.trim() },
+        provider: type === 'notification' ? 'custom_notification' : 'custom_ticketing',
+        status: 'connected',
+        connected_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setCustomIntegrationDetailsConn(newConn);
+      setShowCustomIntegrationDetailsSidebar(true);
+      toast({ title: 'Created', description: 'Custom integration created. Copy the signing secret below.' });
+      await loadConnections();
+      closeAddIntegrationSidebar();
+    } catch (err) {
+      console.error('Failed to create custom integration:', err);
+      toast({ title: 'Error', description: 'Failed to create custom integration. Please try again.', variant: 'destructive' });
+    } finally {
+      setCustomIntegrationSaving(false);
     }
   };
 
@@ -2268,7 +2407,6 @@ export default function OrganizationSettingsPage() {
         manage_security: false,
         view_activity: false,
         manage_compliance: false,
-        interact_with_security_agent: false,
         interact_with_aegis: false,
         manage_aegis: false,
         view_members: false,
@@ -2351,6 +2489,77 @@ export default function OrganizationSettingsPage() {
       });
     } finally {
       setIsCreatingRole(false);
+    }
+  };
+
+  // Unified disconnect handler for the three flows (CI/CD, notification, ticketing).
+  // The row buttons set `connectionToDisconnect`; the shared confirm dialog calls this.
+  const handleConfirmDisconnect = async () => {
+    if (!connectionToDisconnect || !organization?.id) return;
+    const conn = connectionToDisconnect;
+    const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+    const isEmail = conn.provider === 'email';
+    const isCicd = conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket';
+    const removeVerbTitle = isCustom || isEmail ? 'Removed' : 'Disconnected';
+    const providerLabel = describeConnectionLabel(conn);
+
+    setDisconnectingConnection(true);
+    try {
+      const result = await api.deleteOrganizationConnection(organization.id, conn.id);
+
+      // CI/CD: open the host's installations / revoke page so the user can finish
+      // the uninstall on the provider side, then refresh the org payload so the
+      // sidebar's provider chips drop.
+      if (isCicd) {
+        if (result.revokeUrl) {
+          window.open(result.revokeUrl, '_blank');
+          toast({ title: `Opening ${providerLabel}`, description: 'Complete revoke in the opened tab.' });
+        } else if (result.provider === 'github' && result.installationId) {
+          window.open(`https://github.com/settings/installations/${result.installationId}`, '_blank');
+          toast({ title: 'Opening GitHub', description: 'Complete uninstall in the opened tab.' });
+        } else {
+          toast({ title: 'Disconnected', description: `${providerLabel} connection removed.` });
+        }
+        await reloadOrganization();
+      } else if (!isCustom && !isEmail && result.revokeUrl) {
+        // Slack / Discord — surface the workspace-side revoke URL.
+        window.open(result.revokeUrl, '_blank');
+        toast({ title: 'Disconnected', description: `${providerLabel} removed. Complete app removal in the opened tab.` });
+      } else {
+        toast({ title: removeVerbTitle, description: `${providerLabel} connection removed.` });
+      }
+
+      await loadConnections();
+    } catch (err) {
+      console.error('Failed to disconnect connection:', err);
+      toast({ title: 'Error', description: 'Failed to disconnect. Please try again.', variant: 'destructive' });
+    } finally {
+      setDisconnectingConnection(false);
+      setConnectionToDisconnect(null);
+    }
+  };
+
+  const handleConfirmRegenerateSecret = async () => {
+    if (!organization?.id || !customIntegrationDetailsConn) {
+      setShowRegenerateSecretConfirm(false);
+      return;
+    }
+    const conn = customIntegrationDetailsConn;
+    setCustomIntegrationRegenerating(true);
+    setCustomIntegrationSecretVisible(false);
+    try {
+      const result = await api.updateCustomIntegration(organization.id, conn.id, { regenerate_secret: true });
+      if (result.secret) {
+        setCustomIntegrationSecret(result.secret);
+        setNewlyCreatedIntegrationId(conn.id);
+        toast({ title: 'Secret regenerated', description: 'Copy the new secret above.' });
+      }
+    } catch (err) {
+      console.error('Failed to regenerate secret:', err);
+      toast({ title: 'Error', description: 'Failed to regenerate secret. Please try again.', variant: 'destructive' });
+    } finally {
+      setCustomIntegrationRegenerating(false);
+      setShowRegenerateSecretConfirm(false);
     }
   };
 
@@ -2479,7 +2688,6 @@ export default function OrganizationSettingsPage() {
       manage_security: false,
       view_activity: false,
       manage_compliance: false,
-      interact_with_security_agent: false,
       interact_with_aegis: false,
       manage_aegis: false,
       view_members: false,
@@ -2619,10 +2827,11 @@ export default function OrganizationSettingsPage() {
       setSelectedNewRole('admin');
       await reloadOrganization();
       await loadMembers(); // Reload members to update the list
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error transferring ownership:', error);
       toast({
         title: 'Transfer failed',
-        description: error.message || 'Failed to transfer ownership. Please try again.',
+        description: 'Failed to transfer ownership. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2641,10 +2850,11 @@ export default function OrganizationSettingsPage() {
         description: 'The organization has been deleted successfully.',
       });
       navigate('/organizations');
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Error deleting organization:', error);
       toast({
         title: 'Delete failed',
-        description: error.message || 'Failed to delete organization. Please try again.',
+        description: 'Failed to delete organization. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -2652,38 +2862,24 @@ export default function OrganizationSettingsPage() {
     }
   };
 
-  // Section list lives in `lib/orgSettingsSections.tsx` so the sidebar drilldown renders the same items.
-  const orgSettingsSections = buildOrgSettingsSections(effectivePermissions);
-
-  const activeSectionLabel = (() => {
-    for (const entry of orgSettingsSections) {
-      if (!('isCategory' in entry && entry.isCategory) && entry.id === activeSection) {
-        return entry.label;
-      }
-    }
-    return 'General';
-  })();
+  // Sub-nav lives in the sidebar drilldown (OrgSidebar) which calls buildOrgSettingsSections directly.
 
   // Don't render if organization not loaded or permissions not checked yet — show full-page settings skeleton with tab-specific content
   if (!organization || !permissionsChecked) {
     const loadingSection = sectionParam && VALID_SETTINGS_SECTIONS.has(sectionParam) ? sectionParam : 'general';
     return (
-      <>
-        <PageHeader title={`Settings — ${activeSectionLabel}`} />
-        <div className="bg-background">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-            <OrgSettingsTabSkeleton section={loadingSection} />
-          </div>
+      <div className="bg-background">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-8">
+          <OrgSettingsTabSkeleton section={loadingSection} />
         </div>
-      </>
+      </div>
     );
   }
 
   return (
     <>
-      <PageHeader title={`Settings — ${activeSectionLabel}`} />
       <div className="bg-background">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-8">
           {/* Sub-nav lives in the sidebar drilldown (OrgSidebar). Content is single column. */}
           <div className="no-scrollbar">
             {activeSection === 'general' && (
@@ -2704,7 +2900,7 @@ export default function OrganizationSettingsPage() {
                                 onChange={(e) => isOrgOwner && setOrgName(e.target.value)}
                                 placeholder="Enter organization name"
                                 disabled={!isOrgOwner}
-                                className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors ${!isOrgOwner ? 'opacity-60 cursor-not-allowed' : ''}`}
                               />
                             </div>
                           ) : (
@@ -2725,8 +2921,8 @@ export default function OrganizationSettingsPage() {
                                 />
                                 <label htmlFor="org-avatar-upload" className={`cursor-pointer block group ${isUploadingAvatar ? 'pointer-events-none' : ''}`}>
                                   <div className="relative">
-                                    <img
-                                      src={pendingAvatarPreview || organization.avatar_url || '/images/org_profile.png'}
+                                    <OrgAvatar
+                                      src={pendingAvatarPreview || organization.avatar_url}
                                       alt={organization.name}
                                       className="h-20 w-20 rounded-full object-cover border-2 border-border group-hover:border-primary/50 transition-all shadow-lg"
                                     />
@@ -2743,8 +2939,8 @@ export default function OrganizationSettingsPage() {
                                 </label>
                               </>
                             ) : (
-                              <img
-                                src={organization.avatar_url || '/images/org_profile.png'}
+                              <OrgAvatar
+                                src={organization.avatar_url}
                                 alt={organization.name}
                                 className="h-20 w-20 rounded-full object-cover border-2 border-border opacity-75 shadow-lg"
                               />
@@ -2756,22 +2952,18 @@ export default function OrganizationSettingsPage() {
                       </div>
                     </div>
                     {isOrgOwner ? (
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between gap-4 flex-wrap">
-                        <p className="text-xs text-foreground-secondary">
-                          {pendingAvatarFile
-                            ? 'New avatar selected. Click Save to apply.'
-                            : 'Please use 32 characters at maximum. Select an image to change the avatar.'}
-                        </p>
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                         <Button
                           onClick={handleSaveOrganizationDetails}
                           disabled={isSavingOrgName || isUploadingAvatar || (orgName === organization?.name && !pendingAvatarFile)}
-                          size="sm"
-                          className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
+                          <span className={(isSavingOrgName || isUploadingAvatar) ? 'invisible' : ''}>Save</span>
                           {(isSavingOrgName || isUploadingAvatar) && (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            </span>
                           )}
-                          Save
                         </Button>
                       </div>
                     ) : (
@@ -2798,7 +2990,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowMemberDropdown(!showMemberDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2 flex-1 min-w-0 text-left">
                                       {selectedTransferMemberId && !loadingMembers ? (
@@ -2807,13 +2999,10 @@ export default function OrganizationSettingsPage() {
                                           if (!selectedMember) return <span className="text-foreground-secondary">Select a member...</span>;
                                           return (
                                             <>
-                                              <img
-                                                src={selectedMember.avatar_url || '/images/blank_profile_image.png'}
+                                              <UserAvatar
+                                                src={selectedMember.avatar_url}
                                                 alt={selectedMember.full_name || selectedMember.email}
                                                 className="h-5 w-5 rounded-full object-cover border border-border flex-shrink-0"
-                                                onError={(e) => {
-                                                  e.currentTarget.src = '/images/blank_profile_image.png';
-                                                }}
                                               />
                                               <span className="truncate">{selectedMember.full_name || selectedMember.email.split('@')[0]}</span>
                                             </>
@@ -2851,7 +3040,7 @@ export default function OrganizationSettingsPage() {
                                               value={memberSearchTerm}
                                               onChange={(e) => setMemberSearchTerm(e.target.value)}
                                               placeholder="Search members..."
-                                              className="w-full pl-9 pr-3 py-2 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                                              className="w-full pl-9 pr-3 py-2 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
                                               autoFocus
                                             />
                                           </div>
@@ -2870,14 +3059,10 @@ export default function OrganizationSettingsPage() {
                                                   }}
                                                   className={`w-full px-3 py-2.5 flex items-center gap-3 hover:bg-background-subtle/50 transition-colors text-left ${selectedTransferMemberId === member.user_id ? 'bg-background-subtle/50' : ''}`}
                                                 >
-                                                  <img
-                                                    src={member.avatar_url || '/images/blank_profile_image.png'}
+                                                  <UserAvatar
+                                                    src={member.avatar_url}
                                                     alt={member.full_name || member.email}
                                                     className="h-8 w-8 rounded-full object-cover border border-border flex-shrink-0"
-                                                    referrerPolicy="no-referrer"
-                                                    onError={(e) => {
-                                                      e.currentTarget.src = '/images/blank_profile_image.png';
-                                                    }}
                                                   />
                                                   <div className="flex-1 min-w-0">
                                                     <div className="text-sm font-medium text-foreground truncate">
@@ -2917,7 +3102,7 @@ export default function OrganizationSettingsPage() {
                                   <button
                                     type="button"
                                     onClick={() => setShowRoleDropdown(!showRoleDropdown)}
-                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
+                                    className="w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between hover:bg-background-subtle/50 transition-colors"
                                   >
                                     <div className="flex items-center gap-2">
                                       {(() => {
@@ -3001,23 +3186,18 @@ export default function OrganizationSettingsPage() {
                         )}
                       </div>
                       {members.filter(m => m.user_id !== user?.id).length > 0 && (
-                        <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                          <p className="text-xs text-foreground-secondary">
-                            This action is irreversible. Make sure you select the correct member.
-                          </p>
+                        <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                           <Button
                             onClick={handleTransferOwnership}
-                            variant="outline"
-                            size="sm"
-                            className="h-8"
+                            variant="green"
                             disabled={!selectedTransferMemberId || isTransferringOwnership}
                           >
-                            {isTransferringOwnership ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                            ) : (
-                              <UserPlus className="h-3.5 w-3.5 mr-2" />
+                            <span className={isTransferringOwnership ? 'invisible' : ''}>Transfer</span>
+                            {isTransferringOwnership && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
                             )}
-                            Transfer
                           </Button>
                         </div>
                       )}
@@ -3041,11 +3221,9 @@ export default function OrganizationSettingsPage() {
                           {!showDeleteConfirm && organization && (
                             <Button
                               onClick={() => setShowDeleteConfirm(true)}
-                              variant="outline"
-                              size="sm"
-                              className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                              variant="destructive"
+                              className="flex-shrink-0"
                             >
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
                               Delete
                             </Button>
                           )}
@@ -3061,22 +3239,21 @@ export default function OrganizationSettingsPage() {
                               value={deleteConfirmText}
                               onChange={(e) => setDeleteConfirmText(e.target.value)}
                               placeholder={organization.name}
-                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                              autoFocus
+                              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                             />
                             <div className="flex gap-2">
                               <Button
                                 onClick={handleDeleteOrganization}
                                 variant="destructive"
-                                size="sm"
                                 disabled={deleteConfirmText !== organization.name || isDeletingOrg}
-                                className="h-8"
                               >
-                                {isDeletingOrg ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                                ) : (
-                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                <span className={isDeletingOrg ? 'invisible' : ''}>Delete Forever</span>
+                                {isDeletingOrg && (
+                                  <span className="absolute inset-0 flex items-center justify-center">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  </span>
                                 )}
-                                Delete Forever
                               </Button>
                               <Button
                                 onClick={() => {
@@ -3126,10 +3303,9 @@ export default function OrganizationSettingsPage() {
                     </div>
                     {effectivePermissions?.edit_roles && (
                       <Button
+                        variant="green"
                         onClick={() => setShowAddRoleSidepanel(true)}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                       >
-                        <Plus className="h-4 w-4 mr-2" />
                         Add Role
                       </Button>
                     )}
@@ -3198,7 +3374,7 @@ export default function OrganizationSettingsPage() {
                           return (
                             <tr
                               key={role.id || role.name}
-                              className={`transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover'}`}
+                              className={`transition-all duration-150 group ${isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : ''}`}
                               draggable={canDrag}
                               onDragStart={(e) => {
                                 if (!canDrag) return;
@@ -3253,7 +3429,7 @@ export default function OrganizationSettingsPage() {
                                             setEditingRoleName('');
                                           }
                                         }}
-                                        className="bg-transparent border-b border-primary outline-none text-sm font-medium text-foreground focus:outline-none focus:border-primary p-0"
+                                        className="bg-transparent border-b border-input outline-none text-sm font-medium text-foreground focus:outline-none focus:border-foreground-secondary p-0 transition-colors"
                                         autoFocus
                                       />
                                     ) : (
@@ -3262,7 +3438,7 @@ export default function OrganizationSettingsPage() {
                                       </span>
                                     )}
                                     {isUserRole && (
-                                      <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-green-600/15 text-green-500 rounded-full whitespace-nowrap">
+                                      <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-muted text-foreground-secondary rounded-full whitespace-nowrap">
                                         Your Role
                                       </span>
                                     )}
@@ -3339,11 +3515,14 @@ export default function OrganizationSettingsPage() {
                       </table>
                     </div>
                   ) : (
-                    <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-                      <div className="h-12 w-12 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                        <Users className="h-6 w-6 text-foreground-secondary" />
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-8 flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Shield className="h-5 w-5 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-lg font-semibold text-foreground">No roles found</h3>
+                      <h3 className="text-sm font-semibold text-foreground mb-1">No roles found</h3>
+                      <p className="text-sm text-foreground-secondary max-w-md">
+                        Your organization doesn't have any roles configured yet. Add a role to start customizing what members can see and do.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -3369,1029 +3548,245 @@ export default function OrganizationSettingsPage() {
               {/* Keep Integrations mounted after first visit so it doesn't reload when switching tabs (like Members) */}
               {(activeSection === 'integrations' || hasVisitedIntegrations) && (
                 <div
-                  className="space-y-8 pt-8"
+                  className="space-y-6 pt-8"
                   style={{ display: activeSection === 'integrations' ? undefined : 'none' }}
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-4">
                     <div>
                       <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
                       <p className="mt-1.5 text-sm text-foreground-secondary">
-                        Manage your organization&apos;s integrations for syncing projects and sending notifications to Slack, Discord, Jira, and more.
+                        Source-control hosts, notification destinations, and ticketing tools — all in one list. Use Add to wire up a new connection.
                       </p>
                     </div>
-                    <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                      <Button variant="outline" size="sm" className="text-xs">
-                        <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                        Docs
-                      </Button>
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
+                        <Button variant="outline" className="!h-8 !px-3 !rounded-lg">
+                          <BookOpen />
+                          Docs
+                        </Button>
+                      </Link>
+                      {effectivePermissions?.manage_integrations && (
+                        <Button variant="green" onClick={() => setShowAddIntegrationSidebar(true)}>
+                          Add
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Permission Check */}
                   {!effectivePermissions?.manage_integrations ? (
-                    <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-                      <div className="h-16 w-16 rounded-full bg-background-subtle flex items-center justify-center mb-4">
-                        <Lock className="h-8 w-8 text-foreground-secondary" />
+                    <div className="bg-background-card border border-border rounded-lg px-4 py-8 flex flex-col items-center justify-center text-center">
+                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                        <Lock className="h-5 w-5 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-lg font-semibold text-foreground mb-2">Access Denied</h3>
-                      <p className="text-sm text-foreground-secondary max-w-md">
-                        You don't have permission to manage integrations. Contact an administrator to request access.
+                      <h3 className="text-sm font-semibold text-foreground mb-1">No access to integrations</h3>
+                      <p className="text-xs text-foreground-secondary max-w-md">
+                        Ask an organization admin for the <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">manage_integrations</code> permission to connect repositories, notification destinations, or ticketing tools.
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-8">
-                      {/* CI/CD Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {([
-                              { provider: 'github' as CiCdProvider, label: 'GitHub', icon: '/images/integrations/github.png', endpoint: 'github/install' },
-                              { provider: 'gitlab' as CiCdProvider, label: 'GitLab', icon: '/images/integrations/gitlab.png', endpoint: 'gitlab/install' },
-                              { provider: 'bitbucket' as CiCdProvider, label: 'Bitbucket', icon: '/images/integrations/bitbucket.png', endpoint: 'bitbucket/install' },
-                            ]).map(({ provider, label, icon, endpoint }) => (
-                              <Button
-                                key={provider}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { data: { session } } = await supabase.auth.getSession();
-                                    if (!session?.access_token) {
-                                      toast({ title: 'Error', description: 'Please log in first.', variant: 'destructive' });
-                                      return;
-                                    }
-                                    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-                                    const response = await fetch(`${API_BASE_URL}/api/integrations/${endpoint}?org_id=${organization.id}`, {
-                                      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-                                    });
-                                    if (!response.ok) {
-                                      const err = await response.json().catch(() => ({ error: `Failed to connect ${label}` }));
-                                      throw new Error(err.error || `Failed to start ${label} connection`);
-                                    }
-                                    const data = await response.json();
-                                    if (data.redirectUrl) {
-                                      window.location.href = data.redirectUrl;
-                                    }
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to connect ${label}.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                                Add {label}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[120px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2, 3, 4].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-28 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[120px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No source code integrations. Connect a Git provider above to start scanning repositories.
-                                    </td>
-                                  </tr>
-                                ) : cicdConnections.filter(c => c.provider === 'github' || c.provider === 'gitlab' || c.provider === 'bitbucket').map((conn) => {
-                                      const providerIcon = conn.provider === 'github' ? '/images/integrations/github.png'
-                                        : conn.provider === 'gitlab' ? '/images/integrations/gitlab.png'
-                                        : '/images/integrations/bitbucket.png';
-                                      const providerLabel = conn.provider === 'github' ? 'GitHub'
-                                        : conn.provider === 'gitlab' ? 'GitLab' : 'Bitbucket';
-                                      const accountAvatarUrl = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <div className="flex items-center gap-2.5 min-w-0">
-                                              {accountAvatarUrl ? <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" /> : null}
-                                              <span className="text-sm text-foreground truncate">{conn.display_name || conn.installation_id || '-'}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                              onClick={async () => {
-                                                if (!confirm(`Disconnect this ${providerLabel} connection (${conn.display_name || conn.installation_id})?`)) return;
-                                                try {
-                                                  const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                  if (result.revokeUrl) {
-                                                    window.open(result.revokeUrl, '_blank');
-                                                    toast({ title: `Opening ${providerLabel}`, description: 'Complete revoke in the opened tab.' });
-                                                  } else if (result.provider === 'github' && result.installationId) {
-                                                    window.open(`https://github.com/settings/installations/${result.installationId}`, '_blank');
-                                                    toast({ title: 'Opening GitHub', description: 'Complete uninstall in the opened tab.' });
-                                                  }
-                                                  await reloadOrganization();
-                                                  await loadConnections();
-                                                  toast({ title: 'Disconnected', description: `${providerLabel} connection removed.` });
-                                                } catch (err: any) {
-                                                  toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                }
-                                              }}
-                                            >
-                                              Disconnect
-                                            </Button>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Notifications Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setEmailToAdd('');
-                                setShowEmailDialog(true);
-                              }}
-                            >
-                              <Mail className="h-3.5 w-3.5 mr-1.5" />
-                              Add Email
-                            </Button>
-                            {([
-                              { provider: 'slack' as const, label: 'Slack', icon: '/images/integrations/slack.png', getRedirect: api.connectSlackOrg },
-                              { provider: 'discord' as const, label: 'Discord', icon: '/images/integrations/discord.png', getRedirect: api.connectDiscordOrg },
-                            ]).map(({ provider, label, icon, getRedirect }) => (
-                              <Button
-                                key={provider}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await getRedirect(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                Add {label}
-                              </Button>
-                            ))}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setPagerDutyServiceName('');
-                                setPagerDutyRoutingKey('');
-                                setShowPagerDutyDialog(true);
-                              }}
-                            >
-                              <span className="mr-1.5 text-sm leading-none">🚨</span>
-                              Set up PagerDuty
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setCustomIntegrationType('notification');
-                                setEditingCustomIntegration(null);
-                                setCustomIntegrationName('');
-                                setCustomIntegrationWebhookUrl('');
-                                setCustomIntegrationIconFile(null);
-                                setCustomIntegrationIconPreview(null);
-                                setCustomIntegrationSecret(null);
-                                setShowCustomIntegrationSidepanel(true);
-                              }}
-                            >
-                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                              Add Custom
-                            </Button>
-                          </div>
-                        </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2, 3].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="h-4 w-28 bg-muted animate-pulse rounded" />
-                                    </td>
-                                    <td className="px-4 py-3 text-right">
-                                      <div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" />
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {notificationConnections.length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No notification integrations. Add Slack, Discord, or Email above to receive alerts.
-                                    </td>
-                                  </tr>
-                                ) : notificationConnections.map((conn) => {
-                                      const isCustom = conn.provider === 'custom_notification';
-                                      const isEmail = conn.provider === 'email';
-                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
-                                      const providerLabel = isCustom
-                                        ? 'Custom'
-                                        : isEmail ? 'Email' : conn.provider === 'slack' ? 'Slack' : 'Discord';
-                                      const providerIconSrc = !isCustom && !isEmail
-                                        ? (conn.provider === 'slack' ? '/images/integrations/slack.png' : '/images/integrations/discord.png')
-                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
-
-                                      const channelRaw = conn.metadata?.channel || conn.metadata?.incoming_webhook?.channel || null;
-                                      const channelFormatted = channelRaw ? (channelRaw.startsWith('#') ? channelRaw : `#${channelRaw}`) : null;
-                                      const connectionDisplay = conn.provider === 'slack'
-                                        ? { primary: conn.display_name || conn.metadata?.team_name || 'Slack Workspace', secondary: channelFormatted }
-                                        : conn.provider === 'discord'
-                                          ? { primary: conn.display_name !== 'Discord Server' ? conn.display_name : (conn.metadata?.guild_name || conn.display_name || 'Discord Server'), secondary: null }
-                                          : isEmail
-                                            ? { primary: conn.metadata?.email || conn.display_name || 'Email', secondary: null }
-                                            : isCustom
-                                              ? { primary: (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook')), secondary: null }
-                                              : { primary: conn.display_name || 'Connected', secondary: null };
-
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              {providerIconSrc ? (
-                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
-                                              ) : isEmail ? (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Mail className="h-3.5 w-3.5" />
-                                                </div>
-                                              ) : (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Webhook className="h-3.5 w-3.5" />
-                                                </div>
-                                              )}
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <div className={cn(
-                                              "flex flex-col gap-0.5 truncate",
-                                              connectionDisplay.secondary ? "min-w-0" : ""
-                                            )}>
-                                              <span className="text-sm text-foreground truncate">{connectionDisplay.primary}</span>
-                                              {connectionDisplay.secondary && (
-                                                <span className="text-xs text-foreground-secondary truncate">{connectionDisplay.secondary}</span>
-                                              )}
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                              {isCustom && !isEmail && (
-                                                <>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setCustomIntegrationDetailsConn(conn);
-                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
-                                                      setShowCustomIntegrationDetailsSidebar(true);
-                                                    }}
-                                                    title="View details"
-                                                  >
-                                                    <Eye className="h-3.5 w-3.5" />
-                                                  </button>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setEditingCustomIntegration(conn);
-                                                      setCustomIntegrationType('notification');
-                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                      setCustomIntegrationIconFile(null);
-                                                      setCustomIntegrationSecret(null);
-                                                      setShowCustomIntegrationSidepanel(true);
-                                                    }}
-                                                    title="Edit"
-                                                  >
-                                                    <Pencil className="h-3.5 w-3.5" />
-                                                  </button>
-                                                </>
-                                              )}
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={async () => {
-                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : isEmail ? (conn.metadata?.email || 'email') : providerLabel;
-                                                  if (!confirm(`${isCustom || isEmail ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
-                                                  try {
-                                                    const result = await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                    if (!isCustom && !isEmail && result.revokeUrl) {
-                                                      window.open(result.revokeUrl, '_blank');
-                                                      toast({ title: 'Disconnected', description: `${label} removed. Complete app removal in the opened tab.` });
-                                                    } else {
-                                                      toast({ title: isCustom || isEmail ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
-                                                    }
-                                                    await loadConnections();
-                                                  } catch (err: any) {
-                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                  }
-                                                }}
-                                              >
-                                                {isCustom || isEmail ? 'Remove' : 'Disconnect'}
-                                              </Button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Ticketing Section */}
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="text-xs">
-                                  <img src="/images/integrations/jira.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                  Add Jira
-                                  <ChevronDown className="h-3 w-3 ml-1" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await api.connectJiraOrg(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || 'Failed to start Jira connection.', variant: 'destructive' });
-                                  }
-                                }}>
-                                  Jira Cloud (OAuth)
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => {
-                                  setJiraPatBaseUrl('');
-                                  setJiraPatToken('');
-                                  setShowJiraPatDialog(true);
-                                }}>
-                                  Jira Data Center (PAT)
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {([
-                              { label: 'Linear', icon: '/images/integrations/linear.png', getRedirect: api.connectLinearOrg },
-                            ]).map(({ label, icon, getRedirect }) => (
-                              <Button
-                                key={label}
-                                variant="outline"
-                                size="sm"
-                                className="text-xs"
-                                onClick={async () => {
-                                  if (!organization?.id) return;
-                                  try {
-                                    const { redirectUrl } = await getRedirect(organization.id);
-                                    window.location.href = redirectUrl;
-                                  } catch (err: any) {
-                                    toast({ title: 'Error', description: err.message || `Failed to start ${label} connection.`, variant: 'destructive' });
-                                  }
-                                }}
-                              >
-                                <img src={icon} alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5 object-contain" />
-                                Add {label}
-                              </Button>
-                            ))}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => {
-                                setCustomIntegrationType('ticketing');
-                                setEditingCustomIntegration(null);
-                                setCustomIntegrationName('');
-                                setCustomIntegrationWebhookUrl('');
-                                setCustomIntegrationIconFile(null);
-                                setCustomIntegrationIconPreview(null);
-                                setCustomIntegrationSecret(null);
-                                setShowCustomIntegrationSidepanel(true);
-                              }}
-                            >
-                              <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                              Add Custom
-                            </Button>
-                          </div>
-                        </div>
-                        {loadingConnections ? (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {[1, 2].map((i) => (
-                                  <tr key={i}>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2.5">
-                                        <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                                        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                    <td className="px-4 py-3 text-right"><div className="h-8 w-20 bg-muted animate-pulse rounded ml-auto" /></td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                            <table className="w-full table-fixed">
-                              <colgroup>
-                                <col className="w-[200px]" />
-                                <col />
-                                <col className="w-[160px]" />
-                              </colgroup>
-                              <thead className="bg-background-card-header border-b border-border">
-                                <tr>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
-                                {ticketingConnections.length === 0 ? (
-                                  <tr>
-                                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                      No ticketing integrations. Add Jira or Linear above to create issues automatically.
-                                    </td>
-                                  </tr>
-                                ) : ticketingConnections.map((conn) => {
-                                      const isCustom = conn.provider === 'custom_ticketing';
-                                      const hasCustomIcon = isCustom && conn.metadata?.icon_url;
-                                      const providerLabel = isCustom
-                                        ? 'Custom'
-                                        : conn.provider === 'jira'
-                                          ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira')
-                                          : conn.provider === 'linear' ? 'Linear' : conn.provider;
-                                      const providerIconSrc = !isCustom
-                                        ? (conn.provider === 'jira' ? '/images/integrations/jira.png'
-                                          : conn.provider === 'linear' ? '/images/integrations/linear.png'
-                                          : null)
-                                        : (hasCustomIcon ? conn.metadata?.icon_url : null);
-
-                                      const connectionDisplay = isCustom
-                                        ? (conn.metadata?.custom_name || conn.display_name || (conn.metadata?.webhook_url ? conn.metadata.webhook_url.replace(/^https?:\/\//, '').slice(0, 45) : 'Webhook'))
-                                        : (conn.display_name || 'Connected');
-
-                                      return (
-                                        <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                          <td className="px-4 py-3">
-                                            <div className="flex items-center gap-2.5">
-                                              {providerIconSrc ? (
-                                                <img src={providerIconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
-                                              ) : (
-                                                <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
-                                                  <Webhook className="h-3.5 w-3.5" />
-                                                </div>
-                                              )}
-                                              <span className="text-sm font-medium text-foreground">{providerLabel}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-4 py-3 min-w-0">
-                                            <span className="text-sm text-foreground truncate block">{connectionDisplay}</span>
-                                          </td>
-                                          <td className="px-4 py-3 text-right">
-                                            <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                              {isCustom && (
-                                                <>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setCustomIntegrationDetailsConn(conn);
-                                                      setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
-                                                      setShowCustomIntegrationDetailsSidebar(true);
-                                                    }}
-                                                    title="View details"
-                                                  >
-                                                    <Eye className="h-3.5 w-3.5" />
-                                                  </button>
-                                                  <button
-                                                    className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
-                                                    onClick={() => {
-                                                      setEditingCustomIntegration(conn);
-                                                      setCustomIntegrationType('ticketing');
-                                                      setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
-                                                      setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
-                                                      setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
-                                                      setCustomIntegrationIconFile(null);
-                                                      setCustomIntegrationSecret(null);
-                                                      setShowCustomIntegrationSidepanel(true);
-                                                    }}
-                                                    title="Edit"
-                                                  >
-                                                    <Pencil className="h-3.5 w-3.5" />
-                                                  </button>
-                                                </>
-                                              )}
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs hover:bg-destructive/10 hover:border-destructive/30"
-                                                onClick={async () => {
-                                                  const label = isCustom ? (conn.metadata?.custom_name || 'custom integration') : providerLabel;
-                                                  if (!confirm(`${isCustom ? 'Remove' : 'Disconnect'} this ${label} connection?`)) return;
-                                                  try {
-                                                    await api.deleteOrganizationConnection(organization!.id, conn.id);
-                                                    toast({ title: isCustom ? 'Removed' : 'Disconnected', description: `${label} connection removed.` });
-                                                    await loadConnections();
-                                                  } catch (err: any) {
-                                                    toast({ title: 'Error', description: err.message || 'Failed to disconnect.', variant: 'destructive' });
-                                                  }
-                                                }}
-                                              >
-                                                {isCustom ? 'Remove' : 'Disconnect'}
-                                              </Button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
-              {(activeSection === 'notifications' || hasVisitedNotifications) && id && (
-                <div className="pt-8 space-y-6" style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                  {/* Header: title + description, Pause + Create Rule (no border under title) */}
-                  <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
-                    <div>
-                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                      <p className="mt-1.5 text-sm text-foreground-secondary">
-                        Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={notifPauseLoading}>
-                            {notifPauseLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <PauseCircle className="h-3.5 w-3.5" />
-                            )}
-                            {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
-                            <DropdownMenuItem onClick={async () => {
-                              setNotifPauseLoading(true);
-                              try {
-                                await fetch(`${API_BASE}/api/organizations/${id}`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                  body: JSON.stringify({ notifications_paused_until: null }),
-                                });
-                                setNotifPausedUntil(null);
-                                toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                              } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                              finally { setNotifPauseLoading(false); }
-                            }}>
-                              Resume notifications
-                            </DropdownMenuItem>
-                          ) : (
-                            <>
-                              {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                                <DropdownMenuItem key={hours} onClick={async () => {
-                                  setNotifPauseLoading(true);
-                                  try {
-                                    const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                    await fetch(`${API_BASE}/api/organizations/${id}`, {
-                                      method: 'PATCH',
-                                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-                                      body: JSON.stringify({ notifications_paused_until: until }),
-                                    });
-                                    setNotifPausedUntil(until);
-                                    toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                  } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                                  finally { setNotifPauseLoading(false); }
-                                }}>
-                                  {label}
-                                </DropdownMenuItem>
-                              ))}
-                            </>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        onClick={() => notifCreateRuleRef.current?.()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                      >
-                        Create Rule
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Paused banner */}
-                  {notifPausedUntil && new Date(notifPausedUntil) > new Date() && (
-                    <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                      <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                      <span className="text-sm text-amber-400">
-                        Notifications paused until {new Date(notifPausedUntil).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Sub-tabs - Members style (border-b, underline active) */}
-                  <div className="flex items-center justify-between border-b border-border mb-4">
-                    <div className="flex items-center gap-6">
-                      <button
-                        onClick={() => setNotifSubTab('rules')}
-                        className={cn(
-                          'pb-3 text-sm font-medium transition-colors',
-                          notifSubTab === 'rules'
-                            ? 'text-foreground border-b-2 border-foreground'
-                            : 'text-foreground-secondary hover:text-foreground'
-                        )}
-                      >
-                        Rules
-                      </button>
-                      <button
-                        onClick={() => setNotifSubTab('history')}
-                        className={cn(
-                          'pb-3 text-sm font-medium transition-colors',
-                          notifSubTab === 'history'
-                            ? 'text-foreground border-b-2 border-foreground'
-                            : 'text-foreground-secondary hover:text-foreground'
-                        )}
-                      >
-                        History
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Tab content: Rules section always mounted (no display:none) so Create Rule sidebar opens from any tab; list hidden on History. */}
-                  <div>
-                    <NotificationRulesSection organizationId={id} connections={cicdConnections} hideTitle hideListContent={notifSubTab === 'history'} createHandlerRef={notifCreateRuleRef} />
-                  </div>
-                  <div style={{ display: notifSubTab === 'history' ? undefined : 'none' }}>
-                    <NotificationHistorySection organizationId={id} />
-                  </div>
-                </div>
-              )}
-
-              {/* Keep Webhooks mounted after first visit so it doesn't reload when switching tabs (like Integrations) */}
-              {(activeSection === 'webhooks' || hasVisitedWebhooks) && id && (
-                <div
-                  className="space-y-6 pt-8"
-                  style={{ display: activeSection === 'webhooks' ? undefined : 'none' }}
-                >
-                  <div>
-                    <h2 className="text-2xl font-bold text-foreground">Webhooks</h2>
-                    <p className="mt-1.5 text-sm text-foreground-secondary">
-                      Recent webhook deliveries for your projects (push, pull_request, repository, etc.). Check suite and check run events are excluded. Filter by provider, event, and status.
-                    </p>
-                  </div>
-
-                  {/* Filters Row */}
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {/* Provider filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookProvider === 'all' ? 'All Providers' : webhookProvider === 'github' ? 'GitHub' : webhookProvider === 'gitlab' ? 'GitLab' : 'Bitbucket'}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Providers' },
-                          { value: 'github', label: 'GitHub' },
-                          { value: 'gitlab', label: 'GitLab' },
-                          { value: 'bitbucket', label: 'Bitbucket' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookProvider(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookProvider === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Status filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookStatus === 'all' ? 'All Statuses' : webhookStatus.charAt(0).toUpperCase() + webhookStatus.slice(1)}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Statuses' },
-                          { value: 'processed', label: 'Processed' },
-                          { value: 'received', label: 'Received' },
-                          { value: 'skipped', label: 'Skipped' },
-                          { value: 'error', label: 'Error' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookStatus(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookStatus === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Event filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookEvent === 'all' ? 'All Events' : webhookEventLabel(webhookEvent)}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: 'all', label: 'All Events' },
-                          { value: 'push', label: 'Push' },
-                          { value: 'pull_request', label: 'Pull Request' },
-                          { value: 'repository', label: 'Repository' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookEvent(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookEvent === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Timeframe filter */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5">
-                          {webhookTimeframe === '1H' ? 'Last Hour' : webhookTimeframe === '24H' ? '24 Hours' : webhookTimeframe === '7D' ? '7 Days' : '30 Days'}
-                          <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {[
-                          { value: '1H', label: 'Last Hour' },
-                          { value: '24H', label: '24 Hours' },
-                          { value: '7D', label: '7 Days' },
-                          { value: '30D', label: '30 Days' },
-                        ].map(({ value, label }) => (
-                          <DropdownMenuItem key={value} onClick={() => { setWebhookTimeframe(value); setWebhookPage(1); }}>
-                            {label}
-                            {webhookTimeframe === value && <Check className="h-3.5 w-3.5 ml-auto" />}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    {/* Refresh */}
-                    <Button variant="ghost" size="sm" className="text-xs gap-1.5 ml-auto" onClick={() => loadWebhookDeliveries()} disabled={webhookLoading}>
-                      <RefreshCw className={cn('h-3.5 w-3.5', webhookLoading && 'animate-spin')} />
-                      Refresh
-                    </Button>
-                  </div>
-
-                  {/* Deliveries Table */}
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <table className="w-full table-fixed">
-                      <thead className="bg-background-card-header border-b border-border">
-                        <tr>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Time</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Provider</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[130px]">Event</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider min-w-0">Repository</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[90px]">Status</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[80px]">Duration</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Size</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {webhookLoading ? (
-                          [1, 2, 3, 4, 5].map((i) => (
-                            <tr key={i}>
-                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded-sm bg-muted animate-pulse" /><div className="h-4 w-14 bg-muted animate-pulse rounded" /></div></td>
-                              <td className="px-4 py-3"><div className="h-4 w-24 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="h-4 w-32 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3"><div className="h-4 w-16 bg-muted animate-pulse rounded" /></td>
-                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
-                              <td className="px-4 py-3 text-right"><div className="h-4 w-10 bg-muted animate-pulse rounded ml-auto" /></td>
-                            </tr>
-                          ))
-                        ) : webhookDeliveries.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="px-4 py-3 text-center text-sm text-foreground-secondary">
-                              No deliveries
-                            </td>
-                          </tr>
-                        ) : (
-                          webhookDeliveries.map((d: any, idx: number) => {
-                            const providerIcon = d.provider === 'github' ? '/images/integrations/github.png'
-                              : d.provider === 'gitlab' ? '/images/integrations/gitlab.png'
-                              : d.provider === 'bitbucket' ? '/images/integrations/bitbucket.png' : null;
-                            const providerLabel = d.provider === 'github' ? 'GitHub'
-                              : d.provider === 'gitlab' ? 'GitLab'
-                              : d.provider === 'bitbucket' ? 'Bitbucket' : d.provider ?? '—';
-                            const processingStatus = d.processing_status ?? d.status ?? 'received';
-                            const isError = processingStatus === 'error';
-                            const durationMs = d.processing_duration_ms ?? d.duration_ms ?? null;
-                            const sizeKb = d.payload_size_bytes ? (d.payload_size_bytes / 1024).toFixed(1) : null;
-                            return (
-                              <tr key={d.id ?? idx} className={cn('group hover:bg-table-hover transition-colors', isError && 'bg-red-500/[0.03]')} title={isError && d.error_message ? d.error_message : undefined}>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground" title={d.received_at ? new Date(d.received_at).toLocaleString() : undefined}>
-                                    {formatWebhookTime(d.received_at ?? d.created_at)}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-2">
-                                    {providerIcon ? (
-                                      <img src={providerIcon} alt="" className="h-5 w-5 rounded-sm flex-shrink-0" />
-                                    ) : (
-                                      <Webhook className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
-                                    )}
-                                    <span className="text-sm text-foreground">{providerLabel}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground">{webhookEventLabel(d.event_type)}</span>
-                                </td>
-                                <td className="px-4 py-3 min-w-0 overflow-hidden">
-                                  <span className="text-sm text-foreground truncate block" title={d.repo_full_name}>{d.repo_full_name ?? '—'}</span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5">
-                                    <div className={cn('h-2 w-2 rounded-full flex-shrink-0', webhookStatusDot(processingStatus))} />
-                                    <span className="text-sm text-foreground capitalize">{processingStatus}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-right">
-                                  <span className="text-sm text-foreground-secondary tabular-nums">{durationMs != null ? `${durationMs}ms` : '—'}</span>
-                                </td>
-                                <td className="px-4 py-3 text-right whitespace-nowrap">
-                                  <span className="text-sm text-foreground-secondary tabular-nums">{sizeKb != null ? `${sizeKb} KB` : '—'}</span>
-                                </td>
+                    <>
+                      {loadingConnections ? (
+                        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                          <table className="w-full table-fixed">
+                            <colgroup>
+                              <col className="w-[220px]" />
+                              <col className="w-[140px]" />
+                              <col />
+                              <col className="w-[160px]" />
+                            </colgroup>
+                            <thead className="bg-background-card-header border-b border-border">
+                              <tr>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
                               </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Load more */}
-                  {webhookDeliveries.length < webhookTotalCount && webhookTotalCount > 0 && (
-                    <div className="flex justify-center pt-3 pb-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-sm"
-                        disabled={webhookLoadMoreLoading || webhookLoading}
-                        onClick={() => loadMoreWebhookDeliveries()}
-                      >
-                        {webhookLoadMoreLoading ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Loading…
-                          </>
-                        ) : (
-                          `Load more (${webhookDeliveries.length} of ${webhookTotalCount.toLocaleString()})`
-                        )}
-                      </Button>
-                    </div>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {[1, 2, 3, 4].map((i) => (
+                                <tr key={i}>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
+                                      <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3"><div className="h-5 w-16 bg-muted animate-pulse rounded-full" /></td>
+                                  <td className="px-4 py-3"><div className="h-4 w-32 bg-muted animate-pulse rounded" /></td>
+                                  <td className="px-4 py-3 text-right"><div className="h-7 w-20 bg-muted animate-pulse rounded ml-auto" /></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : cicdConnections.length === 0 ? (
+                        <div className="bg-background-card border border-border rounded-lg px-4 py-10 flex flex-col items-center justify-center text-center">
+                          <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                            <Plug className="h-5 w-5 text-foreground-secondary" />
+                          </div>
+                          <h3 className="text-sm font-semibold text-foreground mb-1">No integrations yet</h3>
+                          <p className="text-xs text-foreground-secondary max-w-md mb-4">
+                            Connect a repository, wire up an alert destination, or set up a ticketing tool. Open the Add menu to see what's available.
+                          </p>
+                          <Button variant="green" size="sm" onClick={() => setShowAddIntegrationSidebar(true)}>
+                            <Plus className="h-3.5 w-3.5 mr-1.5" />
+                            Add integration
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                          <table className="w-full table-fixed">
+                            <colgroup>
+                              <col className="w-[220px]" />
+                              <col className="w-[140px]" />
+                              <col />
+                              <col className="w-[160px]" />
+                            </colgroup>
+                            <thead className="bg-background-card-header border-b border-border">
+                              <tr>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
+                                <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {[...cicdConnections]
+                                .sort((a, b) => {
+                                  const at = INTEGRATION_TYPE_ORDER[describeConnectionType(a)];
+                                  const bt = INTEGRATION_TYPE_ORDER[describeConnectionType(b)];
+                                  if (at !== bt) return at - bt;
+                                  return (b.created_at || '').localeCompare(a.created_at || '');
+                                })
+                                .map((conn) => {
+                                  const type = describeConnectionType(conn);
+                                  const pill = INTEGRATION_TYPE_PILL[type];
+                                  const iconSrc = describeConnectionIcon(conn);
+                                  const label = describeConnectionLabel(conn);
+                                  const identifier = describeConnectionIdentifier(conn);
+                                  const accountAvatarUrl = conn.provider === 'github' ? (conn.metadata as { account_avatar_url?: string } | undefined)?.account_avatar_url : undefined;
+                                  const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+                                  const isEmail = conn.provider === 'email';
+                                  const isCicd = conn.provider === 'github' || conn.provider === 'gitlab' || conn.provider === 'bitbucket';
+                                  const showAvatar = isCicd && accountAvatarUrl;
+                                  const latestDelivery = isCicd ? latestDeliveryByProvider[conn.provider] : undefined;
+                                  const latestStatus = latestDelivery?.processing_status ?? latestDelivery?.status ?? null;
+                                  const latestDeliveryDot = latestStatus === 'error'
+                                    ? 'bg-red-500'
+                                    : latestStatus === 'skipped'
+                                      ? 'bg-amber-400'
+                                      : latestStatus === 'processed'
+                                        ? 'bg-green-500'
+                                        : latestStatus === 'received'
+                                          ? 'bg-foreground-secondary'
+                                          : null;
+                                  const latestDeliveryWhen = latestDelivery ? formatWebhookTime(latestDelivery.received_at ?? latestDelivery.created_at ?? null) : null;
+                                  const latestDeliveryTitle = latestDelivery && latestStatus === 'error' && latestDelivery.error_message
+                                    ? `Last delivery failed: ${latestDelivery.error_message}`
+                                    : latestDelivery && latestStatus
+                                      ? `Last delivery ${latestStatus} ${latestDeliveryWhen}`
+                                      : 'No deliveries in the last 30 days';
+                                  return (
+                                    <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
+                                      <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          {iconSrc ? (
+                                            <img src={iconSrc} alt="" className="h-5 w-5 rounded-sm flex-shrink-0 object-contain" />
+                                          ) : isEmail ? (
+                                            <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                              <Mail className="h-3.5 w-3.5" />
+                                            </div>
+                                          ) : (
+                                            <div className="h-5 w-5 rounded-sm flex-shrink-0 flex items-center justify-center text-foreground-secondary">
+                                              <Webhook className="h-3.5 w-3.5" />
+                                            </div>
+                                          )}
+                                          <span className="text-sm font-medium text-foreground truncate">{label}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3">
+                                        <span className="inline-flex items-center rounded-full border border-border bg-background-subtle/50 text-foreground-secondary px-2 py-0.5 text-xs font-medium">
+                                          {pill.label}
+                                        </span>
+                                      </td>
+                                      <td className="px-4 py-3 min-w-0">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          {showAvatar ? (
+                                            <img src={accountAvatarUrl} alt="" className="h-6 w-6 rounded-full flex-shrink-0 bg-muted" />
+                                          ) : null}
+                                          <div className={cn('flex flex-col gap-0.5 min-w-0', identifier.secondary || isCicd ? '' : 'justify-center')}>
+                                            <span className="text-sm text-foreground truncate">{identifier.primary}</span>
+                                            {identifier.secondary && (
+                                              <span className="text-xs text-foreground-secondary truncate">{identifier.secondary}</span>
+                                            )}
+                                            {isCicd && (
+                                              <span className="flex items-center gap-1.5 text-xs text-foreground-secondary truncate" title={latestDeliveryTitle}>
+                                                {latestDeliveryDot ? (
+                                                  <div className={cn('h-1.5 w-1.5 rounded-full flex-shrink-0', latestDeliveryDot)} />
+                                                ) : (
+                                                  <div className="h-1.5 w-1.5 rounded-full flex-shrink-0 bg-border" />
+                                                )}
+                                                <span className="truncate">
+                                                  {latestDelivery
+                                                    ? `Last delivery ${latestDeliveryWhen}`
+                                                    : 'No recent deliveries'}
+                                                </span>
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          {isCustom && (
+                                            <>
+                                              <button
+                                                className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                onClick={() => {
+                                                  setCustomIntegrationDetailsConn(conn);
+                                                  setCustomIntegrationSecret(newlyCreatedIntegrationId === conn.id ? customIntegrationSecret : null);
+                                                  setShowCustomIntegrationDetailsSidebar(true);
+                                                }}
+                                                title="View details"
+                                              >
+                                                <Eye className="h-3.5 w-3.5" />
+                                              </button>
+                                              <button
+                                                className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors"
+                                                onClick={() => {
+                                                  setEditingCustomIntegration(conn);
+                                                  setCustomIntegrationType(conn.provider === 'custom_ticketing' ? 'ticketing' : 'notification');
+                                                  setCustomIntegrationName(conn.metadata?.custom_name || conn.display_name || '');
+                                                  setCustomIntegrationWebhookUrl(conn.metadata?.webhook_url || '');
+                                                  setCustomIntegrationIconPreview(conn.metadata?.icon_url || null);
+                                                  setCustomIntegrationIconFile(null);
+                                                  setCustomIntegrationSecret(null);
+                                                  setShowCustomIntegrationSidepanel(true);
+                                                }}
+                                                title="Edit"
+                                              >
+                                                <Pencil className="h-3.5 w-3.5" />
+                                              </button>
+                                            </>
+                                          )}
+                                          <Button
+                                            variant="outline"
+                                            className="!h-8 !px-3 !rounded-lg hover:bg-destructive/10 hover:border-destructive/30"
+                                            onClick={() => setConnectionToDisconnect(conn)}
+                                          >
+                                            {isCustom || isEmail ? 'Remove' : 'Disconnect'}
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -4406,9 +3801,8 @@ export default function OrganizationSettingsPage() {
                     <h2 className="text-2xl font-bold text-foreground">Members</h2>
                     <Button
                       onClick={() => setMembersInviteModalOpen(true)}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                      variant="green"
                     >
-                      <Plus className="h-4 w-4 mr-2" />
                       Invite
                     </Button>
                   </div>
@@ -4479,7 +3873,10 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'usage' && (
-                <UsageSectionContent organizationId={id || ''} />
+                <UsageSectionContent
+                  organizationId={id || ''}
+                  canViewSpending={!!effectivePermissions?.view_ai_spending}
+                />
               )}
 
               {/* Create New Role – Vercel-style right-side popup panel */}
@@ -4524,7 +3921,7 @@ export default function OrganizationSettingsPage() {
                             value={newRoleNameInput}
                             onChange={(e) => setNewRoleNameInput(e.target.value)}
                             maxLength={24}
-                            className="w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                            className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                             autoFocus
                             disabled={isCreatingRole}
                           />
@@ -4673,31 +4070,27 @@ export default function OrganizationSettingsPage() {
                     </div>
 
                     {/* Footer */}
-                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                    <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                       <Button
                         variant="outline"
                         onClick={closeAddRolePanel}
                         disabled={isCreatingRole}
+                        className="!h-8 !px-3 !rounded-lg"
                       >
                         Cancel
                       </Button>
                       <Button
+                        variant="green"
                         onClick={async () => {
                           await handleCreateRole(newRolePermissions);
                         }}
                         disabled={isCreatingRole || !newRoleNameInput.trim()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
-                        {isCreatingRole ? (
-                          <>
-                            <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                            Create Role
-                          </>
-                        ) : (
-                          <>
-                            <FileCheck className="h-4 w-4 mr-2" />
-                            Create Role
-                          </>
+                        <span className={isCreatingRole ? 'invisible' : ''}>Create Role</span>
+                        {isCreatingRole && (
+                          <span className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </span>
                         )}
                       </Button>
                     </div>
@@ -4746,8 +4139,9 @@ export default function OrganizationSettingsPage() {
                         <div className="space-y-6">
                           {/* Read-only notice when user cannot edit name/color */}
                           {!canEditNameAndColor && (
-                            <div className="px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                              <p className="text-sm text-amber-400">
+                            <div className="px-4 py-3 bg-background-subtle border border-border rounded-lg flex items-center gap-2.5">
+                              <Lock className="h-4 w-4 text-foreground-secondary flex-shrink-0" />
+                              <p className="text-sm text-foreground-secondary">
                                 {selectedRoleForSettings.name === 'owner'
                                   ? 'The owner role cannot be modified.'
                                   : isViewingOwnRole
@@ -4770,7 +4164,7 @@ export default function OrganizationSettingsPage() {
                               placeholder="Enter role name"
                               maxLength={24}
                               disabled={!canEditNameAndColor}
-                              className={`w-full px-3 py-2.5 bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
+                              className={`w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors ${!canEditNameAndColor ? 'opacity-60 cursor-not-allowed' : ''}`}
                             />
                           </div>
 
@@ -4920,13 +4314,14 @@ export default function OrganizationSettingsPage() {
                       </div>
 
                       {/* Footer */}
-                      <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                      <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                         {canEditNameAndColor || canEditThisRole ? (
                           <>
                             <Button
                               variant="outline"
                               onClick={closeRoleSettingsPanel}
                               disabled={isSavingRole}
+                              className="!h-8 !px-3 !rounded-lg"
                             >
                               Cancel
                             </Button>
@@ -4964,18 +4359,13 @@ export default function OrganizationSettingsPage() {
                                 }
                               }}
                               disabled={isSavingRole || !editingRoleName.trim()}
-                              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                              variant="green"
                             >
-                              {isSavingRole ? (
-                                <>
-                                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                  Save Changes
-                                </>
-                              ) : (
-                                <>
-                                  <FileCheck className="h-4 w-4 mr-2" />
-                                  Save Changes
-                                </>
+                              <span className={isSavingRole ? 'invisible' : ''}>Save Changes</span>
+                              {isSavingRole && (
+                                <span className="absolute inset-0 flex items-center justify-center">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                </span>
                               )}
                             </Button>
                           </>
@@ -4983,6 +4373,7 @@ export default function OrganizationSettingsPage() {
                           <Button
                             variant="outline"
                             onClick={closeRoleSettingsPanel}
+                            className="!h-8 !px-3 !rounded-lg"
                           >
                             Close
                           </Button>
@@ -5268,12 +4659,17 @@ export default function OrganizationSettingsPage() {
 
                   </div>
 
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => { setShowCustomIntegrationSidepanel(false); setEditingCustomIntegration(null); setCustomIntegrationSecret(null); }}>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+                    <Button
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => { setShowCustomIntegrationSidepanel(false); setEditingCustomIntegration(null); setCustomIntegrationSecret(null); }}
+                      disabled={customIntegrationSaving}
+                    >
                       Cancel
                     </Button>
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      variant="green"
                       disabled={!customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving || !/^https:\/\/[^\s]+$/i.test(customIntegrationWebhookUrl.trim())}
                       onClick={async () => {
                         if (!organization?.id) return;
@@ -5328,8 +4724,14 @@ export default function OrganizationSettingsPage() {
                         }
                       }}
                     >
-                      {customIntegrationSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      {editingCustomIntegration ? 'Save changes' : 'Create connection'}
+                      <span className={customIntegrationSaving ? 'invisible' : ''}>
+                        {editingCustomIntegration ? 'Save changes' : 'Create connection'}
+                      </span>
+                      {customIntegrationSaving && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -5442,24 +4844,7 @@ export default function OrganizationSettingsPage() {
                               variant="outline"
                               size="sm"
                               disabled={customIntegrationRegenerating}
-                              onClick={async () => {
-                                if (!organization?.id || !customIntegrationDetailsConn) return;
-                                if (!confirm('Regenerate the signing secret? The old secret will stop working immediately.')) return;
-                                setCustomIntegrationRegenerating(true);
-                                setCustomIntegrationSecretVisible(false);
-                                try {
-                                  const result = await api.updateCustomIntegration(organization.id, customIntegrationDetailsConn.id, { regenerate_secret: true });
-                                  if (result.secret) {
-                                    setCustomIntegrationSecret(result.secret);
-                                    setNewlyCreatedIntegrationId(customIntegrationDetailsConn.id);
-                                    toast({ title: 'Secret regenerated', description: 'Copy the new secret above.' });
-                                  }
-                                } catch (err: any) {
-                                  toast({ title: 'Error', description: err.message || 'Failed to regenerate secret.', variant: 'destructive' });
-                                } finally {
-                                  setCustomIntegrationRegenerating(false);
-                                }
-                              }}
+                              onClick={() => setShowRegenerateSecretConfirm(true)}
                             >
                               {customIntegrationRegenerating ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-2" />}
                               Regenerate
@@ -5504,14 +4889,16 @@ export default function OrganizationSettingsPage() {
                       </div>
                     </div>
 
-                    <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+                    <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
                       <Button
                         variant="outline"
+                        className="!h-8 !px-3 !rounded-lg"
                         onClick={closeCustomIntegrationDetailsPanel}
                       >
                         Close
                       </Button>
                       <Button
+                        variant="green"
                         onClick={() => {
                           const conn = customIntegrationDetailsConn;
                           closeCustomIntegrationDetailsPanel();
@@ -5524,7 +4911,6 @@ export default function OrganizationSettingsPage() {
                           setCustomIntegrationSecret(null);
                           setShowCustomIntegrationSidepanel(true);
                         }}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                       >
                         <Pencil className="h-4 w-4 mr-2" />
                         Edit
@@ -5534,192 +4920,446 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {/* Jira Data Center PAT Dialog */}
-              <Dialog open={showJiraPatDialog} onOpenChange={setShowJiraPatDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <img src="/images/integrations/jira.png" alt="Jira" className="h-7 w-7 rounded object-contain" />
+              {/* Add Integration Sidebar — same slide-in pattern as the Add Role panel */}
+              {showAddIntegrationSidebar && (
+                <div className="fixed inset-0 z-50">
+                  <div
+                    className={cn(
+                      'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
+                      addIntegrationPanelVisible ? 'opacity-100' : 'opacity-0'
+                    )}
+                    onClick={closeAddIntegrationSidebar}
+                  />
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="add-integration-title"
+                    className={cn(
+                      'fixed right-4 top-4 bottom-4 w-full max-w-[520px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
+                      addIntegrationPanelVisible ? 'translate-x-0' : 'translate-x-full'
+                    )}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-6 pt-5 pb-4 flex-shrink-0 flex items-start justify-between gap-4 border-b border-border">
                       <div>
-                        <DialogTitle>Jira Data Center</DialogTitle>
-                        <DialogDescription>Connect via Personal Access Token</DialogDescription>
+                        <h2 id="add-integration-title" className="text-xl font-semibold text-foreground">Add integration</h2>
+                        <p className="mt-1 text-sm text-foreground-secondary">
+                          Pick a provider to connect. We'll redirect to the host's install flow or open a setup form.
+                        </p>
                       </div>
+                      <button
+                        type="button"
+                        className="h-7 w-7 rounded-md flex items-center justify-center text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors flex-shrink-0"
+                        onClick={closeAddIntegrationSidebar}
+                        aria-label="Close"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto no-scrollbar px-3 py-4 space-y-5">
+                    {[
+                      {
+                        category: 'CI/CD',
+                        items: [
+                          { key: 'github', label: 'GitHub', description: 'Connect repositories for scanning', icon: <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('github', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start GitHub install:', err);
+                              toast({ title: 'Error', description: 'Failed to start GitHub connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'gitlab', label: 'GitLab', description: 'OAuth + webhook for push and merge events', icon: <img src="/images/integrations/gitlab.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('gitlab', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start GitLab install:', err);
+                              toast({ title: 'Error', description: 'Failed to start GitLab connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'bitbucket', label: 'Bitbucket', description: 'OAuth + webhook for push and pull request events', icon: <img src="/images/integrations/bitbucket.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.startCicdInstall('bitbucket', organization.id);
+                              if (redirectUrl) window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Bitbucket install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Bitbucket connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Notifications',
+                        items: [
+                          { key: 'slack', label: 'Slack', description: 'Real-time alerts to a workspace channel', icon: <img src="/images/integrations/slack.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectSlackOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Slack install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Slack connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'discord', label: 'Discord', description: 'Send alerts to a Discord channel', icon: <img src="/images/integrations/discord.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectDiscordOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Discord install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Discord connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'email', label: 'Email', description: 'Notification emails to a single address', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Mail className="h-4 w-4" /></div>, expandKey: 'email' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'email' ? null : 'email');
+                            setEmailToAdd('');
+                          } },
+                          { key: 'pagerduty', label: 'PagerDuty', description: 'Page on-call for critical security events', icon: <span className="h-5 w-5 flex items-center justify-center text-sm leading-none">🚨</span>, expandKey: 'pagerduty' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'pagerduty' ? null : 'pagerduty');
+                            setPagerDutyServiceName('');
+                            setPagerDutyRoutingKey('');
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Ticketing',
+                        items: [
+                          { key: 'jira-cloud', label: 'Jira Cloud', description: 'OAuth — create issues automatically', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectJiraOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Jira install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Jira connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                          { key: 'jira-dc', label: 'Jira Data Center', description: 'Self-hosted Jira via personal access token', icon: <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, expandKey: 'jira-dc' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'jira-dc' ? null : 'jira-dc');
+                            setJiraPatBaseUrl('');
+                            setJiraPatToken('');
+                          } },
+                          { key: 'linear', label: 'Linear', description: 'Sync issues with a Linear workspace', icon: <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm object-contain" />, onClick: async () => {
+                            if (!organization?.id) return;
+                            setShowAddIntegrationSidebar(false);
+                            try {
+                              const { redirectUrl } = await api.connectLinearOrg(organization.id);
+                              window.location.href = redirectUrl;
+                            } catch (err) {
+                              console.error('Failed to start Linear install:', err);
+                              toast({ title: 'Error', description: 'Failed to start Linear connection. Please try again.', variant: 'destructive' });
+                            }
+                          } },
+                        ],
+                      },
+                      {
+                        category: 'Custom',
+                        items: [
+                          { key: 'custom-notification', label: 'Custom notification webhook', description: 'HMAC-signed POST for security events', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, expandKey: 'custom-notification' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'custom-notification' ? null : 'custom-notification');
+                            setCustomIntegrationName('');
+                            setCustomIntegrationWebhookUrl('');
+                          } },
+                          { key: 'custom-ticketing', label: 'Custom ticketing webhook', description: 'HMAC-signed POST for issue routing', icon: <div className="h-5 w-5 rounded-sm flex items-center justify-center text-foreground-secondary"><Webhook className="h-4 w-4" /></div>, expandKey: 'custom-ticketing' as const, onClick: () => {
+                            setExpandedAddItem(prev => prev === 'custom-ticketing' ? null : 'custom-ticketing');
+                            setCustomIntegrationName('');
+                            setCustomIntegrationWebhookUrl('');
+                          } },
+                        ],
+                      },
+                    ].map((group) => (
+                      <div key={group.category}>
+                        <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground-secondary">
+                          {group.category}
+                        </div>
+                        <ul className="space-y-0.5">
+                          {group.items.map((item) => {
+                            const expandKey = (item as { expandKey?: 'email' | 'pagerduty' | 'jira-dc' | 'custom-notification' | 'custom-ticketing' }).expandKey;
+                            const isExpandable = expandKey !== undefined;
+                            const isExpanded = isExpandable && expandedAddItem === expandKey;
+                            // Per-expansion submit metadata — drives both the in-row Add CTA and
+                            // the disabled-validation logic when the form is open.
+                            let submitDisabled = false;
+                            let submitSaving = false;
+                            let submitFn: (() => Promise<void>) | null = null;
+                            if (expandKey === 'email') {
+                              submitDisabled = !emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving;
+                              submitSaving = emailSaving;
+                              submitFn = handleInlineEmailSubmit;
+                            } else if (expandKey === 'pagerduty') {
+                              submitDisabled = !pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving;
+                              submitSaving = pagerDutySaving;
+                              submitFn = handleInlinePagerDutySubmit;
+                            } else if (expandKey === 'jira-dc') {
+                              submitDisabled = !jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving;
+                              submitSaving = jiraPatSaving;
+                              submitFn = handleInlineJiraDcSubmit;
+                            } else if (expandKey === 'custom-notification') {
+                              submitDisabled = !customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving;
+                              submitSaving = customIntegrationSaving;
+                              submitFn = () => handleInlineCustomSubmit('notification');
+                            } else if (expandKey === 'custom-ticketing') {
+                              submitDisabled = !customIntegrationName.trim() || !customIntegrationWebhookUrl.trim() || customIntegrationSaving;
+                              submitSaving = customIntegrationSaving;
+                              submitFn = () => handleInlineCustomSubmit('ticketing');
+                            }
+
+                            return (
+                              <li key={item.key}>
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={item.onClick}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      item.onClick();
+                                    }
+                                  }}
+                                  className={cn(
+                                    'w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-background-subtle transition-colors text-left cursor-pointer group',
+                                    isExpanded && 'bg-background-subtle'
+                                  )}
+                                >
+                                  <span className="flex-shrink-0">{item.icon}</span>
+                                  <span className="flex-1 min-w-0">
+                                    <span className="block text-sm font-medium text-foreground truncate">{item.label}</span>
+                                    <span className="block text-xs text-foreground-secondary truncate">{item.description}</span>
+                                  </span>
+                                  {isExpanded && submitFn ? (
+                                    <Button
+                                      variant="green"
+                                      disabled={submitDisabled}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (submitFn) void submitFn();
+                                      }}
+                                    >
+                                      <span className={submitSaving ? 'invisible' : ''}>Add</span>
+                                      {submitSaving && (
+                                        <span className="absolute inset-0 flex items-center justify-center">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        </span>
+                                      )}
+                                    </Button>
+                                  ) : (
+                                    <ChevronRight
+                                      className={cn(
+                                        'h-4 w-4 text-foreground-secondary transition-all flex-shrink-0',
+                                        isExpanded ? 'opacity-100 rotate-90' : 'opacity-0 group-hover:opacity-100'
+                                      )}
+                                    />
+                                  )}
+                                </div>
+
+                                {isExpandable && (
+                                  <div
+                                    data-state={isExpanded ? 'open' : 'closed'}
+                                    className={cn(
+                                      'grid transition-[grid-template-rows] duration-200 ease-out',
+                                      isExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                                    )}
+                                  >
+                                    <div className="overflow-hidden">
+                                      <div className="px-3 pt-2 pb-3 space-y-3">
+                                        {expandKey === 'email' && (
+                                          <div className="grid gap-1.5">
+                                            <Label htmlFor="inline-email-to-add" className="text-xs">Email address</Label>
+                                            <Input
+                                              id="inline-email-to-add"
+                                              type="email"
+                                              value={emailToAdd}
+                                              onChange={(e) => setEmailToAdd(e.target.value)}
+                                              className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                            />
+                                          </div>
+                                        )}
+                                        {expandKey === 'pagerduty' && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-pd-service-name" className="text-xs">Service name</Label>
+                                              <Input
+                                                id="inline-pd-service-name"
+                                                value={pagerDutyServiceName}
+                                                onChange={(e) => setPagerDutyServiceName(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-pd-routing-key" className="text-xs">Routing key</Label>
+                                              <Input
+                                                id="inline-pd-routing-key"
+                                                type="password"
+                                                value={pagerDutyRoutingKey}
+                                                onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                              <p className="text-[11px] text-foreground-secondary">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
+                                            </div>
+                                          </>
+                                        )}
+                                        {expandKey === 'jira-dc' && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-jira-url" className="text-xs">Server URL</Label>
+                                              <Input
+                                                id="inline-jira-url"
+                                                type="url"
+                                                value={jiraPatBaseUrl}
+                                                onChange={(e) => setJiraPatBaseUrl(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor="inline-jira-pat" className="text-xs">Personal Access Token</Label>
+                                              <Input
+                                                id="inline-jira-pat"
+                                                type="password"
+                                                value={jiraPatToken}
+                                                onChange={(e) => setJiraPatToken(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                          </>
+                                        )}
+                                        {(expandKey === 'custom-notification' || expandKey === 'custom-ticketing') && (
+                                          <>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor={`inline-custom-name-${expandKey}`} className="text-xs">Name</Label>
+                                              <Input
+                                                id={`inline-custom-name-${expandKey}`}
+                                                value={customIntegrationName}
+                                                onChange={(e) => setCustomIntegrationName(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                            </div>
+                                            <div className="grid gap-1.5">
+                                              <Label htmlFor={`inline-custom-url-${expandKey}`} className="text-xs">Webhook URL</Label>
+                                              <Input
+                                                id={`inline-custom-url-${expandKey}`}
+                                                type="url"
+                                                value={customIntegrationWebhookUrl}
+                                                onChange={(e) => setCustomIntegrationWebhookUrl(e.target.value)}
+                                                className="focus-visible:!ring-foreground/15 focus-visible:!border-foreground/30"
+                                              />
+                                              <p className="text-[11px] text-foreground-secondary">An icon can be added later by editing the integration.</p>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ))}
                     </div>
                   </div>
+                </div>
+              )}
 
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="jira-url">Server URL</Label>
-                      <Input
-                        id="jira-url"
-                        type="url"
-                        value={jiraPatBaseUrl}
-                        onChange={(e) => setJiraPatBaseUrl(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label htmlFor="jira-pat">Personal Access Token</Label>
-                      <Input
-                        id="jira-pat"
-                        type="password"
-                        value={jiraPatToken}
-                        onChange={(e) => setJiraPatToken(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowJiraPatDialog(false)}>Cancel</Button>
-                    <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                      disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
-                      onClick={async () => {
-                        if (!organization?.id) return;
-                        setJiraPatSaving(true);
-                        try {
-                          await api.connectJiraPatOrg(organization.id, jiraPatBaseUrl.trim(), jiraPatToken.trim());
-                          toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
-                          setShowJiraPatDialog(false);
-                          await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to connect.', variant: 'destructive' });
-                        } finally {
-                          setJiraPatSaving(false);
-                        }
-                      }}
-                    >
-                      {jiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Create connection
-                    </Button>
-                  </DialogFooter>
+              {/* Disconnect Confirmation Dialog — shared by CI/CD, notification, ticketing rows */}
+              <Dialog
+                open={!!connectionToDisconnect}
+                onOpenChange={(open) => { if (!open && !disconnectingConnection) setConnectionToDisconnect(null); }}
+              >
+                <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+                  {connectionToDisconnect && (() => {
+                    const conn = connectionToDisconnect;
+                    const isCustom = conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing';
+                    const isEmail = conn.provider === 'email';
+                    const verb = isCustom || isEmail ? 'Remove' : 'Disconnect';
+                    const label = describeConnectionLabel(conn);
+                    return (
+                      <>
+                        <div className="px-6 pt-6 pb-4">
+                          <DialogTitle>{verb} {label}?</DialogTitle>
+                          <DialogDescription className="mt-1">
+                            {isCustom
+                              ? 'Events stop firing to this webhook URL immediately. You can re-add it later.'
+                              : isEmail
+                                ? 'This address stops receiving notification emails immediately.'
+                                : conn.provider === 'slack' || conn.provider === 'discord'
+                                  ? `Notifications stop sending to this ${label} workspace immediately. You'll be prompted to complete app removal in ${label} after closing this dialog.`
+                                  : `Scanning stops for projects linked to this ${label} connection. You'll be prompted to complete the revoke in ${label} after closing this dialog.`}
+                          </DialogDescription>
+                        </div>
+                        <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+                          <Button
+                            variant="outline"
+                            className="!h-8 !px-3 !rounded-lg"
+                            onClick={() => setConnectionToDisconnect(null)}
+                            disabled={disconnectingConnection}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={handleConfirmDisconnect}
+                            disabled={disconnectingConnection}
+                          >
+                            <span className={disconnectingConnection ? 'invisible' : ''}>{verb}</span>
+                            {disconnectingConnection && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </>
+                    );
+                  })()}
                 </DialogContent>
               </Dialog>
 
-              {/* Email Notification Dialog */}
-              <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded flex items-center justify-center text-foreground-secondary">
-                        <Mail className="h-7 w-7" />
-                      </div>
-                      <div>
-                        <DialogTitle>Add Email</DialogTitle>
-                        <DialogDescription>Add an email address to receive notification alerts.</DialogDescription>
-                      </div>
-                    </div>
+              {/* Regenerate Signing Secret Confirmation */}
+              <Dialog
+                open={showRegenerateSecretConfirm}
+                onOpenChange={(open) => { if (!open && !customIntegrationRegenerating) setShowRegenerateSecretConfirm(false); }}
+              >
+                <DialogContent hideClose className="sm:max-w-md bg-background-card-header p-0 gap-0 overflow-visible">
+                  <div className="px-6 pt-6 pb-4">
+                    <DialogTitle>Regenerate signing secret?</DialogTitle>
+                    <DialogDescription className="mt-1">
+                      The old secret stops working immediately. Update every consumer of this webhook with the new secret before the next event fires.
+                    </DialogDescription>
                   </div>
-
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="email-to-add">Email address</Label>
-                      <Input
-                        id="email-to-add"
-                        type="email"
-                        value={emailToAdd}
-                        onChange={(e) => setEmailToAdd(e.target.value)}
-                        placeholder=""
-                      />
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowEmailDialog(false)}>Cancel</Button>
+                  <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                      disabled={!emailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailToAdd.trim()) || emailSaving}
-                      onClick={async () => {
-                        if (!organization?.id) return;
-                        setEmailSaving(true);
-                        try {
-                          await api.createEmailNotification(organization.id, emailToAdd.trim());
-                          toast({ title: 'Added', description: 'Email notification added successfully.' });
-                          setShowEmailDialog(false);
-                          setEmailToAdd('');
-                          await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to add email.', variant: 'destructive' });
-                        } finally {
-                          setEmailSaving(false);
-                        }
-                      }}
+                      variant="outline"
+                      className="!h-8 !px-3 !rounded-lg"
+                      onClick={() => setShowRegenerateSecretConfirm(false)}
+                      disabled={customIntegrationRegenerating}
                     >
-                      {emailSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Add
+                      Cancel
                     </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-
-              {/* PagerDuty Connect Dialog */}
-              <Dialog open={showPagerDutyDialog} onOpenChange={setShowPagerDutyDialog}>
-                <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-                  <div className="px-6 pt-6 pb-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded flex items-center justify-center text-lg leading-none">🚨</div>
-                      <div>
-                        <DialogTitle>Connect PagerDuty</DialogTitle>
-                        <DialogDescription>Get paged for critical security events.</DialogDescription>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="px-6 py-6 grid gap-4 bg-background">
-                    <div className="grid gap-2">
-                      <Label htmlFor="pd-service-name">Service name</Label>
-                      <Input
-                        id="pd-service-name"
-                        value={pagerDutyServiceName}
-                        onChange={(e) => setPagerDutyServiceName(e.target.value)}
-                        placeholder="e.g. Deptex Security Alerts"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="pd-routing-key">Routing key</Label>
-                      <Input
-                        id="pd-routing-key"
-                        type="password"
-                        value={pagerDutyRoutingKey}
-                        onChange={(e) => setPagerDutyRoutingKey(e.target.value)}
-                        placeholder="PagerDuty Events API v2 routing key"
-                      />
-                      <p className="text-xs text-foreground-muted">Found in PagerDuty &rarr; Service &rarr; Integrations &rarr; Events API v2.</p>
-                    </div>
-                  </div>
-
-                  <DialogFooter className="px-6 py-4 bg-background">
-                    <Button variant="outline" onClick={() => setShowPagerDutyDialog(false)}>Cancel</Button>
                     <Button
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                      disabled={!pagerDutyServiceName.trim() || !pagerDutyRoutingKey.trim() || pagerDutySaving}
-                      onClick={async () => {
-                        if (!organization?.id || !session?.access_token) return;
-                        setPagerDutySaving(true);
-                        try {
-                          const res = await fetch(`/api/organizations/${organization.id}/pagerduty/connect`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-                            body: JSON.stringify({ service_name: pagerDutyServiceName.trim(), routing_key: pagerDutyRoutingKey.trim() }),
-                          });
-                          if (!res.ok) {
-                            const err = await res.json().catch(() => ({ error: 'Failed to connect' }));
-                            throw new Error(err.error || `HTTP ${res.status}`);
-                          }
-                          toast({ title: 'Connected', description: 'PagerDuty has been connected successfully.' });
-                          setShowPagerDutyDialog(false);
-                          await loadConnections();
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err.message || 'Failed to connect PagerDuty.', variant: 'destructive' });
-                        } finally {
-                          setPagerDutySaving(false);
-                        }
-                      }}
+                      variant="destructive"
+                      onClick={handleConfirmRegenerateSecret}
+                      disabled={customIntegrationRegenerating}
                     >
-                      {pagerDutySaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-                      Connect
+                      <span className={customIntegrationRegenerating ? 'invisible' : ''}>Regenerate</span>
+                      {customIntegrationRegenerating && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -5738,7 +5378,7 @@ export default function OrganizationSettingsPage() {
 // PHASE 13: Usage Section Content
 // ═══════════════════════════════════════════════════════════════════════
 
-function UsageSectionContent({ organizationId }: { organizationId: string }) {
+function UsageSectionContent({ organizationId, canViewSpending }: { organizationId: string; canViewSpending: boolean }) {
   const navigate = useNavigate();
   const { plan, loading, error, refetch } = usePlan();
 
@@ -5881,6 +5521,10 @@ function UsageSectionContent({ organizationId }: { organizationId: string }) {
           })}
         </div>
       </div>
+
+      {canViewSpending && (
+        <AISpendingSection organizationId={organizationId} canViewSpending={canViewSpending} />
+      )}
     </div>
   );
 }

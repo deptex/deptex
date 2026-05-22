@@ -652,6 +652,13 @@ export const api = {
     });
   },
 
+  async connectPagerDutyOrg(organizationId: string, data: { serviceName: string; routingKey: string }): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/pagerduty/connect`, {
+      method: 'POST',
+      body: JSON.stringify({ service_name: data.serviceName, routing_key: data.routingKey }),
+    });
+  },
+
   async createTeamEmailNotification(organizationId: string, teamId: string, email: string): Promise<{ success: boolean; id: string }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/email-notifications`, {
       method: 'POST',
@@ -830,6 +837,13 @@ export const api = {
     if (projectId) params.set('project_id', projectId);
     if (teamId) params.set('team_id', teamId);
     return fetchWithAuth(`/api/integrations/slack/install?${params}`);
+  },
+
+  async startCicdInstall(
+    provider: 'github' | 'gitlab' | 'bitbucket',
+    organizationId: string,
+  ): Promise<{ redirectUrl: string }> {
+    return fetchWithAuth(`/api/integrations/${provider}/install?org_id=${organizationId}`);
   },
 
   async connectDiscordOrg(organizationId: string, projectId?: string, teamId?: string): Promise<{ redirectUrl: string }> {
@@ -1290,7 +1304,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/ai-usage${params}`);
   },
 
-  async getAIUsageLogs(orgId: string, page?: number, perPage?: number): Promise<{ logs: any[]; total: number }> {
+  async getAIUsageLogs(orgId: string, page?: number, perPage?: number): Promise<{ logs: AIUsageLog[]; total: number }> {
     const params = new URLSearchParams();
     if (page) params.set('page', String(page));
     if (perPage) params.set('per_page', String(perPage));
@@ -4766,6 +4780,16 @@ export interface AIUsageSummary {
   monthlyCostCap: number;
   byFeature: Record<string, { tokens: number; cost: number; count: number }>;
   byUser: Array<{ userId: string; tokens: number; cost: number; count: number }>;
+}
+
+export interface AIUsageLog {
+  id: string;
+  created_at: string;
+  feature: string;
+  model: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  estimated_cost?: number | null;
 }
 
 export type PlatformAIProvider = 'openai' | 'anthropic' | 'google' | 'deepinfra';

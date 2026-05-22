@@ -137,10 +137,16 @@ export function ProjectTeamMultiSelect({
         ref={triggerRef}
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary flex items-center justify-between transition-all min-h-[42px] ${variant === 'modal'
-          ? 'bg-background-card hover:border-foreground-secondary/30'
-          : 'bg-background-card hover:border-foreground-secondary/30'
-          } ${isOpen ? 'ring-2 ring-primary/50 border-primary' : ''}`}
+        // -webkit-tap-highlight-color kills the white/light flash some
+        // browsers paint between mousedown and our focus styles landing.
+        // transition-colors (not transition-all) keeps box-shadow + ring
+        // changes from triggering a per-frame compositor pass that can show
+        // through as a flicker.
+        style={{ WebkitTapHighlightColor: 'transparent' }}
+        className={`w-full px-3 py-2.5 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-input flex items-center justify-between transition-colors min-h-[42px] ${variant === 'modal'
+          ? 'bg-background-card-header hover:border-foreground-secondary/30 active:bg-background-card-header'
+          : 'bg-background-card hover:border-foreground-secondary/30 active:bg-background-card'
+          } ${isOpen ? 'ring-2 ring-ring border-input' : ''}`}
       >
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {selectedTeams.length === 0 ? (
@@ -160,8 +166,13 @@ export function ProjectTeamMultiSelect({
       </button>
 
       {isOpen && (
-        variant === 'modal' && portalPosition
-          ? createPortal(dropdownContent, document.body)
+        // Modal variant: render NOTHING until useLayoutEffect has measured the
+        // trigger and set portalPosition. Otherwise the panel mounts inline
+        // (the absolute-mt-1.5 fallback branch), then unmounts and remounts
+        // into the portal once the position lands — firing animate-in twice
+        // and producing a visible flash on first open.
+        variant === 'modal'
+          ? (portalPosition ? createPortal(dropdownContent, document.body) : null)
           : dropdownContent
       )}
     </div>

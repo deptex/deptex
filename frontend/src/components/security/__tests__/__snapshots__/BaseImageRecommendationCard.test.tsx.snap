@@ -34,7 +34,7 @@ exports[`BaseImageRecommendationCard — snapshots > matches the empty-state sna
       class="mt-3"
     >
       <button
-        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-subtle hover:border-foreground-secondary/30 hover:text-foreground h-8 rounded-md px-3 text-xs"
         type="button"
       >
         Suggest this image family
@@ -96,7 +96,7 @@ exports[`BaseImageRecommendationCard — snapshots > matches the real-recommenda
         </div>
       </div>
       <button
-        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-subtle hover:border-foreground-secondary/30 hover:text-foreground h-8 rounded-md px-3 text-xs"
         type="button"
       >
         Dismiss
@@ -230,7 +230,7 @@ exports[`BaseImageRecommendationCard — snapshots > matches the shell-required 
         </div>
       </div>
       <button
-        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground h-8 rounded-md px-3 text-xs"
+        class="inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border border-input bg-background-card shadow-sm hover:bg-background-subtle hover:border-foreground-secondary/30 hover:text-foreground h-8 rounded-md px-3 text-xs"
         type="button"
       >
         Dismiss

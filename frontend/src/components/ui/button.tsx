@@ -14,15 +14,15 @@ const buttonVariants = cva(
         solid:
           "bg-foreground text-background hover:bg-foreground/90 rounded-lg",
         destructive:
-          "bg-error/95 text-error-foreground border border-foreground/30 shadow hover:bg-error hover:border-foreground/40",
+          "relative !h-8 !px-3 !rounded-lg bg-error/95 text-error-foreground shadow-sm hover:bg-error disabled:bg-error/30 disabled:text-error-foreground/60 disabled:opacity-100",
         outline:
-          "border border-input bg-background-card shadow-sm hover:bg-background-card/80 hover:text-foreground",
+          "border border-input bg-background-card shadow-sm hover:bg-background-subtle hover:border-foreground-secondary/30 hover:text-foreground",
         secondary:
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         white:
           "relative !h-8 !px-3 !rounded-lg bg-foreground text-background shadow-sm hover:bg-foreground/85 disabled:bg-secondary disabled:text-foreground-secondary disabled:opacity-100",
         green:
-          "relative !h-8 !px-3 !rounded-lg bg-emerald-700 text-white shadow-sm hover:bg-emerald-800 disabled:bg-emerald-700/30 disabled:text-white/60 disabled:opacity-100",
+          "relative !h-8 !px-3 !rounded-lg bg-emerald-700 text-white shadow-sm border border-emerald-500/50 hover:bg-emerald-800 disabled:bg-emerald-700/30 disabled:text-white/60 disabled:border-emerald-500/20 disabled:opacity-100",
         ghost: "hover:bg-background-subtle hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
