@@ -2110,9 +2110,31 @@ export const api = {
   },
 
   /**
+   * Phase 36 (v1.1) — stateless HAR preview. POST a raw HAR object;
+   * the route extracts replayable requests, scrubs URL-query tokens,
+   * runs TOTP + non-replayable detectors, and returns a boolean-only
+   * preview shape. No DB writes; no credential row touched.
+   *
+   * 1.5MB body cap; the route's response carries Cache-Control: no-store.
+   */
+  async parseDastHar(
+    projectId: string,
+    targetId: string,
+    har: unknown,
+  ): Promise<DastReplayPreviewResponse> {
+    return fetchWithAuth(
+      `/api/projects/${projectId}/dast/targets/${targetId}/replay/preview`,
+      { method: 'POST', body: JSON.stringify({ har }) },
+    );
+  },
+
+  /**
    * v2.1d — queue a recorded-login dry-run (Test-login button).
    * Returns the test_job_id; client polls GET /dast/jobs?id=<id> via the
    * useJobResult hook until status is terminal.
+   *
+   * Phase 36 (v1.1) — same route now also admits auth_strategy='replay'
+   * via the worker's runReplayLoginProbe. FE caller doesn't change.
    */
   async postDastLoginTest(
     projectId: string,
@@ -4037,7 +4059,7 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 export type ScanJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
-export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded';
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded' | 'replay';
 
 // v2.1d — recorded-login step authoring. Maps 1:1 to the backend type.
 export type RecordedStepAction =
@@ -4071,6 +4093,72 @@ export interface RecordedCredentialPayload {
   step_delay_ms?: number;
   label?: string;
   sso_origins?: string[];
+}
+
+// Phase 36 (v1.1) — replay auth (HAR import). Mirror of backend/src/types/dast.ts.
+export interface ReplayedRequest {
+  method: string;
+  url: string;
+  headers: { name: string; value: string }[];
+  body?: string;
+  body_encoding?: 'utf8' | 'base64';
+}
+
+export interface HarTotpStep {
+  entry_index: number;
+  body_field: string;
+  body_kind: 'form' | 'json';
+}
+
+export interface ReplayCredentialPayload {
+  kind: 'replay';
+  requests: ReplayedRequest[];
+  totp_step?: HarTotpStep;
+  totp_secret?: string;
+  origins_observed: string[];
+  label?: string;
+}
+
+export interface ReplayPayloadSummary {
+  kind: 'replay';
+  request_count: number;
+  origins_observed: string[];
+  totp_detected: boolean;
+  has_totp_secret: boolean;
+  has_non_replayable_pattern: boolean;
+  label?: string;
+}
+
+export type HarFlagChip =
+  | 'auth_header'
+  | 'set_cookie'
+  | 'password_body'
+  | 'totp_detected'
+  | 'non_replayable_pattern';
+
+export interface DastReplayPreviewResponse {
+  requests: {
+    index: number;
+    method: string;
+    url_scrubbed: string;
+    response_status: number;
+    has_auth_header: boolean;
+    has_cookie_header: boolean;
+    has_password_body: boolean;
+    body_size: number;
+    flag_chips: HarFlagChip[];
+  }[];
+  summary: {
+    request_count: number;
+    origins: string[];
+    cookies_set: number;
+    auth_headers_observed: number;
+    dropped_header_count: number;
+    dropped_bytes: number;
+    kept_header_count: number;
+  };
+  totp_detected: HarTotpStep | null;
+  non_replayable_warnings: { entry_index: number; pattern_hint: string }[];
 }
 
 export interface FailedAtStep {
@@ -4196,7 +4284,9 @@ export type DastCredentialPayloadSummary =
   | { kind: 'form'; username_masked: string }
   | { kind: 'jwt'; token_prefix: string; token_length: number; expires_in_minutes: number }
   | { kind: 'cookie'; cookie_count: number; cookie_names: string[] }
-  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string };
+  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string }
+  // Phase 36 (v1.1)
+  | ReplayPayloadSummary;
 
 export interface DastCredentialSummaryDTO {
   auth_strategy: DastAuthStrategy;
@@ -4220,7 +4310,9 @@ export type DastCredentialUpsertPayload =
       kind: 'cookie';
       cookies: { name: string; value: string; domain?: string; path?: string }[];
     }
-  | RecordedCredentialPayload;
+  | RecordedCredentialPayload
+  // Phase 36 (v1.1) — HAR-derived replay payload.
+  | ReplayCredentialPayload;
 
 export interface DastCredentialUpsertDTO {
   auth_strategy: DastAuthStrategy;
