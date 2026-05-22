@@ -17,7 +17,11 @@ import {
   getActiveStreamId,
   replayStream,
 } from '../lib/aegis-v3/resumable-stream';
-import { checkMonthlyCostCap } from '../lib/ai/cost-cap';
+import { canCharge } from '../lib/billing/ledger';
+import {
+  getAegisTurnEstimateCents,
+  FRESH_ORG_DEFAULT_MODEL_ID,
+} from '../lib/billing/aegis-estimate';
 import { getThreadForParticipant } from '../lib/aegis/participants';
 import type { ModelMessage } from 'ai';
 
@@ -75,18 +79,32 @@ router.post('/stream', async (req: AuthRequest, res) => {
     // clean 500 + JSON body instead of a half-flushed SSE stream the client
     // can't make sense of. Once writeHead fires, we're committed to the SSE
     // channel.
+    // Fresh-org rule: orgs that haven't topped up yet default to Haiku
+    // regardless of what the client requested, so they can complete a turn
+    // on the $5 grant. paid-up orgs respect the request.
+    const { data: paidTxnRow } = await supabase
+      .from('billing_transactions')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .in('kind', ['topup', 'auto_recharge_topup'])
+      .limit(1)
+      .maybeSingle();
+    const effectiveModelId = paidTxnRow ? modelId : FRESH_ORG_DEFAULT_MODEL_ID;
+
     const [history, memoryContext, providerInfo] = await Promise.all([
       loadThreadHistory(resolvedThreadId),
       queryRelevantMemories(organizationId, message),
-      getProviderInfoForOrg(organizationId, modelId),
+      getProviderInfoForOrg(organizationId, effectiveModelId),
     ]);
 
-    const cap = await checkMonthlyCostCap(
-      organizationId,
-      providerInfo.model,
-      [{ role: 'user', content: message }],
-      providerInfo.monthlyCostCap,
-    );
+    const estimateCents = getAegisTurnEstimateCents(providerInfo.model);
+    const gate = await canCharge(organizationId, estimateCents);
+    const cap = {
+      allowed: gate.allowed,
+      message: gate.allowed
+        ? undefined
+        : `Your prepaid balance is too low to start a turn. Top up to continue.`,
+    };
 
     // Build the agent here too — getLanguageModelForOrg throws on missing /
     // disabled platform keys, and we want that as a 500 not as a torn-down
@@ -101,7 +119,7 @@ router.post('/stream', async (req: AuthRequest, res) => {
           priorMessageCount: history.length,
           context,
           memoryContext,
-          modelId,
+          modelId: effectiveModelId,
         })
       : null;
 
