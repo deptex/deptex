@@ -1,0 +1,17 @@
+{
+  "name": "deptex-dogfood-react",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "axios": "0.21.0",
+    "lodash": "4.17.20",
+    "moment": "2.29.1",
+    "event-stream": "3.3.6"
+  },
+  "scripts": {
+    "build": "vite build"
+  }
+}
