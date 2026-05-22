@@ -1,5 +1,3 @@
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
-import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { frameworkLabel, type ContainerFinding, type IaCFinding } from '../../lib/api';
 import { CodeSnippetBlock, getLangInfo } from './VulnerabilityOrgSidebarExpandedContent';
@@ -7,17 +5,7 @@ import { CodeSnippetBlock, getLangInfo } from './VulnerabilityOrgSidebarExpanded
 type IaCRow = { type: 'iac'; data: IaCFinding };
 type ContainerRow = { type: 'container'; data: ContainerFinding };
 
-type Props =
-  | (IaCRow & {
-      isIgnored: boolean;
-      busy: boolean;
-      onToggleStatus: () => void;
-    })
-  | (ContainerRow & {
-      isIgnored: boolean;
-      busy: boolean;
-      onToggleStatus: () => void;
-    });
+type Props = IaCRow | ContainerRow;
 
 function severityClass(sev: string | null): string {
   switch ((sev ?? '').toUpperCase()) {
@@ -53,41 +41,7 @@ function formatBenchmarkLabel(key: string): string {
     .join(' ');
 }
 
-function ignoreButton({
-  busy,
-  isIgnored,
-  onClick,
-}: {
-  busy: boolean;
-  isIgnored: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 text-xs gap-1.5 shrink-0"
-      disabled={busy}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-    >
-      {busy ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      ) : isIgnored ? (
-        <Eye className="h-3.5 w-3.5" />
-      ) : (
-        <EyeOff className="h-3.5 w-3.5" />
-      )}
-      {isIgnored ? 'Unignore' : 'Ignore'}
-    </Button>
-  );
-}
-
 export default function InfraFindingCard(props: Props) {
-  const { isIgnored, busy, onToggleStatus } = props;
   const sev = props.data.severity;
   const ruleDocUrl = props.data.rule_doc_url;
   const sevBadge = sev ? (
@@ -108,26 +62,23 @@ export default function InfraFindingCard(props: Props) {
       : [];
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {sevBadge}
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-              {frameworkLabel(f.framework)}
-            </span>
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-              {f.scanner === 'checkov' ? 'Checkov' : 'Trivy'}
-            </span>
-            {f.cwe_ids.length > 0 &&
-              f.cwe_ids.slice(0, 3).map((cwe) => (
-                <span
-                  key={cwe}
-                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20"
-                >
-                  {cwe}
-                </span>
-              ))}
-          </div>
-          {ignoreButton({ busy, isIgnored, onClick: onToggleStatus })}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {sevBadge}
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
+            {frameworkLabel(f.framework)}
+          </span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
+            {f.scanner === 'checkov' ? 'Checkov' : 'Trivy'}
+          </span>
+          {f.cwe_ids != null && f.cwe_ids.length > 0 &&
+            f.cwe_ids.slice(0, 3).map((cwe) => (
+              <span
+                key={cwe}
+                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20"
+              >
+                {cwe}
+              </span>
+            ))}
         </div>
 
         {complianceEntries.length > 0 && (
@@ -218,32 +169,29 @@ export default function InfraFindingCard(props: Props) {
   const cveOrOsv = f.cve_id ?? f.osv_id ?? f.vulnerability_id;
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {sevBadge}
-          {f.cvss_score != null && (
-            <span
-              className={cn(
-                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
-                f.cvss_score >= 9
-                  ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                  : f.cvss_score >= 7
-                  ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
-                  : f.cvss_score >= 4
-                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                  : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
-              )}
-            >
-              CVSS {f.cvss_score.toFixed(1)}
-            </span>
-          )}
-          {f.is_kev && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/25">
-              KEV
-            </span>
-          )}
-        </div>
-        {ignoreButton({ busy, isIgnored, onClick: onToggleStatus })}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {sevBadge}
+        {f.cvss_score != null && (
+          <span
+            className={cn(
+              'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+              f.cvss_score >= 9
+                ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                : f.cvss_score >= 7
+                ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+                : f.cvss_score >= 4
+                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+            )}
+          >
+            CVSS {f.cvss_score.toFixed(1)}
+          </span>
+        )}
+        {f.is_kev && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/25">
+            KEV
+          </span>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -282,7 +230,7 @@ export default function InfraFindingCard(props: Props) {
           </div>
         </div>
         <div className="flex items-center self-center">
-          {f.fix_versions.length > 0 ? (
+          {f.fix_versions != null && f.fix_versions.length > 0 ? (
             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs bg-success/15 text-success border border-success/30">
               Fixed in {f.fix_versions[0]}
             </span>
