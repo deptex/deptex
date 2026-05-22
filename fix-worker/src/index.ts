@@ -17,6 +17,7 @@ import { commitAndPushFix, openPullRequest } from './pr';
 import { FixLogger } from './logger';
 import { getLanguageModelForOrg } from './llm';
 import { isLanguageEnabled, getEnabledLanguages } from './plan-types';
+import { postFixTaskMeterEvent } from './meter-event';
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -142,6 +143,15 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   } finally {
     clearInterval(heartbeat);
     sandbox.cleanup();
+    try {
+      await postFixTaskMeterEvent({
+        taskId: job.id,
+        orgId: fullRow.organization_id,
+        startedAtMs: pipelineStartMs,
+      });
+    } catch (err) {
+      console.warn(`[FIX] meter-event emit failed`, err);
+    }
   }
 }
 
