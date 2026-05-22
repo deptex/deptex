@@ -1,0 +1,50 @@
+# Expected findings for the gin-gonic dogfood fixture.
+# HYPOTHESIS-GRADE until M4 walkthrough.
+
+reachable_vulns:
+  # gin v1.7.7 — multiple advisories. CVE-2023-26125 is representative.
+  - osv_id: CVE-2023-26125
+    aliases: [GHSA-3vp4-m3rf-835h]
+    file: main.go
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  - osv_id: CVE-2019-11254
+    aliases: [GHSA-wxc4-f4m6-wwqv]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  - osv_id: CVE-2022-23806
+    aliases: []
+    base_image: golang:1.17.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 3
+
+malicious_pkg: []
+
+semgrep_findings:
+  - rule_id: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+    file: main.go
+    line: 22
+
+dast_findings:
+  - alert: Remote OS Command Injection
+    url_pattern: /run?name=

@@ -1,0 +1,51 @@
+# Expected findings for the axum dogfood fixture.
+# HYPOTHESIS-GRADE until M4 walkthrough.
+
+reachable_vulns:
+  # tokio 1.28.0 — broadcast channel memory-leak CVE is a representative
+  # advisory for this version range. Walkthrough iterates.
+  - osv_id: CVE-2023-22466
+    aliases: [GHSA-q76r-4961-9rg3]
+    file: src/main.rs
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  - osv_id: CVE-2020-26235
+    aliases: [GHSA-wcg3-cvx6-7396]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  - osv_id: CVE-2022-3996
+    aliases: []
+    base_image: rust:1.60.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 3
+
+malicious_pkg: []
+
+semgrep_findings:
+  - rule_id: rust.lang.security.audit.path-traversal.path-traversal
+    file: src/main.rs
+    line: 17
+
+dast_findings:
+  - alert: Path Traversal
+    url_pattern: /file?name=
