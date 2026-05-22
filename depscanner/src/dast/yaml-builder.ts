@@ -98,11 +98,13 @@ export interface BuildAutomationYamlOptions {
   openApiSpecPath?: string;
 }
 
-// v2.1d — auth budget reserved out of scan_timeout_minutes for the recorded
-// pre-flight probe. activeScan.maxScanDurationInMins is reduced by this
-// amount for the recorded strategy so the combined (auth + spider + scan)
-// run fits within the outer scan_timeout_minutes wall-clock.
-const RECORDED_AUTH_BUDGET_MIN = 3;
+// v2.1d / Phase 36 (v1.1) — auth budget reserved out of scan_timeout_minutes
+// for the in-engine auth phase. activeScan.maxScanDurationInMins is reduced
+// by this amount for the recorded AND replay strategies so the combined
+// (auth + spider + scan) run fits within the outer scan_timeout_minutes
+// wall-clock. The constant name was widened from RECORDED_AUTH_BUDGET_MIN
+// to AUTH_SETUP_BUDGET_MIN per Patch C strategy-neutrality.
+const AUTH_SETUP_BUDGET_MIN = 3;
 
 const CONTEXT_NAME = 'deptex-dast';
 
@@ -242,15 +244,31 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
   // lives in the auth-report.json's summaryItems[auth.summary.auth]). We
   // leave `onFail: exit` in place defensively — when ZAP DOES surface a
   // requestor failure, it short-circuits the spider/active-scan work.
-  if (opts.authStrategy === 'recorded' && opts.authPayload) {
+  // v2.1d / Phase 36 (v1.1) — post-auth verification probe runs for both
+  // browser-driven recorded auth AND replay's script-based auth. The same
+  // empirical finding from v2.1d applies: without parameters.user the
+  // auth method is never invoked, so the probe fires anonymously and the
+  // loggedIn regex never gets a real test.
+  if (
+    (opts.authStrategy === 'recorded' || opts.authStrategy === 'replay')
+    && opts.authPayload
+  ) {
+    // Recorded carries login_page_url; replay carries origins_observed (the
+    // first origin is the canonical post-auth target). Fall back to the
+    // target URL for both.
+    const recordedLoginPageUrl =
+      opts.authStrategy === 'recorded'
+        ? (opts.authPayload as { kind: string } & { login_page_url?: string }).login_page_url
+        : undefined;
     const verificationUrl =
       opts.verificationProbeUrl
-      ?? (opts.authPayload as { kind: string } & { login_page_url?: string }).login_page_url
+      ?? recordedLoginPageUrl
       ?? opts.targetUrl;
     jobs.push({
       type: 'requestor',
       parameters: {
-        // Without `user:` ZAP never replays the recorded auth method (empirical).
+        // Without `user:` ZAP never invokes the script-based / browser-based
+        // auth method (empirical for both strategies — see v2.1d findings).
         user: 'deptex-dast-user',
       },
       requests: [
@@ -286,7 +304,11 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
           apiFile: opts.openApiSpecPath,
           targetUrl: opts.targetUrl,
           context: CONTEXT_NAME,
-          ...(opts.authStrategy === 'recorded' ? { user: 'deptex-dast-user' } : {}),
+          // Phase 36 — replay binds the same user; both strategies need
+          // the explicit user binding to invoke their auth method.
+          ...(opts.authStrategy === 'recorded' || opts.authStrategy === 'replay'
+            ? { user: 'deptex-dast-user' }
+            : {}),
         },
       };
       jobs.push(openApiJob);
@@ -326,9 +348,11 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
     // so the auth budget is consumed before the active-scan starts.
     if (opts.scanProfile === 'full' || opts.scanProfile === 'api') {
       const baseTimeout = opts.scanTimeoutMinutes ?? 30;
+      // Phase 36 — same auth budget carveout for recorded AND replay
+      // (form / jwt / cookie have negligible auth setup time).
       const activeScanDuration =
-        opts.authStrategy === 'recorded'
-          ? Math.max(1, baseTimeout - RECORDED_AUTH_BUDGET_MIN)
+        opts.authStrategy === 'recorded' || opts.authStrategy === 'replay'
+          ? Math.max(1, baseTimeout - AUTH_SETUP_BUDGET_MIN)
           : baseTimeout;
       jobs.push({
         type: 'activeScan',
@@ -359,6 +383,11 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
   // success vs failure — empirically confirmed against ZAP 2.17.0 +
   // authhelper v0.39.0. Note: a pre-baked authhelper add-on ships with the
   // `auth-report-json` template; no add-on install needed.
+  // v2.1d — auth-report.json is generated ONLY by authhelper's browser-based
+  // auth path (recorded strategy). authhelper does NOT emit it for script-
+  // based authentication, so replay's verdict signal lives in ZAP exit code
+  // + the requestor job's onFail:exit semantics (see pipeline.ts
+  // runReplayLoginProbe). Keep this job gated to recorded only.
   if (opts.authStrategy === 'recorded' && opts.authPayload) {
     jobs.push({
       type: 'report',

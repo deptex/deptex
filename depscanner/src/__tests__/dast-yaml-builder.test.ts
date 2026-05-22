@@ -473,3 +473,105 @@ describe("buildAutomationYaml — openapi job (Phase 35 v1.1)", () => {
     expect(types).not.toContain('spiderAjax');
   });
 });
+
+describe('buildAutomationYaml — replay strategy (Phase 36 v1.1)', () => {
+  // Local helper (the openapi describe block has its own jobsOf at line ~338).
+  function jobsOf(doc: any): Array<Record<string, any>> {
+    return (doc.jobs ?? []) as Array<Record<string, any>>;
+  }
+
+  function replayPayload(): CredentialPayload {
+    return {
+      kind: 'replay',
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://app.example.com/login',
+          headers: [
+            { name: 'Content-Type', value: 'application/x-www-form-urlencoded' },
+          ],
+          body: 'username=alice&password=wonderland',
+        },
+      ],
+      origins_observed: ['app.example.com'],
+    } as CredentialPayload;
+  }
+
+  it('emits method=script + scriptEngine="ECMAScript : Graal.js" + scriptInline', () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const ctx = doc.env.contexts[0];
+    expect(ctx.authentication.method).toBe('script');
+    expect(ctx.authentication.parameters.scriptEngine).toBe('ECMAScript : Graal.js');
+    expect(typeof ctx.authentication.parameters.scriptInline).toBe('string');
+    expect((ctx.authentication.parameters.scriptInline as string).length).toBeGreaterThan(100);
+    // No separate `type: script` job — the script is INLINED in
+    // context.authentication.parameters, not a sibling job.
+    const types = jobsOf(doc).map((j) => j.type);
+    expect(types).not.toContain('script');
+  });
+
+  it('emits the deptex-dast-user binding with an empty credentials map', () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const ctx = doc.env.contexts[0];
+    expect(ctx.users).toHaveLength(1);
+    expect(ctx.users[0].name).toBe('deptex-dast-user');
+    expect(ctx.users[0].credentials).toEqual({});
+  });
+
+  it('emits a requestor job with user binding for the post-auth probe', () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const requestor = jobsOf(doc).find((j) => j.type === 'requestor');
+    expect(requestor).toBeDefined();
+    expect(requestor.parameters.user).toBe('deptex-dast-user');
+  });
+
+  it('does NOT emit the auth-report-json report job for replay (script-based auth has no auth-report)', () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const reportTemplates = jobsOf(doc)
+      .filter((j) => j.type === 'report')
+      .map((j) => j.parameters.template);
+    expect(reportTemplates).not.toContain('auth-report-json');
+  });
+
+  it("reserves the AUTH_SETUP_BUDGET_MIN carveout from activeScan duration", () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      scanProfile: 'full',
+      scanTimeoutMinutes: 30,
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const activeScan = jobsOf(doc).find((j) => j.type === 'activeScan');
+    expect(activeScan).toBeDefined();
+    // 30 - AUTH_SETUP_BUDGET_MIN (3) = 27 expected.
+    expect(activeScan.parameters.maxScanDurationInMins).toBe(27);
+  });
+
+  it('binds the openapi job to deptex-dast-user when a spec is set', () => {
+    const { doc } = dumpAndParse({
+      ...BASELINE_OPTS,
+      openApiSpecPath: '/zap/wrk/spec.yaml',
+      authStrategy: 'replay',
+      authPayload: replayPayload(),
+    });
+    const openapi = jobsOf(doc).find((j) => j.type === 'openapi');
+    expect(openapi).toBeDefined();
+    expect(openapi.parameters.user).toBe('deptex-dast-user');
+  });
+});
