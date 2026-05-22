@@ -16,6 +16,7 @@ import {
   isDastEncryptionConfigured,
   decryptCredential,
 } from '../lib/dast-encryption';
+import { parseHar } from '../lib/dast-har-parse';
 import { createActivity } from '../lib/activities';
 import {
   validateSpecSource,
@@ -887,6 +888,142 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// POST /:projectId/dast/targets/:targetId/replay/preview         (Phase 36)
+//
+// Stateless HAR preview endpoint. Used by the FE Replay tab before the user
+// commits a credential — they drop a .har file, we extract the replayable
+// requests, scrub URL-query tokens, run the TOTP + non-replayable detectors,
+// and return a boolean-only preview shape. No DB writes; no credential row
+// touched; no plaintext echoed back beyond the structural metadata.
+//
+// Body-cap: 1.5MB via route-local express.json (the global parser at
+// src/index.ts is path-gated to SKIP this exact route — see
+// REPLAY_PREVIEW_PATH there). 100kb default would reject the average HAR.
+//
+// Privacy:
+//   - `express.json` errors carry the failed body bytes on err.body; the
+//     route-scoped error handler at the bottom strips them before re-
+//     throwing. Defense-in-depth against the global handler at
+//     backend/src/index.ts (which also strips, but this is the first gate).
+//   - Response carries `Cache-Control: no-store` so no proxy / browser
+//     cache holds the preview shape (which carries scrubbed URLs + body
+//     sizes for the failed-auth analysis layer).
+//   - parseHar emits no log lines on either path. Any 5xx logs only the
+//     error code + index — never body / header contents.
+// ---------------------------------------------------------------------------
+router.post(
+  '/:projectId/dast/targets/:targetId/replay/preview',
+  // Route-local 1.5MB body cap (HAR files are typically 500KB-1MB).
+  express.json({ limit: '1.5mb' }),
+  // Route-scoped error handler — converts body-parser 400s into our
+  // canonical error_code shape WITHOUT echoing err.body. Mounted as a
+  // four-arg middleware so Express recognizes it as an error handler;
+  // delegated by `next(err)` from the route handler below.
+  async (req: AuthRequest, res, next) => {
+    try {
+      const userId = req.user!.id;
+      const { projectId, targetId } = req.params;
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+      if (!isDastEncryptionConfigured()) {
+        return res.status(503).json({ error_code: 'dast_encryption_not_configured' });
+      }
+
+      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const harShape = (req.body as { har?: unknown })?.har;
+      if (harShape === undefined) {
+        return res.status(422).json({
+          error_code: 'invalid_har_shape',
+          detail: 'request body must be `{ har: <HAR 1.2 JSON> }`',
+        });
+      }
+
+      let result;
+      try {
+        result = parseHar(harShape);
+      } catch (e) {
+        const code = (e as { error_code?: string }).error_code;
+        if (code) {
+          return res.status(422).json({
+            error_code: code,
+            detail: (e as { detail?: string }).detail ?? 'HAR rejected',
+          });
+        }
+        // Unstructured throw — log shape metadata only, never bytes.
+        console.error('[dast] /replay/preview unstructured parser failure');
+        return res.status(500).json({ error: 'Failed to parse HAR' });
+      }
+
+      // No-store / no-cache: the preview carries scrubbed URLs + body sizes
+      // that could otherwise sit in a shared proxy cache. Private narrows
+      // it further; must-revalidate guards browsers that ignore no-store.
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
+      return res.status(200).json({
+        requests: result.entries,
+        summary: result.summary,
+        totp_detected: result.totp_detected,
+        non_replayable_warnings: result.non_replayable_warnings,
+      });
+    } catch (e: any) {
+      // Strip body-parser's leaked-body fields BEFORE re-throwing to the
+      // global handler. The global handler at backend/src/index.ts also
+      // strips these for defense-in-depth, but the closer the strip the
+      // safer: a future logger added between here and there can't see
+      // them either.
+      if (e && typeof e === 'object') {
+        if ('body' in e) delete (e as { body?: unknown }).body;
+        if ('bodyRaw' in e) delete (e as { bodyRaw?: unknown }).bodyRaw;
+        if ('rawBody' in e) delete (e as { rawBody?: unknown }).rawBody;
+      }
+      console.error('[dast] /replay/preview exception:', e?.message ?? '(no message)');
+      return res.status(500).json({ error: 'Failed to parse HAR' });
+    }
+  },
+);
+
+// Route-scoped body-parser error handler. body-parser throws PayloadTooLargeError
+// (with .type='entity.too.large') and various SyntaxErrors (with .body /
+// .bodyRaw on the error). Convert all to our canonical 413 / 422 codes
+// without echoing the bytes. Mounted ONLY on the preview path so other dast
+// routes still use the default Express error path.
+router.use(
+  '/:projectId/dast/targets/:targetId/replay/preview',
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) return next();
+    // Strip leaked-body fields immediately so any downstream log call sees
+    // a scrubbed object.
+    if (err && typeof err === 'object') {
+      if ('body' in err) delete err.body;
+      if ('bodyRaw' in err) delete err.bodyRaw;
+    }
+    if (err.type === 'entity.too.large' || err.status === 413) {
+      return res.status(413).json({
+        error_code: 'har_too_large',
+        detail: 'request body exceeds 1.5MB',
+      });
+    }
+    if (err instanceof SyntaxError || err.type === 'entity.parse.failed') {
+      return res.status(422).json({
+        error_code: 'invalid_har_shape',
+        detail: 'request body is not valid JSON',
+      });
+    }
+    console.error('[dast] /replay/preview body-parser error:', err?.message ?? '(no message)');
+    return res.status(500).json({ error: 'Failed to parse request' });
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /:projectId/dast/targets/:targetId/credentials/test     (v2.1d)
 // Queues a dry-run dast_zap job carrying `payload.dry_run: true`. The worker
 // branches on that flag and runs the recorded-login probe ONLY (no spider,
@@ -921,8 +1058,9 @@ router.post(
         return res.status(409).json({ error: 'target_disabled' });
       }
 
-      // Only `recorded` credentials are testable. Form/JWT/cookie validate
-      // inline at PUT time via probeFormLogin / JWT exp / shape checks.
+      // Phase 36 (v1.1): testable strategies are `recorded` AND `replay`.
+      // Form / JWT / cookie validate inline at PUT time via probeFormLogin /
+      // JWT exp / shape checks and don't need the dry-run probe.
       const { data: credRow } = await supabase
         .from('project_dast_credentials')
         .select('auth_strategy')
@@ -931,10 +1069,10 @@ router.post(
       if (!credRow) {
         return res.status(404).json({ error: 'credentials_not_set' });
       }
-      if (credRow.auth_strategy !== 'recorded') {
+      if (credRow.auth_strategy !== 'recorded' && credRow.auth_strategy !== 'replay') {
         return res.status(422).json({
           code: 'unsupported_strategy_for_test',
-          detail: 'Only recorded credentials use the Test-login flow; form/jwt/cookie validate at save time.',
+          detail: 'Only recorded and replay credentials use the Test-login flow; form/jwt/cookie validate at save time.',
         });
       }
 
@@ -1059,13 +1197,24 @@ router.post(
 
       // Audit-log entry (best-effort; activities table is gitignored from
       // failure cascades — never break the user-facing 202 over a log write).
+      //
+      // Phase 36 / Decision 16: reuse `dast_login_test.run` activity_type with
+      // metadata.strategy so the FE activity feed can distinguish recorded
+      // from replay without adding a parallel activity type.
       try {
         await createActivity({
           organization_id: access.organizationId,
           user_id: userId,
           activity_type: 'dast_login_test.run',
-          description: 'Started recorded-login test',
-          metadata: { test_job_id: job.id, target_id: targetId },
+          description:
+            credRow.auth_strategy === 'replay'
+              ? 'Started replay (HAR) login test'
+              : 'Started recorded-login test',
+          metadata: {
+            test_job_id: job.id,
+            target_id: targetId,
+            strategy: credRow.auth_strategy,
+          },
         });
       } catch {
         /* createActivity already swallows; this catch is defensive */
@@ -1398,26 +1547,50 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
       return res.status(500).json({ error: 'Failed to load DAST jobs' });
     }
 
-    const jobs: DastJobDTO[] = (data ?? []).map((row: any) => ({
-      id: row.id,
-      status: row.status,
-      trigger_source: row.trigger_source,
-      target_id: row.target_id ?? null,
-      target_url: row.target_url,
-      scan_profile: row.scan_profile,
-      findings_count: row.findings_count,
-      duration_seconds: row.duration_seconds,
-      started_at: row.started_at,
-      completed_at: row.completed_at,
-      error: row.error,
-      error_category: row.error_category,
-      // v2.1d — discriminated union, FE switches on .kind for the recorded-
-      // login outcome (test_result / pre_flight_failed / session_loss).
-      // Always JSONB-shaped; null when no auth-failure / no test result.
-      error_payload: row.error_payload ?? null,
-      attempts: row.attempts ?? 0,
-      created_at: row.created_at,
-    }));
+    // Phase 36 / Patch G — `error_payload.diagnostic_responses` (populated by
+    // the worker on a failed Test-replay) can carry 256-byte response-body
+    // excerpts. Strip them for any caller lacking manage_integrations: a
+    // regular project member with view access can still see test result
+    // shape + failure kind, but never the raw bodies. Credential editors
+    // still get the full surface for debugging.
+    const canSeeDiagnostics = await checkOrgManageIntegrationsPermission(
+      userId,
+      access.organizationId,
+    );
+
+    const jobs: DastJobDTO[] = (data ?? []).map((row: any) => {
+      let errorPayload = row.error_payload ?? null;
+      if (
+        errorPayload
+        && !canSeeDiagnostics
+        && typeof errorPayload === 'object'
+        && 'diagnostic_responses' in errorPayload
+      ) {
+        // Shallow clone + null-out the leak surface; preserve the
+        // discriminated-union .kind + the rest of the failure-context fields.
+        errorPayload = { ...errorPayload, diagnostic_responses: null };
+      }
+      return {
+        id: row.id,
+        status: row.status,
+        trigger_source: row.trigger_source,
+        target_id: row.target_id ?? null,
+        target_url: row.target_url,
+        scan_profile: row.scan_profile,
+        findings_count: row.findings_count,
+        duration_seconds: row.duration_seconds,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        error: row.error,
+        error_category: row.error_category,
+        // v2.1d — discriminated union, FE switches on .kind for the recorded-
+        // login outcome (test_result / pre_flight_failed / session_loss).
+        // Always JSONB-shaped; null when no auth-failure / no test result.
+        error_payload: errorPayload,
+        attempts: row.attempts ?? 0,
+        created_at: row.created_at,
+      };
+    });
     return res.json(jobs);
   } catch (e: any) {
     console.error('[dast] GET jobs exception:', e);

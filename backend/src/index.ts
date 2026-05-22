@@ -106,12 +106,28 @@ app.use((req, res, next) => {
 // Explicit limit so a future refactor can't silently uncap the body-parser
 // default; 100kb is plenty for any current route (registry creds top out at
 // ~10kb after per-field caps).
-app.use(express.json({
+//
+// Phase 36 (v1.1) — DAST replay/preview needs a 1.5MB body cap (HAR files
+// are larger than any other route's body). Patch B / Patch I-1: gate the
+// global parser on path so it SKIPS the replay-preview route, then the dast
+// router mounts a route-local 1.5MB express.json. The path-gated form is
+// the only one that works — Express middleware fires in mount order, so a
+// router-internal `express.json` would no-op (the global parser would have
+// already populated req._body=true).
+const REPLAY_PREVIEW_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+\/replay\/preview\/?$/;
+const globalJsonParser = express.json({
   limit: '100kb',
   verify: (req: any, res, buf) => {
     req.rawBody = buf.toString();
+  },
+});
+app.use((req, res, next) => {
+  if (REPLAY_PREVIEW_PATH.test(req.path)) {
+    // The dast router installs its own 1.5mb parser for this exact route.
+    return next();
   }
-}));
+  return globalJsonParser(req, res, next);
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -182,9 +198,25 @@ app.post('/api/webhook/github', githubWebhookHandler);
 app.use('/api/integrations', gitlabWebhooksRouter);
 app.use('/api/integrations', bitbucketWebhooksRouter);
 
-// Error handling middleware
+// Error handling middleware.
+//
+// Phase 36 (v1.1) — body-parser-thrown errors carry the failed body bytes on
+// `err.body` (and sometimes `err.bodyRaw`). Logging the raw err object would
+// echo those bytes to stdout, which leaks HAR contents on a parse failure
+// (POST /replay/preview with malformed JSON would otherwise emit the entire
+// failed body to Pino / Datadog forwarders bypassing console). Strip those
+// fields off the cloned shape we hand to the logger. Route-scoped error
+// handlers in the dast router strip them too for defense-in-depth — this
+// global handler is the last gate.
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
+  const safe = {
+    name: err.name,
+    message: err.message,
+    stack: err.stack,
+    // Body-parser specific fields that we intentionally omit:
+    // body, bodyRaw, rawBody, statusCode, expose, type.
+  };
+  console.error('Error:', safe);
   res.status(500).json({ error: 'Internal server error' });
 });
 
