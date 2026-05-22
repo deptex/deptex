@@ -40,8 +40,16 @@ const JWT_REGEX = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 // Common credential JSON shape: "password":"value", "token":"value", etc.
 // Anchored to keys we know our own DTOs use; intentionally narrow to keep
 // false-positive rate low.
+//
+// Phase 36 (v1.1) — `totp_secret` added so a serialized ReplayCredentialPayload
+// (or any other DTO that carries an RFC 6238 base32) gets scrubbed when this
+// helper runs on a log row. The `secret` alternative does NOT cover
+// `totp_secret` because the alternation requires the key to be exactly
+// `"<one of>"` delimited — `_` before `secret` in `totp_secret` breaks the
+// match. Without this addition a future dast-logger.ts that serializes a
+// replay payload would leak the base32 plaintext.
 const CREDENTIAL_JSON_REGEX =
-  /("(?:password|token|access_token|refresh_token|api_key|apikey|secret|client_secret)"\s*:\s*")([^"\\]+)(")/gi;
+  /("(?:password|token|access_token|refresh_token|api_key|apikey|secret|client_secret|totp_secret)"\s*:\s*")([^"\\]+)(")/gi;
 
 // Cookie header values: `Set-Cookie: name=value; …` — preserve the name, scrub
 // the value.

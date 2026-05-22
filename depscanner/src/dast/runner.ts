@@ -71,6 +71,25 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/(?:api[_-]?key|apikey|access[_-]?key)["']?\s*[:=]\s*["']?[A-Za-z0-9+/=_-]{12,}(?=[\s"',;&?#}\])>\\]|$)/gi, 'api_key=[REDACTED]'],
   // Slack tokens
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED_SLACK]'],
+  // Phase 36 (v1.1) — setHeader("Cookie", "name=value;…") JS-source literal
+  // emitted by replay-zap-auth.ts's generateReplayAuthScript. The header-form
+  // matcher above requires `cookie:` (colon-separated) so it doesn't fire on
+  // this comma-separated JS-source shape. Defense-in-depth against ZAP /
+  // Graal.js emitting the offending script source on a parse / registration
+  // error to stderr — pipeline.ts:runReplayLoginProbe forwards every stderr
+  // chunk through redactCredentials.
+  [/setHeader\s*\(\s*["'](?:Cookie|Set-Cookie|Authorization)["']\s*,\s*["'][^"']*["']/gi, 'setHeader("[REDACTED]")'],
+  // Bare RFC 4648 base32 strings of ≥16 chars (legitimate TOTP secrets are
+  // 16-32). The positive lookahead requires at least one base32-digit char
+  // (2-7) somewhere in the match — without it the regex would false-positive
+  // on long all-uppercase identifiers like `LONGCONSTNAMEHERE`. TOTP secrets
+  // from real IdPs always carry digits (base32 alphabet has 8 digits in 32
+  // chars; 16-char run averages ~4). Matches the inlined
+  // `__DEPTEX_TOTP_SECRET = "JBSWY3DPEHPK3PXP"` shape in the generated
+  // Graal.js source — the cookie / api_key / password matchers above are
+  // key-prefix-anchored and don't catch a bare base32 literal living in a
+  // `var X = "…"` assignment.
+  [/\b(?=[A-Z2-7]*[2-7])[A-Z2-7]{16,256}={0,6}\b/g, '[REDACTED_BASE32]'],
 ];
 
 export function redactCredentials(input: string | null | undefined): string | null {

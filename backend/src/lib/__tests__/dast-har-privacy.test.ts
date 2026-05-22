@@ -269,17 +269,8 @@ describe('dast-har-parse + dast-credential-validate — privacy canary suite', (
 });
 
 // ---------------------------------------------------------------------------
-// M2 placeholders — these tests get implemented when POST /replay/preview +
-// PUT /credentials + GET /credentials lands at M2 step 2.
+// Route-layer canaries (body-cap 413 strip + global error handler strip +
+// Patch G diagnostic_responses lifecycle) are landed in the route-level
+// suite at backend/src/__tests__/dast-replay-routes.test.ts where the
+// supertest harness already exists. Keep this file lib-level and pure.
 // ---------------------------------------------------------------------------
-describe.skip('M2 — route-layer privacy canaries', () => {
-  it.skip('body-cap canary — 2MB body with canary returns 413 without echoing canary', () => {
-    /* M2 step 7 */
-  });
-  it.skip('global error handler — POST malformed JSON with canary bytes does not echo them', () => {
-    /* M2 step 7 */
-  });
-  it.skip('Patch G test-job lifecycle — diagnostic_responses === null after success', () => {
-    /* M3 step 7b(e) */
-  });
-});

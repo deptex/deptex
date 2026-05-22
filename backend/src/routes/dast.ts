@@ -595,6 +595,14 @@ router.get(
 // ---------------------------------------------------------------------------
 router.put(
   '/:projectId/dast/targets/:targetId/credentials',
+  // Phase 36 (v1.1) — route-local 1.5MB parser. The replay credential carries
+  // the assembled captured-request list (up to HAR_MAX_SERIALIZED_PLAINTEXT_BYTES
+  // = 1MB plaintext); other strategies (form / jwt / cookie / recorded) ship
+  // <10KB bodies. The global parser is path-gated to SKIP PUT /credentials
+  // (see backend/src/index.ts:117-) so this route-local express.json is what
+  // actually buffers the body. Without this, a legitimate 150KB replay payload
+  // would be rejected by the global 100kb parser and surface as a generic 500.
+  express.json({ limit: '1.5mb' }),
   async (req: AuthRequest, res) => {
     try {
       const userId = req.user!.id;
@@ -1019,6 +1027,39 @@ router.use(
       });
     }
     console.error('[dast] /replay/preview body-parser error:', err?.message ?? '(no message)');
+    return res.status(500).json({ error: 'Failed to parse request' });
+  },
+);
+
+// Phase 36 (v1.1) — PUT /credentials route-scoped body-parser error handler.
+// Mirrors the preview-route handler above but maps to `replay_payload_too_large`
+// since the documented PUT cap (HAR_MAX_SERIALIZED_PLAINTEXT_BYTES=1MB +
+// 0.5MB headroom = 1.5MB route-local) is the replay-feature contract.
+// Non-replay strategies (form/jwt/cookie/recorded) ship <10KB bodies; if any
+// of them ever hit 1.5MB it's because someone's smuggling a HAR through
+// auth_strategy='form' and 413 is correct.
+router.use(
+  '/:projectId/dast/targets/:targetId/credentials',
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) return next();
+    if (err && typeof err === 'object') {
+      if ('body' in err) delete err.body;
+      if ('bodyRaw' in err) delete err.bodyRaw;
+    }
+    if (err.type === 'entity.too.large' || err.status === 413) {
+      return res.status(413).json({
+        error_code: 'replay_payload_too_large',
+        detail: 'request body exceeds 1.5MB',
+      });
+    }
+    if (err instanceof SyntaxError || err.type === 'entity.parse.failed') {
+      return res.status(422).json({
+        error_code: 'invalid_credential_shape',
+        detail: 'request body is not valid JSON',
+      });
+    }
+    console.error('[dast] PUT /credentials body-parser error:', err?.message ?? '(no message)');
     return res.status(500).json({ error: 'Failed to parse request' });
   },
 );

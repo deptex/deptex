@@ -41,7 +41,11 @@ export type CredentialValidateError =
   | { error_code: 'jwt_expired_too_soon'; detail: string }
   | { error_code: 'login_url_invalid'; detail: string }
   | { error_code: 'login_probe_failed'; detail: string }
-  | { error_code: 'login_probe_failed_indicator_collision'; detail: string };
+  | { error_code: 'login_probe_failed_indicator_collision'; detail: string }
+  // Phase 36 (v1.1) — assembled replay payload exceeded
+  // HAR_MAX_SERIALIZED_PLAINTEXT_BYTES (1MB) at the validator's final cap.
+  // Mirrors the route-scoped body-parser 413 path which emits the same code.
+  | { error_code: 'replay_payload_too_large'; detail: string };
 
 export interface CredentialValidateOk {
   ok: true;
@@ -648,7 +652,11 @@ export function validateReplayPayload(
   const serializedSize = JSON.stringify(payload).length;
   if (serializedSize > HAR_MAX_SERIALIZED_PLAINTEXT_BYTES) {
     return {
-      error_code: 'invalid_credential_shape',
+      // Phase 36 / criticalreview PD-1: the canonical error_code is
+      // `replay_payload_too_large` (mirrors the route-scoped body-parser 413).
+      // Original code emitted `invalid_credential_shape` here, which made
+      // the documented `replay_payload_too_large` unreachable.
+      error_code: 'replay_payload_too_large',
       detail: `replay payload serialized ${serializedSize} bytes > ${HAR_MAX_SERIALIZED_PLAINTEXT_BYTES}`,
     };
   }

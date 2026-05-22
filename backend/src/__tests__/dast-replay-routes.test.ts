@@ -62,12 +62,15 @@ import dastRouter from '../routes/dast';
 
 function makeApp() {
   const app = express();
-  // Route-local 1.5MB parser fires from dastRouter; global parser here
-  // mirrors the path-gating in src/index.ts so the body-cap test triggers
-  // the route-scoped 413 (not the global 100kb).
+  // Route-local 1.5MB parsers fire from dastRouter on /replay/preview and
+  // PUT /credentials; the global 100kb parser here mirrors src/index.ts's
+  // path-gating EXACTLY so the body-cap tests hit the route-scoped 413
+  // (not the global 100kb that would surface as a generic 500).
   const REPLAY_PREVIEW_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+\/replay\/preview\/?$/;
+  const DAST_CREDENTIALS_PUT_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+\/credentials\/?$/;
   app.use((req, res, next) => {
     if (REPLAY_PREVIEW_PATH.test(req.path)) return next();
+    if (req.method === 'PUT' && DAST_CREDENTIALS_PUT_PATH.test(req.path)) return next();
     return express.json({ limit: '100kb' })(req, res, next);
   });
   app.use('/api/projects', dastRouter);
@@ -371,5 +374,162 @@ describe('POST /:projectId/dast/targets/:targetId/credentials/test — replay br
     );
     expect(r.status).toBe(422);
     expect(r.body.code).toBe('unsupported_strategy_for_test');
+  });
+
+  // criticalreview mt-1 — pins the cross-tenant 404 behavior on the widened
+  // gate. A future refactor that hoists the credentials SELECT above
+  // loadTargetOrDeny would convert this into a cross-tenant auth_strategy
+  // enumeration leak; this test catches the regression.
+  it('returns 404 cross-tenant for replay branch', async () => {
+    setProjectAccessOwner(ORG_A);
+    setTargetCrossTenant();
+
+    const r = await request(makeApp()).post(
+      `/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials/test`,
+    );
+    expect(r.status).toBe(404);
+    expect(r.body.error).toBe('target_not_found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// criticalreview byok-4 — route-layer privacy canaries
+//
+// The lib-level canary suite at dast-har-privacy.test.ts catches leaks in
+// parseHar + validateAndPrepareCredential by stubbing process.stdout/stderr.
+// These route-level canaries catch the body-parser + global-error-handler
+// strip sites, which the lib-level suite can't reach (they only fire under
+// real Express middleware stack).
+//
+// stdio capture helper — re-derived here so the file is self-contained;
+// future cleanup could extract this to a shared test/utils module.
+// ---------------------------------------------------------------------------
+
+const CANARY_LITERAL = 'CANARY_BEARER_DO_NOT_LOG_xyz123abc';
+
+function captureStdio(): { stdout: string[]; stderr: string[]; restore: () => void } {
+  const cap = { stdout: [] as string[], stderr: [] as string[], restore: () => undefined as void };
+  const originalOut = process.stdout.write.bind(process.stdout);
+  const originalErr = process.stderr.write.bind(process.stderr);
+  const originalConsoleError = console.error;
+  const originalConsoleLog = console.log;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stdout.write as any) = (chunk: any, encOrCb?: any, cb?: any): boolean => {
+    cap.stdout.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return originalOut(chunk, encOrCb, cb);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (process.stderr.write as any) = (chunk: any, encOrCb?: any, cb?: any): boolean => {
+    cap.stderr.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return originalErr(chunk, encOrCb, cb);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (console.error as any) = (...args: any[]) => {
+    cap.stderr.push(args.map(String).join(' ') + '\n');
+    return originalConsoleError(...args);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (console.log as any) = (...args: any[]) => {
+    cap.stdout.push(args.map(String).join(' ') + '\n');
+    return originalConsoleLog(...args);
+  };
+  cap.restore = () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stdout.write as any) = originalOut;
+    // eslint-disable-next-line @typescript-eslint/do-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stderr.write as any) = originalErr;
+    console.error = originalConsoleError;
+    console.log = originalConsoleLog;
+  };
+  return cap;
+}
+
+describe('Route-layer privacy canaries — body-cap + parse-fail + global error handler', () => {
+  it('body-cap canary — 2MB body with canary in payload returns 413 without echoing canary', async () => {
+    setProjectAccessOwner(ORG_A);
+    setTargetOrgA();
+
+    const cap = captureStdio();
+    let r;
+    try {
+      const big = { padding: 'x'.repeat(2_000_000) + CANARY_LITERAL, har: { log: { entries: [] } } };
+      r = await request(makeApp())
+        .post(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/replay/preview`)
+        .send(big);
+    } finally {
+      cap.restore();
+    }
+    expect(r.status).toBe(413);
+    expect(r.body.error_code).toBe('har_too_large');
+    // The body parser threw with err.body populated; the route-scoped handler
+    // strips it BEFORE any log call, and the global handler strips again. The
+    // canary bytes (which were in `padding`, well past the 1.5MB limit) must
+    // NEVER appear in any captured stdout/stderr or the response body.
+    expect(JSON.stringify(r.body)).not.toContain(CANARY_LITERAL);
+    expect(cap.stdout.join('')).not.toContain(CANARY_LITERAL);
+    expect(cap.stderr.join('')).not.toContain(CANARY_LITERAL);
+  });
+
+  it('parse-fail canary — malformed JSON with canary bytes returns 422 without echoing them', async () => {
+    setProjectAccessOwner(ORG_A);
+    setTargetOrgA();
+
+    const cap = captureStdio();
+    let r;
+    try {
+      // Send raw malformed JSON containing the canary. supertest with
+      // `.set('Content-Type', 'application/json').send(rawString)` lets us
+      // ship bytes the parser will reject.
+      r = await request(makeApp())
+        .post(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/replay/preview`)
+        .set('Content-Type', 'application/json')
+        .send(`{"har": "${CANARY_LITERAL}", invalid-json-here }`);
+    } finally {
+      cap.restore();
+    }
+    expect(r.status).toBe(422);
+    expect(r.body.error_code).toBe('invalid_har_shape');
+    expect(JSON.stringify(r.body)).not.toContain(CANARY_LITERAL);
+    expect(cap.stdout.join('')).not.toContain(CANARY_LITERAL);
+    expect(cap.stderr.join('')).not.toContain(CANARY_LITERAL);
+  });
+
+  it('PUT /credentials body-cap canary — > 1.5MB body returns 413 replay_payload_too_large without echoing canary', async () => {
+    setProjectAccessOwner(ORG_A);
+    setTargetOrgA();
+    pushTableResponse('project_dast_config', { data: { scan_timeout_minutes: 30 }, error: null });
+
+    const cap = captureStdio();
+    let r;
+    try {
+      const big = {
+        auth_strategy: 'replay',
+        payload: {
+          kind: 'replay',
+          requests: [
+            {
+              method: 'POST',
+              url: 'https://app.example.com/login',
+              headers: [],
+              body: 'x'.repeat(2_000_000) + CANARY_LITERAL,
+            },
+          ],
+          origins_observed: ['app.example.com'],
+        },
+      };
+      r = await request(makeApp())
+        .put(`/api/projects/${PROJECT_A}/dast/targets/${TARGET_A}/credentials`)
+        .send(big);
+    } finally {
+      cap.restore();
+    }
+    // criticalreview PD-1 fix: 413 with replay_payload_too_large (NOT a
+    // generic 500). The canary must not leak via the body-parser err.body.
+    expect(r.status).toBe(413);
+    expect(r.body.error_code).toBe('replay_payload_too_large');
+    expect(JSON.stringify(r.body)).not.toContain(CANARY_LITERAL);
+    expect(cap.stdout.join('')).not.toContain(CANARY_LITERAL);
+    expect(cap.stderr.join('')).not.toContain(CANARY_LITERAL);
   });
 });

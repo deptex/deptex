@@ -121,6 +121,20 @@ describe('scrubLogValue — credential JSON values', () => {
     const out = scrubLogValue('{"endpoint_url":"/login","status":200}');
     expect(out).toBe('{"endpoint_url":"/login","status":200}');
   });
+
+  // Phase 36 (v1.1) — the `secret` alternative does NOT cover `totp_secret`
+  // because the regex requires the key to be exactly `"<one of>"` delimited.
+  // The `_` before `secret` in `totp_secret` breaks the implicit match.
+  it('scrubs the Phase-36 replay payload\'s "totp_secret" key', () => {
+    const out = scrubLogValue(
+      '{"kind":"replay","totp_secret":"JBSWY3DPEHPK3PXP","origins_observed":["app.example.com"]}',
+    );
+    expect(out).toContain('"totp_secret":"[REDACTED]"');
+    expect(out).not.toContain('JBSWY3DPEHPK3PXP');
+    // Non-credential keys still pass through untouched.
+    expect(out).toContain('"kind":"replay"');
+    expect(out).toContain('"origins_observed":["app.example.com"]');
+  });
 });
 
 describe('scrubLogValue — Cookie / Set-Cookie headers', () => {
