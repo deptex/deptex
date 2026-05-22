@@ -1,5 +1,5 @@
 import { Response, NextFunction } from 'express';
-import { supabase } from './supabase';
+import { supabase } from '../lib/supabase';
 import { AuthRequest } from '../middleware/auth';
 
 export async function userHasOrgPermission(
