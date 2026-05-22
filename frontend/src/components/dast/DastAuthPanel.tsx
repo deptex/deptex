@@ -13,8 +13,10 @@ import {
   type DastCredentialUpsertDTO,
   type DastCredentialUpsertPayload,
   type RecordedCredentialPayload,
+  type ReplayCredentialPayload,
 } from '../../lib/api';
 import { RecordedStrategyEditor } from './RecordedStrategyEditor';
+import { ReplayStrategyEditor } from './ReplayStrategyEditor';
 
 interface DastAuthPanelProps {
   projectId: string;
@@ -44,6 +46,8 @@ interface DraftState {
   // emits an assembled payload via onChange. Stored here so buildPayload can
   // assemble the upsert request from one source of truth.
   recordedPayload: RecordedCredentialPayload | null;
+  // Phase 36 (v1.1) — replay (HAR import) — owned by ReplayStrategyEditor.
+  replayPayload: ReplayCredentialPayload | null;
   // common
   loggedInIndicator: string;
   loggedOutIndicator: string;
@@ -54,6 +58,8 @@ const STRATEGY_OPTIONS: { value: DastAuthStrategy; label: string }[] = [
   { value: 'jwt', label: 'JWT bearer' },
   { value: 'cookie', label: 'Session cookies' },
   { value: 'recorded', label: 'Recorded login (v2.1d)' },
+  // Phase 36 (v1.1) — replay-based auth from a captured DevTools HAR.
+  { value: 'replay', label: 'Replay (HAR import)' },
 ];
 
 function emptyDraft(strategy: DastAuthStrategy): DraftState {
@@ -67,6 +73,7 @@ function emptyDraft(strategy: DastAuthStrategy): DraftState {
     token: '',
     cookies: [{ name: '', value: '' }],
     recordedPayload: null,
+    replayPayload: null,
     loggedInIndicator: '',
     loggedOutIndicator: '',
   };
@@ -90,6 +97,9 @@ function buildPayload(draft: DraftState): DastCredentialUpsertPayload | null {
   }
   if (draft.strategy === 'recorded') {
     return draft.recordedPayload;
+  }
+  if (draft.strategy === 'replay') {
+    return draft.replayPayload;
   }
   const validCookies = draft.cookies
     .map((c) => ({ name: c.name.trim(), value: c.value }))
@@ -218,6 +228,14 @@ export function DastAuthPanel({
           disabled={disabled || saving}
         />
       )}
+      {draft.strategy === 'replay' && (
+        <ReplayStrategyEditor
+          projectId={projectId}
+          targetId={targetId}
+          onChange={(payload) => setDraft((d) => ({ ...d, replayPayload: payload }))}
+          disabled={disabled || saving}
+        />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
@@ -327,6 +345,15 @@ function CurrentCredentialSummary({ summary }: { summary: DastCredentialSummaryD
   } else if (summary.payload_summary.kind === 'recorded') {
     const labelStr = summary.payload_summary.label ? `${summary.payload_summary.label} — ` : '';
     detail = `${labelStr}${summary.payload_summary.step_count}-step recorded login on ${summary.payload_summary.login_page_url_host}${summary.payload_summary.has_totp ? ' (with TOTP)' : ''}`;
+  } else if (summary.payload_summary.kind === 'replay') {
+    const labelStr = summary.payload_summary.label ? `${summary.payload_summary.label} — ` : '';
+    const totpStr = summary.payload_summary.totp_detected
+      ? summary.payload_summary.has_totp_secret
+        ? ' (TOTP secret set)'
+        : ' (TOTP detected — secret missing)'
+      : '';
+    const warn = summary.payload_summary.has_non_replayable_pattern ? ' — has non-replayable steps' : '';
+    detail = `${labelStr}${summary.payload_summary.request_count} replayed requests across ${summary.payload_summary.origins_observed.length} origin${summary.payload_summary.origins_observed.length === 1 ? '' : 's'}${totpStr}${warn}`;
   } else {
     detail = `${summary.payload_summary.cookie_count} cookie${summary.payload_summary.cookie_count === 1 ? '' : 's'}`;
   }

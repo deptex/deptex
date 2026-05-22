@@ -13,7 +13,15 @@ import {
   RecordedCredentialPayload,
   RecordedStep,
   RecordedStepAction,
+  ReplayCredentialPayload,
 } from '../types/dast';
+import {
+  HAR_MAX_SERIALIZED_PLAINTEXT_BYTES,
+  JS_LINE_TERMINATOR_RE,
+  TOTP_BASE32_RE as REPLAY_TOTP_BASE32_RE,
+  TOTP_MAX_SECRET_LEN,
+} from './dast-har-constants';
+import { extractOriginsObserved, parseHar } from './dast-har-parse';
 import { validateExternalUrl } from './url-guard';
 
 // Login-probe bounds. Each is independently load-bearing:
@@ -33,7 +41,11 @@ export type CredentialValidateError =
   | { error_code: 'jwt_expired_too_soon'; detail: string }
   | { error_code: 'login_url_invalid'; detail: string }
   | { error_code: 'login_probe_failed'; detail: string }
-  | { error_code: 'login_probe_failed_indicator_collision'; detail: string };
+  | { error_code: 'login_probe_failed_indicator_collision'; detail: string }
+  // Phase 36 (v1.1) — assembled replay payload exceeded
+  // HAR_MAX_SERIALIZED_PLAINTEXT_BYTES (1MB) at the validator's final cap.
+  // Mirrors the route-scoped body-parser 413 path which emits the same code.
+  | { error_code: 'replay_payload_too_large'; detail: string };
 
 export interface CredentialValidateOk {
   ok: true;
@@ -46,7 +58,14 @@ export interface CredentialValidateOk {
 
 export type CredentialValidateResult = CredentialValidateOk | { ok: false; error: CredentialValidateError };
 
-const VALID_STRATEGIES: ReadonlySet<DastAuthStrategy> = new Set(['form', 'jwt', 'cookie', 'recorded']);
+const VALID_STRATEGIES: ReadonlySet<DastAuthStrategy> = new Set([
+  'form',
+  'jwt',
+  'cookie',
+  'recorded',
+  // Phase 36 (v1.1) — HAR-derived replay auth strategy.
+  'replay',
+]);
 
 // ---------------------------------------------------------------------------
 // v2.1d — Recorded-login validator bounds. Each is independently load-bearing:
@@ -437,11 +456,212 @@ function summarizePayload(p: DastCredentialUpsertPayload): DastCredentialPayload
         ...(typeof p.label === 'string' && p.label.length > 0 ? { label: p.label } : {}),
       };
     }
+    case 'replay': {
+      // Phase 36 (v1.1) — same hostname-only posture. No URL paths, no header
+      // values, no body content in the summary.
+      const hasNonReplayable = p.requests.some((r) => {
+        try {
+          const u = new URL(r.url);
+          // Mirrors HAR_NON_REPLAYABLE_PATTERNS but only used here for the
+          // boolean — the detailed warning list lives on the preview-route
+          // response, not on the stored credential.
+          return /\/(?:webauthn|fido|passkey|sms\/verify|sms\/code)\b/i.test(u.pathname);
+        } catch {
+          return false;
+        }
+      });
+      return {
+        kind: 'replay',
+        request_count: p.requests.length,
+        origins_observed: Array.isArray(p.origins_observed) ? p.origins_observed.slice(0, 10) : [],
+        totp_detected: p.totp_step !== undefined,
+        has_totp_secret: typeof p.totp_secret === 'string' && p.totp_secret.length > 0,
+        has_non_replayable_pattern: hasNonReplayable,
+        ...(typeof p.label === 'string' && p.label.length > 0 ? { label: p.label } : {}),
+      };
+    }
   }
 }
 
 function isPlainString(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 36 (v1.1) — Replay-auth (HAR import) validator
+// ---------------------------------------------------------------------------
+
+/**
+ * Strictly validates an assembled ReplayCredentialPayload before encrypt +
+ * store. Called from `checkShape` AFTER `payload.kind === 'replay'` is
+ * confirmed; the parser at `dast-har-parse.parseHar()` already did the per-
+ * entry shape work for the `POST /replay/preview` route, but the PUT
+ * route's payload arrives as the assembled list (the FE strips response
+ * fields + reassembles `requests[]`). This function is the LAST gate before
+ * we commit the row.
+ *
+ * Patch I-6 disciplines:
+ *   - `totp_secret` must match TOTP_BASE32_RE (strict A-Z + 2-7 + optional
+ *     `=` padding) AND be ≤ TOTP_MAX_SECRET_LEN. Lowercase / whitespace /
+ *     hyphens / non-alphabet chars → reject. Keeps the inlined-script-body
+ *     literal context safe under `JSON.stringify` substitution.
+ *   - Every user-supplied string (URL, header values, body, label,
+ *     totp_secret) is scanned for U+2028 / U+2029 via JS_LINE_TERMINATOR_RE;
+ *     reject on any hit. Pre-ES2019 these chars broke out of JS string
+ *     literals (historical templating CVE class); Graal.js is ES2020+ but
+ *     defense-in-depth is cheap.
+ *   - The full request list is re-run through `parseHar` (skipping the
+ *     wrapping {log: {entries}} shape) so the same caps + private-IP-literal
+ *     guard apply at PUT time, not just at preview time.
+ */
+export function validateReplayPayload(
+  payload: ReplayCredentialPayload,
+): CredentialValidateError | null {
+  if (!Array.isArray(payload.requests) || payload.requests.length === 0) {
+    return {
+      error_code: 'invalid_credential_shape',
+      detail: 'replay payload.requests must be a non-empty array',
+    };
+  }
+
+  // Rebuild a HAR-shaped wrapper so we can reuse the parser's caps + private-
+  // IP + line-terminator guard. The PUT-time list omits response shape; we
+  // synthesise a minimal stub.
+  const synthHar = {
+    log: {
+      entries: payload.requests.map((r) => ({
+        request: {
+          method: r.method,
+          url: r.url,
+          headers: r.headers ?? [],
+          ...(r.body !== undefined
+            ? {
+                postData: {
+                  mimeType:
+                    (r.headers ?? []).find((h) => h.name.toLowerCase() === 'content-type')?.value
+                    ?? 'application/octet-stream',
+                  text: r.body,
+                },
+              }
+            : {}),
+        },
+        response: { status: 0, headers: [] },
+      })),
+    },
+  };
+  try {
+    parseHar(synthHar);
+  } catch (e) {
+    const code = (e as { error_code?: string }).error_code;
+    if (code === 'har_too_large' || code === 'har_too_small') {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: `replay payload rejected by parser cap: ${code}`,
+      };
+    }
+    return {
+      error_code: 'invalid_credential_shape',
+      detail: `replay payload rejected: ${code ?? 'parse_failure'}`,
+    };
+  }
+
+  // origins_observed must align with what the request list actually carries.
+  // The FE computes this; we recompute and assert equality so a tampered
+  // PUT body can't lie about reachable hosts (else the SSRF gate would only
+  // see the declared list, not the actual ones).
+  const observed = extractOriginsObserved(payload.requests);
+  if (!Array.isArray(payload.origins_observed)) {
+    return {
+      error_code: 'invalid_credential_shape',
+      detail: 'replay payload.origins_observed must be an array',
+    };
+  }
+  const declared = new Set(payload.origins_observed.map((s) => s.toLowerCase()));
+  for (const o of observed) {
+    if (!declared.has(o)) {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: 'replay payload.origins_observed missing a hostname present in requests',
+      };
+    }
+  }
+
+  // TOTP secret discipline (Patch I-6).
+  if (payload.totp_secret !== undefined) {
+    if (typeof payload.totp_secret !== 'string') {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: 'replay payload.totp_secret must be a string when present',
+      };
+    }
+    if (payload.totp_secret.length > TOTP_MAX_SECRET_LEN) {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: `replay payload.totp_secret exceeds ${TOTP_MAX_SECRET_LEN} chars`,
+      };
+    }
+    if (!REPLAY_TOTP_BASE32_RE.test(payload.totp_secret)) {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: 'replay payload.totp_secret must be canonical RFC 4648 base32 (A-Z + 2-7, optional `=` padding)',
+      };
+    }
+    if (JS_LINE_TERMINATOR_RE.test(payload.totp_secret)) {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: 'replay payload.totp_secret contains U+2028 / U+2029',
+      };
+    }
+  }
+
+  // totp_step shape validation when present. The parser detects it; here we
+  // sanity-check the FE didn't tamper with the index/field.
+  if (payload.totp_step !== undefined) {
+    const ts = payload.totp_step;
+    if (
+      typeof ts !== 'object' ||
+      ts === null ||
+      typeof ts.entry_index !== 'number' ||
+      ts.entry_index < 0 ||
+      ts.entry_index >= payload.requests.length ||
+      typeof ts.body_field !== 'string' ||
+      (ts.body_kind !== 'form' && ts.body_kind !== 'json')
+    ) {
+      return {
+        error_code: 'invalid_credential_shape',
+        detail: 'replay payload.totp_step shape invalid',
+      };
+    }
+  }
+
+  if (payload.label !== undefined) {
+    if (typeof payload.label !== 'string') {
+      return { error_code: 'invalid_credential_shape', detail: 'replay payload.label must be a string when present' };
+    }
+    if (payload.label.length > 80) {
+      return { error_code: 'invalid_credential_shape', detail: 'replay payload.label exceeds 80 chars' };
+    }
+    if (JS_LINE_TERMINATOR_RE.test(payload.label)) {
+      return { error_code: 'invalid_credential_shape', detail: 'replay payload.label contains U+2028 / U+2029' };
+    }
+  }
+
+  // Final cap: serialized plaintext bytes (encryption layer's effective
+  // ceiling). The parser caps the input HAR at 1MB; the assembled payload
+  // is smaller post-extraction, but defense-in-depth.
+  const serializedSize = JSON.stringify(payload).length;
+  if (serializedSize > HAR_MAX_SERIALIZED_PLAINTEXT_BYTES) {
+    return {
+      // Phase 36 / criticalreview PD-1: the canonical error_code is
+      // `replay_payload_too_large` (mirrors the route-scoped body-parser 413).
+      // Original code emitted `invalid_credential_shape` here, which made
+      // the documented `replay_payload_too_large` unreachable.
+      error_code: 'replay_payload_too_large',
+      detail: `replay payload serialized ${serializedSize} bytes > ${HAR_MAX_SERIALIZED_PLAINTEXT_BYTES}`,
+    };
+  }
+
+  return null;
 }
 
 function checkShape(input: unknown): CredentialValidateResult | { ok: 'continue'; dto: DastCredentialUpsertDTO } {
@@ -453,7 +673,7 @@ function checkShape(input: unknown): CredentialValidateResult | { ok: 'continue'
   if (!VALID_STRATEGIES.has(strategy)) {
     return {
       ok: false,
-      error: { error_code: 'invalid_credential_shape', detail: 'auth_strategy must be form|jwt|cookie|recorded' },
+      error: { error_code: 'invalid_credential_shape', detail: 'auth_strategy must be form|jwt|cookie|recorded|replay' },
     };
   }
   const payload = body.payload as DastCredentialUpsertPayload | undefined;
@@ -504,6 +724,11 @@ function checkShape(input: unknown): CredentialValidateResult | { ok: 'continue'
     }
   } else if (payload.kind === 'recorded') {
     const err = validateRecordedSteps(payload as RecordedCredentialPayload);
+    if (err) return { ok: false, error: err };
+  } else if (payload.kind === 'replay') {
+    // Phase 36 (v1.1) — HAR-derived replay auth. Structural caps + TOTP
+    // base32 strictness + JS line-terminator rejection.
+    const err = validateReplayPayload(payload as ReplayCredentialPayload);
     if (err) return { ok: false, error: err };
   }
 
@@ -776,6 +1001,10 @@ export interface ValidateAndPrepareOptions {
   // goto step values + sso_origins. Default true; tests pass false to skip
   // DNS round-trips. Mirrors runFormProbe's posture for the form path.
   runRecordedSsrfGuard?: boolean;
+  // Phase 36 (v1.1) — whether to run the replay-strategy SSRF/IMDS guard on
+  // every distinct origin in the captured request list. Default true;
+  // tests pass false to skip DNS.
+  runReplaySsrfGuard?: boolean;
   // Override for the SSRF helper — defaults to validateExternalUrl from
   // ./url-guard. Tests stub it to avoid hitting real DNS.
   validateUrl?: typeof validateExternalUrl;
@@ -844,6 +1073,37 @@ export async function validateRecordedSsrf(
   return null;
 }
 
+/**
+ * Phase 36 (v1.1) — DNS-resolving SSRF guard for the replay strategy.
+ * Runs validateExternalUrl on EVERY distinct origin observed in the
+ * captured request list (the parser caps at HAR_MAX_ORIGINS = 10 so this
+ * is bounded). Belt-and-suspenders alongside the literal-IP guard the
+ * parser already runs at extractEntry().
+ *
+ * Worker re-runs the same check at scan time (M3 step 7) — DNS-rebind
+ * between PUT and scan dispatch can re-point a benign-at-create-time
+ * hostname at IMDS / Fly internal mesh / RFC 1918.
+ */
+export async function validateReplaySsrf(
+  payload: ReplayCredentialPayload,
+  guard: typeof validateExternalUrl = validateExternalUrl,
+): Promise<CredentialValidateError | null> {
+  // Iterate origins, not raw requests — the parser already capped origins
+  // at 10 so this is O(10) DNS lookups, not O(requests).
+  const origins = extractOriginsObserved(payload.requests);
+  for (const host of origins) {
+    // validateExternalUrl wants a full URL; synthesize https://<host>/.
+    const r = await guard(`https://${host}/`);
+    if (r.valid === false) {
+      return {
+        error_code: 'login_url_invalid',
+        detail: `replay origin rejected: ${r.reason}`,
+      };
+    }
+  }
+  return null;
+}
+
 export async function validateAndPrepareCredential(
   input: unknown,
   opts: ValidateAndPrepareOptions,
@@ -867,6 +1127,12 @@ export async function validateAndPrepareCredential(
   } else if (dto.payload.kind === 'recorded' && opts.runRecordedSsrfGuard !== false) {
     const err = await validateRecordedSsrf(
       dto.payload as RecordedCredentialPayload,
+      opts.validateUrl ?? validateExternalUrl,
+    );
+    if (err) return { ok: false, error: err };
+  } else if (dto.payload.kind === 'replay' && opts.runReplaySsrfGuard !== false) {
+    const err = await validateReplaySsrf(
+      dto.payload as ReplayCredentialPayload,
       opts.validateUrl ?? validateExternalUrl,
     );
     if (err) return { ok: false, error: err };

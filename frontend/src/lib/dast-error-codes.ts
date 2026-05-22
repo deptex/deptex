@@ -55,3 +55,60 @@ export function friendlySpecErrorMessage(
       return 'Something went wrong updating the spec config.';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 36 (v1.1) — HAR replay-import error codes. Mirror of
+// backend/src/lib/dast-har-constants.ts HAR_ERROR_CODES.
+// `scripts/check-dast-error-codes-match.sh` extends to compare both blocks.
+// ---------------------------------------------------------------------------
+
+export const HAR_ERROR_CODES = [
+  'invalid_har_shape',
+  'har_too_large',
+  'har_too_small',
+  'har_entry_too_large',
+  'har_non_https_entry',
+  'har_private_ip_entry',
+  'har_origin_count_exceeded',
+  'har_no_replayable_requests',
+  'har_totp_secret_invalid',
+  'replay_payload_too_large',
+  'dast_encryption_not_configured',
+] as const;
+export type HarErrorCode = typeof HAR_ERROR_CODES[number];
+
+/**
+ * Map a backend HarErrorCode to user-friendly copy for the Replay tab's
+ * upload-error banner.
+ */
+export function friendlyHarErrorMessage(
+  code: string | undefined,
+  detail?: string | undefined,
+): string {
+  switch (code) {
+    case 'invalid_har_shape':
+      return 'That file isn’t a valid HAR (HTTP Archive 1.2). Export it from Chrome DevTools → Network → ⋮ → Save all as HAR with content.';
+    case 'har_too_large':
+      return 'HAR exceeds the 1.5 MB cap. Trim the captured session to just the login flow before re-exporting.';
+    case 'har_too_small':
+      return 'The HAR contained no captured requests. Re-record the login and ensure DevTools is recording before you click Sign in.';
+    case 'har_entry_too_large':
+      return `A single captured request is too large for replay (${detail ?? 'header / body cap exceeded'}). Trim the HAR or drop telemetry-heavy requests.`;
+    case 'har_non_https_entry':
+      return 'All captured requests must use HTTPS. Re-record against the production hostname (not a local proxy).';
+    case 'har_private_ip_entry':
+      return 'A captured request points at a private / loopback IP. Replay only supports public IdP targets.';
+    case 'har_origin_count_exceeded':
+      return 'HAR touches more than 10 hostnames. Trim cross-origin telemetry / analytics before re-exporting.';
+    case 'har_no_replayable_requests':
+      return 'No replayable requests after filtering. The HAR may have been captured before the login traffic started.';
+    case 'har_totp_secret_invalid':
+      return 'TOTP secret must be canonical base32 (A-Z and 2-7 only, up to 256 chars). Copy it verbatim from your IdP setup screen.';
+    case 'replay_payload_too_large':
+      return 'Replay payload is too large to encrypt and store. Trim some captured requests.';
+    case 'dast_encryption_not_configured':
+      return 'Replay credentials need the DAST encryption key set on the server. Ask an admin to configure DAST_CREDENTIAL_KEY.';
+    default:
+      return 'Couldn’t process that HAR.';
+  }
+}

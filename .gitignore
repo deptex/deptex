@@ -20,6 +20,15 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
+# Phase 36 (v1.1) — DAST HAR captures. The Replay tab ingests these in-memory
+# via POST /replay/preview; no real HAR ever lives in the repo. All test
+# fixtures are synthetic (built in code). The Cloudflare HAR Sanitizer pattern
+# of "preview before commit" is what we ship — captures hold session cookies,
+# Authorization headers, and TOTP secrets (2023 Okta breach class).
+# See docs/runbooks/dast-har-import-dogfood.md for the dev-tenant-only
+# dogfood procedure.
+**/*.har
+
 # Editor / OS
 .vscode/*
 !.vscode/extensions.json

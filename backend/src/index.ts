@@ -106,12 +106,42 @@ app.use((req, res, next) => {
 // Explicit limit so a future refactor can't silently uncap the body-parser
 // default; 100kb is plenty for any current route (registry creds top out at
 // ~10kb after per-field caps).
-app.use(express.json({
+//
+// Phase 36 (v1.1) — DAST replay needs a larger body cap. Two routes are
+// path-gated to skip the global 100kb parser and mount their own:
+//   1. POST /replay/preview — 1.5MB (raw HAR JSON)
+//   2. PUT /credentials — 1.5MB (assembled replay payload up to the documented
+//      HAR_MAX_SERIALIZED_PLAINTEXT_BYTES=1MB cap, with headroom)
+// Without gating PUT /credentials, a legitimate 150KB replay payload (5
+// captured requests × 30KB bodies, all under per-entry caps) would be
+// rejected by the 100kb parser with PayloadTooLargeError → surfaces as
+// generic 500 via the global error handler. The documented
+// `replay_payload_too_large` error code would be unreachable.
+//
+// The path-gated form is the only one that works — Express middleware fires
+// in mount order, so a router-internal `express.json` would no-op once the
+// global parser has populated req._body=true.
+const REPLAY_PREVIEW_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+\/replay\/preview\/?$/;
+const DAST_CREDENTIALS_PUT_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+\/credentials\/?$/;
+const globalJsonParser = express.json({
   limit: '100kb',
   verify: (req: any, res, buf) => {
     req.rawBody = buf.toString();
+  },
+});
+app.use((req, res, next) => {
+  if (REPLAY_PREVIEW_PATH.test(req.path)) {
+    // The dast router installs its own 1.5mb parser for this exact route.
+    return next();
   }
-}));
+  // PUT /credentials only — the regex matches GET/DELETE too because the path
+  // is the same, but those carry no body. method gate avoids unbounding
+  // DELETE-with-body or future method introductions.
+  if (req.method === 'PUT' && DAST_CREDENTIALS_PUT_PATH.test(req.path)) {
+    return next();
+  }
+  return globalJsonParser(req, res, next);
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -182,9 +212,25 @@ app.post('/api/webhook/github', githubWebhookHandler);
 app.use('/api/integrations', gitlabWebhooksRouter);
 app.use('/api/integrations', bitbucketWebhooksRouter);
 
-// Error handling middleware
+// Error handling middleware.
+//
+// Phase 36 (v1.1) — body-parser-thrown errors carry the failed body bytes on
+// `err.body` (and sometimes `err.bodyRaw`). Logging the raw err object would
+// echo those bytes to stdout, which leaks HAR contents on a parse failure
+// (POST /replay/preview with malformed JSON would otherwise emit the entire
+// failed body to Pino / Datadog forwarders bypassing console). Strip those
+// fields off the cloned shape we hand to the logger. Route-scoped error
+// handlers in the dast router strip them too for defense-in-depth — this
+// global handler is the last gate.
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
+  const safe = {
+    name: err.name,
+    message: err.message,
+    stack: err.stack,
+    // Body-parser specific fields that we intentionally omit:
+    // body, bodyRaw, rawBody, statusCode, expose, type.
+  };
+  console.error('Error:', safe);
   res.status(500).json({ error: 'Internal server error' });
 });
 

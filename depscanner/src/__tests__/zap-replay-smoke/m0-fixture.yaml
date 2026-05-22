@@ -1,0 +1,82 @@
+# M0 step 3 — Working AF YAML for ZAP Script-Based Authentication.
+#
+# Pinned against ZAP @sha256:8770b23f9e8b49038f413cb2b10c58c901e5b6717be221a22b1bcab5c9771b8a
+# (ZAP 2.17.0 + authhelper v0.39.0). Engine string `ECMAScript : Graal.js` is
+# the exact identifier returned by `/JSON/script/view/listEngines/` on this
+# image; RE-VALIDATE when the depscanner Dockerfile bumps ZAP.
+#
+# Two empirically-confirmed wiring quirks (M0 step 4 ZAP error feedback):
+#   1. The auth-script body lives inline in `context.authentication.parameters.scriptInline`
+#      — NOT in a separate `type: script` job. The Script-Based Authentication
+#      method validates `scriptInline` (or `script:` path) at plan-parse time;
+#      if neither is present on the auth method, the plan fails BEFORE jobs run.
+#   2. `addOns` job omitted — ZAP 2.17.0's stable image already ships
+#      authhelper + scripting + ascanrules + pscanrules pre-baked, and listing
+#      them triggers "the addOns job no longer does anything" warnings (same
+#      finding as yaml-builder.ts line 183 for v2.1d).
+#
+# Wiring assumptions for the smoke run:
+#   - The fixture (depscanner/test/fixtures/dast-auth-app/server.ts) runs on
+#     the Docker host at :4500; the ZAP container reaches it via
+#     `host.docker.internal` (Windows / Mac Docker Desktop auto-mapping;
+#     Linux needs `--add-host=host.docker.internal:host-gateway`).
+
+env:
+  contexts:
+    - name: deptex-m0-fixture
+      urls:
+        - http://host.docker.internal:4500
+      includePaths:
+        - 'http://host\.docker\.internal:4500.*'
+      excludePaths: []
+      authentication:
+        method: script
+        parameters:
+          scriptEngine: 'ECMAScript : Graal.js'
+          # Inline script body — ZAP registers + invokes this directly when
+          # the user-bound requestor below fires its GET. The session cookie
+          # ZAP harvests from the 302 response is auto-attached to
+          # subsequent requests by `sessionManagement.method: cookie` below.
+          scriptInline: |
+            function authenticate(helper, paramsValues, credentials) {
+              var HttpRequestHeader = Java.type('org.parosproxy.paros.network.HttpRequestHeader');
+              var URI = Java.type('org.apache.commons.httpclient.URI');
+              var loginUrl = new URI('http://host.docker.internal:4500/login', false);
+              var msg = helper.prepareMessage();
+              msg.setRequestHeader(new HttpRequestHeader('POST', loginUrl, 'HTTP/1.1'));
+              msg.getRequestHeader().setHeader('Content-Type', 'application/x-www-form-urlencoded');
+              msg.setRequestBody('username=alice&password=wonderland');
+              msg.getRequestHeader().setContentLength(msg.getRequestBody().length());
+              helper.sendAndReceive(msg, true);
+              return msg;
+            }
+            function getRequiredParamsNames() { return []; }
+            function getOptionalParamsNames() { return []; }
+            function getCredentialsParamsNames() { return []; }
+        verification:
+          method: response
+          loggedInRegex: 'WELCOME, ALICE'
+          loggedOutRegex: 'You are not logged in'
+      sessionManagement:
+        method: cookie
+      users:
+        # Script-Based Authentication for HAR replay doesn't take user-side
+        # credentials — the captured cookies/bearers are inlined into the
+        # scriptInline body itself. The user entry exists only so the
+        # requestor job below has something to bind to.
+        - name: deptex-dast-user
+          credentials: {}
+
+jobs:
+  # Post-auth verification probe. Without `user:` ZAP never invokes the
+  # script-based auth method (same empirical finding as the v2.1d recorded
+  # path — see yaml-builder.ts lines 226-244). With it, ZAP runs the
+  # script, harvests the Set-Cookie via cookieBasedSessionManagement, then
+  # GETs /dashboard with the cookie attached and matches the loggedInRegex.
+  - type: requestor
+    parameters:
+      user: deptex-dast-user
+    requests:
+      - url: http://host.docker.internal:4500/dashboard
+        method: GET
+    onFail: exit

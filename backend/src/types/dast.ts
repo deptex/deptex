@@ -12,10 +12,13 @@ export type DastSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type DastFindingStatus = 'open' | 'suppressed' | 'risk_accepted' | 'fixed';
 export type DastConfidence = 'confirmed' | 'high' | 'medium' | 'low';
 
-// v2.1a inserted form|jwt|cookie. v2.1d adds 'recorded' (HAR-style step replay
-// via ZAP's browser-based AF auth method). The DB CHECK already lists all four
-// (phase24a_dast_v2_engine_additive.sql:136-137).
-export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded';
+// v2.1a inserted form|jwt|cookie. v2.1d added 'recorded' (browser-driven step
+// replay via ZAP's browser-based AF auth method). Phase 36 widens this further
+// for HAR-import-based 'replay' (Script-Based Authentication driving captured
+// requests from a DevTools HAR). DB CHECK constraint phased at:
+//   - phase24a_dast_v2_engine_additive.sql:136-137 (form|jwt|cookie|recorded)
+//   - phase36_dast_replay_auth.sql (adds replay)
+export type DastAuthStrategy = 'form' | 'jwt' | 'cookie' | 'recorded' | 'replay';
 export type DastDetectedRuntime = 'unknown' | 'classic' | 'spa';
 export type DastAuthState = 'anonymous' | 'authenticated' | 'authentication_lost';
 // v2.1a inserts 'zap' only; v2.1c adds 'nuclei' as a second engine.
@@ -75,6 +78,105 @@ export interface RecordedCredentialPayload {
    * this field stays unused.
    */
   sso_origins?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 36 (v1.1) — Replay auth (HAR import)
+// ---------------------------------------------------------------------------
+
+/**
+ * One captured request from a DevTools HAR file. ZAP's Script-Based
+ * Authentication script body replays each entry in order using
+ * `helper.sendAndReceive()`; the cookie jar managed by
+ * cookieBasedSessionManagement auto-collects any Set-Cookie response.
+ *
+ * `body_encoding: 'base64'` accommodates non-text bodies (binary uploads,
+ * image-like multipart parts) without forcing a textual round-trip. Default
+ * is `'utf8'`. The parser at backend/src/lib/dast-har-parse.ts picks
+ * `'base64'` when the HAR entry's `postData.text` is missing AND
+ * `postData.params` is absent (HAR 1.2 convention for opaque bodies).
+ */
+export interface ReplayedRequest {
+  method: string;
+  url: string;
+  headers: { name: string; value: string }[];
+  body?: string;
+  body_encoding?: 'utf8' | 'base64';
+}
+
+/**
+ * Detected TOTP step within the captured HAR. `entry_index` is the position
+ * in `requests[]` (0-indexed) of the request whose body contains the OTP
+ * code. `body_field` is the form / JSON field name to overwrite at every
+ * script invocation with a fresh RFC 6238 code generated from `totp_secret`.
+ *
+ * Why a separate `body_kind`: HAR bodies arrive as either url-encoded form
+ * params (Content-Type: application/x-www-form-urlencoded) OR a JSON blob.
+ * The script body's mutation logic differs — form fields are string-replaced
+ * by name; JSON values are mutated via parse/stringify. Always-form would
+ * round-trip JSON wrong; always-JSON would mangle x-www-form bodies.
+ */
+export interface HarTotpStep {
+  entry_index: number;
+  body_field: string;
+  body_kind: 'form' | 'json';
+}
+
+/**
+ * Decrypted replay-auth payload. Stored AES-256-GCM-encrypted in
+ * project_dast_credentials.encrypted_payload via the existing
+ * DAST_CREDENTIAL_KEY envelope; the plaintext never appears in
+ * scan_jobs.payload, error_payload, worker stderr, or QStash bodies.
+ *
+ * Patch A (Decision 18): when `totp_step` AND `totp_secret` are both set,
+ * the base32 secret IS inlined into the on-disk AF YAML alongside the
+ * captured cookies/bearers, and a vendored ~30-LOC RFC 6238 helper is
+ * string-inlined into the script body. The script regenerates a fresh code
+ * at every ZAP auth invocation (initial + indicator-miss re-auth), so the
+ * "stale code at script-render-time" failure mode is structurally absent.
+ *
+ * Privacy posture (Threat Model section of the plan): plaintext exists at
+ * encrypt/decrypt boundaries + while ZAP's process is alive; YAML is
+ * unlinked in a finally block; Buffer.fill(0) zeroes the decrypted JSON
+ * buffer (artifact i) and the pre-write YAML buffer (artifact iv).
+ * Script-source and assembled-YAML strings (artifacts ii + iii) are NOT
+ * zeroable in V8 — bounded by GC + Fly machine ephemerality (<5min idle TTL).
+ */
+export interface ReplayCredentialPayload {
+  kind: 'replay';
+  requests: ReplayedRequest[];
+  totp_step?: HarTotpStep;
+  /**
+   * RFC 4648 canonical base32 (alphabet A-Z + 2-7, optional `=` padding).
+   * Strictly validated at PUT time via `TOTP_BASE32_RE` per Patch I-6 —
+   * lowercase / whitespace / hyphens / non-alphabet chars are rejected
+   * (forcing the user to canonical form pre-save defends against script-
+   * injection via a crafted secret literal in the inlined script body).
+   */
+  totp_secret?: string;
+  /**
+   * Distinct origins observed in the captured HAR (hostname only, never
+   * path/query). Capped at HAR_MAX_ORIGINS for the credential summary +
+   * SSRF revalidation surface.
+   */
+  origins_observed: string[];
+  /** Optional human-readable target label, surfaced in the credentials list (≤80 chars). */
+  label?: string;
+}
+
+/**
+ * Compact summary shape for the credentials list + the GET /credentials
+ * route. Cardinalities only — no headers, no URLs beyond origin hostnames,
+ * no body content. Mirrors the redaction posture of the other variants.
+ */
+export interface ReplayPayloadSummary {
+  kind: 'replay';
+  request_count: number;
+  origins_observed: string[];
+  totp_detected: boolean;
+  has_totp_secret: boolean;
+  has_non_replayable_pattern: boolean;
+  label?: string;
 }
 
 // Phase 35 (v1.1) — OpenAPI spec source enum + per-target spec_config DTO.
@@ -171,7 +273,9 @@ export type DastCredentialPayloadSummary =
    * and step values are NOT echoed (they may leak the app's internal URL
    * structure / form names).
    */
-  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string };
+  | { kind: 'recorded'; step_count: number; has_totp: boolean; login_page_url_host: string; label?: string }
+  // Phase 36 (v1.1): replay summary — same hostname-only posture.
+  | ReplayPayloadSummary;
 
 export interface DastCredentialSummaryDTO {
   auth_strategy: DastAuthStrategy;
@@ -195,7 +299,10 @@ export type DastCredentialUpsertPayload =
       kind: 'cookie';
       cookies: { name: string; value: string; domain?: string; path?: string }[];
     }
-  | RecordedCredentialPayload;
+  | RecordedCredentialPayload
+  // Phase 36 (v1.1) — replay-auth payload (HAR-derived request list +
+  // optional inlined TOTP secret).
+  | ReplayCredentialPayload;
 
 export interface DastCredentialUpsertDTO {
   auth_strategy: DastAuthStrategy;

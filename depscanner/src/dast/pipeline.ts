@@ -63,6 +63,7 @@ import {
   type CredentialPayload,
   type DastAuthStrategy,
   type RecordedCredentialPayload,
+  type ReplayCredentialPayload,
 } from './auth-config';
 import {
   parseZapReport,
@@ -1076,6 +1077,177 @@ export async function runRecordedLoginProbe(
   return { result: parsed, internalIndexToZapIndex: authBuild.internalIndexToZapIndex };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 36 (v1.1) — Replay login probe (Test-replay dry-run).
+// ---------------------------------------------------------------------------
+
+export interface ReplayLoginProbeInputs {
+  targetUrl: string;
+  payload: ReplayCredentialPayload;
+  loggedInIndicator?: string | null;
+  loggedOutIndicator?: string | null;
+  detectedRuntime: DetectedRuntime;
+  scope?: ScopeConfig;
+  scanTimeoutMinutes: number;
+  zapWorkDir: string;
+  spawnImpl?: typeof import('child_process').spawn;
+}
+
+/**
+ * Run a login-only ZAP autorun for the replay strategy and translate the
+ * outcome into a DastLoginTestResultRaw. Distinct from the recorded probe:
+ *   - Recorded uses authhelper's browser-based auth + auth-report.json
+ *     (rich per-step diagnostic data via the headless Firefox path).
+ *   - Replay uses Script-Based Authentication with our generated Graal.js
+ *     script body. authhelper doesn't emit auth-report.json for
+ *     script-based auth, so the verdict source is:
+ *       a) ZAP exit code (0 = autorun succeeded = requestor's loggedInRegex matched)
+ *       b) onFail: 'exit' on the requestor job — a regex miss aborts the autorun
+ *
+ * Rationale: the M0 smoke runs validated this end-to-end against the
+ * dast-auth-app fixture (form + TOTP route groups). A v1.1 follow-up
+ * could parse stderr for richer per-request diagnostics, but the exit-code
+ * signal is the primary correctness gate Test-replay needs.
+ */
+export async function runReplayLoginProbe(
+  inputs: ReplayLoginProbeInputs,
+  control: {
+    onHeartbeat: () => Promise<void>;
+    isCancelled: () => Promise<boolean>;
+    pollIntervalMs: number;
+  },
+): Promise<{ result: DastLoginTestResultRaw }> {
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-replay-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+
+  const yamlText = buildAutomationYaml({
+    targetUrl: inputs.targetUrl,
+    scanProfile: 'auto',
+    detectedRuntime: inputs.detectedRuntime,
+    reportRelativePath: 'zap-report.json',
+    scope: inputs.scope,
+    authStrategy: 'replay',
+    authPayload: inputs.payload,
+    loggedInIndicator: inputs.loggedInIndicator ?? undefined,
+    loggedOutIndicator: inputs.loggedOutIndicator ?? undefined,
+    scanTimeoutMinutes: inputs.scanTimeoutMinutes,
+    loginOnly: true,
+  });
+
+  // The YAML embeds the inlined script body which contains the captured
+  // cookies / bearers / TOTP base32. Mode 0o600 so other unix users on
+  // the Fly machine can't read it; unlinked eagerly after spawn.
+  fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
+
+  const startedAt = Date.now();
+
+  const LOGIN_PROBE_HARD_CAP_MS = 5 * 60_000;
+  const effectiveTimeoutMs = Math.min(
+    inputs.scanTimeoutMinutes * 60_000,
+    LOGIN_PROBE_HARD_CAP_MS,
+  );
+
+  let stderrChunks = '';
+  const handle = spawnExternal({
+    command: '/zap/zap.sh',
+    args: ['-cmd', '-autorun', yamlPath],
+    timeoutMs: effectiveTimeoutMs,
+    spawnImpl: inputs.spawnImpl,
+    onStderr: (chunk) => {
+      const redacted = redactCredentials(chunk) ?? '';
+      process.stderr.write(`[zap-replay] ${redacted}`);
+      // Last 8KB is enough to surface a meaningful failure reason without
+      // hoarding RAM if the run is loud.
+      stderrChunks = (stderrChunks + redacted).slice(-8192);
+    },
+    onStdout: () => {
+      /* no-op — Graal.js script print() lines land on stdout; we ignore
+         them. The verdict signal is the exit code. */
+    },
+  });
+
+  let pollDone = false;
+  let pollTimer: NodeJS.Timeout | null = null;
+  async function pollOnce(): Promise<void> {
+    if (pollDone) return;
+    try {
+      await control.onHeartbeat();
+    } catch {
+      /* non-fatal */
+    }
+    if (pollDone) return;
+    let cancelled = false;
+    try {
+      cancelled = await control.isCancelled();
+    } catch {
+      cancelled = false;
+    }
+    if (pollDone) return;
+    if (cancelled) {
+      handle.abort('cancellation_requested');
+      return;
+    }
+    pollTimer = setTimeout(pollOnce, control.pollIntervalMs);
+    pollTimer.unref?.();
+  }
+  pollTimer = setTimeout(pollOnce, control.pollIntervalMs);
+  pollTimer.unref?.();
+
+  let runResult;
+  try {
+    runResult = await handle.done;
+  } finally {
+    pollDone = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    try {
+      fs.unlinkSync(yamlPath);
+    } catch {
+      /* noop */
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const durationMs = Date.now() - startedAt;
+
+  if (runResult.aborted) {
+    return {
+      result: {
+        success: false,
+        duration_ms: durationMs,
+        steps_run: 0,
+        failed_at_step: {
+          step_index: 0,
+          action: 'click',
+          reason: 'browser_crashed',
+          detail: `ZAP replay probe aborted: ${runResult.abortReason ?? 'unknown'}`,
+        },
+      },
+    };
+  }
+
+  // Exit code 0 → autorun succeeded → all requestor verifications matched
+  // loggedInRegex. Non-zero → the requestor's onFail:exit fired OR ZAP
+  // itself bailed (plan parse failure, etc.).
+  const success = runResult.exitCode === 0;
+  return {
+    result: {
+      success,
+      duration_ms: durationMs,
+      steps_run: inputs.payload.requests.length,
+      ...(success
+        ? {}
+        : {
+            failed_at_step: {
+              step_index: 0,
+              action: 'click',
+              reason: 'logged_in_indicator_missed' as const,
+              detail: `ZAP replay autorun exited ${runResult.exitCode ?? 'unknown'}; check loggedInRegex + HAR request order`,
+            },
+          }),
+    },
+  };
+}
+
 /**
  * Build the cross_link_metadata payload for an inserted finding. Nuclei
  * findings get a `nuclei.cve_ids` array merged in — confirm_pdvs_from_dast_run
@@ -1409,6 +1581,10 @@ export async function runDastPipeline(
   // via validateRecordedSsrf at PUT time, but DNS-rebind between PUT and the
   // actual scan can re-point a benign-at-create-time hostname at IMDS / Fly
   // 6PN / RFC1918. Re-resolve every URL the browser-auth method will fetch.
+  //
+  // engine-fallback-ok — Phase 36's replay strategy has its own DNS-resolving
+  // SSRF revalidation in validateReplaySsrf (route side) + the per-entry
+  // literal-IP guard in parseHar; this recorded-specific block doesn't apply.
   if (cred && cred.credentialRow.auth_strategy === 'recorded') {
     const rec = cred.payload as RecordedCredentialPayload;
     // Effective loginPageUrl per buildRecordedAuthForZap: steps[0].goto.value
@@ -1525,15 +1701,21 @@ export async function runDastPipeline(
       await recordJobError(supabase, job.id, abort.errorCategory, abort.errorPayload, abort.message);
       throw abort;
     }
-    if (!cred || cred.credentialRow.auth_strategy !== 'recorded') {
+    // Phase 36 (v1.1) — Test-login (dry-run) admits BOTH recorded and replay.
+    // Form / JWT / cookie validate inline at PUT time; they have no dry-run.
+    if (
+      !cred
+      || (cred.credentialRow.auth_strategy !== 'recorded'
+        && cred.credentialRow.auth_strategy !== 'replay')
+    ) {
       const abort = new DastPipelineAbortError(
         'auth_failed',
         {
           stage: 'dry_run_dispatch',
-          reason: 'dry_run_requires_recorded_strategy',
+          reason: 'dry_run_requires_recorded_or_replay_strategy',
           got: cred?.credentialRow.auth_strategy ?? 'none',
         },
-        'Test-login (dry-run) requires auth_strategy=recorded',
+        'Test-login (dry-run) requires auth_strategy=recorded or replay',
       );
       console.error(
         `${tag} dry-run rejected: auth_strategy=${cred?.credentialRow.auth_strategy ?? 'none'}`,
@@ -1542,23 +1724,46 @@ export async function runDastPipeline(
       throw abort;
     }
 
-    console.log(`${tag} dry-run dispatch — running recorded login probe (loginOnly)`);
+    console.log(
+      `${tag} dry-run dispatch — running ${cred.credentialRow.auth_strategy} login probe (loginOnly)`,
+    );
     let probe: { result: DastLoginTestResultRaw };
     try {
-      probe = await runRecordedLoginProbe(
-        {
-          targetUrl: target.target_url,
-          payload: cred.payload as RecordedCredentialPayload,
-          loggedInIndicator: cred.credentialRow.logged_in_indicator,
-          loggedOutIndicator: cred.credentialRow.logged_out_indicator,
-          detectedRuntime: target.detected_runtime,
-          scope,
-          scanTimeoutMinutes: timeoutMinutes,
-          zapWorkDir,
-          spawnImpl: options.spawnImpl,
-        },
-        control,
-      );
+      if (cred.credentialRow.auth_strategy === 'replay') {
+        // Phase 36 (v1.1) — replay strategy uses Script-Based Authentication
+        // (no headless browser); the verdict comes from ZAP's autorun exit
+        // code + the requestor job's onFail:exit semantics. No auth-report.json
+        // is emitted for script-based auth.
+        probe = await runReplayLoginProbe(
+          {
+            targetUrl: target.target_url,
+            payload: cred.payload as ReplayCredentialPayload,
+            loggedInIndicator: cred.credentialRow.logged_in_indicator,
+            loggedOutIndicator: cred.credentialRow.logged_out_indicator,
+            detectedRuntime: target.detected_runtime,
+            scope,
+            scanTimeoutMinutes: timeoutMinutes,
+            zapWorkDir,
+            spawnImpl: options.spawnImpl,
+          },
+          control,
+        );
+      } else {
+        probe = await runRecordedLoginProbe(
+          {
+            targetUrl: target.target_url,
+            payload: cred.payload as RecordedCredentialPayload,
+            loggedInIndicator: cred.credentialRow.logged_in_indicator,
+            loggedOutIndicator: cred.credentialRow.logged_out_indicator,
+            detectedRuntime: target.detected_runtime,
+            scope,
+            scanTimeoutMinutes: timeoutMinutes,
+            zapWorkDir,
+            spawnImpl: options.spawnImpl,
+          },
+          control,
+        );
+      }
     } catch (e) {
       // v2.1d /criticalreview EHA-1 (P1): the original implementation
       // re-threw here, causing the outer worker catch (depscanner/src/index.ts
@@ -1629,6 +1834,12 @@ export async function runDastPipeline(
   // Only ZAP engine + recorded credential needs this — Nuclei rejects
   // recorded outright via buildNucleiAuthHeaders below, and form/jwt/cookie
   // use their pre-existing in-engine auth flows.
+  //
+  // engine-fallback-ok — Phase 36's replay strategy authenticates via ZAP's
+  // Script-Based Authentication inside the autorun YAML itself, so it has
+  // no separate worker-driven pre-flight. The verification probe at
+  // yaml-builder.ts:251 IS the post-auth check; loggedInRegex mismatch
+  // fires onFail:exit on the autorun.
   if (engine === 'zap' && cred && cred.credentialRow.auth_strategy === 'recorded') {
     console.log(`${tag} recorded-auth pre-flight probe (shared with Test-login)`);
     try {
