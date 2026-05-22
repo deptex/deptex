@@ -34,3 +34,18 @@ export function estimateInputTokens(messages: Array<{ content: string | null }>)
   const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   return Math.ceil(totalChars / 4);
 }
+
+const AI_MARKUP_FACTOR = 2;
+
+export interface AiCost {
+  cogCents: number;
+  chargedCents: number;
+}
+
+export function chargedCentsForAi(model: string, inputTokens: number, outputTokens: number): AiCost {
+  const pricing = getTokenPricing(model);
+  const cogDollars = inputTokens * pricing.input + outputTokens * pricing.output;
+  const cogCents = cogDollars * 100;
+  const chargedCents = cogCents * AI_MARKUP_FACTOR;
+  return { cogCents, chargedCents };
+}

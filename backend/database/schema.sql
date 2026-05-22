@@ -150,6 +150,34 @@ CREATE TABLE IF NOT EXISTS public.banned_versions (
   created_at timestamp with time zone DEFAULT now(),
   dependency_id uuid NOT NULL
 );
+CREATE TABLE IF NOT EXISTS public.billing_stripe_webhook_events (
+  event_id text NOT NULL,
+  event_type text NOT NULL,
+  processed_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.billing_transactions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  kind text NOT NULL,
+  amount_cents bigint NOT NULL,
+  event_type text,
+  provider text,
+  feature text,
+  quantity numeric(20,6),
+  output_quantity numeric(20,6),
+  unit text,
+  cost_cents_cog numeric(20,6),
+  attribution_user_id uuid,
+  attribution_resource_type text,
+  attribution_resource_id uuid,
+  model_id text,
+  machine_size text,
+  idempotency_key text,
+  description text NOT NULL,
+  stripe_payment_intent_id text,
+  created_by_user_id uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.container_image_scan_cache (
   image_digest text NOT NULL,
   scanner text NOT NULL,
@@ -458,6 +486,25 @@ CREATE TABLE IF NOT EXISTS public.organization_asset_tiers (
   updated_at timestamp with time zone DEFAULT now(),
   rereview_settings jsonb NOT NULL DEFAULT jsonb_build_object('enabled', true, 'triggers', jsonb_build_object('depscore_delta', 5, 'severity_escalation', true, 'reachability_upgrade', true, 'kev_added', true, 'epss_delta', 0.1, 'has_exploit_flipped', true, 'is_malicious_flipped', true, 'became_direct', true, 'dev_to_prod', true))
 );
+CREATE TABLE IF NOT EXISTS public.organization_billing (
+  organization_id uuid NOT NULL,
+  balance_cents bigint NOT NULL DEFAULT 0,
+  auto_recharge_enabled boolean NOT NULL DEFAULT false,
+  auto_recharge_threshold_cents integer,
+  auto_recharge_amount_cents integer,
+  auto_recharge_monthly_cap_cents integer,
+  auto_recharge_in_progress boolean NOT NULL DEFAULT false,
+  auto_recharge_in_progress_started_at timestamp with time zone,
+  auto_recharge_last_attempt_at timestamp with time zone,
+  low_balance_alert_threshold_cents integer NOT NULL DEFAULT 500,
+  billing_email_override text,
+  stripe_customer_id text,
+  stripe_default_payment_method_id text,
+  low_balance_alert_sent_at timestamp with time zone,
+  zero_balance_alert_sent_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.organization_deprecations (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   organization_id uuid NOT NULL,
@@ -582,29 +629,6 @@ CREATE TABLE IF NOT EXISTS public.organization_package_policies (
   package_policy_code text NOT NULL DEFAULT ''::text,
   updated_at timestamp with time zone DEFAULT now(),
   updated_by_id uuid
-);
-CREATE TABLE IF NOT EXISTS public.organization_plans (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  organization_id uuid NOT NULL,
-  plan_tier text NOT NULL DEFAULT 'free'::text,
-  subscription_status text NOT NULL DEFAULT 'active'::text,
-  stripe_customer_id text,
-  stripe_subscription_id text,
-  stripe_price_id text,
-  billing_email text,
-  billing_cycle text DEFAULT 'monthly'::text,
-  current_period_start timestamp with time zone,
-  current_period_end timestamp with time zone,
-  cancel_at_period_end boolean DEFAULT false,
-  cancel_at timestamp with time zone,
-  syncs_used integer DEFAULT 0,
-  syncs_reset_at timestamp with time zone DEFAULT now(),
-  payment_method_brand text,
-  payment_method_last4 text,
-  custom_limits jsonb,
-  metadata jsonb DEFAULT '{}'::jsonb,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.organization_policies (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -787,7 +811,8 @@ CREATE TABLE IF NOT EXISTS public.organizations (
   epd_budget_exceeded_behavior text,
   default_ai_provider text NOT NULL DEFAULT 'anthropic'::text,
   default_model text,
-  enabled_models jsonb
+  enabled_models jsonb,
+  subscription_tier text
 );
 CREATE TABLE IF NOT EXISTS public.package_anomalies (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1725,12 +1750,6 @@ CREATE TABLE IF NOT EXISTS public.sla_policy_changes (
   new_values jsonb,
   created_at timestamp with time zone DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS public.stripe_webhook_events (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  event_id text NOT NULL,
-  event_type text NOT NULL,
-  processed_at timestamp with time zone DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS public.taint_engine_framework_models (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -2199,6 +2218,22 @@ CREATE OR REPLACE FUNCTION public.array_to_vector(real[], integer, boolean)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$array_to_vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.assert_balance_matches_ledger()
+ RETURNS TABLE(organization_id uuid, balance_cents bigint, ledger_sum bigint, drift_cents bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT ob.organization_id,
+         ob.balance_cents,
+         COALESCE(SUM(bt.amount_cents), 0)::BIGINT AS ledger_sum,
+         (ob.balance_cents - COALESCE(SUM(bt.amount_cents), 0))::BIGINT AS drift_cents
+    FROM organization_billing ob
+    LEFT JOIN billing_transactions bt ON bt.organization_id = ob.organization_id
+    GROUP BY ob.organization_id, ob.balance_cents
+    HAVING ob.balance_cents != COALESCE(SUM(bt.amount_cents), 0);
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.assert_flow_suppression_tenant()
@@ -3595,14 +3630,121 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.decrement_sync_usage(p_org_id uuid)
- RETURNS void
+CREATE OR REPLACE FUNCTION public.create_organization_billing_row()
+ RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
 BEGIN
-  UPDATE organization_plans
-    SET syncs_used = GREATEST(syncs_used - 1, 0), updated_at = NOW()
-    WHERE organization_id = p_org_id;
+  INSERT INTO organization_billing (organization_id, balance_cents)
+    VALUES (NEW.id, 500)
+    ON CONFLICT (organization_id) DO NOTHING;
+
+  INSERT INTO billing_transactions (organization_id, kind, amount_cents, description)
+    SELECT NEW.id, 'signup_grant', 500, 'Welcome credit ($5)'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM billing_transactions
+      WHERE organization_id = NEW.id AND kind = 'signup_grant'
+    );
+
+  RETURN NEW;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.credit_balance(p_organization_id uuid, p_amount_cents bigint, p_kind text, p_description text, p_stripe_payment_intent_id text, p_created_by_user_id uuid)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_new_balance BIGINT;
+BEGIN
+  IF p_amount_cents <= 0 THEN
+    RAISE EXCEPTION 'credit_balance: amount must be positive';
+  END IF;
+
+  UPDATE organization_billing
+    SET balance_cents              = balance_cents + p_amount_cents,
+        low_balance_alert_sent_at  = NULL,
+        zero_balance_alert_sent_at = NULL,
+        updated_at                 = NOW()
+    WHERE organization_id = p_organization_id
+    RETURNING balance_cents INTO v_new_balance;
+
+  IF v_new_balance IS NULL THEN
+    RAISE NOTICE 'credit_balance: auto-creating missing organization_billing row for org %', p_organization_id;
+    INSERT INTO organization_billing (organization_id, balance_cents)
+      VALUES (p_organization_id, p_amount_cents)
+      RETURNING balance_cents INTO v_new_balance;
+  END IF;
+
+  INSERT INTO billing_transactions (
+    organization_id, kind, amount_cents, description,
+    stripe_payment_intent_id, created_by_user_id
+  ) VALUES (
+    p_organization_id, p_kind, p_amount_cents, p_description,
+    p_stripe_payment_intent_id, p_created_by_user_id
+  );
+
+  RETURN v_new_balance;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.deduct_balance(p_organization_id uuid, p_amount_cents numeric, p_description text, p_event_metadata jsonb)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_current_balance BIGINT;
+  v_amount_rounded  BIGINT;
+BEGIN
+  v_amount_rounded := ROUND(p_amount_cents)::BIGINT;
+
+  IF v_amount_rounded <= 0 THEN
+    RAISE EXCEPTION 'deduct_balance: amount must round to positive int (got %)', p_amount_cents;
+  END IF;
+
+  SELECT balance_cents INTO v_current_balance
+    FROM organization_billing
+    WHERE organization_id = p_organization_id
+    FOR UPDATE;
+
+  IF v_current_balance IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_current_balance < v_amount_rounded THEN
+    RETURN NULL;
+  END IF;
+
+  UPDATE organization_billing
+    SET balance_cents = balance_cents - v_amount_rounded,
+        updated_at    = NOW()
+    WHERE organization_id = p_organization_id;
+
+  INSERT INTO billing_transactions (
+    organization_id, kind, amount_cents, description,
+    event_type, provider, feature, quantity, output_quantity, unit,
+    cost_cents_cog, attribution_user_id, attribution_resource_type,
+    attribution_resource_id, model_id, machine_size, idempotency_key
+  ) VALUES (
+    p_organization_id, 'usage_deduction', -v_amount_rounded, p_description,
+    p_event_metadata->>'event_type',
+    p_event_metadata->>'provider',
+    p_event_metadata->>'feature',
+    (p_event_metadata->>'quantity')::NUMERIC(20,6),
+    (p_event_metadata->>'output_quantity')::NUMERIC(20,6),
+    p_event_metadata->>'unit',
+    (p_event_metadata->>'cost_cents_cog')::NUMERIC(20,6),
+    (p_event_metadata->>'attribution_user_id')::UUID,
+    p_event_metadata->>'attribution_resource_type',
+    (p_event_metadata->>'attribution_resource_id')::UUID,
+    p_event_metadata->>'model_id',
+    p_event_metadata->>'machine_size',
+    p_event_metadata->>'idempotency_key'
+  );
+
+  RETURN v_current_balance - v_amount_rounded;
 END;
 $function$
 ;
@@ -4674,35 +4816,6 @@ CREATE OR REPLACE FUNCTION public.hnswhandler(internal)
  RETURNS index_am_handler
  LANGUAGE c
 AS '$libdir/vector', $function$hnswhandler$function$
-;
-
-CREATE OR REPLACE FUNCTION public.increment_sync_usage(p_org_id uuid, p_sync_limit integer)
- RETURNS TABLE(new_count integer, was_allowed boolean)
- LANGUAGE plpgsql
-AS $function$
-DECLARE
-  v_current INTEGER;
-BEGIN
-  SELECT syncs_used INTO v_current
-    FROM organization_plans
-    WHERE organization_id = p_org_id
-    FOR UPDATE;
-
-  IF v_current IS NULL THEN
-    RETURN QUERY SELECT 0, false;
-    RETURN;
-  END IF;
-
-  IF p_sync_limit = -1 OR v_current < p_sync_limit THEN
-    UPDATE organization_plans
-      SET syncs_used = syncs_used + 1, updated_at = NOW()
-      WHERE organization_id = p_org_id;
-    RETURN QUERY SELECT v_current + 1, true;
-  ELSE
-    RETURN QUERY SELECT v_current, false;
-  END IF;
-END;
-$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.inner_product(halfvec, halfvec)
@@ -6106,6 +6219,8 @@ ALTER TABLE public.aegis_tool_executions ADD CONSTRAINT aegis_tool_executions_pk
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_pkey PRIMARY KEY (id);
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_pkey PRIMARY KEY (id);
+ALTER TABLE public.billing_stripe_webhook_events ADD CONSTRAINT billing_stripe_webhook_events_pkey PRIMARY KEY (event_id);
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_pkey PRIMARY KEY (id);
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_pkey PRIMARY KEY (image_digest, scanner, scanner_version, trivy_db_version_day);
 ALTER TABLE public.demo_requests ADD CONSTRAINT demo_requests_pkey PRIMARY KEY (id);
 ALTER TABLE public.dependencies ADD CONSTRAINT dependencies_new_pkey PRIMARY KEY (id);
@@ -6130,6 +6245,7 @@ ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliverie
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_pkey PRIMARY KEY (id);
+ALTER TABLE public.organization_billing ADD CONSTRAINT organization_billing_pkey PRIMARY KEY (organization_id);
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_integrations ADD CONSTRAINT organization_integrations_pkey PRIMARY KEY (id);
@@ -6140,7 +6256,6 @@ ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_pkey
 ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_pkey PRIMARY KEY (id);
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_pkey PRIMARY KEY (id);
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_pkey PRIMARY KEY (id);
@@ -6206,7 +6321,6 @@ ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_pkey PRI
 ALTER TABLE public.security_audit_logs ADD CONSTRAINT security_audit_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.sla_policy_changes ADD CONSTRAINT sla_policy_changes_pkey PRIMARY KEY (id);
-ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_pkey PRIMARY KEY (id);
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_pkey PRIMARY KEY (id);
 ALTER TABLE public.taint_engine_settings ADD CONSTRAINT taint_engine_settings_pkey PRIMARY KEY (organization_id);
@@ -6238,13 +6352,13 @@ ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_i
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_name_key UNIQUE (organization_id, name);
+ALTER TABLE public.organization_billing ADD CONSTRAINT organization_billing_stripe_customer_id_key UNIQUE (stripe_customer_id);
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_organization_id_cve_id_package_key UNIQUE (organization_id, cve_id, package_purl);
 ALTER TABLE public.organization_invitations ADD CONSTRAINT organization_invitations_organization_id_email_status_key UNIQUE (organization_id, email, status) DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE public.organization_malicious_allowlist ADD CONSTRAINT oma_natural_key UNIQUE NULLS NOT DISTINCT (organization_id, package_name, version, ecosystem);
 ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_organization_id_user_id_key UNIQUE (organization_id, user_id);
 ALTER TABLE public.organization_mfa_exemptions ADD CONSTRAINT organization_mfa_exemptions_organization_id_user_id_key UNIQUE (organization_id, user_id);
 ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_key UNIQUE (organization_id);
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.organization_pr_checks ADD CONSTRAINT organization_pr_checks_organization_id_key UNIQUE (organization_id);
 ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT orc_id_org_uq UNIQUE (id, organization_id);
@@ -6291,7 +6405,6 @@ ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id
 ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
-ALTER TABLE public.stripe_webhook_events ADD CONSTRAINT stripe_webhook_events_event_id_key UNIQUE (event_id);
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
 ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_user_id_key UNIQUE (team_id, user_id);
@@ -6304,6 +6417,14 @@ ALTER TABLE public.user_sessions ADD CONSTRAINT user_sessions_session_id_key UNI
 ALTER TABLE public.watched_packages ADD CONSTRAINT watched_packages_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.aegis_chat_messages ADD CONSTRAINT aegis_chat_messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text])));
 ALTER TABLE public.ai_usage_logs ADD CONSTRAINT ai_usage_logs_tier_check CHECK ((tier = ANY (ARRAY['platform'::text, 'byok'::text])));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_attribution_resource_type_check CHECK ((attribution_resource_type = ANY (ARRAY['aegis_chat'::text, 'scan_job'::text, 'fix_task'::text, 'rule_generation'::text, 'epd_scoring'::text])));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_cost_cents_cog_check CHECK (((cost_cents_cog IS NULL) OR (cost_cents_cog >= (0)::numeric)));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_event_type_check CHECK ((event_type = ANY (ARRAY['ai_tokens'::text, 'worker_minutes'::text])));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_kind_check CHECK ((kind = ANY (ARRAY['signup_grant'::text, 'topup'::text, 'auto_recharge_topup'::text, 'usage_deduction'::text, 'refund'::text, 'adjustment'::text])));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_output_quantity_check CHECK (((output_quantity IS NULL) OR (output_quantity > (0)::numeric)));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_quantity_check CHECK (((quantity IS NULL) OR (quantity > (0)::numeric)));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_unit_check CHECK ((unit = ANY (ARRAY['input_tokens'::text, 'output_tokens'::text, 'seconds'::text, 'mixed_tokens'::text])));
+ALTER TABLE public.billing_transactions ADD CONSTRAINT chk_event_type_unit_pairing CHECK (((event_type IS NULL) OR ((event_type = 'ai_tokens'::text) AND (unit = ANY (ARRAY['input_tokens'::text, 'output_tokens'::text, 'mixed_tokens'::text]))) OR ((event_type = 'worker_minutes'::text) AND (unit = 'seconds'::text) AND (output_quantity IS NULL))));
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_image_digest_check CHECK ((image_digest ~ '^[a-f0-9]{64}(\+linux/(amd64|arm64))?$'::text));
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_scan_results_check CHECK ((octet_length((scan_results)::text) <= 1048576));
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_scan_results_hash_check CHECK ((scan_results_hash ~ '^[a-f0-9]{64}$'::text));
@@ -6326,6 +6447,8 @@ ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliverie
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_priority_check CHECK ((priority = ANY (ARRAY['critical'::text, 'high'::text, 'normal'::text, 'low'::text])));
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'dispatching'::text, 'dispatched'::text, 'failed'::text])));
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_rule_scope_check CHECK ((rule_scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
+ALTER TABLE public.organization_billing ADD CONSTRAINT chk_auto_recharge_in_progress_pairing CHECK ((((auto_recharge_in_progress = false) AND (auto_recharge_in_progress_started_at IS NULL)) OR ((auto_recharge_in_progress = true) AND (auto_recharge_in_progress_started_at IS NOT NULL))));
+ALTER TABLE public.organization_billing ADD CONSTRAINT organization_billing_balance_cents_check CHECK ((balance_cents >= 0));
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_framework_spec_osv_match_chk CHECK (framework_spec_osv_matches_cve(framework_spec, cve_id));
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_spec_format_check CHECK ((spec_format = ANY (ARRAY['semgrep_yaml'::text, 'framework_spec'::text])));
 ALTER TABLE public.organization_generated_rules ADD CONSTRAINT organization_generated_rules_spec_shape_chk CHECK ((((spec_format = 'semgrep_yaml'::text) AND (rule_yaml IS NOT NULL)) OR ((spec_format = 'framework_spec'::text) AND (framework_spec IS NOT NULL))));
@@ -6344,6 +6467,7 @@ ALTER TABLE public.organization_registry_credentials ADD CONSTRAINT organization
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_max_hours_check CHECK ((max_hours > 0));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.organization_sla_policies ADD CONSTRAINT organization_sla_policies_warning_threshold_percent_check CHECK (((warning_threshold_percent >= 1) AND (warning_threshold_percent <= 99)));
+ALTER TABLE public.organizations ADD CONSTRAINT chk_organizations_subscription_tier CHECK (((subscription_tier IS NULL) OR (subscription_tier = ANY (ARRAY['pro'::text, 'enterprise'::text]))));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
@@ -6432,6 +6556,9 @@ ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_organization_id_fkey FOR
 ALTER TABLE public.api_tokens ADD CONSTRAINT api_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_attribution_user_id_fkey FOREIGN KEY (attribution_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_first_scanned_by_org_id_fkey FOREIGN KEY (first_scanned_by_org_id) REFERENCES organizations(id) ON DELETE SET NULL;
 ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_fkey FOREIGN KEY (note_id) REFERENCES dependency_notes(id) ON DELETE CASCADE;
 ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6465,6 +6592,7 @@ ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_team_i
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.notification_rule_changes ADD CONSTRAINT notification_rule_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_asset_tiers ADD CONSTRAINT organization_asset_tiers_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.organization_billing ADD CONSTRAINT organization_billing_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_dependency_id_fkey FOREIGN KEY (dependency_id) REFERENCES dependencies(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_deprecated_by_fkey FOREIGN KEY (deprecated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.organization_deprecations ADD CONSTRAINT organization_deprecations_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -6487,7 +6615,6 @@ ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_n
 ALTER TABLE public.organization_notification_rules ADD CONSTRAINT organization_notification_rules_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_package_policies ADD CONSTRAINT organization_package_policies_updated_by_id_fkey FOREIGN KEY (updated_by_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.organization_plans ADD CONSTRAINT organization_plans_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_policies ADD CONSTRAINT organization_policies_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_author_id_fkey FOREIGN KEY (author_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.organization_policy_changes ADD CONSTRAINT organization_policy_changes_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -6691,6 +6818,10 @@ CREATE INDEX idx_aul_org_created ON public.ai_usage_logs USING btree (organizati
 CREATE INDEX idx_aul_org_month ON public.ai_usage_logs USING btree (organization_id, created_at) WHERE (success = true);
 CREATE INDEX idx_aul_user_feature ON public.ai_usage_logs USING btree (user_id, feature, created_at DESC);
 CREATE INDEX idx_banned_versions_org_dependency_id ON public.banned_versions USING btree (organization_id, dependency_id);
+CREATE INDEX idx_billing_transactions_attribution ON public.billing_transactions USING btree (attribution_resource_type, attribution_resource_id) WHERE (attribution_resource_id IS NOT NULL);
+CREATE INDEX idx_billing_transactions_feature ON public.billing_transactions USING btree (organization_id, feature, created_at DESC) WHERE (feature IS NOT NULL);
+CREATE INDEX idx_billing_transactions_kind ON public.billing_transactions USING btree (organization_id, kind, created_at DESC);
+CREATE INDEX idx_billing_transactions_org_created ON public.billing_transactions USING btree (organization_id, created_at DESC);
 CREATE INDEX idx_cisc_scanned_at ON public.container_image_scan_cache USING btree (scanned_at);
 CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
 CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
@@ -6741,15 +6872,13 @@ CREATE INDEX idx_notif_events_org ON public.notification_events USING btree (org
 CREATE INDEX idx_notif_events_project ON public.notification_events USING btree (project_id, created_at DESC);
 CREATE INDEX idx_notif_events_status ON public.notification_events USING btree (status) WHERE (status = 'pending'::text);
 CREATE INDEX idx_notif_events_stuck ON public.notification_events USING btree (created_at, dispatch_attempts) WHERE (status = 'pending'::text);
+CREATE INDEX idx_ob_auto_recharge_enabled ON public.organization_billing USING btree (auto_recharge_enabled) WHERE (auto_recharge_enabled = true);
+CREATE INDEX idx_ob_stripe_customer ON public.organization_billing USING btree (stripe_customer_id) WHERE (stripe_customer_id IS NOT NULL);
 CREATE INDEX idx_ogr_cve ON public.organization_generated_rules USING btree (cve_id);
 CREATE INDEX idx_ogr_org_enabled ON public.organization_generated_rules USING btree (organization_id, enabled);
 CREATE INDEX idx_ogr_status ON public.organization_generated_rules USING btree (organization_id, validation_status);
 CREATE INDEX idx_oma_lookup ON public.organization_malicious_allowlist USING btree (organization_id, package_name, ecosystem) WHERE (revoked_at IS NULL);
 CREATE INDEX idx_oma_org_active ON public.organization_malicious_allowlist USING btree (organization_id) WHERE (revoked_at IS NULL);
-CREATE INDEX idx_op_status ON public.organization_plans USING btree (subscription_status);
-CREATE INDEX idx_op_stripe_customer ON public.organization_plans USING btree (stripe_customer_id);
-CREATE INDEX idx_op_stripe_subscription ON public.organization_plans USING btree (stripe_subscription_id);
-CREATE INDEX idx_op_tier ON public.organization_plans USING btree (plan_tier);
 CREATE INDEX idx_orc_org ON public.organization_registry_credentials USING btree (organization_id);
 CREATE INDEX idx_org_generated_rules_org_format_enabled ON public.organization_generated_rules USING btree (organization_id, spec_format, enabled, validation_status) WHERE (enabled = true);
 CREATE INDEX idx_org_package_policies_org ON public.organization_package_policies USING btree (organization_id);
@@ -6956,7 +7085,6 @@ CREATE INDEX idx_sla_policies_org ON public.organization_sla_policies USING btre
 CREATE INDEX idx_sla_policy_changes_created ON public.sla_policy_changes USING btree (created_at DESC);
 CREATE INDEX idx_sla_policy_changes_org ON public.sla_policy_changes USING btree (organization_id);
 CREATE INDEX idx_sso_bypass_org ON public.organization_sso_bypass_tokens USING btree (organization_id) WHERE (used_at IS NULL);
-CREATE INDEX idx_swe_event_id ON public.stripe_webhook_events USING btree (event_id);
 CREATE INDEX idx_team_banned_versions_team_dependency_id ON public.team_banned_versions USING btree (team_id, dependency_id);
 CREATE INDEX idx_team_deprecations_team_dependency_id ON public.team_deprecations USING btree (team_id, dependency_id);
 CREATE INDEX idx_team_integrations_provider ON public.team_integrations USING btree (provider);
@@ -6994,6 +7122,7 @@ CREATE INDEX idx_webhook_deliveries_delivery_id ON public.webhook_deliveries USI
 CREATE INDEX idx_webhook_deliveries_repo ON public.webhook_deliveries USING btree (repo_full_name);
 CREATE INDEX project_dependency_vulnerabilities_runtime_confirmed_fk ON public.project_dependency_vulnerabilities USING btree (runtime_confirmed_dast_finding_id) WHERE (runtime_confirmed_dast_finding_id IS NOT NULL);
 CREATE UNIQUE INDEX banned_versions_organization_id_dependency_id_banned_version_ke ON public.banned_versions USING btree (organization_id, dependency_id, banned_version);
+CREATE UNIQUE INDEX idx_billing_transactions_one_signup_grant_per_org ON public.billing_transactions USING btree (organization_id) WHERE (kind = 'signup_grant'::text);
 CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
 CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
 CREATE UNIQUE INDEX idx_org_integrations_org_provider_installation ON public.organization_integrations USING btree (organization_id, provider, installation_id) WHERE (installation_id IS NOT NULL);
@@ -7014,6 +7143,8 @@ CREATE UNIQUE INDEX project_dast_findings_target_unresolved ON public.project_da
 CREATE UNIQUE INDEX project_dast_targets_label_unique ON public.project_dast_targets USING btree (project_id, label) WHERE (label IS NOT NULL);
 CREATE UNIQUE INDEX team_banned_versions_team_id_dependency_id_banned_version_key ON public.team_banned_versions USING btree (team_id, dependency_id, banned_version);
 CREATE UNIQUE INDEX team_deprecations_team_id_dependency_id_key ON public.team_deprecations USING btree (team_id, dependency_id);
+CREATE UNIQUE INDEX uq_billing_transactions_org_idemp ON public.billing_transactions USING btree (organization_id, idempotency_key) WHERE (idempotency_key IS NOT NULL);
+CREATE UNIQUE INDEX uq_billing_transactions_pi_credit ON public.billing_transactions USING btree (stripe_payment_intent_id) WHERE ((stripe_payment_intent_id IS NOT NULL) AND (kind = ANY (ARRAY['topup'::text, 'auto_recharge_topup'::text])));
 
 -- ============================================
 -- TRIGGERS
@@ -7035,6 +7166,7 @@ CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
+CREATE TRIGGER trg_organizations_after_insert_billing AFTER INSERT ON public.organizations FOR EACH ROW EXECUTE FUNCTION create_organization_billing_row();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
 CREATE TRIGGER update_aegis_chat_threads_updated_at BEFORE UPDATE ON public.aegis_chat_threads FOR EACH ROW EXECUTE FUNCTION update_aegis_chat_threads_updated_at();
 CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();
