@@ -288,7 +288,7 @@ function recomputeOrgCanvasLayout(edges: Edge[], nodes: Node[]): Edge[] {
   });
 }
 
-export default function OrganizationVulnerabilitiesPage() {
+export default function OrganizationOverviewPage() {
   const { id: orgId } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -2940,8 +2940,8 @@ export default function OrganizationVulnerabilitiesPage() {
             <div className="flex-1 overflow-y-auto">
               {/* Section Title */}
               <div className="px-5 pt-5 pb-4">
-                <h3 className="text-base font-semibold text-foreground">Organization Security</h3>
-                <p className="text-sm text-foreground-secondary mt-1">Security status overview for your organization</p>
+                <h3 className="text-base font-semibold text-foreground">Organization Findings</h3>
+                <p className="text-sm text-foreground-secondary mt-1">Findings overview for your organization</p>
               </div>
 
               {/* Status Items */}

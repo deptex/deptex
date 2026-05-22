@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Scale,
-  ShieldAlert,
+  Bug,
   Settings,
   MessageSquare,
   Workflow,
@@ -102,11 +102,15 @@ type NavItemDef = {
   drilldown?: boolean;
 };
 
+// Order reflects "view → act → configure" — status surfaces first
+// (Overview/Findings/Compliance), action surfaces next (Aegis/Flows),
+// configuration last. Aegis sits next to the things it acts on rather
+// than at #2 where prominence-bias once placed it.
 const allNavItems: NavItemDef[] = [
   { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard, requiredPermission: null },
-  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis', drilldown: true },
-  { id: 'vulnerabilities', label: 'Vulnerabilities', path: 'vulnerabilities', icon: ShieldAlert, requiredPermission: null },
+  { id: 'findings', label: 'Findings', path: 'findings', icon: Bug, requiredPermission: null },
   { id: 'compliance', label: 'Compliance', path: 'compliance', icon: Scale, requiredPermission: null },
+  { id: 'aegis', label: 'Aegis', path: 'aegis', icon: MessageSquare, requiredPermission: 'interact_with_aegis', drilldown: true },
   { id: 'flows', label: 'Flows', path: 'flows', icon: Workflow, requiredPermission: null },
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null, drilldown: true },
 ];
@@ -177,7 +181,7 @@ export default function OrgSidebar({
     const pathParts = location.pathname.split('/');
     if (pathParts.includes('settings')) return 'settings';
     if (pathParts.includes('compliance')) return 'compliance';
-    if (pathParts.includes('vulnerabilities')) return 'vulnerabilities';
+    if (pathParts.includes('findings')) return 'findings';
     if (pathParts.includes('aegis')) return 'aegis';
     if (pathParts.includes('flows')) return 'flows';
     return 'overview';
