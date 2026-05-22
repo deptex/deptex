@@ -6360,7 +6360,7 @@ ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_f
 ALTER TABLE public.project_container_findings ADD CONSTRAINT project_container_findings_reachability_level_check CHECK (((reachability_level IS NULL) OR (reachability_level = ANY (ARRAY['module'::text, 'unreachable'::text]))));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_profile_check CHECK ((scan_profile = ANY (ARRAY['auto'::text, 'quick'::text, 'full'::text, 'api'::text])));
 ALTER TABLE public.project_dast_config ADD CONSTRAINT project_dast_config_scan_timeout_minutes_check CHECK (((scan_timeout_minutes >= 5) AND (scan_timeout_minutes <= 60)));
-ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_auth_strategy_check CHECK ((auth_strategy = ANY (ARRAY['form'::text, 'jwt'::text, 'cookie'::text, 'recorded'::text])));
+ALTER TABLE public.project_dast_credentials ADD CONSTRAINT project_dast_credentials_auth_strategy_check CHECK ((auth_strategy = ANY (ARRAY['form'::text, 'jwt'::text, 'cookie'::text, 'recorded'::text, 'replay'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_auth_state_check CHECK ((auth_state = ANY (ARRAY['anonymous'::text, 'authenticated'::text, 'authentication_lost'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_confidence_check CHECK ((confidence = ANY (ARRAY['confirmed'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_engine_check CHECK ((engine = ANY (ARRAY['zap'::text, 'nuclei'::text, 'merged'::text])));
