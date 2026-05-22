@@ -49,6 +49,35 @@
     scrollbar-width: none; /* Firefox */
   }
 
+  /* Per-route opt-in: re-enable the body/html scrollbar that is hidden globally
+     by the rules in @layer base. Toggled by adding .security-scrollbar to
+     both <html> and <body> from the page's useEffect. */
+  html.security-scrollbar,
+  body.security-scrollbar {
+    -ms-overflow-style: auto !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent !important;
+    overflow-y: auto !important;
+  }
+  html.security-scrollbar::-webkit-scrollbar,
+  body.security-scrollbar::-webkit-scrollbar {
+    display: block !important;
+    width: 8px !important;
+  }
+  html.security-scrollbar::-webkit-scrollbar-track,
+  body.security-scrollbar::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+  html.security-scrollbar::-webkit-scrollbar-thumb,
+  body.security-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2) !important;
+    border-radius: 4px !important;
+  }
+  html.security-scrollbar::-webkit-scrollbar-thumb:hover,
+  body.security-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.35) !important;
+  }
+
   /* Subtle visible scrollbar - use this to override hidden scrollbars */
   .custom-scrollbar {
     -ms-overflow-style: auto !important;

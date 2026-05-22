@@ -32,7 +32,7 @@ export default function OrganizationVulnerabilitiesTableSkeleton() {
           <colgroup>
             <col className="w-8" />
             <col className="w-[45%]" />
-            <col className="w-[10rem]" />
+            <col className="w-[18rem]" />
             <col className="w-[8rem]" />
             <col className="w-10" />
           </colgroup>

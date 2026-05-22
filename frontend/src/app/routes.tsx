@@ -32,7 +32,7 @@ import CookiePolicyPage from "./pages/legal/CookiePolicyPage";
 import ProtectedRoute from "../components/ProtectedRoute";
 import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
-import OrganizationVulnerabilitiesPage from "./pages/OrganizationVulnerabilitiesPage";
+import OrganizationFindingsPage from "./pages/OrganizationFindingsPage";
 import AegisPage from "./pages/AegisPage";
 import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
 import FlowEditorPage from "./pages/FlowEditorPage";
@@ -117,12 +117,12 @@ export const router = createBrowserRouter([
         element: <Navigate to="overview" replace />,
       },
       {
-        path: "security",
-        element: <Navigate to=".." replace />,
+        path: "findings",
+        element: <OrganizationFindingsPage />,
       },
       {
         path: "vulnerabilities",
-        element: <OrganizationVulnerabilitiesPage />,
+        element: <Navigate to="../findings" replace />,
       },
       {
         path: "projects",
