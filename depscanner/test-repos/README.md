@@ -31,7 +31,7 @@ Depscanner ships four distinct fixture families, all serving different layers:
 
 ## v1a coverage (current)
 
-13 fixtures spanning every ecosystem we ship:
+12 fixtures spanning every ecosystem we ship:
 
 | # | Fixture | Ecosystem | Origin | Server-side / DAST |
 |---|---|---|---|---|

@@ -15,6 +15,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
 - See `docs/flow-code-sandbox.md` before changing the flow / policy code execution sandbox (isolated-vm setup, exposed helpers, return cap)
+- Dogfood corpus: `depscanner/test-repos/` holds 12 hand-authored framework fixtures (one per ecosystem we ship), each seeded with intentional vulnerabilities across every scanner category. `npm run dogfood:check` (in `depscanner/`) is the executable cross-batch regression gate; the runbook for the end-to-end manual walkthrough is `docs/runbooks/depscanner-dogfood.md`. Don't modify the upstream taint-engine fixtures in `depscanner/fixtures/test-*` — those are byte-stable inputs for the snapshot suite. The dogfood copies are intentionally separate.
 - Roadmap: `.cursor/plans/deptex_projects_roadmap_index.plan.md`
 
 ---

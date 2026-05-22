@@ -44,7 +44,7 @@ In `deptex` prod org:
    sub-path; the worker scans only that directory.
 5. **Set `sync_frequency=manual`** on the connected repo's Settings →
    Sync page. This prevents the fixture from re-scanning on every push to
-   `deptex/deptex` (which would fan out 13 simultaneous extractions).
+   `deptex/deptex` (which would fan out 12 simultaneous extractions).
 
 ### (c) Wait for scan
 
