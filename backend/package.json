@@ -12,7 +12,9 @@
     "type-check": "tsc --noEmit",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:baseline": "tsx scripts/migrate.ts baseline",
-    "migrate:status": "tsx scripts/migrate.ts status"
+    "migrate:status": "tsx scripts/migrate.ts status",
+    "reconcile:billing": "tsx scripts/reconcile-billing.ts",
+    "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts"
   },
   "keywords": [
     "dependency-tracking",
