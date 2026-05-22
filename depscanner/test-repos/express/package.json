@@ -1,0 +1,19 @@
+{
+  "name": "deptex-dogfood-express",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deptex dogfood fixture — Express.js reference app with intentional findings across all scanner categories.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.18.2",
+    "lodash": "4.17.20",
+    "minimist": "1.2.5",
+    "event-stream": "3.3.6"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}

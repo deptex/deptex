@@ -74,7 +74,9 @@
     "iterate": "tsx test/iterate/cli.ts",
     "iterate:tournament": "tsx test/iterate/tournament.ts",
     "tournament:rule-gen": "tsx test/iterate/tournament-2026-05-10/runner.ts",
-    "tournament:spot-check": "tsx test/iterate/tournament-2026-05-10/spot-check-runner.ts"
+    "tournament:spot-check": "tsx test/iterate/tournament-2026-05-10/spot-check-runner.ts",
+    "dogfood:check": "tsx scripts/dogfood-check.ts",
+    "test:dogfood-check": "tsx test/dogfood-check.test.ts"
   },
   "keywords": [
     "extraction",

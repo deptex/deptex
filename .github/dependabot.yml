@@ -1,0 +1,77 @@
+# Dependabot configuration.
+#
+# We deliberately keep this scope minimal. The depscanner dogfood corpus
+# under `depscanner/test-repos/` seeds intentionally-vulnerable dependencies
+# (and historical-malicious package names) so a real end-to-end scan has
+# something to find. Letting Dependabot watch those directories would open
+# noisy PRs against fixtures whose CVEs are the entire point of the corpus.
+#
+# If you need Dependabot for production packages, scope it tightly — keep
+# the `ignore` directives below so the dogfood corpus is never auto-bumped.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: bundler
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        directories:
+          - "depscanner/test-repos/**"
