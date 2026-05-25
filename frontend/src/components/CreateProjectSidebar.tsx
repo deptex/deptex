@@ -58,10 +58,18 @@ export function CreateProjectSidebar({
   const [orgAssetTiersLoading, setOrgAssetTiersLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [sidebarConnectionsLoading, setSidebarConnectionsLoading] = useState(false);
+  const [sidebarConnectionsError, setSidebarConnectionsError] = useState(false);
   const [sidebarRepos, setSidebarRepos] = useState<RepoWithProvider[]>([]);
   const [sidebarReposLoading, setSidebarReposLoading] = useState(false);
   const [sidebarReposLoadAttempted, setSidebarReposLoadAttempted] = useState(false);
-  const [sidebarReposError, setSidebarReposError] = useState<string | null>(null);
+  type SidebarReposError =
+    | { kind: 'workspace_missing'; provider: 'bitbucket' }
+    | { kind: 'auth_expired'; provider: string }
+    | { kind: 'no_integrations' }
+    | { kind: 'rate_limited' }
+    | { kind: 'network' }
+    | { kind: 'generic' };
+  const [sidebarReposError, setSidebarReposError] = useState<SidebarReposError | null>(null);
   const [sidebarRepoSearch, setSidebarRepoSearch] = useState('');
   const [sidebarRepoToConnect, setSidebarRepoToConnect] = useState<RepoWithProvider | null>(null);
   const [sidebarConnections, setSidebarConnections] = useState<CiCdConnection[]>([]);
@@ -82,6 +90,38 @@ export function CreateProjectSidebar({
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [createdProjectName, setCreatedProjectName] = useState('');
   const sidebarGitHubDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Sequence + abort guards so a slow response from a previous integration
+  // can't overwrite the active integration's state, and an in-flight repo
+  // click is cancelled when the user clicks a different repo. Without these,
+  // switching from GitHub -> GitLab while the GitHub fetch is slow lands GH
+  // repos under the GL icon when the slow response finally returns.
+  const reposLoadSeqRef = useRef(0);
+  const reposAbortRef = useRef<AbortController | null>(null);
+  const scanSeqRef = useRef(0);
+  const scanAbortRef = useRef<AbortController | null>(null);
+  // Synchronous re-entry guard for Create button. State setters batch, so a
+  // double-click within one tick can fire two requests before `creating`
+  // flips. A ref flips synchronously and survives the batch.
+  const creatingRef = useRef(false);
+
+  function classifyError(err: unknown): SidebarReposError {
+    const e = err as { message?: string; responseBody?: { error?: string; code?: string } } | undefined;
+    const body = e?.responseBody;
+    const msg = e?.message ?? '';
+    if (e instanceof TypeError && msg === 'Failed to fetch') return { kind: 'network' };
+    if (body?.code === 'integration_workspace_missing' || /missing a workspace slug/i.test(msg)) {
+      return { kind: 'workspace_missing', provider: 'bitbucket' };
+    }
+    if (body?.code === 'integration_auth_expired' || /401|token (expired|refresh failed)/i.test(msg)) {
+      return { kind: 'auth_expired', provider: 'unknown' };
+    }
+    if (/no source code integration/i.test(msg) || /integration not found/i.test(msg)) {
+      return { kind: 'no_integrations' };
+    }
+    if (/rate.?limit/i.test(msg)) return { kind: 'rate_limited' };
+    return { kind: 'generic' };
+  }
 
   const teamLocked = !!lockedTeam;
   const effectiveTeams = teamLocked && lockedTeam ? [lockedTeam] : teams;
@@ -133,6 +173,13 @@ export function CreateProjectSidebar({
   }, [open, organizationId]);
 
   const closeModal = () => {
+    // Abort any in-flight repo list / scan so their resolves don't
+    // re-pollute state on the next open.
+    if (reposAbortRef.current) reposAbortRef.current.abort();
+    if (scanAbortRef.current) scanAbortRef.current.abort();
+    reposAbortRef.current = null;
+    scanAbortRef.current = null;
+    creatingRef.current = false;
     onClose();
     setProjectName('');
     setSelectedTeamId(teamLocked && lockedTeam ? lockedTeam.id : null);
@@ -141,6 +188,7 @@ export function CreateProjectSidebar({
     setCreatedProjectId(null);
     setCreatedProjectName('');
     setSidebarConnectionsLoading(false);
+    setSidebarConnectionsError(false);
     setSidebarRepos([]);
     setSidebarReposLoading(false);
     setSidebarReposLoadAttempted(false);
@@ -149,6 +197,7 @@ export function CreateProjectSidebar({
     setSidebarRepoToConnect(null);
     setSidebarRepoScanLoading(null);
     setSidebarRepoScanResult(null);
+    setSidebarRepoScanResultsByRepo({});
     setSidebarRepoScanError(null);
     setSidebarRepoNoManifest(false);
     setSidebarScanLoading(false);
@@ -160,6 +209,7 @@ export function CreateProjectSidebar({
   const loadSidebarConnections = async () => {
     if (!organizationId) return;
     setSidebarConnectionsLoading(true);
+    setSidebarConnectionsError(false);
     try {
       const connections = await api.getOrganizationConnections(organizationId);
       setSidebarConnections(connections);
@@ -172,9 +222,10 @@ export function CreateProjectSidebar({
       } else {
         setSidebarReposLoadAttempted(true);
       }
-    } catch {
+    } catch (err) {
+      console.error('Failed to load org connections:', err);
+      setSidebarConnectionsError(true);
       setSidebarReposLoadAttempted(true);
-      /* ignore */
     } finally {
       setSidebarConnectionsLoading(false);
     }
@@ -182,6 +233,13 @@ export function CreateProjectSidebar({
 
   const loadSidebarRepos = async (integrationId?: string) => {
     if (!organizationId) return;
+    // Cancel any previous in-flight load + bump sequence so its late resolve
+    // doesn't write into the current state.
+    if (reposAbortRef.current) reposAbortRef.current.abort();
+    const controller = new AbortController();
+    reposAbortRef.current = controller;
+    const seq = ++reposLoadSeqRef.current;
+
     setSidebarReposLoading(true);
     setSidebarReposError(null);
     setSidebarRepos([]);
@@ -193,13 +251,19 @@ export function CreateProjectSidebar({
     setSidebarRepoScanResultsByRepo({});
     try {
       const targetIntegration = integrationId || sidebarSelectedIntegration || undefined;
-      const repoData = await api.getOrganizationRepositories(organizationId, targetIntegration);
+      const repoData = await api.getOrganizationRepositories(organizationId, targetIntegration, { signal: controller.signal });
+      if (seq !== reposLoadSeqRef.current) return;
       setSidebarRepos(repoData.repositories);
     } catch (err: any) {
-      setSidebarReposError(err.message || 'Failed to load repositories');
+      if (controller.signal.aborted || err?.name === 'AbortError') return;
+      if (seq !== reposLoadSeqRef.current) return;
+      console.error('Failed to load repos:', err);
+      setSidebarReposError(classifyError(err));
     } finally {
-      setSidebarReposLoadAttempted(true);
-      setSidebarReposLoading(false);
+      if (seq === reposLoadSeqRef.current) {
+        setSidebarReposLoadAttempted(true);
+        setSidebarReposLoading(false);
+      }
     }
   };
 
@@ -209,6 +273,13 @@ export function CreateProjectSidebar({
       setSidebarSelectedPath('');
       return;
     }
+    // Cancel any previous in-flight scan and bump the sequence so its late
+    // resolve doesn't write into the just-selected repo's state.
+    if (scanAbortRef.current) scanAbortRef.current.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    const seq = ++scanSeqRef.current;
+
     setSidebarRepoToConnect(repo);
     setSidebarRepoScanResult(null);
     setSidebarRepoScanError(null);
@@ -218,7 +289,14 @@ export function CreateProjectSidebar({
     if (!organizationId) return;
     setSidebarRepoScanLoading(repo.full_name);
     try {
-      const scanData = await api.getOrganizationRepositoryScan(organizationId, repo.full_name, repo.default_branch, repo.integration_id ?? '');
+      const scanData = await api.getOrganizationRepositoryScan(
+        organizationId,
+        repo.full_name,
+        repo.default_branch,
+        repo.integration_id ?? '',
+        { signal: controller.signal },
+      );
+      if (seq !== scanSeqRef.current) return;
       if (scanData.potentialProjects.length === 0) {
         setSidebarRepoNoManifest(true);
       } else {
@@ -238,15 +316,27 @@ export function CreateProjectSidebar({
         }
       }
     } catch (err: any) {
-      setSidebarRepoScanError(err.message || 'Failed to scan repository');
+      if (controller.signal.aborted || err?.name === 'AbortError') return;
+      if (seq !== scanSeqRef.current) return;
+      console.error('Failed to scan repo:', err);
+      setSidebarRepoScanError('We couldn’t scan that repository. Try again, or pick a different one.');
     } finally {
-      setSidebarRepoScanLoading(null);
+      // Only clear the spinner if it's still pointing at THIS repo. A user
+      // clicking A then B before A's scan returns shouldn't have B's spinner
+      // killed by A's `finally`.
+      if (seq === scanSeqRef.current) {
+        setSidebarRepoScanLoading(null);
+      }
     }
   };
 
   const projectLimit = usePlanLimit('projects');
 
   const handleCreateProject = async () => {
+    // Synchronous re-entry guard. A double-click within one React tick
+    // can fire two requests before `creating` flips through setState.
+    if (creatingRef.current) return;
+
     if (!organizationId || !projectName.trim()) {
       toast({ title: 'Error', description: 'Project name is required', variant: 'destructive' });
       return;
@@ -264,7 +354,7 @@ export function CreateProjectSidebar({
     const teamIds = teamLocked && lockedTeam ? [lockedTeam.id] : effectiveTeamId ? [effectiveTeamId] : undefined;
     const cachedScan = sidebarRepoToConnect ? sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name] : null;
     const effectiveFramework = cachedScan?.framework || sidebarRepoToConnect?.framework || null;
-    const createPayload: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null; framework?: string | null } = {
+    const createPayload: Parameters<typeof api.createProject>[1] = {
       name: projectName.trim(),
       team_ids: teamIds,
       framework: effectiveFramework || undefined,
@@ -275,93 +365,56 @@ export function CreateProjectSidebar({
       createPayload.asset_tier = assetTier;
     }
 
+    // Combined create-and-connect: backend creates the project + repo link +
+    // extraction queue in one shot, with rollback on any failure. No more
+    // orphan-project failures from "create succeeded, connect didn't."
+    if (sidebarRepoToConnect) {
+      const potentialProjects = cachedScan?.potentialProjects ?? [];
+      const unlinked = potentialProjects.filter((p) => !p.isLinked);
+      if (potentialProjects.length > 0 && unlinked.length === 0) {
+        toast({ title: 'No path available', description: 'All package paths in this repo are already linked to other projects.', variant: 'destructive' });
+        return;
+      }
+      const pathToConnect = sidebarSelectedPath || unlinked[0]?.path || potentialProjects[0]?.path || '';
+      const selectedProject = potentialProjects.find((p) => p.path === pathToConnect);
+      createPayload.repo = {
+        repo_full_name: sidebarRepoToConnect.full_name,
+        integration_id: sidebarRepoToConnect.integration_id ?? '',
+        package_json_path: pathToConnect || undefined,
+        ecosystem: selectedProject?.ecosystem || cachedScan?.ecosystem || sidebarRepoToConnect.ecosystem,
+        framework: cachedScan?.framework || sidebarRepoToConnect.framework || undefined,
+      };
+    }
+
+    creatingRef.current = true;
     setCreating(true);
     try {
       const newProject = await api.createProject(organizationId, createPayload);
-
       onProjectCreated?.(newProject, effectiveFramework);
-      // Skip the first reload when a repo is being connected — connectProjectRepository
-      // will trigger its own reload with complete data (framework, repo status, etc.)
-      if (!sidebarRepoToConnect) {
-        onProjectsReload?.();
-      }
-
+      onProjectsReload?.();
       if (sidebarRepoToConnect) {
-        const cachedScan = sidebarRepoScanResultsByRepo[sidebarRepoToConnect.full_name];
-        const useCachedScan = !!(cachedScan && cachedScan.potentialProjects.length > 0);
-        const potentialProjects = useCachedScan ? cachedScan.potentialProjects : null;
-
-        if (useCachedScan && potentialProjects) {
-          const unlinked = potentialProjects.filter((p) => !p.isLinked);
-          const pathToConnect = sidebarSelectedPath || unlinked[0]?.path || potentialProjects[0]?.path || '';
-          const selectedProject = potentialProjects.find((p) => p.path === pathToConnect) || unlinked[0];
-          if (unlinked.length === 0) {
-            toast({ title: 'No path available', description: 'All package paths in this repo are already linked to other projects.', variant: 'destructive' });
-            closeModal();
-          } else {
-            try {
-              await api.connectProjectRepository(organizationId, newProject.id, {
-                repo_id: sidebarRepoToConnect.id,
-                repo_full_name: sidebarRepoToConnect.full_name,
-                default_branch: sidebarRepoToConnect.default_branch,
-                framework: cachedScan?.framework || sidebarRepoToConnect.framework,
-                package_json_path: pathToConnect || undefined,
-                ecosystem: selectedProject?.ecosystem || cachedScan?.ecosystem || sidebarRepoToConnect.ecosystem,
-                provider: sidebarRepoToConnect.provider,
-                integration_id: sidebarRepoToConnect.integration_id,
-              });
-              onProjectsReload?.();
-              toast({ title: 'Repository connected', description: 'Extraction has started.' });
-              closeModal();
-            } catch (err: any) {
-              toast({ title: 'Connection failed', description: err.message || 'Failed to connect repository', variant: 'destructive' });
-              closeModal();
-            }
-          }
-        } else {
-          setSidebarScanLoading(true);
-          try {
-            const scanData = await api.getRepositoryScan(organizationId, newProject.id, sidebarRepoToConnect.full_name, sidebarRepoToConnect.default_branch, sidebarRepoToConnect.integration_id ?? '');
-            if (scanData.potentialProjects.length === 0) {
-              toast({ title: 'No manifest file found', description: 'No supported manifest file found in this repository.', variant: 'destructive' });
-              closeModal();
-            } else {
-              const unlinked = scanData.potentialProjects.filter((p) => !p.isLinked);
-              if (unlinked.length <= 1) {
-                await api.connectProjectRepository(organizationId, newProject.id, {
-                  repo_id: sidebarRepoToConnect.id,
-                  repo_full_name: sidebarRepoToConnect.full_name,
-                  default_branch: sidebarRepoToConnect.default_branch,
-                  framework: scanData.framework || sidebarRepoToConnect.framework,
-                  package_json_path: (unlinked[0]?.path) || undefined,
-                  ecosystem: unlinked[0]?.ecosystem || scanData.ecosystem || sidebarRepoToConnect.ecosystem,
-                  provider: sidebarRepoToConnect.provider,
-                  integration_id: sidebarRepoToConnect.integration_id,
-                });
-                onProjectsReload?.();
-                toast({ title: 'Repository connected', description: 'Extraction has started.' });
-                closeModal();
-              } else {
-                setCreatedProjectId(newProject.id);
-                setCreatedProjectName(projectName.trim());
-                setSidebarScanResult(scanData);
-                const firstUnlinked = scanData.potentialProjects.find((p) => !p.isLinked);
-                setSidebarSelectedPath(firstUnlinked ? firstUnlinked.path : scanData.potentialProjects[0]?.path ?? '');
-              }
-            }
-          } catch (err: any) {
-            toast({ title: 'Scan failed', description: err.message || 'Failed to scan repository', variant: 'destructive' });
-            closeModal();
-          } finally {
-            setSidebarScanLoading(false);
-          }
-        }
-      } else {
-        closeModal();
+        toast({ title: 'Project created', description: 'Extraction has started.' });
       }
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Failed to create project', variant: 'destructive' });
+      closeModal();
+    } catch (err: unknown) {
+      const e = err as { message?: string; responseBody?: { error?: string; code?: string } } | undefined;
+      const code = e?.responseBody?.code;
+      const backendMessage = e?.responseBody?.error;
+      let title = 'Failed to create project';
+      let description = backendMessage || 'Please try again, or contact support if this keeps happening.';
+      if (code === 'plan_limit') {
+        title = 'Project limit reached';
+        description = backendMessage || 'Upgrade your plan to create more projects.';
+      } else if (e?.message === 'Not authenticated') {
+        title = 'Session expired';
+        description = 'Please sign in again.';
+      } else if (e instanceof TypeError && e.message === 'Failed to fetch') {
+        title = 'Network error';
+        description = 'Check your connection and try again.';
+      }
+      toast({ title, description, variant: 'destructive' });
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
@@ -539,7 +592,16 @@ export function CreateProjectSidebar({
                   </div>
                 ))}
               </div>
-            ) : gitConnections.length === 0 ? (
+            ) : sidebarConnectionsError ? (
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <Inbox className="h-5 w-5 text-foreground-secondary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Couldn’t load your integrations</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">A network or server hiccup got in the way. Try again.</p>
+                <Button size="sm" variant="outline" onClick={loadSidebarConnections}>Try again</Button>
+              </div>
+            ) : gitConnections.length === 0 || sidebarReposError?.kind === 'no_integrations' ? (
               <div className="flex flex-wrap gap-2 justify-center">
                 <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('github')}>
                   {connectingProvider === 'github' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
@@ -554,23 +616,54 @@ export function CreateProjectSidebar({
                   Add Bitbucket
                 </Button>
               </div>
-            ) : sidebarReposError && (sidebarReposError.includes('integration') || sidebarReposError.includes('GitHub App') || sidebarReposError.includes('No source')) ? (
-              <div className="flex flex-wrap gap-2 justify-center">
-                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('github')}>
-                  {connectingProvider === 'github' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/github.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
-                  Add GitHub
-                </Button>
-                <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('gitlab')}>
-                  {connectingProvider === 'gitlab' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/gitlab.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
-                  Add GitLab
-                </Button>
+            ) : sidebarReposError?.kind === 'workspace_missing' ? (
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <img src="/images/integrations/bitbucket.png" alt="" className="h-5 w-5 rounded-sm" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Your Bitbucket workspace needs reconnecting</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">Bitbucket retired the cross-workspace listing API. Reconnect to pick a workspace.</p>
                 <Button size="sm" variant="outline" className="gap-2" disabled={!!connectingProvider} onClick={() => startGitProviderConnect('bitbucket')}>
                   {connectingProvider === 'bitbucket' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <img src="/images/integrations/bitbucket.png" alt="" className="h-3.5 w-3.5 rounded-sm" />}
-                  Add Bitbucket
+                  Reconnect Bitbucket
                 </Button>
+              </div>
+            ) : sidebarReposError?.kind === 'auth_expired' ? (
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <Lock className="h-5 w-5 text-foreground-secondary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Your integration’s token expired</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">Reconnect the provider to refresh access.</p>
+                <Button size="sm" variant="outline" onClick={() => loadSidebarRepos()}>Try again</Button>
+              </div>
+            ) : sidebarReposError?.kind === 'rate_limited' ? (
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <Loader2 className="h-5 w-5 text-foreground-secondary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">We’re being rate-limited</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">Wait a minute and try again.</p>
+                <Button size="sm" variant="outline" onClick={() => loadSidebarRepos()}>Retry</Button>
+              </div>
+            ) : sidebarReposError?.kind === 'network' ? (
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <Inbox className="h-5 w-5 text-foreground-secondary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Network error</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">Check your connection and try again.</p>
+                <Button size="sm" variant="outline" onClick={() => loadSidebarRepos()}>Retry</Button>
               </div>
             ) : sidebarReposError ? (
-              <p className="text-sm text-foreground-secondary">{sidebarReposError}</p>
+              <div className="flex flex-col items-center justify-center text-center py-8">
+                <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                  <Inbox className="h-5 w-5 text-foreground-secondary" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground mb-1">Couldn’t load repositories</h3>
+                <p className="text-sm text-foreground-secondary max-w-md mb-3">Something went wrong loading your repositories. Try again.</p>
+                <Button size="sm" variant="outline" onClick={() => loadSidebarRepos()}>Try again</Button>
+              </div>
             ) : (
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">

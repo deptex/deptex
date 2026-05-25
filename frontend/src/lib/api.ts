@@ -725,14 +725,58 @@ export const api = {
     return this._projectDataCache.get(cacheKey) || null;
   },
 
-  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null; framework?: string | null }): Promise<Project> {
+  async createProject(
+    organizationId: string,
+    data: {
+      name: string;
+      team_ids?: string[];
+      asset_tier?: AssetTier;
+      asset_tier_id?: string | null;
+      framework?: string | null;
+      /**
+       * When present, the backend performs project insert + repo connect +
+       * extraction queue inline and rolls the project back on failure. Use
+       * this for the create-from-sidebar flow where a project is always
+       * paired with a repo.
+       */
+      repo?: {
+        repo_full_name: string;
+        integration_id: string;
+        package_json_path?: string;
+        ecosystem?: string;
+        framework?: string;
+      };
+    }
+  ): Promise<Project & { repo?: { repo_full_name: string; default_branch: string; status: string } | null }> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
     const cacheKey = `${organizationId}:${project.id}`;
     this._projectDataCache.set(cacheKey, project as ProjectWithRole);
+    if (data.repo) {
+      // The combined endpoint created a project_repositories row, so any
+      // cached scan result for that (org, repo) is now stale.
+      this.invalidateOrganizationRepositoryScanCache(organizationId, data.repo.repo_full_name);
+    }
     return project;
+  },
+
+  invalidateOrganizationRepositoriesCache(organizationId: string): void {
+    for (const key of this._organizationRepositoriesCache.keys()) {
+      if (key.startsWith(`${organizationId}:`)) {
+        this._organizationRepositoriesCache.delete(key);
+      }
+    }
+  },
+
+  invalidateOrganizationRepositoryScanCache(organizationId: string, repoFullName?: string): void {
+    const prefix = repoFullName ? `${organizationId}:${repoFullName}:` : `${organizationId}:`;
+    for (const key of this._organizationRepositoryScanCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this._organizationRepositoryScanCache.delete(key);
+      }
+    }
   },
 
   async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; asset_tier?: AssetTier; asset_tier_id?: string | null; notifications_paused_until?: string | null }): Promise<Project> {
@@ -1572,7 +1616,8 @@ export const api = {
 
   async getOrganizationRepositories(
     organizationId: string,
-    integrationId?: string
+    integrationId?: string,
+    options?: { signal?: AbortSignal }
   ): Promise<{
     repositories: RepoWithProvider[];
   }> {
@@ -1582,7 +1627,10 @@ export const api = {
       return { repositories: cached.repositories };
     }
     const params = integrationId ? `?integration_id=${integrationId}` : '';
-    const result = await fetchWithAuth(`/api/organizations/${organizationId}/repositories${params}`);
+    const result = await fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     this._organizationRepositoriesCache.set(cacheKey, { repositories: result.repositories, fetchedAt: Date.now() });
     return result;
   },
@@ -1611,7 +1659,8 @@ export const api = {
     organizationId: string,
     repoFullName: string,
     defaultBranch: string,
-    integrationId: string
+    integrationId: string,
+    options?: { signal?: AbortSignal }
   ): Promise<{
     isMonorepo: boolean;
     confidence?: 'high' | 'medium';
@@ -1632,7 +1681,10 @@ export const api = {
       return cached.data;
     }
     const params = new URLSearchParams({ repo_full_name: repoFullName, default_branch: defaultBranch, integration_id: integrationId });
-    const data = await fetchWithAuth(`/api/organizations/${organizationId}/repositories/scan?${params}`);
+    const data = await fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/scan?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     this._organizationRepositoryScanCache.set(key, { data, fetchedAt: Date.now() });
     return data;
   },
@@ -1701,8 +1753,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    const scanKey = `${organizationId}:${data.repo_full_name}:${data.default_branch}`;
-    this._organizationRepositoryScanCache.delete(scanKey);
+    // Cache key shape is `${org}:${repo}:${branch}:${integrationId}` — the
+    // 3-part variant used here previously never matched and left the cache
+    // stale for the full TTL after every connect. Iterate-and-prefix-delete
+    // to invalidate every cached scan for this (org, repo).
+    this.invalidateOrganizationRepositoryScanCache(organizationId, data.repo_full_name);
     return result;
   },
 
