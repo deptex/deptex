@@ -131,28 +131,36 @@ export function ConsumptionBreakdownChart({
         ) : (
           <>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-                <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
+              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                 <XAxis
                   dataKey="_label"
-                  tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
+                  tick={{ fontSize: 12, fill: 'rgba(255,255,255,0.55)' }}
                   tickLine={false}
-                  axisLine={{ stroke: 'hsl(var(--border))' }}
+                  axisLine={false}
                   interval="preserveStartEnd"
-                  minTickGap={24}
+                  minTickGap={36}
+                  padding={{ left: 12, right: 12 }}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
+                  tick={{ fontSize: 12, fill: 'rgba(255,255,255,0.55)' }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={formatCentsAxis}
-                  width={50}
+                  width={44}
                   domain={[0, (dataMax: number) => (dataMax > 0 ? Math.ceil(dataMax * 1.1) : 500)]}
                   allowDecimals={false}
+                  tickCount={6}
                 />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<ChartTooltip />} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} content={<ChartTooltip />} />
                 {features.map((feature, idx) => (
-                  <Bar key={feature} dataKey={feature} stackId="a" fill={featureColor(feature, idx)} radius={idx === features.length - 1 ? [3, 3, 0, 0] : 0} />
+                  <Bar
+                    key={feature}
+                    dataKey={feature}
+                    stackId="a"
+                    fill={featureColor(feature, idx)}
+                    radius={idx === features.length - 1 ? [2, 2, 0, 0] : 0}
+                  />
                 ))}
               </BarChart>
             </ResponsiveContainer>

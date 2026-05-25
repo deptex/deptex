@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { useBilling } from '../../contexts/PlanContext';
 import {
   Select,
   SelectContent,
@@ -8,7 +7,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
-import { Progress } from '../ui/progress';
 import { DateRangePicker } from './DateRangePicker';
 import { ConsumptionBreakdownChart } from './ConsumptionBreakdownChart';
 import { ProductBreakdownTable } from './ProductBreakdownTable';
@@ -18,7 +16,6 @@ import {
   type ProjectOption,
   type UsageBreakdownResponse,
   type UsageGranularity,
-  featureLabel,
 } from './usage-types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
@@ -67,7 +64,6 @@ function defaultRange(): DateRange {
 }
 
 export function UsageSectionContent({ organizationId }: UsageSectionContentProps) {
-  const { billing } = useBilling();
   const [range, setRange] = useState<DateRange>(defaultRange);
   const [category, setCategory] = useState<FeatureCategory>('all');
   const [subFeature, setSubFeature] = useState<string>('all');
@@ -80,7 +76,6 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset subFeature when category changes so the dropdown stays consistent.
   useEffect(() => {
     setSubFeature('all');
   }, [category]);
@@ -91,7 +86,9 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
       try {
         const res = await authedFetch(`${API_BASE_URL}/api/organizations/${organizationId}/projects`);
         if (!res.ok) return;
-        const body = (await res.json()) as { projects?: Array<{ id: string; name: string }> } | Array<{ id: string; name: string }>;
+        const body = (await res.json()) as
+          | { projects?: Array<{ id: string; name: string }> }
+          | Array<{ id: string; name: string }>;
         const list = Array.isArray(body) ? body : body.projects ?? [];
         if (!cancelled) setProjects(list.map((p) => ({ id: p.id, name: p.name })));
       } catch (err) {
@@ -140,20 +137,14 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
     ? WORKER_FEATURE_OPTIONS
     : null;
 
-  const balanceCents = billing?.balanceCents ?? 0;
-  const totalCents = data?.totalCents ?? 0;
-  const signupGrant = 500;
-  const usedFromGrant = Math.min(totalCents, signupGrant);
-  const grantUsedPct = (usedFromGrant / signupGrant) * 100;
-  const totalDollars = (totalCents / 100).toFixed(2);
-  const balanceDollars = (balanceCents / 100).toFixed(2);
+  const totalDollars = ((data?.totalCents ?? 0) / 100).toFixed(2);
 
   return (
     <div className="space-y-6 pt-8">
       <header>
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Usage</h2>
         <p className="mt-1 text-sm text-foreground-secondary">
-          Itemized billing across AI tokens and worker time.
+          Itemized billing across AI tokens and worker time. Balance and top-ups live on the Plan & Billing tab.
         </p>
       </header>
 
@@ -161,7 +152,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         <DateRangePicker value={range} onChange={setRange} />
 
         <Select value={category} onValueChange={(v) => setCategory(v as FeatureCategory)}>
-          <SelectTrigger className="h-9 min-w-[180px]">
+          <SelectTrigger className="h-9 min-w-[160px]">
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
@@ -175,7 +166,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
 
         {subFeatureOptions && (
           <Select value={subFeature} onValueChange={setSubFeature}>
-            <SelectTrigger className="h-9 min-w-[180px]">
+            <SelectTrigger className="h-9 min-w-[160px]">
               <SelectValue placeholder="Feature" />
             </SelectTrigger>
             <SelectContent>
@@ -189,7 +180,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         )}
 
         <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger className="h-9 min-w-[180px]">
+          <SelectTrigger className="h-9 min-w-[160px]">
             <SelectValue placeholder="Project" />
           </SelectTrigger>
           <SelectContent>
@@ -201,26 +192,10 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
             ))}
           </SelectContent>
         </Select>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-border bg-background-card p-6">
-          <p className="text-xs uppercase tracking-wider text-foreground-secondary">Spend in range</p>
-          <p className="mt-2 text-3xl font-semibold tracking-tight text-foreground">${totalDollars}</p>
-          <p className="mt-1 text-xs text-foreground-secondary">
-            {data ? `${data.buckets.reduce((n, b) => n + Object.keys(b.byFeature).length, 0)} events` : '—'}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border bg-background-card p-6">
-          <div className="flex items-baseline justify-between">
-            <p className="text-xs uppercase tracking-wider text-foreground-secondary">Welcome credit used</p>
-            <p className="font-mono text-xs text-foreground-secondary">
-              ${(usedFromGrant / 100).toFixed(2)} / $5.00
-            </p>
-          </div>
-          <p className="mt-2 text-3xl font-semibold tracking-tight text-foreground">${balanceDollars}</p>
-          <p className="mt-1 text-xs text-foreground-secondary">Current balance</p>
-          <Progress value={grantUsedPct} className="mt-3 h-2" />
+        <div className="ml-auto text-right">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-foreground-secondary">Total spend</p>
+          <p className="text-lg font-semibold tabular-nums text-foreground">${totalDollars}</p>
         </div>
       </div>
 
@@ -239,14 +214,10 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         onCumulativeChange={setCumulative}
       />
 
-      <section>
-        <h3 className="mb-3 text-base font-semibold text-foreground">By product</h3>
+      <section className="space-y-3">
+        <h3 className="text-base font-semibold text-foreground">By product</h3>
         <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
       </section>
-
-      <footer className="pt-2 text-xs text-foreground-secondary">
-        {subFeature !== 'all' ? <p>Filtered to: {featureLabel(subFeature)}</p> : null}
-      </footer>
     </div>
   );
 }
