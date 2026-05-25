@@ -147,7 +147,6 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
           <div className="flex items-center justify-end px-3 py-2">
             <Button
               variant="white"
-              size="sm"
               onClick={applyDraft}
               disabled={!draft?.from || !draft?.to}
             >
