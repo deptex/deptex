@@ -277,7 +277,7 @@ async function detectRepoFrameworkCached(
   repoFullName: string,
   defaultBranch: string
 ): Promise<{ framework: string; ecosystem: string }> {
-  const cacheKey = `repo-framework:${repoFullName}:${defaultBranch}`;
+  const cacheKey = `repo-framework:${provider.provider}:${repoFullName}:${defaultBranch}`;
   const cached = await getCached<{ framework: string; ecosystem: string }>(cacheKey);
   if (cached) return cached;
   const result = await detectRepoFramework(provider, repoFullName, defaultBranch);
@@ -1033,10 +1033,8 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
 
     for (const integ of integrations) {
       try {
-        console.log('[REPO-LIST] querying integration:', { id: integ.id, provider: integ.provider, display_name: (integ as any).display_name, metadata: integ.metadata });
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
-        console.log('[REPO-LIST]', integ.provider, 'returned', repos.length, 'repos');
         for (const repo of repos) {
           allRepos.push({
             id: repo.id,
@@ -1051,7 +1049,7 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
           });
         }
       } catch (err: any) {
-        console.warn(`[REPO-LIST] FAILED for ${integ.provider} integration ${integ.id}:`, err.message);
+        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
       }
     }
 
@@ -4034,10 +4032,8 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
 
     for (const integ of integrations) {
       try {
-        console.log('[REPO-LIST] querying integration:', { id: integ.id, provider: integ.provider, display_name: (integ as any).display_name, metadata: integ.metadata });
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
-        console.log('[REPO-LIST]', integ.provider, 'returned', repos.length, 'repos');
         for (const repo of repos) {
           allRepos.push({
             id: repo.id,
@@ -4052,7 +4048,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           });
         }
       } catch (err: any) {
-        console.warn(`[REPO-LIST] FAILED for ${integ.provider} integration ${integ.id}:`, err.message);
+        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
       }
     }
 

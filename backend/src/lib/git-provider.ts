@@ -15,6 +15,7 @@ export interface RepoInfo {
 
 export interface TreeEntry {
   path: string;
+  /** 'tree' (subdirectory), 'blob' (file), or 'submodule' (gitlink). */
   type: string;
 }
 
@@ -31,19 +32,16 @@ export interface GitProvider {
 export class GitHubProvider implements GitProvider {
   readonly provider = 'github' as const;
   private installationId: string;
-  private tokenCache: { token: string; expiresAt: number } | null = null;
 
   constructor(installationId: string) {
     this.installationId = installationId;
   }
 
-  private async getToken(): Promise<string> {
-    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt) {
-      return this.tokenCache.token;
-    }
-    const token = await createInstallationToken(this.installationId);
-    this.tokenCache = { token, expiresAt: Date.now() + 50 * 60 * 1000 };
-    return token;
+  // Installation tokens are cached + deduplicated at module scope in
+  // github.ts (createInstallationToken) so a fresh provider instance per
+  // HTTP request doesn't mint a new token every time.
+  private getToken(): Promise<string> {
+    return createInstallationToken(this.installationId);
   }
 
   async listRepositories(): Promise<RepoInfo[]> {

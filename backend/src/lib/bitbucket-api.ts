@@ -1,30 +1,23 @@
 import type { RepoInfo, TreeEntry, GitProvider } from './git-provider';
 import { supabase } from './supabase';
+import {
+  fetchWithRetry,
+  AuthExpiredError,
+  ProviderError,
+} from './provider-fetch';
 
 const BITBUCKET_API = 'https://api.bitbucket.org/2.0';
 const BITBUCKET_TOKEN_URL = 'https://bitbucket.org/site/oauth2/access_token';
 
-class BitbucketAuthExpiredError extends Error {}
-
-async function bbFetchRaw(token: string, path: string): Promise<Response> {
-  const url = path.startsWith('http') ? path : `${BITBUCKET_API}${path}`;
-  console.log('[BB-DEBUG] bbFetch GET', url, ' tokenPrefix=', token.slice(0, 8) + '...');
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  console.log('[BB-DEBUG] bbFetch response status=', response.status, response.statusText);
-  if (response.status === 401) {
-    const body = await response.text();
-    throw new BitbucketAuthExpiredError(`401: ${body}`);
+/**
+ * The integration row throws this when there's no workspace slug. Atlassian
+ * sunset every cross-workspace listing endpoint in CHANGE-2770 (April 2026),
+ * so an integration without a workspace can no longer enumerate anything.
+ */
+export class BitbucketWorkspaceMissingError extends Error {
+  constructor() {
+    super('Bitbucket integration is missing a workspace slug — reinstall the integration to select a workspace');
   }
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Bitbucket API error (${path}): ${response.status} ${errorText}`);
-  }
-  return response;
 }
 
 export class BitbucketProvider implements GitProvider {
@@ -33,6 +26,7 @@ export class BitbucketProvider implements GitProvider {
   private refreshToken: string | null;
   private integrationId: string | null;
   private workspace: string | undefined;
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(
     accessToken: string,
@@ -46,7 +40,7 @@ export class BitbucketProvider implements GitProvider {
     this.workspace = workspace;
   }
 
-  private async refreshAccessToken(): Promise<void> {
+  private async doRefreshAccessToken(): Promise<void> {
     if (!this.refreshToken || !this.integrationId) {
       throw new Error('Bitbucket token expired and no refresh token / integration id available to refresh');
     }
@@ -55,7 +49,6 @@ export class BitbucketProvider implements GitProvider {
     if (!clientId || !clientSecret) {
       throw new Error('Bitbucket refresh requires BITBUCKET_CLIENT_ID/BITBUCKET_CLIENT_SECRET env');
     }
-    console.log('[BB-DEBUG] refreshing access token for integration', this.integrationId);
     const tokenRes = await fetch(BITBUCKET_TOKEN_URL, {
       method: 'POST',
       headers: {
@@ -67,6 +60,10 @@ export class BitbucketProvider implements GitProvider {
         refresh_token: this.refreshToken,
       }),
     });
+    if (!tokenRes.ok) {
+      const body = await tokenRes.text();
+      throw new ProviderError('bitbucket', tokenRes.status, '/site/oauth2/access_token', body.slice(0, 200));
+    }
     const tokenData = (await tokenRes.json()) as {
       access_token?: string;
       refresh_token?: string;
@@ -87,75 +84,81 @@ export class BitbucketProvider implements GitProvider {
       })
       .eq('id', this.integrationId);
     if (updErr) {
-      console.warn('[BB-DEBUG] failed to persist refreshed Bitbucket token:', updErr.message);
-    } else {
-      console.log('[BB-DEBUG] persisted refreshed token to DB');
+      console.warn('Failed to persist refreshed Bitbucket token:', updErr.message);
     }
   }
 
-  private async bbFetch(path: string): Promise<Response> {
+  private async refreshAccessToken(): Promise<void> {
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this.doRefreshAccessToken().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  private async bbFetch(apiPath: string): Promise<Response> {
+    const doFetch = () =>
+      fetch(apiPath.startsWith('http') ? apiPath : `${BITBUCKET_API}${apiPath}`, {
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'User-Agent': 'Deptex-App',
+        },
+      });
     try {
-      return await bbFetchRaw(this.accessToken, path);
+      return await fetchWithRetry('bitbucket', apiPath, doFetch);
     } catch (err) {
-      if (err instanceof BitbucketAuthExpiredError) {
-        console.log('[BB-DEBUG] 401 received, attempting refresh + retry');
+      if (err instanceof AuthExpiredError) {
         await this.refreshAccessToken();
-        return await bbFetchRaw(this.accessToken, path);
+        return await fetchWithRetry('bitbucket', apiPath, doFetch);
       }
       throw err;
     }
   }
 
   async listRepositories(): Promise<RepoInfo[]> {
-    const repos: RepoInfo[] = [];
-
-    // Bitbucket sunset every cross-workspace listing endpoint
-    // (CHANGE-2770, April 2026). Integrations are now per-workspace and
-    // the workspace slug must be captured at install time.
     if (!this.workspace) {
-      throw new Error('Bitbucket integration is missing a workspace slug — reinstall the integration to select a workspace');
+      throw new BitbucketWorkspaceMissingError();
     }
-    const workspaces: string[] = [this.workspace];
 
-    for (const ws of workspaces) {
-      let url: string | undefined = `/repositories/${encodeURIComponent(ws)}?pagelen=100&sort=-updated_on`;
-      let pageCount = 0;
-      while (url && pageCount < 10) {
-        const res = await this.bbFetch(url);
-        const data = (await res.json()) as {
-          values: Array<{
-            uuid: string;
-            full_name: string;
-            mainbranch?: { name: string };
-            is_private: boolean;
-          }>;
-          next?: string;
-        };
+    const repos: RepoInfo[] = [];
+    let url: string | undefined = `/repositories/${encodeURIComponent(this.workspace)}?pagelen=100&sort=-updated_on`;
+    let pageCount = 0;
+    while (url && pageCount < 50) {
+      const res = await this.bbFetch(url);
+      const data = (await res.json()) as {
+        values: Array<{
+          uuid: string;
+          full_name: string;
+          mainbranch?: { name: string };
+          is_private: boolean;
+        }>;
+        next?: string;
+      };
 
-        console.log('[BB-DEBUG] workspace=', ws, 'page', pageCount, 'returned', data.values.length, 'repos:', JSON.stringify(data.values.map((r) => r.full_name)));
-
-        for (const repo of data.values) {
-          const numericId = Math.abs(hashString(repo.uuid));
-          repos.push({
-            id: numericId,
-            full_name: repo.full_name,
-            default_branch: repo.mainbranch?.name || 'main',
-            private: repo.is_private,
-          });
-        }
-
-        url = data.next;
-        pageCount++;
+      for (const repo of data.values) {
+        // Skip empty repos (no main branch yet); connecting them would queue
+        // an extraction that fails at clone with no actionable error.
+        if (!repo.mainbranch?.name) continue;
+        const numericId = Math.abs(hashString(repo.uuid));
+        repos.push({
+          id: numericId,
+          full_name: repo.full_name,
+          default_branch: repo.mainbranch.name,
+          private: repo.is_private,
+        });
       }
+
+      url = data.next;
+      pageCount++;
     }
-    console.log('[BB-DEBUG] listRepositories DONE. total=', repos.length);
     return repos;
   }
 
   async getFileContent(repo: string, filePath: string, ref: string): Promise<string> {
     const [workspace, repoSlug] = repo.split('/');
+    const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
     const res = await this.bbFetch(
-      `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/${filePath}`
+      `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/${encodedPath}`
     );
     return res.text();
   }
@@ -174,10 +177,12 @@ export class BitbucketProvider implements GitProvider {
       };
 
       for (const entry of data.values) {
-        entries.push({
-          path: entry.path,
-          type: entry.type === 'commit_directory' ? 'tree' : 'blob',
-        });
+        // Bitbucket: 'commit_directory' = subtree, 'commit_file' = file,
+        // 'commit_submodule' = submodule (gitlink).
+        let type: 'tree' | 'blob' | 'submodule' = 'blob';
+        if (entry.type === 'commit_directory') type = 'tree';
+        else if (entry.type === 'commit_submodule') type = 'submodule';
+        entries.push({ path: entry.path, type });
       }
 
       url = data.next;
@@ -194,10 +199,12 @@ export class BitbucketProvider implements GitProvider {
     const data = (await res.json()) as {
       values: Array<{ path: string; type: string }>;
     };
-    return data.values.map((entry) => ({
-      path: entry.path,
-      type: entry.type === 'commit_directory' ? 'tree' : 'blob',
-    }));
+    return data.values.map((entry) => {
+      let type: 'tree' | 'blob' | 'submodule' = 'blob';
+      if (entry.type === 'commit_directory') type = 'tree';
+      else if (entry.type === 'commit_submodule') type = 'submodule';
+      return { path: entry.path, type };
+    });
   }
 
   getCloneUrl(repo: string): string {

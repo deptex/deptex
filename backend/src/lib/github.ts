@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import {
+  fetchWithRetry,
+  ProviderError,
+  RateLimitedError,
+  AuthExpiredError,
+} from './provider-fetch';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
@@ -17,15 +23,12 @@ const base64Url = (input: Buffer | string) => {
  * Get the GitHub App private key from env var or file path
  */
 function getPrivateKey(): string {
-  // First try direct env var
   if (process.env.GITHUB_APP_PRIVATE_KEY) {
     return process.env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n');
   }
 
-  // Then try file path
   const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
   if (keyPath) {
-    // Resolve relative to backend root (parent of src/lib)
     const resolvedPath = path.resolve(__dirname, '../../', keyPath);
     if (fs.existsSync(resolvedPath)) {
       return fs.readFileSync(resolvedPath, 'utf8');
@@ -66,6 +69,61 @@ export function createGitHubAppJwt(): string {
   return `${unsignedToken}.${base64Url(signature)}`;
 }
 
+/**
+ * Module-scoped installation-token cache so a fresh `GitHubProvider` instance
+ * built per HTTP request doesn't mint a new token every time, and so two
+ * concurrent cold callers de-dupe onto a single mint.
+ *
+ * GitHub installation tokens are valid for 60 minutes; we cache for 45 to
+ * leave headroom for clock skew + request duration.
+ */
+const INSTALLATION_TOKEN_TTL_MS = 45 * 60 * 1000;
+const installationTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const installationTokenInflight = new Map<string, Promise<string>>();
+
+/** Internal: actually hit the GitHub access_tokens endpoint. No caching. */
+async function mintInstallationToken(installationId: string): Promise<string> {
+  const jwt = createGitHubAppJwt();
+  const response = await fetchWithRetry(
+    'github',
+    `/app/installations/${installationId}/access_tokens`,
+    () =>
+      fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'Deptex-App',
+        },
+      }),
+  );
+  const data = (await response.json()) as { token: string };
+  return data.token;
+}
+
+export async function createInstallationToken(installationId: string): Promise<string> {
+  const cached = installationTokenCache.get(installationId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.token;
+  }
+  const existing = installationTokenInflight.get(installationId);
+  if (existing) return existing;
+  const promise = (async () => {
+    try {
+      const token = await mintInstallationToken(installationId);
+      installationTokenCache.set(installationId, {
+        token,
+        expiresAt: Date.now() + INSTALLATION_TOKEN_TTL_MS,
+      });
+      return token;
+    } finally {
+      installationTokenInflight.delete(installationId);
+    }
+  })();
+  installationTokenInflight.set(installationId, promise);
+  return promise;
+}
+
 /** Get installation details including account login and avatar. Uses App JWT. */
 export async function getInstallationAccount(installationId: string): Promise<{ login: string; account_type?: string; avatar_url?: string } | null> {
   const jwt = createGitHubAppJwt();
@@ -84,62 +142,74 @@ export async function getInstallationAccount(installationId: string): Promise<{ 
   return login ? { login, account_type: accountType, avatar_url: avatarUrl } : null;
 }
 
-export async function createInstallationToken(installationId: string): Promise<string> {
-  const jwt = createGitHubAppJwt();
-  const response = await fetch(
-    `${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`,
-    {
-      method: 'POST',
+/**
+ * Shared fetch helper for any API call authed with an installation token.
+ * Wraps every call in the rate-limit-aware retry pipeline. Throws
+ * RateLimitedError / AuthExpiredError / ProviderError so route handlers can
+ * map to user-facing copy without leaking upstream bodies.
+ */
+async function ghFetch(installationToken: string, apiPath: string, init: RequestInit = {}): Promise<Response> {
+  const url = apiPath.startsWith('http') ? apiPath : `${GITHUB_API_BASE}${apiPath}`;
+  return fetchWithRetry('github', apiPath, () =>
+    fetch(url, {
+      ...init,
       headers: {
-        Authorization: `Bearer ${jwt}`,
+        Authorization: `Bearer ${installationToken}`,
         Accept: 'application/vnd.github+json',
         'User-Agent': 'Deptex-App',
+        ...(init.headers || {}),
       },
-    }
+    }),
   );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create installation token: ${response.status} ${errorText}`);
-  }
-
-  const data = (await response.json()) as { token: string };
-  return data.token;
 }
 
 export async function listInstallationRepositories(installationToken: string) {
-  const response = await fetch(`${GITHUB_API_BASE}/installation/repositories?per_page=100`, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to list repositories: ${response.status} ${errorText}`);
+  const repos: Array<{
+    id: number;
+    full_name: string;
+    default_branch: string;
+    private: boolean;
+  }> = [];
+  let page = 1;
+  const perPage = 100;
+  while (page <= 20) {
+    const response = await ghFetch(
+      installationToken,
+      `/installation/repositories?per_page=${perPage}&page=${page}`,
+    );
+    const data = (await response.json()) as {
+      total_count?: number;
+      repositories: Array<{
+        id: number;
+        full_name: string;
+        default_branch: string | null;
+        private: boolean;
+      }>;
+    };
+    for (const r of data.repositories || []) {
+      // Skip empty repos (no default branch yet). Connecting them would
+      // queue an extraction that fails at clone with no actionable error.
+      if (!r.default_branch) continue;
+      repos.push({
+        id: r.id,
+        full_name: r.full_name,
+        default_branch: r.default_branch,
+        private: r.private,
+      });
+    }
+    if (!data.repositories || data.repositories.length < perPage) break;
+    page++;
   }
-
-  const data = (await response.json()) as {
-    repositories: Array<{
-      id: number;
-      full_name: string;
-      default_branch: string;
-      private: boolean;
-    }>;
-  };
-
-  return data.repositories || [];
+  return repos;
 }
 
 export async function getRepositoryFileContent(
   installationToken: string,
   repoFullName: string,
-  path: string,
+  filePath: string,
   ref?: string
 ): Promise<string> {
-  const result = await getRepositoryFileWithSha(installationToken, repoFullName, path, ref);
+  const result = await getRepositoryFileWithSha(installationToken, repoFullName, filePath, ref);
   return result.content;
 }
 
@@ -152,23 +222,13 @@ export async function getRepositoryFileWithSha(
   filePath: string,
   ref?: string
 ): Promise<{ content: string; sha: string }> {
-  const url = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/contents/${filePath}`);
+  const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+  const url = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/contents/${encodedPath}`);
   if (ref) {
     url.searchParams.set('ref', ref);
   }
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to fetch ${filePath}: ${response.status} ${errorText}`);
-  }
+  const response = await ghFetch(installationToken, url.toString());
 
   const data = (await response.json()) as {
     content: string;
@@ -196,19 +256,14 @@ export async function getRepositoryRootContents(
   if (ref) {
     url.searchParams.set('ref', ref);
   }
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to list root contents: ${response.status} ${errorText}`);
-  }
+  const response = await ghFetch(installationToken, url.toString());
   const data = (await response.json()) as Array<{ name: string; path: string; type: string }>;
   return Array.isArray(data) ? data : [];
+}
+
+export interface RecursiveTreeResult {
+  entries: Array<{ path: string; type: string }>;
+  truncated: boolean;
 }
 
 /** Recursive tree (all files/dirs) for monorepo scan. Uses Git Trees API. */
@@ -217,42 +272,45 @@ export async function getRepositoryTreeRecursive(
   repoFullName: string,
   ref: string
 ): Promise<Array<{ path: string; type: string }>> {
+  const result = await getRepositoryTreeRecursiveWithFlag(installationToken, repoFullName, ref);
+  return result.entries;
+}
+
+export async function getRepositoryTreeRecursiveWithFlag(
+  installationToken: string,
+  repoFullName: string,
+  ref: string
+): Promise<RecursiveTreeResult> {
   const commitSha = await getBranchSha(installationToken, repoFullName, ref);
-  const commitUrl = `${GITHUB_API_BASE}/repos/${repoFullName}/git/commits/${commitSha}`;
-  const commitRes = await fetch(commitUrl, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  if (!commitRes.ok) {
-    const errorText = await commitRes.text();
-    throw new Error(`Failed to get commit: ${commitRes.status} ${errorText}`);
-  }
+  const commitRes = await ghFetch(
+    installationToken,
+    `/repos/${repoFullName}/git/commits/${commitSha}`,
+  );
   const commitData = (await commitRes.json()) as { tree: { sha: string } };
   const treeSha = commitData.tree?.sha;
   if (!treeSha) {
     throw new Error('Commit has no tree');
   }
-  const treeUrl = `${GITHUB_API_BASE}/repos/${repoFullName}/git/trees/${treeSha}?recursive=1`;
-  const treeRes = await fetch(treeUrl, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  if (!treeRes.ok) {
-    const errorText = await treeRes.text();
-    throw new Error(`Failed to get tree: ${treeRes.status} ${errorText}`);
-  }
+  const treeRes = await ghFetch(
+    installationToken,
+    `/repos/${repoFullName}/git/trees/${treeSha}?recursive=1`,
+  );
   interface TreeResponse {
     tree?: Array<{ path: string; type: string }>;
+    truncated?: boolean;
   }
   const treeData = (await treeRes.json()) as TreeResponse;
   const tree = treeData.tree || [];
-  return tree.map((node) => ({ path: node.path, type: node.type }));
+  // GitHub returns type as 'blob' | 'tree' | 'commit' (the last for submodules).
+  // Map submodule entries to a distinct type so callers can skip them rather
+  // than treating them as regular files.
+  return {
+    entries: tree.map((node) => ({
+      path: node.path,
+      type: node.type === 'tree' ? 'tree' : node.type === 'commit' ? 'submodule' : 'blob',
+    })),
+    truncated: treeData.truncated === true,
+  };
 }
 
 /**
@@ -265,19 +323,14 @@ export async function cloneRepository(
   branch: string,
   targetDir: string
 ): Promise<void> {
-  // Dynamic import to avoid requiring simple-git in the main backend
   const simpleGit = await import('simple-git');
   const git = simpleGit.default(targetDir);
 
-  // Construct GitHub clone URL with token
-  // Format: https://x-access-token:TOKEN@github.com/owner/repo.git
   const repoUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
 
   try {
-    // Clone the repository
     await git.clone(repoUrl, targetDir, ['--branch', branch, '--depth', '1']);
   } catch (error: any) {
-    // If directory already exists or clone fails, try to pull instead
     if (error.message?.includes('already exists')) {
       const existingGit = simpleGit.default(targetDir);
       await existingGit.pull('origin', branch);
@@ -322,7 +375,6 @@ export async function getCommitDiffPublic(
     'User-Agent': 'Deptex-App',
   };
 
-  // Use PAT if available for higher rate limits
   const pat = process.env.GITHUB_PAT;
   if (pat) {
     headers['Authorization'] = `Bearer ${pat}`;
@@ -335,9 +387,9 @@ export async function getCommitDiffPublic(
   if (!response.ok) {
     const errorText = await response.text();
     if (response.status === 403 && errorText.includes('rate limit')) {
-      throw new Error('GitHub API rate limit exceeded. Configure GITHUB_PAT environment variable for higher limits.');
+      throw new RateLimitedError('github', `/repos/${repoFullName}/commits/${sha}`, 60_000, 'public unauthenticated');
     }
-    throw new Error(`Failed to fetch commit diff: ${response.status} ${errorText}`);
+    throw new ProviderError('github', response.status, `/repos/${repoFullName}/commits/${sha}`, errorText.slice(0, 200));
   }
 
   return response.text();
@@ -354,21 +406,10 @@ export async function getCompareChangedFiles(
   headRef: string
 ): Promise<string[]> {
   const comparePath = `${baseRef}...${headRef}`;
-  const response = await fetch(
-    `${GITHUB_API_BASE}/repos/${repoFullName}/compare/${encodeURIComponent(comparePath)}`,
-    {
-      headers: {
-        Authorization: `Bearer ${installationToken}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'Deptex-App',
-      },
-    }
+  const response = await ghFetch(
+    installationToken,
+    `/repos/${repoFullName}/compare/${encodeURIComponent(comparePath)}`,
   );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to compare refs: ${response.status} ${errorText}`);
-  }
 
   const data = (await response.json()) as {
     files?: Array<{ filename?: string; previous_filename?: string }>;
@@ -391,20 +432,8 @@ export async function getBranchSha(
   branch: string
 ): Promise<string> {
   const branchName = branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch;
-  // Ref must be a single path segment; encode so "heads/deptex/bump-x" works
   const refEncoded = encodeURIComponent(`heads/${branchName}`);
-  const url = `${GITHUB_API_BASE}/repos/${repoFullName}/git/ref/${refEncoded}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to get branch ref: ${response.status} ${errorText}`);
-  }
+  const response = await ghFetch(installationToken, `/repos/${repoFullName}/git/ref/${refEncoded}`);
   const data = (await response.json()) as { object: { sha: string } };
   return data.object.sha;
 }

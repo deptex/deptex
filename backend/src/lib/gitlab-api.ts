@@ -1,28 +1,12 @@
 import type { RepoInfo, TreeEntry, GitProvider } from './git-provider';
 import { supabase } from './supabase';
+import {
+  fetchWithRetry,
+  AuthExpiredError,
+  ProviderError,
+} from './provider-fetch';
 
 const GITLAB_API = '/api/v4';
-
-class GitLabAuthExpiredError extends Error {}
-
-async function gitlabFetchRaw(baseUrl: string, token: string, path: string): Promise<Response> {
-  const url = `${baseUrl}${GITLAB_API}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'User-Agent': 'Deptex-App',
-    },
-  });
-  if (response.status === 401) {
-    const body = await response.text();
-    throw new GitLabAuthExpiredError(`401: ${body}`);
-  }
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`GitLab API error (${path}): ${response.status} ${errorText}`);
-  }
-  return response;
-}
 
 export class GitLabProvider implements GitProvider {
   readonly provider = 'gitlab' as const;
@@ -30,6 +14,13 @@ export class GitLabProvider implements GitProvider {
   private refreshToken: string | null;
   private integrationId: string | null;
   private baseUrl: string;
+  /**
+   * Single-flight refresh: if multiple concurrent calls hit a 401, they share
+   * one POST /oauth/token rather than each firing their own. Without this, the
+   * provider rotates the refresh_token on the winner and every loser holds a
+   * stale token → integration permanently dead until reinstall.
+   */
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(
     accessToken: string,
@@ -43,7 +34,7 @@ export class GitLabProvider implements GitProvider {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
-  private async refreshAccessToken(): Promise<void> {
+  private async doRefreshAccessToken(): Promise<void> {
     if (!this.refreshToken || !this.integrationId) {
       throw new Error('GitLab token expired and no refresh token / integration id available to refresh');
     }
@@ -52,7 +43,6 @@ export class GitLabProvider implements GitProvider {
     if (!clientId || !clientSecret) {
       throw new Error('GitLab refresh requires GITLAB_CLIENT_ID/GITLAB_CLIENT_SECRET env');
     }
-    console.log('[GL-DEBUG] refreshing access token for integration', this.integrationId);
     const tokenRes = await fetch(`${this.baseUrl}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -63,6 +53,10 @@ export class GitLabProvider implements GitProvider {
         grant_type: 'refresh_token',
       }),
     });
+    if (!tokenRes.ok) {
+      const body = await tokenRes.text();
+      throw new ProviderError('gitlab', tokenRes.status, '/oauth/token', body.slice(0, 200));
+    }
     const tokenData = (await tokenRes.json()) as {
       access_token?: string;
       refresh_token?: string;
@@ -83,20 +77,32 @@ export class GitLabProvider implements GitProvider {
       })
       .eq('id', this.integrationId);
     if (updErr) {
-      console.warn('[GL-DEBUG] failed to persist refreshed GitLab token:', updErr.message);
-    } else {
-      console.log('[GL-DEBUG] persisted refreshed token to DB');
+      console.warn('Failed to persist refreshed GitLab token:', updErr.message);
     }
   }
 
-  private async gitlabFetch(path: string): Promise<Response> {
+  private async refreshAccessToken(): Promise<void> {
+    if (this.refreshPromise) return this.refreshPromise;
+    this.refreshPromise = this.doRefreshAccessToken().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  private async gitlabFetch(apiPath: string): Promise<Response> {
+    const doFetch = () =>
+      fetch(`${this.baseUrl}${GITLAB_API}${apiPath}`, {
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'User-Agent': 'Deptex-App',
+        },
+      });
     try {
-      return await gitlabFetchRaw(this.baseUrl, this.accessToken, path);
+      return await fetchWithRetry('gitlab', apiPath, doFetch);
     } catch (err) {
-      if (err instanceof GitLabAuthExpiredError) {
-        console.log('[GL-DEBUG] 401 received, attempting refresh + retry');
+      if (err instanceof AuthExpiredError) {
         await this.refreshAccessToken();
-        return await gitlabFetchRaw(this.baseUrl, this.accessToken, path);
+        return await fetchWithRetry('gitlab', apiPath, doFetch);
       }
       throw err;
     }
@@ -108,25 +114,28 @@ export class GitLabProvider implements GitProvider {
     const perPage = 100;
     while (true) {
       const res = await this.gitlabFetch(
-        `/projects?membership=true&min_access_level=20&per_page=${perPage}&page=${page}&order_by=last_activity_at&sort=desc`
+        `/projects?membership=true&min_access_level=30&per_page=${perPage}&page=${page}&order_by=last_activity_at&sort=desc`
       );
       const data = (await res.json()) as Array<{
         id: number;
         path_with_namespace: string;
-        default_branch: string;
+        default_branch: string | null;
         visibility: string;
       }>;
       for (const project of data) {
+        // Skip empty repos (no default branch yet). Connecting them would
+        // queue an extraction that fails at clone with no actionable error.
+        if (!project.default_branch) continue;
         repos.push({
           id: project.id,
           full_name: project.path_with_namespace,
-          default_branch: project.default_branch || 'main',
+          default_branch: project.default_branch,
           private: project.visibility !== 'public',
         });
       }
       if (data.length < perPage) break;
       page++;
-      if (page > 10) break;
+      if (page > 50) break;
     }
     return repos;
   }
@@ -153,7 +162,14 @@ export class GitLabProvider implements GitProvider {
       for (const entry of data) {
         entries.push({
           path: entry.path,
-          type: entry.type === 'tree' ? 'tree' : 'blob',
+          // GitLab returns 'tree' | 'blob' | 'commit' (submodule). Map
+          // submodules to a distinct type so callers can skip them.
+          type:
+            entry.type === 'tree'
+              ? 'tree'
+              : entry.type === 'commit'
+                ? 'submodule'
+                : 'blob',
         });
       }
       if (data.length < perPage) break;
@@ -171,7 +187,12 @@ export class GitLabProvider implements GitProvider {
     const data = (await res.json()) as Array<{ path: string; type: string; name: string }>;
     return data.map((entry) => ({
       path: entry.path,
-      type: entry.type === 'tree' ? 'tree' : 'blob',
+      type:
+        entry.type === 'tree'
+          ? 'tree'
+          : entry.type === 'commit'
+            ? 'submodule'
+            : 'blob',
     }));
   }
 
