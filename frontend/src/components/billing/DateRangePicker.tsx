@@ -97,7 +97,7 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
           type="button"
           className={cn(
             'flex h-9 items-center justify-between gap-2 rounded-md border border-border bg-background-card px-3 text-sm text-foreground',
-            'hover:bg-accent transition-colors',
+            'hover:bg-background-subtle transition-colors',
             'focus:outline-none focus:ring-1 focus:ring-ring',
             'min-w-[230px]',
           )}
@@ -122,8 +122,8 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
                 onClick={() => applyPreset(preset)}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-left text-sm text-foreground transition-colors',
-                  'hover:bg-accent',
-                  value.preset === preset.id && 'bg-accent font-medium',
+                  'hover:bg-background-subtle',
+                  value.preset === preset.id && 'bg-background-subtle font-medium',
                 )}
               >
                 {preset.label}
