@@ -1,18 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../ui/select';
+import { MultiSelect, type MultiSelectOption } from '../ui/multi-select';
+import { FrameworkIcon } from '../framework-icon';
 import { DateRangePicker } from './DateRangePicker';
 import { ConsumptionBreakdownChart } from './ConsumptionBreakdownChart';
 import { ProductBreakdownTable } from './ProductBreakdownTable';
 import {
+  FEATURE_LABEL,
   type DateRange,
-  type FeatureCategory,
   type ProjectOption,
   type UsageBreakdownResponse,
   type UsageGranularity,
@@ -30,26 +25,16 @@ async function authedFetch(input: string, init?: RequestInit) {
   });
 }
 
-const CATEGORY_OPTIONS: Array<{ value: FeatureCategory; label: string }> = [
-  { value: 'all', label: 'All products' },
-  { value: 'ai', label: 'AI usage' },
-  { value: 'workers', label: 'Worker time' },
+const PRODUCT_OPTIONS: MultiSelectOption[] = [
+  { value: 'aegis.chat', label: FEATURE_LABEL['aegis.chat'] },
+  { value: 'rule.generation', label: FEATURE_LABEL['rule.generation'] },
+  { value: 'epd.scoring', label: FEATURE_LABEL['epd.scoring'] },
+  { value: 'depscanner.scan', label: FEATURE_LABEL['depscanner.scan'] },
+  { value: 'depscanner.dast', label: FEATURE_LABEL['depscanner.dast'] },
+  { value: 'depscanner.dast_zap_dry_run', label: FEATURE_LABEL['depscanner.dast_zap_dry_run'] },
+  { value: 'fix-worker.task', label: FEATURE_LABEL['fix-worker.task'] },
 ];
-
-const WORKER_FEATURE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'all', label: 'All workers' },
-  { value: 'depscanner.scan', label: 'Extraction worker' },
-  { value: 'depscanner.dast', label: 'DAST worker' },
-  { value: 'depscanner.dast_zap_dry_run', label: 'DAST probe' },
-  { value: 'fix-worker.task', label: 'Fix worker' },
-];
-
-const AI_FEATURE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'all', label: 'All AI' },
-  { value: 'aegis.chat', label: 'Aegis chat' },
-  { value: 'rule.generation', label: 'Rule generation' },
-  { value: 'epd.scoring', label: 'EPD scoring' },
-];
+const ALL_PRODUCT_VALUES = PRODUCT_OPTIONS.map((o) => o.value);
 
 interface UsageSectionContentProps {
   organizationId: string;
@@ -65,9 +50,9 @@ function defaultRange(): DateRange {
 
 export function UsageSectionContent({ organizationId }: UsageSectionContentProps) {
   const [range, setRange] = useState<DateRange>(defaultRange);
-  const [category, setCategory] = useState<FeatureCategory>('all');
-  const [subFeature, setSubFeature] = useState<string>('all');
-  const [projectId, setProjectId] = useState<string>('all');
+  const [selectedProducts, setSelectedProducts] = useState<string[]>(ALL_PRODUCT_VALUES);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [allProjectsSelected, setAllProjectsSelected] = useState(true);
   const [granularity, setGranularity] = useState<UsageGranularity>('day');
   const [cumulative, setCumulative] = useState(false);
 
@@ -77,20 +62,20 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setSubFeature('all');
-  }, [category]);
-
-  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await authedFetch(`${API_BASE_URL}/api/organizations/${organizationId}/projects`);
         if (!res.ok) return;
         const body = (await res.json()) as
-          | { projects?: Array<{ id: string; name: string }> }
-          | Array<{ id: string; name: string }>;
+          | { projects?: Array<{ id: string; name: string; framework?: string | null }> }
+          | Array<{ id: string; name: string; framework?: string | null }>;
         const list = Array.isArray(body) ? body : body.projects ?? [];
-        if (!cancelled) setProjects(list.map((p) => ({ id: p.id, name: p.name })));
+        const mapped: ProjectOption[] = list.map((p) => ({ id: p.id, name: p.name, framework: p.framework ?? null }));
+        if (!cancelled) {
+          setProjects(mapped);
+          setSelectedProjects(mapped.map((p) => p.id));
+        }
       } catch (err) {
         console.warn('[usage] projects load failed', err);
       }
@@ -100,19 +85,32 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
     };
   }, [organizationId]);
 
+  const projectOptions = useMemo<MultiSelectOption[]>(
+    () =>
+      projects.map((p) => ({
+        value: p.id,
+        label: p.name,
+        icon: <FrameworkIcon frameworkId={p.framework ?? undefined} size={14} className="text-foreground-secondary" />,
+      })),
+    [projects],
+  );
+
   const loadBreakdown = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
         granularity,
-        category,
         cumulative: String(cumulative),
         start: range.start.toISOString(),
         end: range.end.toISOString(),
       });
-      if (subFeature !== 'all') params.set('feature', subFeature);
-      if (projectId !== 'all') params.set('project_id', projectId);
+      if (selectedProducts.length < ALL_PRODUCT_VALUES.length) {
+        params.set('features', selectedProducts.length > 0 ? selectedProducts.join(',') : '__none__');
+      }
+      if (!allProjectsSelected && projects.length > 0) {
+        params.set('project_ids', selectedProjects.length > 0 ? selectedProjects.join(',') : '__none__');
+      }
 
       const res = await authedFetch(
         `${API_BASE_URL}/api/organizations/${organizationId}/billing/usage/breakdown?${params.toString()}`,
@@ -125,17 +123,20 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
     } finally {
       setLoading(false);
     }
-  }, [organizationId, granularity, category, cumulative, range, subFeature, projectId]);
+  }, [
+    organizationId,
+    granularity,
+    cumulative,
+    range,
+    selectedProducts,
+    selectedProjects,
+    allProjectsSelected,
+    projects.length,
+  ]);
 
   useEffect(() => {
     void loadBreakdown();
   }, [loadBreakdown]);
-
-  const subFeatureOptions = category === 'ai'
-    ? AI_FEATURE_OPTIONS
-    : category === 'workers'
-    ? WORKER_FEATURE_OPTIONS
-    : null;
 
   const totalDollars = ((data?.totalCents ?? 0) / 100).toFixed(2);
 
@@ -151,47 +152,38 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
       <div className="flex flex-wrap items-center gap-2">
         <DateRangePicker value={range} onChange={setRange} />
 
-        <Select value={category} onValueChange={(v) => setCategory(v as FeatureCategory)}>
-          <SelectTrigger className="h-9 w-[180px]">
-            <SelectValue placeholder="Category" />
-          </SelectTrigger>
-          <SelectContent>
-            {CATEGORY_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <MultiSelect
+          options={PRODUCT_OPTIONS}
+          selected={selectedProducts}
+          onChange={setSelectedProducts}
+          renderLabel={(count, total) =>
+            count === 0
+              ? 'No products'
+              : count === total
+              ? 'All products selected'
+              : `${count} product${count === 1 ? '' : 's'} selected`
+          }
+          triggerClassName="w-[200px]"
+        />
 
-        {subFeatureOptions && (
-          <Select value={subFeature} onValueChange={setSubFeature}>
-            <SelectTrigger className="h-9 w-[180px]">
-              <SelectValue placeholder="Feature" />
-            </SelectTrigger>
-            <SelectContent>
-              {subFeatureOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-
-        <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger className="h-9 w-[180px]">
-            <SelectValue placeholder="Project" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All projects</SelectItem>
-            {projects.map((project) => (
-              <SelectItem key={project.id} value={project.id}>
-                {project.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <MultiSelect
+          options={projectOptions}
+          selected={allProjectsSelected ? projectOptions.map((o) => o.value) : selectedProjects}
+          onChange={(values) => {
+            setSelectedProjects(values);
+            setAllProjectsSelected(values.length === projectOptions.length);
+          }}
+          renderLabel={(count, total) =>
+            total === 0
+              ? 'No projects'
+              : count === 0
+              ? 'No projects'
+              : count === total
+              ? 'All projects selected'
+              : `${count} project${count === 1 ? '' : 's'} selected`
+          }
+          triggerClassName="w-[200px]"
+        />
 
         <div className="ml-auto text-right">
           <p className="text-[10px] font-medium uppercase tracking-wider text-foreground-secondary">Total spend</p>

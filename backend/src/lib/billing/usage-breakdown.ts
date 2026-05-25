@@ -10,7 +10,9 @@ export interface UsageBreakdownInput {
   granularity: UsageGranularity;
   category?: FeatureCategory;
   featureFilter?: string;
+  featureFilters?: string[];
   projectId?: string;
+  projectIds?: string[];
   cumulative?: boolean;
 }
 
@@ -99,10 +101,14 @@ export async function loadUsageBreakdown(input: UsageBreakdownInput): Promise<Us
     .gte('created_at', input.start.toISOString())
     .lte('created_at', input.end.toISOString());
 
-  if (input.featureFilter) {
+  if (input.featureFilters && input.featureFilters.length > 0) {
+    query = query.in('feature', input.featureFilters);
+  } else if (input.featureFilter) {
     query = query.eq('feature', input.featureFilter);
   }
-  if (input.projectId) {
+  if (input.projectIds && input.projectIds.length > 0) {
+    query = query.in('project_id', input.projectIds);
+  } else if (input.projectId) {
     query = query.eq('project_id', input.projectId);
   }
 

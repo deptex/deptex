@@ -28,6 +28,7 @@ export interface UsageBreakdownResponse {
 export interface ProjectOption {
   id: string;
   name: string;
+  framework?: string | null;
 }
 
 export type DateRangePreset = 'last_7d' | 'last_30d' | 'this_month' | 'last_month' | 'last_90d' | 'custom';

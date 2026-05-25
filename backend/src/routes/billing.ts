@@ -246,7 +246,13 @@ router.get('/:id/billing/usage/breakdown', async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'Invalid category' });
   }
   const featureFilter = typeof req.query.feature === 'string' && req.query.feature !== 'all' ? req.query.feature : undefined;
+  const featureFilters = typeof req.query.features === 'string' && req.query.features.length > 0
+    ? req.query.features.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
   const projectId = typeof req.query.project_id === 'string' && req.query.project_id !== 'all' ? req.query.project_id : undefined;
+  const projectIds = typeof req.query.project_ids === 'string' && req.query.project_ids.length > 0
+    ? req.query.project_ids.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
   const cumulative = req.query.cumulative === 'true';
 
   const rangeDays = Math.min(Math.max(Number(req.query.range_days) || 30, 1), 365);
@@ -271,7 +277,9 @@ router.get('/:id/billing/usage/breakdown', async (req: AuthRequest, res) => {
       granularity,
       category,
       featureFilter,
+      featureFilters,
       projectId,
+      projectIds,
       cumulative,
     });
     res.json(result);
