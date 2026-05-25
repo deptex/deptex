@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { MultiSelect, type MultiSelectOption } from '../ui/multi-select';
+import { Skeleton } from '../ui/skeleton';
 import { FrameworkIcon } from '../framework-icon';
 import { DateRangePicker } from './DateRangePicker';
 import { ConsumptionBreakdownChart } from './ConsumptionBreakdownChart';
@@ -60,12 +61,14 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
   const [cumulative, setCumulative] = useState(false);
 
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [data, setData] = useState<UsageBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setProjectsLoading(true);
     (async () => {
       try {
         const res = await authedFetch(`${API_BASE_URL}/api/organizations/${organizationId}/projects`);
@@ -81,6 +84,8 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         }
       } catch (err) {
         console.warn('[usage] projects load failed', err);
+      } finally {
+        if (!cancelled) setProjectsLoading(false);
       }
     })();
     return () => {
@@ -178,7 +183,9 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
             setAllProjectsSelected(values.length === projectOptions.length);
           }}
           renderLabel={(count, total) =>
-            total === 0
+            projectsLoading
+              ? 'Loading projects…'
+              : total === 0
               ? 'No projects'
               : count === 0
               ? 'No projects'
@@ -187,11 +194,18 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
               : `${count} project${count === 1 ? '' : 's'} selected`
           }
           triggerClassName="w-[200px]"
+          disabled={projectsLoading}
+          searchable
+          searchPlaceholder="Search projects…"
         />
 
         <div className="ml-auto text-right">
           <p className="text-[10px] font-medium uppercase tracking-wider text-foreground-secondary">Total spend</p>
-          <p className="text-lg font-semibold tabular-nums text-foreground">${totalDollars}</p>
+          {loading && !data ? (
+            <Skeleton className="ml-auto mt-1 h-6 w-20" />
+          ) : (
+            <p className="text-lg font-semibold tabular-nums text-foreground">${totalDollars}</p>
+          )}
         </div>
       </div>
 

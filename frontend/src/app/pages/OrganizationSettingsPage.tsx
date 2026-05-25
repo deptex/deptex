@@ -620,14 +620,56 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'usage':
       return (
-        <div className="space-y-6">
-          <div>
+        <div className="space-y-6 pt-8">
+          {/* Header */}
+          <div className="space-y-2">
             <div className={`h-8 w-24 ${pulse}`} />
+            <div className={`h-4 w-96 ${pulse}`} />
           </div>
-          <div className="bg-background-card border border-border rounded-lg p-12 flex flex-col items-center justify-center text-center">
-            <div className="h-16 w-16 rounded-full bg-muted animate-pulse mb-4" />
-            <div className={`h-5 w-56 ${pulse} mb-2`} />
-            <div className={`h-4 w-72 ${pulse}`} />
+          {/* Filter row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={`h-9 w-[230px] ${pulse}`} />
+            <div className={`h-9 w-[200px] ${pulse}`} />
+            <div className={`h-9 w-[200px] ${pulse}`} />
+            <div className="ml-auto flex flex-col items-end gap-1">
+              <div className={`h-3 w-20 ${pulse}`} />
+              <div className={`h-6 w-24 ${pulse}`} />
+            </div>
+          </div>
+          {/* Consumption Breakdown card */}
+          <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+            <div className="flex items-center justify-between border-b border-border bg-background-card-header px-5 py-4">
+              <div className={`h-5 w-48 ${pulse}`} />
+              <div className="flex items-center gap-4">
+                <div className={`h-8 w-48 ${pulse}`} />
+                <div className={`h-6 w-24 ${pulse}`} />
+              </div>
+            </div>
+            {/* Chart skeleton */}
+            <div className="h-72 px-2 py-4">
+              <div className="flex h-full items-end gap-1 px-10 pb-6 pt-2">
+                {[42, 55, 38, 71, 48, 62, 35, 58, 67, 51, 44, 73, 60, 49, 65, 56, 41, 68, 53, 47, 60, 52, 64, 45, 70, 58, 49, 63, 55, 50].map((h, i) => (
+                  <div key={i} className={`${pulse} flex-1 rounded-t-sm`} style={{ height: `${h}%` }} />
+                ))}
+              </div>
+            </div>
+            {/* Product table headers */}
+            <div className="grid grid-cols-[2fr_2fr_1fr] items-center gap-4 border-b border-border px-5 pb-3 pt-4">
+              <div className={`h-5 w-20 ${pulse}`} />
+              <div className={`h-5 w-16 ${pulse}`} />
+              <div className={`h-5 w-14 ${pulse} ml-auto`} />
+            </div>
+            {/* Product rows */}
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="grid grid-cols-[2fr_2fr_1fr] items-center gap-4 px-5 py-3">
+                <div className={`h-4 w-32 ${pulse}`} />
+                <div className="flex items-center gap-3">
+                  <div className={`h-4 w-14 ${pulse}`} />
+                  <div className={`h-8 w-24 ${pulse}`} />
+                </div>
+                <div className={`h-4 w-16 ${pulse} ml-auto`} />
+              </div>
+            ))}
           </div>
         </div>
       );

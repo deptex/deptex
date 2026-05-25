@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Checkbox } from '../ui/checkbox';
+import { Skeleton } from '../ui/skeleton';
 import { cn } from '../../lib/utils';
 import { ProductBreakdownTable } from './ProductBreakdownTable';
 import {
@@ -22,7 +23,7 @@ function formatTick(ts: string, granularity: UsageGranularity): string {
     return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
   }
   if (granularity === 'week') {
-    return `wk ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
@@ -46,27 +47,83 @@ interface TooltipPayloadEntry {
   dataKey: string;
   value: number;
   color: string;
+  payload?: { ts?: string };
 }
 
-function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: TooltipPayloadEntry[]; label?: string }) {
-  if (!active || !payload || payload.length === 0) return null;
-  const filtered = payload.filter((p) => p.value > 0);
-  const total = filtered.reduce((sum, p) => sum + p.value, 0);
+function formatTooltipDate(ts: string | undefined, granularity: UsageGranularity): string {
+  if (!ts) return '';
+  const d = new Date(ts + 'T00:00:00Z');
+  if (granularity === 'month') {
+    return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+  if (granularity === 'week') {
+    const end = new Date(d);
+    end.setUTCDate(end.getUTCDate() + 6);
+    const monthFmt = (x: Date) => x.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return `${monthFmt(d)} – ${monthFmt(end)}, ${end.getUTCFullYear()}`;
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatCentsTooltip(cents: number): string {
+  const dollars = cents / 100;
+  if (dollars >= 1) return `$${dollars.toFixed(2)}`;
+  if (dollars >= 0.01) return `$${dollars.toFixed(2)}`;
+  return `$${dollars.toFixed(4)}`;
+}
+
+const SKELETON_BAR_HEIGHTS = [
+  42, 55, 38, 71, 48, 62, 35, 58, 67, 51, 44, 73, 60, 49, 65, 56, 41, 68, 53, 47,
+  60, 52, 64, 45, 70, 58, 49, 63, 55, 50,
+];
+
+function ChartSkeleton() {
   return (
-    <div className="rounded-md border border-border bg-background-card px-3 py-2 text-xs shadow-lg">
-      <p className="font-medium text-foreground">{label}</p>
-      <div className="mt-1 space-y-0.5">
+    <div className="flex h-full items-end gap-1 px-10 pb-6 pt-2">
+      {SKELETON_BAR_HEIGHTS.map((h, i) => (
+        <Skeleton key={i} className="flex-1 rounded-t-sm" style={{ height: `${h}%` }} />
+      ))}
+    </div>
+  );
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  granularity,
+}: {
+  active?: boolean;
+  payload?: TooltipPayloadEntry[];
+  granularity: UsageGranularity;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const filtered = payload.filter((p) => p.value > 0).sort((a, b) => b.value - a.value);
+  if (filtered.length === 0) return null;
+  const total = filtered.reduce((sum, p) => sum + p.value, 0);
+  const ts = payload[0]?.payload?.ts;
+  const dateLabel = formatTooltipDate(ts, granularity);
+
+  return (
+    <div className="min-w-[240px] overflow-hidden rounded-lg border border-border bg-background-card shadow-2xl">
+      <div className="space-y-2 px-4 py-3">
         {filtered.map((p) => (
-          <div key={p.dataKey} className="flex items-center gap-2 text-foreground-secondary">
-            <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: p.color }} />
-            <span className="flex-1">{featureLabel(p.dataKey)}</span>
-            <span className="font-mono text-foreground">${(p.value / 100).toFixed(4)}</span>
+          <div key={p.dataKey} className="flex items-center gap-3">
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: p.color }}
+            />
+            <span className="flex-1 truncate text-sm text-foreground">{featureLabel(p.dataKey)}</span>
+            <span className="font-mono text-sm tabular-nums text-foreground">
+              {formatCentsTooltip(p.value)}
+            </span>
           </div>
         ))}
       </div>
-      <div className="mt-1 flex items-center justify-between border-t border-border pt-1 text-foreground">
-        <span>Total</span>
-        <span className="font-mono">${(total / 100).toFixed(4)}</span>
+      <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+        <span className="text-xs text-foreground-secondary">{dateLabel}</span>
+        <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
+          {formatCentsTooltip(total)}
+        </span>
       </div>
     </div>
   );
@@ -98,9 +155,12 @@ export function ConsumptionBreakdownChart({
     return [...set];
   }, [data]);
 
+  const [hoveredProduct, setHoveredProduct] = useState<string | null>(null);
+  const activeProduct = hoveredProduct;
+
   return (
-    <div className="rounded-lg border border-border bg-background-card">
-      <div className="flex items-center justify-between border-b border-border px-5 py-4">
+    <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+      <div className="flex items-center justify-between border-b border-border bg-background-card-header px-5 py-4">
         <h3 className="text-base font-semibold text-foreground">Consumption Breakdown</h3>
         <div className="flex items-center gap-4">
           <div className="flex rounded-md border border-border bg-background p-0.5">
@@ -137,7 +197,7 @@ export function ConsumptionBreakdownChart({
       </div>
       <div className="relative h-72 px-2 py-4">
         {loading && !data ? (
-          <div className="flex h-full items-center justify-center text-sm text-foreground-secondary">Loading…</div>
+          <ChartSkeleton />
         ) : (
           <>
             <ResponsiveContainer width="100%" height="100%">
@@ -162,16 +222,24 @@ export function ConsumptionBreakdownChart({
                   allowDecimals={false}
                   tickCount={6}
                 />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} content={<ChartTooltip />} />
-                {features.map((feature, idx) => (
-                  <Bar
-                    key={feature}
-                    dataKey={feature}
-                    stackId="a"
-                    fill={featureColor(feature, idx)}
-                    radius={idx === features.length - 1 ? [2, 2, 0, 0] : 0}
-                  />
-                ))}
+                <Tooltip
+                  cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                  content={(props: any) => <ChartTooltip {...props} granularity={granularity} />}
+                />
+                {features.map((feature, idx) => {
+                  const dim = activeProduct !== null && activeProduct !== feature;
+                  return (
+                    <Bar
+                      key={feature}
+                      dataKey={feature}
+                      stackId="a"
+                      fill={featureColor(feature, idx)}
+                      fillOpacity={dim ? 0.15 : 1}
+                      radius={idx === features.length - 1 ? [2, 2, 0, 0] : 0}
+                      isAnimationActive={false}
+                    />
+                  );
+                })}
               </BarChart>
             </ResponsiveContainer>
             {(!data || data.totalCents === 0) && (
@@ -184,7 +252,11 @@ export function ConsumptionBreakdownChart({
           </>
         )}
       </div>
-      <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
+      <ProductBreakdownTable
+        products={data?.products ?? []}
+        loading={loading}
+        onProductHover={setHoveredProduct}
+      />
     </div>
   );
 }
