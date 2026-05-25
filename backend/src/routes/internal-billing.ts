@@ -32,6 +32,7 @@ const MAX_DURATION_SECONDS = 24 * 60 * 60;
 const meterEventSchema = z
   .object({
     organization_id: z.string().uuid(),
+    project_id: z.string().uuid().optional(),
     event_type: z.enum(['ai_tokens', 'worker_minutes']),
     provider: z.enum(['openai', 'anthropic', 'google', 'deepinfra', 'fly']),
     feature: z.string().min(1).max(100),
@@ -105,6 +106,7 @@ router.post('/meter-event', async (req, res) => {
   try {
     const result = await recordMeterEvent({
       organizationId: body.organization_id,
+      projectId: body.project_id,
       eventType: body.event_type,
       provider: body.provider,
       feature: body.feature,

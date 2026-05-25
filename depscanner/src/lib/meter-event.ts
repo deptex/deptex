@@ -13,6 +13,7 @@ export type WorkerJobFeature =
 
 export interface PostWorkerMinutesInput {
   orgId: string;
+  projectId?: string;
   scanJobId: string;
   feature: WorkerJobFeature;
   seconds: number;
@@ -25,7 +26,7 @@ export async function postWorkerMinutesEvent(input: PostWorkerMinutesInput): Pro
   }
   if (!Number.isFinite(input.seconds) || input.seconds <= 0) return;
 
-  const body = {
+  const body: Record<string, unknown> = {
     organization_id: input.orgId,
     event_type: 'worker_minutes',
     provider: 'fly',
@@ -39,6 +40,7 @@ export async function postWorkerMinutesEvent(input: PostWorkerMinutesInput): Pro
     },
     idempotency_key: `depscanner:${input.scanJobId}:final`,
   };
+  if (input.projectId) body.project_id = input.projectId;
 
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -75,6 +77,7 @@ function featureForScanType(type: string): WorkerJobFeature {
 export interface JobTiming {
   jobId: string;
   orgId: string;
+  projectId?: string;
   type: string;
   startedAtMs: number;
   endedAtMs?: number;
@@ -85,6 +88,7 @@ export async function postScanJobMeterEvent(timing: JobTiming): Promise<void> {
   const seconds = Math.max(1, Math.round((endedAt - timing.startedAtMs) / 1000));
   await postWorkerMinutesEvent({
     orgId: timing.orgId,
+    projectId: timing.projectId,
     scanJobId: timing.jobId,
     feature: featureForScanType(timing.type),
     seconds,

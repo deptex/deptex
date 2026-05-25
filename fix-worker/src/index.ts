@@ -147,6 +147,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       await postFixTaskMeterEvent({
         taskId: job.id,
         orgId: fullRow.organization_id,
+        projectId: fullRow.project_id,
         startedAtMs: pipelineStartMs,
       });
     } catch (err) {

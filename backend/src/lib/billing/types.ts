@@ -19,6 +19,10 @@ export interface MeterAttribution {
 
 export interface RecordMeterEventInput {
   organizationId: string;
+  /** Optional — populated for worker events (depscanner.*, fix-worker.task)
+   * where the resource is tied to a project. Aegis chats and EPD scoring
+   * are cross-project, leave null. */
+  projectId?: string;
   eventType: MeterEventType;
   provider: MeterProvider;
   feature: string;

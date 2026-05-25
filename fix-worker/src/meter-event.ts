@@ -9,6 +9,7 @@ const MACHINE_SIZE = process.env.FLY_VM_SIZE_NAME || process.env.FLY_MACHINE_SIZ
 export interface FixTaskTiming {
   taskId: string;
   orgId: string;
+  projectId?: string;
   startedAtMs: number;
   endedAtMs?: number;
 }
@@ -22,7 +23,7 @@ export async function postFixTaskMeterEvent(timing: FixTaskTiming): Promise<void
   const seconds = Math.max(1, Math.round((endedAt - timing.startedAtMs) / 1000));
   if (!Number.isFinite(seconds) || seconds <= 0) return;
 
-  const body = {
+  const body: Record<string, unknown> = {
     organization_id: timing.orgId,
     event_type: 'worker_minutes',
     provider: 'fly',
@@ -36,6 +37,7 @@ export async function postFixTaskMeterEvent(timing: FixTaskTiming): Promise<void
     },
     idempotency_key: `fix-worker:${timing.taskId}:final`,
   };
+  if (timing.projectId) body.project_id = timing.projectId;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {

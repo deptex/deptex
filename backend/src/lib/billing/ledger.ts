@@ -26,6 +26,7 @@ interface DeductBalanceMetadata {
   model_id?: string;
   machine_size?: string;
   idempotency_key: string;
+  project_id?: string;
 }
 
 function buildDeductMetadata(input: RecordMeterEventInput): DeductBalanceMetadata {
@@ -44,6 +45,7 @@ function buildDeductMetadata(input: RecordMeterEventInput): DeductBalanceMetadat
   if (input.attribution?.userId) md.attribution_user_id = input.attribution.userId;
   if (input.attribution?.resourceType) md.attribution_resource_type = input.attribution.resourceType;
   if (input.attribution?.resourceId) md.attribution_resource_id = input.attribution.resourceId;
+  if (input.projectId) md.project_id = input.projectId;
   return md;
 }
 

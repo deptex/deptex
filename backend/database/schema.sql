@@ -176,7 +176,8 @@ CREATE TABLE IF NOT EXISTS public.billing_transactions (
   description text NOT NULL,
   stripe_payment_intent_id text,
   created_by_user_id uuid,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  project_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.container_image_scan_cache (
   image_digest text NOT NULL,
@@ -3726,7 +3727,8 @@ BEGIN
     organization_id, kind, amount_cents, description,
     event_type, provider, feature, quantity, output_quantity, unit,
     cost_cents_cog, attribution_user_id, attribution_resource_type,
-    attribution_resource_id, model_id, machine_size, idempotency_key
+    attribution_resource_id, model_id, machine_size, idempotency_key,
+    project_id
   ) VALUES (
     p_organization_id, 'usage_deduction', -v_amount_rounded, p_description,
     p_event_metadata->>'event_type',
@@ -3741,7 +3743,8 @@ BEGIN
     (p_event_metadata->>'attribution_resource_id')::UUID,
     p_event_metadata->>'model_id',
     p_event_metadata->>'machine_size',
-    p_event_metadata->>'idempotency_key'
+    p_event_metadata->>'idempotency_key',
+    (p_event_metadata->>'project_id')::UUID
   );
 
   RETURN v_current_balance - v_amount_rounded;
@@ -6559,6 +6562,7 @@ ALTER TABLE public.banned_versions ADD CONSTRAINT banned_versions_organization_i
 ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_attribution_user_id_fkey FOREIGN KEY (attribution_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.billing_transactions ADD CONSTRAINT billing_transactions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE public.container_image_scan_cache ADD CONSTRAINT container_image_scan_cache_first_scanned_by_org_id_fkey FOREIGN KEY (first_scanned_by_org_id) REFERENCES organizations(id) ON DELETE SET NULL;
 ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_note_id_fkey FOREIGN KEY (note_id) REFERENCES dependency_notes(id) ON DELETE CASCADE;
 ALTER TABLE public.dependency_note_reactions ADD CONSTRAINT dependency_note_reactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
@@ -6822,6 +6826,7 @@ CREATE INDEX idx_billing_transactions_attribution ON public.billing_transactions
 CREATE INDEX idx_billing_transactions_feature ON public.billing_transactions USING btree (organization_id, feature, created_at DESC) WHERE (feature IS NOT NULL);
 CREATE INDEX idx_billing_transactions_kind ON public.billing_transactions USING btree (organization_id, kind, created_at DESC);
 CREATE INDEX idx_billing_transactions_org_created ON public.billing_transactions USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_billing_transactions_org_project_created ON public.billing_transactions USING btree (organization_id, project_id, created_at DESC) WHERE (project_id IS NOT NULL);
 CREATE INDEX idx_cisc_scanned_at ON public.container_image_scan_cache USING btree (scanned_at);
 CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
 CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);

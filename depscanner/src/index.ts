@@ -156,6 +156,7 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
       await postScanJobMeterEvent({
         jobId: job.id,
         orgId: job.organization_id,
+        projectId: job.project_id,
         type: job.type,
         startedAtMs: jobStartedAt,
       });

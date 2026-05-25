@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
 import { getBalance, listTransactions, listUsageActivity } from '../lib/billing/ledger';
+import { loadUsageBreakdown, type UsageGranularity, type FeatureCategory } from '../lib/billing/usage-breakdown';
 import {
   createPaymentIntent,
   detachPaymentMethod,
@@ -229,6 +230,54 @@ router.get('/:id/billing/transactions', async (req: AuthRequest, res) => {
   } catch (err) {
     console.error('[billing.transactions] failed', err);
     res.status(500).json({ error: 'Failed to load transactions' });
+  }
+});
+
+router.get('/:id/billing/usage/breakdown', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'view_settings');
+  if (!orgId) return;
+
+  const granularity = (req.query.granularity as UsageGranularity) || 'day';
+  if (!['day', 'week', 'month'].includes(granularity)) {
+    return res.status(400).json({ error: 'Invalid granularity' });
+  }
+  const category = (req.query.category as FeatureCategory) || 'all';
+  if (!['all', 'ai', 'workers'].includes(category)) {
+    return res.status(400).json({ error: 'Invalid category' });
+  }
+  const featureFilter = typeof req.query.feature === 'string' && req.query.feature !== 'all' ? req.query.feature : undefined;
+  const projectId = typeof req.query.project_id === 'string' && req.query.project_id !== 'all' ? req.query.project_id : undefined;
+  const cumulative = req.query.cumulative === 'true';
+
+  const rangeDays = Math.min(Math.max(Number(req.query.range_days) || 30, 1), 365);
+  let start: Date;
+  let end: Date;
+  if (typeof req.query.start === 'string' && typeof req.query.end === 'string') {
+    start = new Date(req.query.start);
+    end = new Date(req.query.end);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({ error: 'Invalid start/end' });
+    }
+  } else {
+    end = new Date();
+    start = new Date(end.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+  }
+
+  try {
+    const result = await loadUsageBreakdown({
+      organizationId: orgId,
+      start,
+      end,
+      granularity,
+      category,
+      featureFilter,
+      projectId,
+      cumulative,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[billing.usage.breakdown] failed', err);
+    res.status(500).json({ error: 'Failed to load usage breakdown' });
   }
 });
 
