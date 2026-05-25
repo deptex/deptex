@@ -111,10 +111,10 @@ function CheckboxIndicator({ checked }: { checked: boolean }) {
       aria-hidden
       className={cn(
         'flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors',
-        checked ? 'border-foreground bg-foreground' : 'border-border bg-transparent',
+        checked ? 'border-white bg-white' : 'border-border bg-transparent',
       )}
     >
-      {checked && <Check className="h-3 w-3 text-background" strokeWidth={3} />}
+      {checked && <Check className="h-3 w-3 text-black" strokeWidth={3} />}
     </span>
   );
 }

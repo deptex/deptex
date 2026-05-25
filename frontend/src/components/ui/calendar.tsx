@@ -184,10 +184,10 @@ function CalendarDayButton({
       className={cn(
         'inline-flex h-9 w-9 items-center justify-center p-0 font-normal leading-none',
         'group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-1 group-data-[focused=true]/day:ring-ring',
-        'data-[range-start=true]:rounded-md data-[range-start=true]:bg-foreground data-[range-start=true]:text-background',
-        'data-[range-end=true]:rounded-md data-[range-end=true]:bg-foreground data-[range-end=true]:text-background',
+        'data-[range-start=true]:rounded-md data-[range-start=true]:bg-white data-[range-start=true]:text-black data-[range-start=true]:hover:bg-white',
+        'data-[range-end=true]:rounded-md data-[range-end=true]:bg-white data-[range-end=true]:text-black data-[range-end=true]:hover:bg-white',
         'data-[range-middle=true]:bg-transparent data-[range-middle=true]:text-foreground',
-        'data-[selected-single=true]:bg-foreground data-[selected-single=true]:text-background',
+        'data-[selected-single=true]:bg-white data-[selected-single=true]:text-black data-[selected-single=true]:hover:bg-white',
         '[&>span]:text-xs [&>span]:opacity-70',
         defaultClassNames.day,
         className,

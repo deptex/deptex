@@ -6,7 +6,8 @@ import { DateRangePicker } from './DateRangePicker';
 import { ConsumptionBreakdownChart } from './ConsumptionBreakdownChart';
 import { ProductBreakdownTable } from './ProductBreakdownTable';
 import {
-  FEATURE_LABEL,
+  PRODUCT_GROUPS,
+  regroupBreakdown,
   type DateRange,
   type ProjectOption,
   type UsageBreakdownResponse,
@@ -25,16 +26,19 @@ async function authedFetch(input: string, init?: RequestInit) {
   });
 }
 
-const PRODUCT_OPTIONS: MultiSelectOption[] = [
-  { value: 'aegis.chat', label: FEATURE_LABEL['aegis.chat'] },
-  { value: 'rule.generation', label: FEATURE_LABEL['rule.generation'] },
-  { value: 'epd.scoring', label: FEATURE_LABEL['epd.scoring'] },
-  { value: 'depscanner.scan', label: FEATURE_LABEL['depscanner.scan'] },
-  { value: 'depscanner.dast', label: FEATURE_LABEL['depscanner.dast'] },
-  { value: 'depscanner.dast_zap_dry_run', label: FEATURE_LABEL['depscanner.dast_zap_dry_run'] },
-  { value: 'fix-worker.task', label: FEATURE_LABEL['fix-worker.task'] },
-];
+const PRODUCT_OPTIONS: MultiSelectOption[] = PRODUCT_GROUPS.map((g) => ({
+  value: g.key,
+  label: g.label,
+}));
 const ALL_PRODUCT_VALUES = PRODUCT_OPTIONS.map((o) => o.value);
+
+function expandGroupsToFeatures(groupKeys: string[]): string[] {
+  const out: string[] = [];
+  for (const g of PRODUCT_GROUPS) {
+    if (groupKeys.includes(g.key)) out.push(...g.features);
+  }
+  return out;
+}
 
 interface UsageSectionContentProps {
   organizationId: string;
@@ -106,7 +110,8 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         end: range.end.toISOString(),
       });
       if (selectedProducts.length < ALL_PRODUCT_VALUES.length) {
-        params.set('features', selectedProducts.length > 0 ? selectedProducts.join(',') : '__none__');
+        const expanded = expandGroupsToFeatures(selectedProducts);
+        params.set('features', expanded.length > 0 ? expanded.join(',') : '__none__');
       }
       if (!allProjectsSelected && projects.length > 0) {
         params.set('project_ids', selectedProjects.length > 0 ? selectedProjects.join(',') : '__none__');
@@ -117,7 +122,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
       );
       if (!res.ok) throw new Error(`Failed to load (${res.status})`);
       const body = (await res.json()) as UsageBreakdownResponse;
-      setData(body);
+      setData(regroupBreakdown(body));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load usage');
     } finally {

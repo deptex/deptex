@@ -39,35 +39,123 @@ export interface DateRange {
   preset: DateRangePreset;
 }
 
-export const FEATURE_LABEL: Record<string, string> = {
-  'aegis.chat': 'Aegis chat',
-  'depscanner.scan': 'Repo scan',
-  'depscanner.dast': 'DAST scan',
-  'depscanner.dast_zap_dry_run': 'DAST probe',
-  'fix-worker.task': 'Aegis fix',
-  'rule.generation': 'Rule generation',
-  'epd.scoring': 'EPD scoring',
-};
+// Display groups. The underlying feature_type values get folded into one of
+// these four buckets for the chart, legend, and product table. The MultiSelect
+// also operates on these group keys; when sending to the backend we expand
+// each selected group back to its underlying features.
+export interface ProductGroup {
+  key: string;
+  label: string;
+  features: string[];
+  color: string;
+  eventType: 'ai_tokens' | 'worker_minutes';
+}
+
+export const PRODUCT_GROUPS: ProductGroup[] = [
+  {
+    key: 'scan_machines',
+    label: 'Scan machines',
+    features: ['depscanner.scan', 'depscanner.dast', 'depscanner.dast_zap_dry_run'],
+    color: '#3b82f6',
+    eventType: 'worker_minutes',
+  },
+  {
+    key: 'aegis_tokens',
+    label: 'Aegis tokens',
+    features: ['aegis.chat', 'epd.scoring'],
+    color: '#a78bfa',
+    eventType: 'ai_tokens',
+  },
+  {
+    key: 'rule_generation',
+    label: 'Rule generation',
+    features: ['rule.generation'],
+    color: '#ec4899',
+    eventType: 'ai_tokens',
+  },
+  {
+    key: 'aegis_fix_machines',
+    label: 'Aegis fix machines',
+    features: ['fix-worker.task'],
+    color: '#22c55e',
+    eventType: 'worker_minutes',
+  },
+];
+
+const FEATURE_TO_GROUP_KEY: Record<string, string> = {};
+for (const g of PRODUCT_GROUPS) {
+  for (const f of g.features) FEATURE_TO_GROUP_KEY[f] = g.key;
+}
+
+export function featureToGroupKey(feature: string): string {
+  return FEATURE_TO_GROUP_KEY[feature] ?? feature;
+}
+
+export const FEATURE_LABEL: Record<string, string> = Object.fromEntries(
+  PRODUCT_GROUPS.map((g) => [g.key, g.label]),
+);
 
 export function featureLabel(feature: string): string {
   return FEATURE_LABEL[feature] ?? feature;
 }
 
-// Stable palette per feature for the stacked chart.
-export const FEATURE_COLOR: Record<string, string> = {
-  'aegis.chat': '#a78bfa',          // violet-400
-  'fix-worker.task': '#22c55e',     // emerald-500
-  'depscanner.scan': '#3b82f6',     // blue-500
-  'depscanner.dast': '#f59e0b',     // amber-500
-  'depscanner.dast_zap_dry_run': '#eab308', // yellow-500
-  'rule.generation': '#ec4899',     // pink-500
-  'epd.scoring': '#06b6d4',         // cyan-500
-};
+export const FEATURE_COLOR: Record<string, string> = Object.fromEntries(
+  PRODUCT_GROUPS.map((g) => [g.key, g.color]),
+);
 
 const FALLBACK_COLORS = ['#64748b', '#0ea5e9', '#d946ef', '#10b981', '#f97316'];
 
 export function featureColor(feature: string, index = 0): string {
   return FEATURE_COLOR[feature] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+}
+
+// Re-aggregate a backend UsageBreakdownResponse so every key in byFeature /
+// every product row is a group key. Backend stays feature-level; frontend
+// owns the grouping for display.
+export function regroupBreakdown(data: UsageBreakdownResponse): UsageBreakdownResponse {
+  const regroupedBuckets: UsageBucket[] = data.buckets.map((bucket) => {
+    const byGroup: Record<string, number> = {};
+    for (const [feature, cents] of Object.entries(bucket.byFeature)) {
+      const key = featureToGroupKey(feature);
+      byGroup[key] = (byGroup[key] ?? 0) + cents;
+    }
+    return { ts: bucket.ts, byFeature: byGroup, totalCents: bucket.totalCents };
+  });
+
+  const productsByGroup = new Map<
+    string,
+    { totalCents: number; totalQuantity: number; eventType: ProductRow['eventType']; perBucket: number[] }
+  >();
+  const bucketCount = data.buckets.length;
+  for (const product of data.products) {
+    const key = featureToGroupKey(product.feature);
+    let agg = productsByGroup.get(key);
+    if (!agg) {
+      agg = {
+        totalCents: 0,
+        totalQuantity: 0,
+        eventType: product.eventType,
+        perBucket: new Array(bucketCount).fill(0),
+      };
+      productsByGroup.set(key, agg);
+    }
+    agg.totalCents += product.totalCents;
+    agg.totalQuantity += product.totalQuantity;
+    for (let i = 0; i < bucketCount; i++) {
+      agg.perBucket[i] += product.sparkline[i] ?? 0;
+    }
+  }
+  const products: ProductRow[] = [...productsByGroup.entries()]
+    .map(([key, agg]) => ({
+      feature: key,
+      eventType: agg.eventType,
+      totalCents: agg.totalCents,
+      totalQuantity: agg.totalQuantity,
+      sparkline: agg.perBucket,
+    }))
+    .sort((a, b) => b.totalCents - a.totalCents);
+
+  return { ...data, buckets: regroupedBuckets, products };
 }
 
 export function formatQuantity(eventType: ProductRow['eventType'], quantity: number): string {
