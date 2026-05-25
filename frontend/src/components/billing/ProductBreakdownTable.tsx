@@ -29,46 +29,48 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
   );
 }
 
+const COL_GRID = 'grid grid-cols-[2fr_2fr_1fr] items-center gap-4';
+
 export function ProductBreakdownTable({ products, loading }: ProductBreakdownTableProps) {
-  if (loading && products.length === 0) {
-    return (
-      <div className="p-6 text-sm text-foreground-secondary">Loading…</div>
-    );
-  }
-  if (products.length === 0) {
-    return (
-      <div className="p-6 text-sm text-foreground-secondary">No products billed in this range.</div>
-    );
-  }
   return (
     <div className="overflow-hidden">
-      <div className="border-b border-border px-5 pb-3 pt-4">
+      <div className={`${COL_GRID} border-b border-border px-5 pb-3 pt-4`}>
         <h4 className="text-sm font-semibold text-foreground">Products</h4>
+        <h4 className="text-sm font-semibold text-foreground">Usage</h4>
+        <h4 className="text-right text-sm font-semibold text-foreground">Costs</h4>
       </div>
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-border">
+
+      {loading && products.length === 0 ? (
+        <div className="px-5 py-6 text-sm text-foreground-secondary">Loading…</div>
+      ) : products.length === 0 ? (
+        <div className="px-5 py-6 text-sm text-foreground-secondary">No products billed in this range.</div>
+      ) : (
+        <div className="divide-y divide-border">
           {products.map((product, idx) => {
             const color = featureColor(product.feature, idx);
             return (
-              <tr key={product.feature} className="hover:bg-background-card-hover">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2 text-foreground">
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-                    <span>{featureLabel(product.feature)}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
+              <div
+                key={product.feature}
+                className={`${COL_GRID} px-5 py-3 hover:bg-background-card-hover`}
+              >
+                <div className="flex items-center gap-2 text-foreground">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                  <span>{featureLabel(product.feature)}</span>
+                </div>
+                <div className="flex items-center gap-3">
                   <Sparkline values={product.sparkline} color={color} />
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-foreground-secondary">
-                  {formatQuantity(product.eventType, product.totalQuantity)}
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-foreground">{formatCents(product.totalCents)}</td>
-              </tr>
+                  <span className="font-mono text-sm text-foreground-secondary">
+                    {formatQuantity(product.eventType, product.totalQuantity)}
+                  </span>
+                </div>
+                <div className="text-right font-mono text-sm text-foreground">
+                  {formatCents(product.totalCents)}
+                </div>
+              </div>
             );
           })}
-        </tbody>
-      </table>
+        </div>
+      )}
     </div>
   );
 }
