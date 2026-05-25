@@ -125,36 +125,45 @@ export function ConsumptionBreakdownChart({
           </label>
         </div>
       </div>
-      <div className="h-72 px-2 py-4">
+      <div className="relative h-72 px-2 py-4">
         {loading && !data ? (
           <div className="flex h-full items-center justify-center text-sm text-foreground-secondary">Loading…</div>
-        ) : !data || data.buckets.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-foreground-secondary">
-            No usage in this range.
-          </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-              <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="_label"
-                tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
-                tickLine={false}
-                axisLine={{ stroke: 'hsl(var(--border))' }}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={formatCentsAxis}
-                width={50}
-              />
-              <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<ChartTooltip />} />
-              {features.map((feature, idx) => (
-                <Bar key={feature} dataKey={feature} stackId="a" fill={featureColor(feature, idx)} radius={idx === features.length - 1 ? [3, 3, 0, 0] : 0} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
+          <>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="_label"
+                  tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
+                  tickLine={false}
+                  axisLine={{ stroke: 'hsl(var(--border))' }}
+                  interval="preserveStartEnd"
+                  minTickGap={24}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: 'hsl(var(--foreground-secondary))' }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={formatCentsAxis}
+                  width={50}
+                  domain={[0, (dataMax: number) => (dataMax > 0 ? Math.ceil(dataMax * 1.1) : 500)]}
+                  allowDecimals={false}
+                />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<ChartTooltip />} />
+                {features.map((feature, idx) => (
+                  <Bar key={feature} dataKey={feature} stackId="a" fill={featureColor(feature, idx)} radius={idx === features.length - 1 ? [3, 3, 0, 0] : 0} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+            {(!data || data.totalCents === 0) && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <span className="rounded-full border border-border bg-background-card/80 px-3 py-1 text-xs text-foreground-secondary backdrop-blur-sm">
+                  No usage in this range
+                </span>
+              </div>
+            )}
+          </>
         )}
       </div>
       {features.length > 0 && (
