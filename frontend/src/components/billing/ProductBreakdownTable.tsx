@@ -42,7 +42,7 @@ export function ProductBreakdownTable({ products, loading }: ProductBreakdownTab
   }
   return (
     <div className="overflow-hidden">
-      <div className="px-5 pb-3 pt-4">
+      <div className="border-b border-border px-5 pb-3 pt-4">
         <h4 className="text-sm font-semibold text-foreground">Products</h4>
       </div>
       <table className="w-full text-sm">

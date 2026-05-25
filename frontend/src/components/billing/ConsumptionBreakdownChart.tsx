@@ -184,19 +184,7 @@ export function ConsumptionBreakdownChart({
           </>
         )}
       </div>
-      {features.length > 0 && (
-        <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-border px-5 py-3 text-xs text-foreground-secondary">
-          {features.map((feature, idx) => (
-            <div key={feature} className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: featureColor(feature, idx) }} />
-              <span>{featureLabel(feature)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="border-t border-border">
-        <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
-      </div>
+      <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
     </div>
   );
 }
