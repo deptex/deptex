@@ -4,7 +4,6 @@ import { MultiSelect, type MultiSelectOption } from '../ui/multi-select';
 import { FrameworkIcon } from '../framework-icon';
 import { DateRangePicker } from './DateRangePicker';
 import { ConsumptionBreakdownChart } from './ConsumptionBreakdownChart';
-import { ProductBreakdownTable } from './ProductBreakdownTable';
 import {
   PRODUCT_GROUPS,
   regroupBreakdown,
@@ -210,11 +209,6 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         cumulative={cumulative}
         onCumulativeChange={setCumulative}
       />
-
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold text-foreground">By product</h3>
-        <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
-      </section>
     </div>
   );
 }

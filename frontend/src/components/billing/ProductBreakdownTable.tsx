@@ -32,20 +32,16 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 export function ProductBreakdownTable({ products, loading }: ProductBreakdownTableProps) {
   if (loading && products.length === 0) {
     return (
-      <div className="rounded-lg border border-border bg-background-card p-6 text-sm text-foreground-secondary">
-        Loading…
-      </div>
+      <div className="p-6 text-sm text-foreground-secondary">Loading…</div>
     );
   }
   if (products.length === 0) {
     return (
-      <div className="rounded-lg border border-border bg-background-card p-6 text-sm text-foreground-secondary">
-        No products billed in this range.
-      </div>
+      <div className="p-6 text-sm text-foreground-secondary">No products billed in this range.</div>
     );
   }
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+    <div className="overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-background-card-header text-xs text-foreground-secondary">
           <tr>

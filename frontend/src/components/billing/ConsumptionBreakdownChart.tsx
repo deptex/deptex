@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Checkbox } from '../ui/checkbox';
 import { cn } from '../../lib/utils';
+import { ProductBreakdownTable } from './ProductBreakdownTable';
 import {
   type UsageBreakdownResponse,
   type UsageGranularity,
@@ -120,7 +121,11 @@ export function ConsumptionBreakdownChart({
             ))}
           </div>
           <label className="flex items-center gap-2 text-xs text-foreground-secondary">
-            <Checkbox checked={cumulative} onCheckedChange={(c) => onCumulativeChange(c === true)} />
+            <Checkbox
+              checked={cumulative}
+              onCheckedChange={(c) => onCumulativeChange(c === true)}
+              className="data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black"
+            />
             Cumulative
           </label>
         </div>
@@ -184,6 +189,9 @@ export function ConsumptionBreakdownChart({
           ))}
         </div>
       )}
+      <div className="border-t border-border">
+        <ProductBreakdownTable products={data?.products ?? []} loading={loading} />
+      </div>
     </div>
   );
 }
