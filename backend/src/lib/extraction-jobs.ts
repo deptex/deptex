@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supabase } from './supabase';
 import { startExtractionMachine } from './fly-machines';
 

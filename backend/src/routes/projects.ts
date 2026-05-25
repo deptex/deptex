@@ -285,6 +285,37 @@ async function detectRepoFrameworkCached(
   return result;
 }
 
+/**
+ * Validate package_json_path against path traversal. Allowed: empty string,
+ * or POSIX-relative subdirectory paths like `packages/api`. Rejected: leading
+ * `/`, segments equal to `..`, NUL bytes, backslashes.
+ */
+function isValidPackageJsonPath(input: unknown): input is string {
+  if (typeof input !== 'string') return false;
+  if (input === '') return true;
+  if (input.includes('\0')) return false;
+  if (input.startsWith('/')) return false;
+  if (input.includes('\\')) return false;
+  if (input.split('/').some((seg) => seg === '..')) return false;
+  if (input.length > 512) return false;
+  return true;
+}
+
+/**
+ * Re-resolve a repo's canonical metadata server-side from the integration.
+ * Prevents a caller from spoofing default_branch, repo_id, or provider to
+ * point at a different branch/repo than what they think they're connecting.
+ * Returns null if the integration doesn't have access to that repo.
+ */
+async function resolveRepoFromIntegration(
+  provider: GitProvider,
+  repoFullName: string
+): Promise<{ id: number; full_name: string; default_branch: string; private: boolean } | null> {
+  const repos = await provider.listRepositories();
+  const match = repos.find((r) => r.full_name === repoFullName);
+  return match ?? null;
+}
+
 async function getOrgIntegrations(orgId: string): Promise<OrgIntegration[]> {
   const { data } = await supabase
     .from('organization_integrations')
@@ -1065,13 +1096,15 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, framework: frameworkRaw } = req.body;
+    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, framework: frameworkRaw, repo: repoRaw } = req.body;
 
-    if (!name || typeof name !== 'string') {
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ error: 'Project name is required' });
     }
+    if (name.trim().length > 200) {
+      return res.status(400).json({ error: 'Project name must be 200 characters or fewer' });
+    }
 
-    // Check if user is admin or owner
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -1083,7 +1116,11 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Check if user is admin, owner, or has manage_teams_and_projects permission
+    // Authorize by permission key, not by role name. `owner` is the only role
+    // guaranteed by name; everything else looks up the org_role permissions
+    // bundle. A previous legacy check accepted membership.role === 'admin',
+    // which would inadvertently grant access to any custom role named
+    // "admin" with zero permissions set.
     const { data: orgRole } = await supabase
       .from('organization_roles')
       .select('permissions')
@@ -1093,28 +1130,25 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
 
     const canCreateProjects =
       membership.role === 'owner' ||
-      membership.role === 'admin' ||
       orgRole?.permissions?.manage_teams_and_projects === true;
 
     if (!canCreateProjects) {
       return res.status(403).json({ error: 'You do not have permission to create projects' });
     }
 
-    // Plan limit check: projects
     try {
       const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
       const planCheck = await checkPlanLimit(id, 'projects');
       if (!planCheck.allowed) {
         return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `You've reached the ${planCheck.limit} project limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
+          error: `You've reached the ${planCheck.limit} project limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
+          code: 'plan_limit',
           resource: 'projects', current: planCheck.current, limit: planCheck.limit,
           tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
         });
       }
     } catch (e) { /* fail open if plan-limits module unavailable */ }
 
-    // Validate team_ids if provided
     const teamIdsArray = Array.isArray(team_ids) ? team_ids.filter((tid: any) => tid && typeof tid === 'string') : [];
     if (teamIdsArray.length > 0) {
       const { data: teams, error: teamsError } = await supabase
@@ -1151,6 +1185,64 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
+    // Server-side re-resolve every repo field from the integration. Trusting
+    // the client lets a member with manage_teams_and_projects connect any
+    // repo the integration has access to (not necessarily one the org admin
+    // intended to expose), use an attacker-controlled default_branch, or
+    // traverse out of the repo via package_json_path.
+    type ResolvedRepo = {
+      integration_id: string;
+      provider: 'github' | 'gitlab' | 'bitbucket';
+      installation_id: string;
+      repo_id: number;
+      repo_full_name: string;
+      default_branch: string;
+      package_json_path: string;
+      ecosystem: string;
+      framework: string | null;
+    };
+    let resolvedRepo: ResolvedRepo | null = null;
+    if (repoRaw && typeof repoRaw === 'object') {
+      const reqIntegrationId = typeof repoRaw.integration_id === 'string' ? repoRaw.integration_id : '';
+      const reqRepoFullName = typeof repoRaw.repo_full_name === 'string' ? repoRaw.repo_full_name : '';
+      const reqPackageJsonPath = typeof repoRaw.package_json_path === 'string' ? repoRaw.package_json_path : '';
+      const reqEcosystem = typeof repoRaw.ecosystem === 'string' ? repoRaw.ecosystem : '';
+
+      if (!reqIntegrationId || !reqRepoFullName) {
+        return res.status(400).json({ error: 'repo.integration_id and repo.repo_full_name are required' });
+      }
+      if (!isValidPackageJsonPath(reqPackageJsonPath)) {
+        return res.status(400).json({ error: 'Invalid package_json_path' });
+      }
+      const integ = await getIntegrationById(id, reqIntegrationId);
+      if (!integ) {
+        return res.status(400).json({ error: 'Integration not found or not connected' });
+      }
+      let canonical: { id: number; default_branch: string } | null = null;
+      try {
+        const provider = createProvider(integ);
+        const match = await resolveRepoFromIntegration(provider, reqRepoFullName);
+        if (!match) {
+          return res.status(403).json({ error: 'This integration does not have access to that repository' });
+        }
+        canonical = { id: match.id, default_branch: match.default_branch };
+      } catch (err: any) {
+        console.error('Error resolving repo from integration:', err);
+        return res.status(502).json({ error: 'Could not reach the source-code provider' });
+      }
+      resolvedRepo = {
+        integration_id: integ.id,
+        provider: integ.provider,
+        installation_id: integ.installation_id || integ.id,
+        repo_id: canonical.id,
+        repo_full_name: reqRepoFullName,
+        default_branch: canonical.default_branch,
+        package_json_path: reqPackageJsonPath,
+        ecosystem: reqEcosystem || 'npm',
+        framework: typeof repoRaw.framework === 'string' ? repoRaw.framework : null,
+      };
+    }
+
     const { data: defaultOrgStatus } = await supabase
       .from('organization_statuses')
       .select('id, name, color, is_passing')
@@ -1168,9 +1260,9 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
     };
     if (defaultOrgStatus?.id) insertPayload.status_id = defaultOrgStatus.id;
     if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
-    if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
+    if (resolvedRepo?.framework) insertPayload.framework = resolvedRepo.framework;
+    else if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
 
-    // Create project
     const { data: project, error: projectError } = await supabase
       .from('projects')
       .insert(insertPayload)
@@ -1181,16 +1273,26 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       if (projectError.code === '23505' || projectError.message?.includes('duplicate key')) {
         return res.status(400).json({ error: 'A project with this name already exists' });
       }
-      throw projectError;
+      console.error('Error inserting project row:', projectError);
+      return res.status(500).json({ error: 'Failed to create project' });
     }
 
-    // Create project-team associations
-    // First team in the array is the owner, rest are contributors
+    // Best-effort transactional rollback on downstream failure. FK CASCADE on
+    // project_teams.project_id and project_repositories.project_id means a
+    // single DELETE on projects cleans up everything we inserted.
+    const rollbackProject = async () => {
+      try {
+        await supabase.from('projects').delete().eq('id', project.id);
+      } catch (e) {
+        console.error('Failed to roll back project after downstream failure:', e);
+      }
+    };
+
     if (teamIdsArray.length > 0) {
       const projectTeamInserts = teamIdsArray.map((teamId: string, index: number) => ({
         project_id: project.id,
         team_id: teamId,
-        is_owner: index === 0, // First team is the owner
+        is_owner: index === 0,
       }));
 
       const { error: projectTeamsError } = await supabase
@@ -1198,13 +1300,122 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
         .insert(projectTeamInserts);
 
       if (projectTeamsError) {
-        // Rollback project creation
-        await supabase.from('projects').delete().eq('id', project.id);
-        throw projectTeamsError;
+        console.error('Error inserting project_teams:', projectTeamsError);
+        await rollbackProject();
+        return res.status(500).json({ error: 'Failed to create project' });
       }
     }
 
-    // Get team names for response
+    let repoInfo: { repo_full_name: string; default_branch: string; status: string } | null = null;
+    if (resolvedRepo) {
+      const { error: repoInsertError } = await supabase
+        .from('project_repositories')
+        .insert({
+          project_id: project.id,
+          installation_id: resolvedRepo.installation_id,
+          repo_id: resolvedRepo.repo_id,
+          repo_full_name: resolvedRepo.repo_full_name,
+          default_branch: resolvedRepo.default_branch,
+          package_json_path: resolvedRepo.package_json_path,
+          ecosystem: resolvedRepo.ecosystem,
+          provider: resolvedRepo.provider,
+          integration_id: resolvedRepo.integration_id,
+          status: 'initializing',
+          extraction_step: 'queued',
+          sync_frequency: 'daily',
+        });
+
+      if (repoInsertError) {
+        if (repoInsertError.code === '23505' || repoInsertError.message?.includes('duplicate key')) {
+          await rollbackProject();
+          return res.status(409).json({
+            error: 'This repository is already linked to another project in this organization. Each package in a repo can only be tracked by one project.',
+          });
+        }
+        console.error('Error inserting project_repositories:', repoInsertError);
+        await rollbackProject();
+        return res.status(500).json({ error: 'Failed to create project' });
+      }
+
+      const queueResult = await queueExtractionJob(project.id, id, {
+        repo_full_name: resolvedRepo.repo_full_name,
+        installation_id: resolvedRepo.installation_id,
+        default_branch: resolvedRepo.default_branch,
+        package_json_path: resolvedRepo.package_json_path,
+        ecosystem: resolvedRepo.ecosystem,
+        provider: resolvedRepo.provider,
+        integration_id: resolvedRepo.integration_id,
+      }, { trigger_type: 'initial', started_by_user_id: userId });
+
+      if (!queueResult.success) {
+        console.error('Failed to queue extraction after project create:', queueResult.error);
+        await rollbackProject();
+        return res.status(502).json({ error: 'Failed to queue extraction job' });
+      }
+
+      repoInfo = {
+        repo_full_name: resolvedRepo.repo_full_name,
+        default_branch: resolvedRepo.default_branch,
+        status: 'initializing',
+      };
+
+      if (resolvedRepo.provider === 'gitlab' || resolvedRepo.provider === 'bitbucket') {
+        const integ = await getIntegrationById(id, resolvedRepo.integration_id);
+        const token = integ?.access_token;
+        if (token) {
+          const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+          const secret = generateWebhookSecret();
+          try {
+            if (resolvedRepo.provider === 'gitlab') {
+              const baseUrl = (integ.metadata as any)?.base_url || (integ.metadata as any)?.gitlab_url || 'https://gitlab.com';
+              const { id: hookId } = await registerGitLabWebhook(
+                baseUrl,
+                token,
+                Number(resolvedRepo.repo_id),
+                `${backendUrl}/api/integrations/webhooks/gitlab`,
+                secret
+              );
+              await supabase
+                .from('project_repositories')
+                .update({
+                  webhook_id: String(hookId),
+                  webhook_secret: secret,
+                  webhook_status: 'active',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('project_id', project.id);
+            } else {
+              const [workspace, repoSlug] = resolvedRepo.repo_full_name.split('/');
+              if (workspace && repoSlug) {
+                const { uuid } = await registerBitbucketWebhook(
+                  token,
+                  workspace,
+                  repoSlug,
+                  `${backendUrl}/api/integrations/webhooks/bitbucket`,
+                  secret
+                );
+                await supabase
+                  .from('project_repositories')
+                  .update({
+                    webhook_id: uuid,
+                    webhook_secret: secret,
+                    webhook_status: 'active',
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('project_id', project.id);
+              }
+            }
+          } catch (webhookErr: any) {
+            console.warn('Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+            await supabase
+              .from('project_repositories')
+              .update({ webhook_status: 'failed', updated_at: new Date().toISOString() })
+              .eq('project_id', project.id);
+          }
+        }
+      }
+    }
+
     const teamNames: string[] = [];
     if (teamIdsArray.length > 0) {
       const { data: teams } = await supabase
@@ -1233,21 +1444,25 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       status_id: project.status_id ?? null,
       status_name: defaultOrgStatus?.name ?? null,
       status_color: defaultOrgStatus?.color ?? null,
+      repo: repoInfo,
     };
 
-    // Create activity log
-    await createActivity({
-      organization_id: id,
-      user_id: userId,
-      activity_type: 'project_created',
-      description: `created project "${name.trim()}"`,
-      metadata: {
-        project_name: name.trim(),
-        project_id: project.id,
-        team_ids: teamIdsArray,
-        team_names: teamNames,
-      },
-    });
+    try {
+      await createActivity({
+        organization_id: id,
+        user_id: userId,
+        activity_type: 'project_created',
+        description: `created project "${name.trim()}"`,
+        metadata: {
+          project_name: name.trim(),
+          project_id: project.id,
+          team_ids: teamIdsArray,
+          team_names: teamNames,
+        },
+      });
+    } catch (e) {
+      console.warn('Failed to record project_created activity:', e);
+    }
 
     try {
       await emitEvent({ type: 'project_created', organizationId: id, projectId: project.id, payload: { projectName: name.trim(), teamIds: teamIdsArray }, source: 'system', priority: 'normal' });
@@ -1256,7 +1471,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
     res.status(201).json(formattedProject);
   } catch (error: any) {
     console.error('Error creating project:', error);
-    res.status(500).json({ error: error.message || 'Failed to create project' });
+    res.status(500).json({ error: 'Failed to create project' });
   }
 });
 
@@ -4152,21 +4367,27 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
   }
 });
 
-// POST /api/organizations/:id/projects/:projectId/repositories/connect - Connect a repo (supports all providers)
+// POST /api/organizations/:id/projects/:projectId/repositories/connect
+// Re-connect or change the repo wired to an existing project. The main
+// create-project flow now connects + queues inline via POST /:id/projects;
+// this endpoint is for the "change repo" / "reconnect" case on an existing
+// project where the project row already exists.
 router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthRequest, res) => {
   const { id, projectId } = req.params;
-  const package_json_path = typeof req.body?.package_json_path === 'string' ? req.body.package_json_path : '';
-  console.log(`[EXTRACT] POST connect received: org=${id} project=${projectId} repo=${(req.body && req.body.repo_full_name) || '?'} path=${package_json_path || '(root)'}`);
   try {
     const userId = req.user!.id;
-    const { repo_id, repo_full_name, default_branch, framework, ecosystem, provider: reqProvider, integration_id: reqIntegrationId } = req.body;
+    const { repo_full_name, ecosystem, integration_id: reqIntegrationId } = req.body ?? {};
+    const package_json_path = typeof req.body?.package_json_path === 'string' ? req.body.package_json_path : '';
 
-    if (!repo_id || !repo_full_name || !default_branch) {
-      return res.status(400).json({ error: 'repo_id, repo_full_name, and default_branch are required' });
+    if (typeof repo_full_name !== 'string' || !repo_full_name) {
+      return res.status(400).json({ error: 'repo_full_name is required' });
     }
-
-    const resolvedEcosystem = ecosystem || 'npm';
-    const resolvedProvider = reqProvider || 'github';
+    if (typeof reqIntegrationId !== 'string' || !reqIntegrationId) {
+      return res.status(400).json({ error: 'integration_id is required' });
+    }
+    if (!isValidPackageJsonPath(package_json_path)) {
+      return res.status(400).json({ error: 'Invalid package_json_path' });
+    }
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
@@ -4179,44 +4400,39 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       return res.status(403).json({ error: 'You do not have permission to connect repositories' });
     }
 
-    let installationId: string;
-    let integrationId: string | null = reqIntegrationId || null;
-
-    if (reqIntegrationId) {
-      const integ = await getIntegrationById(id, reqIntegrationId);
-      if (!integ) {
-        return res.status(400).json({ error: 'Integration not found or not connected' });
-      }
-      installationId = integ.installation_id || reqIntegrationId;
-    } else {
-      const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .select('github_installation_id')
-        .eq('id', id)
-        .single();
-      if (orgError || !org?.github_installation_id) {
-        return res.status(400).json({ error: 'No source code integration connected for this organization' });
-      }
-      installationId = org.github_installation_id;
+    const integ = await getIntegrationById(id, reqIntegrationId);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
     }
 
-    const { data: existingLink } = await supabase
-      .from('project_repositories')
-      .select('project_id')
-      .eq('repo_full_name', repo_full_name)
-      .eq('package_json_path', package_json_path)
-      .maybeSingle();
-
-    if (existingLink && existingLink.project_id !== projectId) {
-      return res.status(409).json({
-        error: 'This repository and package path are already linked to another project. Each package in a repo can only be tracked by one project.',
-      });
+    // Re-resolve the canonical repo metadata server-side from the integration.
+    // Trusting the client lets a member spoof repo_id/default_branch/provider
+    // and connect repos the integration shouldn't expose.
+    let canonical: { id: number; default_branch: string } | null = null;
+    try {
+      const provider = createProvider(integ);
+      const match = await resolveRepoFromIntegration(provider, repo_full_name);
+      if (!match) {
+        return res.status(403).json({ error: 'This integration does not have access to that repository' });
+      }
+      canonical = { id: match.id, default_branch: match.default_branch };
+    } catch (err: any) {
+      console.error('Error resolving repo from integration:', err);
+      return res.status(502).json({ error: 'Could not reach the source-code provider' });
     }
 
+    const resolvedEcosystem = typeof ecosystem === 'string' && ecosystem ? ecosystem : 'npm';
+    const resolvedProvider = integ.provider;
+    const installationId = integ.installation_id || integ.id;
+
+    // The partial UNIQUE on scan_jobs(project_id, type) WHERE status IN
+    // ('queued','processing') makes this a hard guard; the pre-check stays as
+    // a friendlier error than the 23505 the INSERT would otherwise return.
     const { data: activeJob } = await supabase
       .from('scan_jobs')
       .select('id')
       .eq('project_id', projectId)
+      .eq('type', 'extraction')
       .in('status', ['queued', 'processing'])
       .maybeSingle();
 
@@ -4230,13 +4446,13 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
         {
           project_id: projectId,
           installation_id: installationId,
-          repo_id: repo_id,
+          repo_id: canonical.id,
           repo_full_name: repo_full_name,
-          default_branch: default_branch,
+          default_branch: canonical.default_branch,
           package_json_path: package_json_path,
           ecosystem: resolvedEcosystem,
           provider: resolvedProvider,
-          integration_id: integrationId,
+          integration_id: integ.id,
           status: 'initializing',
           extraction_step: 'queued',
           extraction_error: null,
@@ -4249,19 +4465,23 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       .single();
 
     if (repoError || !repoRecord) {
-      throw repoError;
+      if (repoError?.code === '23505' || repoError?.message?.includes('duplicate key')) {
+        return res.status(409).json({
+          error: 'This repository is already linked to another project in this organization. Each package in a repo can only be tracked by one project.',
+        });
+      }
+      console.error('Error upserting project_repositories:', repoError);
+      return res.status(500).json({ error: 'Failed to connect repository' });
     }
-
-    console.log(`[EXTRACT] Connect: queuing extraction job for project ${projectId}, repo ${repo_full_name} path=${package_json_path || '(root)'} ecosystem=${resolvedEcosystem} provider=${resolvedProvider}`);
 
     const queueResult = await queueExtractionJob(projectId, id, {
       repo_full_name: repo_full_name,
       installation_id: installationId,
-      default_branch: default_branch,
+      default_branch: canonical.default_branch,
       package_json_path: package_json_path,
       ecosystem: resolvedEcosystem,
       provider: resolvedProvider,
-      integration_id: integrationId ?? undefined,
+      integration_id: integ.id,
     }, { trigger_type: 'initial', started_by_user_id: userId });
 
     if (!queueResult.success) {
@@ -4273,36 +4493,21 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
           updated_at: new Date().toISOString(),
         })
         .eq('project_id', projectId);
-      return res.status(502).json({
-        error: queueResult.error ?? 'Failed to queue extraction job. Set UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN, then run depscanner.',
-      });
+      return res.status(502).json({ error: 'Failed to queue extraction job' });
     }
 
-    if (framework) {
-      await supabase
-        .from('projects')
-        .update({ framework, updated_at: new Date().toISOString() })
-        .eq('id', projectId)
-        .eq('organization_id', id);
-    }
-
-    // Register per-repo webhook for GitLab/Bitbucket so push/PR events are received
-    if (
-      (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') &&
-      integrationId
-    ) {
-      const integ = await getIntegrationById(id, integrationId);
-      const token = integ?.access_token;
+    if (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') {
+      const token = integ.access_token;
       if (token) {
         const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
         const secret = generateWebhookSecret();
         try {
           if (resolvedProvider === 'gitlab') {
-            const baseUrl = (integ.metadata as any)?.base_url || 'https://gitlab.com';
+            const baseUrl = (integ.metadata as any)?.base_url || (integ.metadata as any)?.gitlab_url || 'https://gitlab.com';
             const { id: hookId } = await registerGitLabWebhook(
               baseUrl,
               token,
-              Number(repo_id),
+              canonical.id,
               `${backendUrl}/api/integrations/webhooks/gitlab`,
               secret
             );
@@ -4315,8 +4520,8 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
                 updated_at: new Date().toISOString(),
               })
               .eq('project_id', projectId);
-          } else if (resolvedProvider === 'bitbucket') {
-            const [workspace, repoSlug] = String(repo_full_name).split('/');
+          } else {
+            const [workspace, repoSlug] = repo_full_name.split('/');
             if (workspace && repoSlug) {
               const { uuid } = await registerBitbucketWebhook(
                 token,
@@ -4337,7 +4542,11 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
             }
           }
         } catch (webhookErr: any) {
-          console.warn('[EXTRACT] Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+          console.warn('Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+          await supabase
+            .from('project_repositories')
+            .update({ webhook_status: 'failed', updated_at: new Date().toISOString() })
+            .eq('project_id', projectId);
         }
       }
     }
@@ -4351,7 +4560,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
     });
   } catch (error: any) {
     console.error('Error connecting repository:', error);
-    res.status(500).json({ error: error.message || 'Failed to connect repository' });
+    res.status(500).json({ error: 'Failed to connect repository' });
   }
 });
 
