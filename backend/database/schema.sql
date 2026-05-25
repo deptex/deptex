@@ -5621,6 +5621,22 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.refund_sync_usage(p_org_id uuid)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_new_count INTEGER;
+BEGIN
+  UPDATE organization_plans
+    SET syncs_used = GREATEST(0, syncs_used - 1)
+    WHERE organization_id = p_org_id
+    RETURNING syncs_used INTO v_new_count;
+  RETURN COALESCE(v_new_count, 0);
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.resume_sla_shift_deadlines(p_organization_id uuid, p_pause_duration_seconds integer)
  RETURNS integer
  LANGUAGE plpgsql

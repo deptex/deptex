@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { supabase } from './supabase';
-import { startExtractionMachine } from './fly-machines';
+import { startExtractionMachine, stopFlyMachine, DEPSCANNER_CONFIG } from './fly-machines';
 
 // Extraction job queue — Supabase-based job persistence.
 // Jobs stored in the scan_jobs table (type='extraction'); survives machine crashes.
@@ -195,14 +195,18 @@ export async function queueExtractionJob(
 }
 
 /**
- * Cancel an active extraction job for a project.
+ * Cancel an active extraction job for a project. Also stops the Fly
+ * machine claimed by the job (if any) so cancel isn't purely cosmetic
+ * — the previous behaviour let the worker run to completion burning
+ * billable time after a user clicked Cancel. Refunds the sync slot
+ * since no extraction completed.
  */
 export async function cancelExtractionJob(
   projectId: string
 ): Promise<{ success: boolean; error?: string }> {
   const { data: job } = await supabase
     .from('scan_jobs')
-    .select('id, status')
+    .select('id, status, machine_id, organization_id')
     .eq('project_id', projectId)
     .eq('type', 'extraction')
     .in('status', ['queued', 'processing'])
@@ -250,6 +254,22 @@ export async function cancelExtractionJob(
       updated_at: new Date().toISOString(),
     })
     .eq('project_id', projectId);
+
+  if (job.machine_id) {
+    try {
+      await stopFlyMachine(DEPSCANNER_CONFIG.app, job.machine_id);
+    } catch (e: any) {
+      console.warn(`[EXTRACT] Failed to stop Fly machine ${job.machine_id} on cancel:`, e?.message ?? e);
+    }
+  }
+
+  if (job.organization_id) {
+    try {
+      await supabase.rpc('refund_sync_usage', { p_org_id: job.organization_id });
+    } catch (e: any) {
+      console.warn('[EXTRACT] Failed to refund sync usage on cancel:', e?.message ?? e);
+    }
+  }
 
   return { success: true };
 }

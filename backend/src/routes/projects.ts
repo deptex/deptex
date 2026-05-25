@@ -945,6 +945,12 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
     }
 
+    const rl = await checkRateLimit(`repo-scan:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many scan requests. Try again in a minute.' });
+    }
+
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -1026,6 +1032,12 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { integration_id } = req.query as { integration_id?: string };
 
+    const rl = await checkRateLimit(`repos:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many repository list requests. Try again in a minute.' });
+    }
+
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -1050,7 +1062,12 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'No source code integrations connected for this organization' });
     }
 
-    const allRepos: Array<{
+    // Fan out across providers in parallel so one slow / rate-limited
+    // provider doesn't stretch the user's wait. allSettled gives each
+    // provider an isolated success/failure result so we can surface a
+    // partial response: "GitLab loaded; GitHub is rate-limited" instead
+    // of silently dropping the failing provider with a 200 empty list.
+    type RepoListEntry = {
       id: number;
       full_name: string;
       default_branch: string;
@@ -1060,13 +1077,28 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       provider: string;
       integration_id: string;
       display_name: string;
-    }> = [];
+    };
+    type FailedProvider = {
+      integration_id: string;
+      provider: string;
+      display_name: string;
+      reason: 'rate_limited' | 'auth_expired' | 'workspace_missing' | 'unavailable';
+    };
+    const allRepos: RepoListEntry[] = [];
+    const failedProviders: FailedProvider[] = [];
 
-    for (const integ of integrations) {
-      try {
-        const provider = createProvider(integ);
-        const repos = await provider.listRepositories();
-        for (const repo of repos) {
+    const results = await Promise.allSettled(
+      integrations.map(async (integ) => ({
+        integ,
+        repos: await createProvider(integ).listRepositories(),
+      })),
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const integ = integrations[i];
+      const result = results[i];
+      if (result.status === 'fulfilled') {
+        for (const repo of result.value.repos) {
           allRepos.push({
             id: repo.id,
             full_name: repo.full_name,
@@ -1079,15 +1111,27 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
             display_name: (integ as any).display_name || integ.provider,
           });
         }
-      } catch (err: any) {
-        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
+      } else {
+        const err: any = result.reason;
+        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err?.message ?? err);
+        let reason: FailedProvider['reason'] = 'unavailable';
+        const msg = String(err?.message ?? '');
+        if (err?.constructor?.name === 'RateLimitedError' || /rate.?limit/i.test(msg)) reason = 'rate_limited';
+        else if (err?.constructor?.name === 'AuthExpiredError' || /401|token (expired|refresh failed)/i.test(msg)) reason = 'auth_expired';
+        else if (/workspace slug/i.test(msg)) reason = 'workspace_missing';
+        failedProviders.push({
+          integration_id: integ.id,
+          provider: integ.provider,
+          display_name: (integ as any).display_name || integ.provider,
+          reason,
+        });
       }
     }
 
-    res.json({ repositories: allRepos });
+    res.json({ repositories: allRepos, failedProviders });
   } catch (error: any) {
     console.error('Error fetching organization repositories:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch repositories' });
+    res.status(500).json({ error: 'Failed to fetch repositories' });
   }
 });
 
@@ -1103,6 +1147,12 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
     }
     if (name.trim().length > 200) {
       return res.status(400).json({ error: 'Project name must be 200 characters or fewer' });
+    }
+
+    const rl = await checkRateLimit(`create-project:${userId}`, 10, 300);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 300));
+      return res.status(429).json({ error: 'Too many project creation requests. Try again in a few minutes.' });
     }
 
     const { data: membership, error: membershipError } = await supabase
@@ -4387,6 +4437,12 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
     }
     if (!isValidPackageJsonPath(package_json_path)) {
       return res.status(400).json({ error: 'Invalid package_json_path' });
+    }
+
+    const rl = await checkRateLimit(`connect-repo:${userId}`, 10, 300);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 300));
+      return res.status(429).json({ error: 'Too many connect-repository requests. Try again in a few minutes.' });
     }
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
