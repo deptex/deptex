@@ -97,7 +97,7 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
           type="button"
           className={cn(
             'flex h-9 items-center justify-between gap-2 rounded-md border border-border bg-background-card px-3 text-sm text-foreground',
-            'hover:bg-background-card-hover transition-colors',
+            'hover:bg-accent transition-colors',
             'focus:outline-none focus:ring-1 focus:ring-ring',
             'min-w-[230px]',
           )}
@@ -122,8 +122,8 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
                 onClick={() => applyPreset(preset)}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-left text-sm text-foreground transition-colors',
-                  'hover:bg-background-card-hover',
-                  value.preset === preset.id && 'bg-background-card-hover font-medium',
+                  'hover:bg-accent',
+                  value.preset === preset.id && 'bg-accent font-medium',
                 )}
               >
                 {preset.label}
@@ -137,7 +137,9 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
             selected={draft}
             onSelect={setDraft}
             numberOfMonths={2}
-            defaultMonth={value.start}
+            defaultMonth={addDays(new Date(new Date().getFullYear(), new Date().getMonth(), 1), -1)}
+            endMonth={new Date()}
+            disabled={{ after: new Date() }}
             captionLayout="label"
           />
           <div className="flex items-center justify-between border-t border-border px-3 py-2 text-xs text-foreground-secondary">
