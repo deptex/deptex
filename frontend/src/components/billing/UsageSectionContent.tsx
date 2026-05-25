@@ -152,7 +152,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         <DateRangePicker value={range} onChange={setRange} />
 
         <Select value={category} onValueChange={(v) => setCategory(v as FeatureCategory)}>
-          <SelectTrigger className="h-9 min-w-[160px]">
+          <SelectTrigger className="h-9 w-[180px]">
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
@@ -166,7 +166,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
 
         {subFeatureOptions && (
           <Select value={subFeature} onValueChange={setSubFeature}>
-            <SelectTrigger className="h-9 min-w-[160px]">
+            <SelectTrigger className="h-9 w-[180px]">
               <SelectValue placeholder="Feature" />
             </SelectTrigger>
             <SelectContent>
@@ -180,7 +180,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
         )}
 
         <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger className="h-9 min-w-[160px]">
+          <SelectTrigger className="h-9 w-[180px]">
             <SelectValue placeholder="Project" />
           </SelectTrigger>
           <SelectContent>
