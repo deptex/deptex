@@ -120,7 +120,12 @@ export function ConsumptionBreakdownChart({
               </button>
             ))}
           </div>
-          <label className="flex items-center gap-2 text-xs text-foreground-secondary">
+          <label
+            className={cn(
+              'flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1 text-xs transition-colors',
+              'text-foreground-secondary hover:bg-background-subtle hover:text-foreground',
+            )}
+          >
             <Checkbox
               checked={cumulative}
               onCheckedChange={(c) => onCumulativeChange(c === true)}
