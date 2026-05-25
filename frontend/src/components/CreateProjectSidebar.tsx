@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Check, Lock, Loader2, Save, HelpCircle, ChevronDown } from 'lucide-react';
+import { Plus, Search, Check, Lock, Loader2, Save, HelpCircle, ChevronDown, PackageSearch, Inbox } from 'lucide-react';
 import { api, Team, type Project, type AssetTier, type CiCdConnection, type RepoWithProvider, type OrganizationAssetTier } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../hooks/use-toast';
@@ -77,6 +77,7 @@ export function CreateProjectSidebar({
   const [sidebarSelectedPath, setSidebarSelectedPath] = useState('');
   const [sidebarConnecting, setSidebarConnecting] = useState(false);
   const [sidebarRepoScanError, setSidebarRepoScanError] = useState<string | null>(null);
+  const [sidebarRepoNoManifest, setSidebarRepoNoManifest] = useState(false);
   const [sidebarGitHubDropdownOpen, setSidebarGitHubDropdownOpen] = useState(false);
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [createdProjectName, setCreatedProjectName] = useState('');
@@ -149,6 +150,7 @@ export function CreateProjectSidebar({
     setSidebarRepoScanLoading(null);
     setSidebarRepoScanResult(null);
     setSidebarRepoScanError(null);
+    setSidebarRepoNoManifest(false);
     setSidebarScanLoading(false);
     setSidebarScanResult(null);
     setSidebarSelectedPath('');
@@ -182,6 +184,13 @@ export function CreateProjectSidebar({
     if (!organizationId) return;
     setSidebarReposLoading(true);
     setSidebarReposError(null);
+    setSidebarRepos([]);
+    setSidebarRepoToConnect(null);
+    setSidebarSelectedPath('');
+    setSidebarRepoScanResult(null);
+    setSidebarRepoScanError(null);
+    setSidebarRepoNoManifest(false);
+    setSidebarRepoScanResultsByRepo({});
     try {
       const targetIntegration = integrationId || sidebarSelectedIntegration || undefined;
       const repoData = await api.getOrganizationRepositories(organizationId, targetIntegration);
@@ -203,6 +212,7 @@ export function CreateProjectSidebar({
     setSidebarRepoToConnect(repo);
     setSidebarRepoScanResult(null);
     setSidebarRepoScanError(null);
+    setSidebarRepoNoManifest(false);
     setSidebarSelectedPath('');
     setProjectName(repoNameOnly(repo.full_name));
     if (!organizationId) return;
@@ -210,7 +220,7 @@ export function CreateProjectSidebar({
     try {
       const scanData = await api.getOrganizationRepositoryScan(organizationId, repo.full_name, repo.default_branch, repo.integration_id ?? '');
       if (scanData.potentialProjects.length === 0) {
-        setSidebarRepoScanError('No projects found in this repository.');
+        setSidebarRepoNoManifest(true);
       } else {
         const result: SidebarScanResult = {
           full_name: repo.full_name,
@@ -622,7 +632,7 @@ export function CreateProjectSidebar({
                           (e.target as HTMLInputElement).blur();
                         }
                       }}
-                      className={`w-full pl-9 py-2 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all ${sidebarRepoSearch ? 'pr-14' : 'pr-3'}`}
+                      className={`w-full pl-9 py-2 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors ${sidebarRepoSearch ? 'pr-14' : 'pr-3'}`}
                     />
                     {sidebarRepoSearch && (
                       <button
@@ -651,11 +661,23 @@ export function CreateProjectSidebar({
                     ))}
                   </div>
                 ) : sidebarRepos.length === 0 ? (
-                  <p className="text-sm text-foreground-secondary">No repositories available.</p>
+                  <div className="flex flex-col items-center justify-center text-center py-8">
+                    <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                      <Inbox className="h-5 w-5 text-foreground-secondary" />
+                    </div>
+                    <h3 className="text-sm font-semibold text-foreground mb-1">No repositories available</h3>
+                    <p className="text-sm text-foreground-secondary max-w-md">Make sure the integration has access to at least one repository, then refresh.</p>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {sidebarRepoSearch.trim() && filteredSidebarRepos.length === 0 ? (
-                      <p className="text-sm text-foreground-secondary py-4 text-center">No repositories match your search.</p>
+                      <div className="flex flex-col items-center justify-center text-center py-8">
+                        <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                          <Search className="h-5 w-5 text-foreground-secondary" />
+                        </div>
+                        <h3 className="text-sm font-semibold text-foreground mb-1">No repositories match your search</h3>
+                        <p className="text-sm text-foreground-secondary max-w-md">Try a different search or clear it.</p>
+                      </div>
                     ) : (
                       displayRepos.map((repo) => {
                         const isSelected = sidebarRepoToConnect?.full_name === repo.full_name;
@@ -739,9 +761,26 @@ export function CreateProjectSidebar({
                                   ) : null}
                                 </div>
                               </div>
-                              {isSelected && sidebarRepoScanError && !isLoading && (
+                              {isSelected && !isLoading && (sidebarRepoNoManifest || sidebarRepoScanError) && (
                                 <div className="pl-5 pt-3">
-                                  <div className="rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground-secondary">{sidebarRepoScanError}</div>
+                                  {sidebarRepoNoManifest ? (
+                                    <div className="rounded-lg border border-border bg-background px-4 py-6 flex flex-col items-center text-center">
+                                      <div className="h-10 w-10 rounded-full border border-border bg-background-card flex items-center justify-center mb-3">
+                                        <PackageSearch className="h-5 w-5 text-foreground-secondary" />
+                                      </div>
+                                      <h3 className="text-sm font-semibold text-foreground mb-1">No supported package manifests found</h3>
+                                      <a
+                                        href="/docs/projects"
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs text-foreground-secondary hover:text-foreground underline underline-offset-2 transition-colors"
+                                      >
+                                        Check out our supported frameworks →
+                                      </a>
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground-secondary">{sidebarRepoScanError}</div>
+                                  )}
                                 </div>
                               )}
                             </div>
