@@ -142,10 +142,11 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
             endMonth={new Date()}
             disabled={{ after: new Date() }}
             captionLayout="label"
+            showOutsideDays={false}
           />
           <div className="flex items-center justify-end px-3 py-2">
             <Button
-              variant="green"
+              variant="white"
               size="sm"
               onClick={applyDraft}
               disabled={!draft?.from || !draft?.to}

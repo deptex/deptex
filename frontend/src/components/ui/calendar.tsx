@@ -97,7 +97,7 @@ function Calendar({
           defaultClassNames.week_number,
         ),
         day: cn(
-          'group/day relative aspect-square h-full w-full select-none p-0 text-center',
+          'group/day relative h-9 w-9 select-none p-0 text-center',
           '[&:first-child[data-selected=true]_button]:rounded-l-md',
           '[&:last-child[data-selected=true]_button]:rounded-r-md',
           defaultClassNames.day,
@@ -188,7 +188,7 @@ function CalendarDayButton({
       data-range-end={modifiers.range_end}
       data-range-middle={modifiers.range_middle}
       className={cn(
-        'flex aspect-square h-auto w-full min-w-8 flex-col gap-1 font-normal leading-none',
+        'inline-flex h-9 w-9 items-center justify-center p-0 font-normal leading-none',
         'group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-1 group-data-[focused=true]/day:ring-ring',
         'data-[range-start=true]:rounded-md data-[range-start=true]:rounded-l-md data-[range-start=true]:bg-foreground data-[range-start=true]:text-background',
         'data-[range-end=true]:rounded-md data-[range-end=true]:rounded-r-md data-[range-end=true]:bg-foreground data-[range-end=true]:text-background',
