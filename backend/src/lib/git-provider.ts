@@ -102,7 +102,7 @@ export function createProvider(integration: OrgIntegration): GitProvider {
         throw new Error('GitLab integration missing access_token');
       }
       const gitlabUrl = integration.metadata?.gitlab_url || process.env.GITLAB_URL || 'https://gitlab.com';
-      return new GL(integration.access_token, gitlabUrl);
+      return new GL(integration.access_token, gitlabUrl, integration.refresh_token ?? null, integration.id);
     }
     case 'bitbucket': {
       const { BitbucketProvider: BB } = require('./bitbucket-api');
@@ -110,7 +110,7 @@ export function createProvider(integration: OrgIntegration): GitProvider {
         throw new Error('Bitbucket integration missing access_token');
       }
       const workspace = integration.metadata?.workspace;
-      return new BB(integration.access_token, workspace);
+      return new BB(integration.access_token, workspace, integration.refresh_token ?? null, integration.id);
     }
     default:
       throw new Error(`Unsupported provider: ${integration.provider}`);
