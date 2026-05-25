@@ -119,6 +119,56 @@ Update the fixture's row in `depscanner/test-repos/RESULTS.md` with:
 - `walkthrough_date` (UTC)
 - Performance snapshot in the secondary table.
 
+## Cross-provider smoke (GitLab + Bitbucket)
+
+The per-fixture walkthrough above exercises the GitHub provider path only.
+This section covers a separate one-shot smoke for the **GitLab** and
+**Bitbucket** provider connect/scan flows, using the `express` fixture
+content as a standalone repo (no `package_json_path` monorepo trick).
+
+The scanner itself is already exercised by the 12 GitHub fixtures — what
+this smoke verifies is the per-provider install + repo-list + scan-dispatch
+plumbing, which has its own OAuth flow and route surface
+(`/api/integrations/{gitlab|bitbucket}/install`).
+
+### One-time setup (per provider)
+
+1. **Install the Deptex app** against the provider workspace. In the
+   create-project sidebar, click "Add GitLab" (or "Add Bitbucket") — this
+   kicks off the OAuth/install handshake. Authorize against the deptex
+   prod org.
+2. **Create an empty repo** on the provider — name it
+   `deptex-dogfood-express`. Public or private is fine.
+3. **Push the express fixture content** as the standalone repo content:
+   ```bash
+   mkdir /tmp/dogfood-express && cd /tmp/dogfood-express
+   cp -r /c/Coding/Deptex/depscanner/test-repos/express/. .
+   git init && git add . && git commit -m "feat: dogfood express fixture"
+   git remote add origin <gitlab-or-bitbucket-clone-url>
+   git branch -M main && git push -u origin main
+   ```
+4. **Create a Deptex project**: `dogfood-express-gitlab` (or `-bitbucket`)
+   in the `Vulnerable Projects` team, connect to the new repo, leave
+   `package_json_path` empty (express is at the repo root), set
+   `sync_frequency=manual`.
+
+### Smoke verification
+
+Re-run steps (c) through (g) of the per-fixture walkthrough. The
+`expected.yaml` is the same one the GitHub express fixture uses — the
+fixture content is byte-identical, so findings should match. Use the
+new project's UUID when invoking the harness:
+
+```bash
+cd depscanner
+npm run dogfood:check -- --fixture express --project-id <new-uuid>
+```
+
+Pass on both providers = create-project flow validated across GitHub +
+GitLab + Bitbucket. Failure on either provider is a P0 connect-flow bug
+(scanner already passes against the GitHub express fixture, so a failure
+here isolates to the provider plumbing).
+
 ## `expected.yaml` schema
 
 The harness's contract. Every fixture's `.deptex/expected.yaml` follows

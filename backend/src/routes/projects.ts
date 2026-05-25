@@ -977,7 +977,14 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('Error scanning repository (org-level):', error);
-    res.status(500).json({ error: error.message || 'Failed to scan repository' });
+    const msg = String(error?.message ?? '');
+    // Providers throw 404 when the default branch is missing or the repo has no
+    // commits (GitLab: "404 Tree Not Found"; GitHub/Bitbucket: similar). Treat
+    // it like the no-manifest case so the UI shows one actionable message.
+    if (/404/.test(msg) && /tree|contents|not\s*found/i.test(msg)) {
+      return res.json({ isMonorepo: false, potentialProjects: [] });
+    }
+    res.status(500).json({ error: 'Failed to scan repository' });
   }
 });
 
@@ -1026,8 +1033,10 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
 
     for (const integ of integrations) {
       try {
+        console.log('[REPO-LIST] querying integration:', { id: integ.id, provider: integ.provider, display_name: (integ as any).display_name, metadata: integ.metadata });
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
+        console.log('[REPO-LIST]', integ.provider, 'returned', repos.length, 'repos');
         for (const repo of repos) {
           allRepos.push({
             id: repo.id,
@@ -1042,7 +1051,7 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
           });
         }
       } catch (err: any) {
-        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
+        console.warn(`[REPO-LIST] FAILED for ${integ.provider} integration ${integ.id}:`, err.message);
       }
     }
 
@@ -4025,8 +4034,10 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
 
     for (const integ of integrations) {
       try {
+        console.log('[REPO-LIST] querying integration:', { id: integ.id, provider: integ.provider, display_name: (integ as any).display_name, metadata: integ.metadata });
         const provider = createProvider(integ);
         const repos = await provider.listRepositories();
+        console.log('[REPO-LIST]', integ.provider, 'returned', repos.length, 'repos');
         for (const repo of repos) {
           allRepos.push({
             id: repo.id,
@@ -4041,7 +4052,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           });
         }
       } catch (err: any) {
-        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
+        console.warn(`[REPO-LIST] FAILED for ${integ.provider} integration ${integ.id}:`, err.message);
       }
     }
 
