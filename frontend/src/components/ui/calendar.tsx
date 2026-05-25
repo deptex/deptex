@@ -102,15 +102,9 @@ function Calendar({
           '[&:last-child[data-selected=true]_button]:rounded-r-md',
           defaultClassNames.day,
         ),
-        range_start: cn(
-          'rounded-l-md bg-background-subtle',
-          defaultClassNames.range_start,
-        ),
-        range_middle: cn('rounded-none bg-background-subtle', defaultClassNames.range_middle),
-        range_end: cn(
-          'rounded-r-md bg-background-subtle',
-          defaultClassNames.range_end,
-        ),
+        range_start: cn(defaultClassNames.range_start),
+        range_middle: cn(defaultClassNames.range_middle),
+        range_end: cn(defaultClassNames.range_end),
         today: cn(
           'rounded-md bg-background-subtle text-foreground data-[selected=true]:rounded-none',
           defaultClassNames.today,
@@ -190,9 +184,9 @@ function CalendarDayButton({
       className={cn(
         'inline-flex h-9 w-9 items-center justify-center p-0 font-normal leading-none',
         'group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-1 group-data-[focused=true]/day:ring-ring',
-        'data-[range-start=true]:rounded-md data-[range-start=true]:rounded-l-md data-[range-start=true]:bg-foreground data-[range-start=true]:text-background',
-        'data-[range-end=true]:rounded-md data-[range-end=true]:rounded-r-md data-[range-end=true]:bg-foreground data-[range-end=true]:text-background',
-        'data-[range-middle=true]:rounded-none data-[range-middle=true]:bg-background-subtle data-[range-middle=true]:text-foreground',
+        'data-[range-start=true]:rounded-md data-[range-start=true]:bg-foreground data-[range-start=true]:text-background',
+        'data-[range-end=true]:rounded-md data-[range-end=true]:bg-foreground data-[range-end=true]:text-background',
+        'data-[range-middle=true]:bg-transparent data-[range-middle=true]:text-foreground',
         'data-[selected-single=true]:bg-foreground data-[selected-single=true]:text-background',
         '[&>span]:text-xs [&>span]:opacity-70',
         defaultClassNames.day,
