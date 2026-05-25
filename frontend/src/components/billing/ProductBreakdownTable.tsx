@@ -42,15 +42,10 @@ export function ProductBreakdownTable({ products, loading }: ProductBreakdownTab
   }
   return (
     <div className="overflow-hidden">
+      <div className="px-5 pb-3 pt-4">
+        <h4 className="text-sm font-semibold text-foreground">Products</h4>
+      </div>
       <table className="w-full text-sm">
-        <thead className="bg-background-card-header text-xs text-foreground-secondary">
-          <tr>
-            <th className="px-4 py-2 text-left font-medium">Product</th>
-            <th className="px-4 py-2 text-left font-medium">Trend</th>
-            <th className="px-4 py-2 text-right font-medium">Usage</th>
-            <th className="px-4 py-2 text-right font-medium">Charge</th>
-          </tr>
-        </thead>
         <tbody className="divide-y divide-border">
           {products.map((product, idx) => {
             const color = featureColor(product.feature, idx);
