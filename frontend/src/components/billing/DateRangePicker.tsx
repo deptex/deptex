@@ -4,6 +4,7 @@ import { DateRange as DayPickerRange } from 'react-day-picker';
 import { format } from 'date-fns';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Calendar } from '../ui/calendar';
+import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import type { DateRange, DateRangePreset } from './usage-types';
 
@@ -142,24 +143,15 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
             disabled={{ after: new Date() }}
             captionLayout="label"
           />
-          <div className="flex items-center justify-between border-t border-border px-3 py-2 text-xs text-foreground-secondary">
-            <span>
-              {draft?.from ? format(draft.from, 'MMM d, yyyy') : '—'}
-              {' → '}
-              {draft?.to ? format(draft.to, 'MMM d, yyyy') : '—'}
-            </span>
-            <button
-              type="button"
+          <div className="flex items-center justify-end px-3 py-2">
+            <Button
+              variant="green"
+              size="sm"
               onClick={applyDraft}
               disabled={!draft?.from || !draft?.to}
-              className={cn(
-                'rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground',
-                'hover:bg-primary/90 transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
               Apply
-            </button>
+            </Button>
           </div>
         </div>
       </PopoverContent>
