@@ -162,7 +162,7 @@ PR -> check runs + smart comments + policy engine + PR tracking
 
 ## Depscore
 
-Composite vulnerability priority score. Uses `tierMultiplier` from `organization_asset_tiers` (project's `asset_tier_id`). Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring adds `epd_factor` for execution path dominance.
+Composite vulnerability priority score. Uses `projects.importance` (a numeric scalar in `[0.5, 2.0]`, default `1.0`) multiplied directly into the score as `tierWeight` — no enum, no lookup table. Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring adds `epd_factor` for execution path dominance. (The legacy `asset_tier` enum + `organization_asset_tiers` table were dropped in `phase41_drop_asset_tiers.sql`.)
 
 ---
 
