@@ -19,7 +19,7 @@ import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
 export async function doSemgrep(ctx: PipelineContext): Promise<void> {
-  const { supabase, job, projectId, log, workspaceRoot, runId, assetTier, tierMultiplier } = ctx;
+  const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('semgrep')) {
     await log.warn('semgrep', INSTALL_HINTS.semgrep);
@@ -153,7 +153,7 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
                   metadata: sanitizeMetadata(r.extra?.metadata),
                   code_snippet: codeSnippet,
                   semgrep_fingerprint: r.extra?.fingerprint ?? null,
-                  depscore: calculateSemgrepDepscore({ severity, cweIds, category, assetTier, tierMultiplier }),
+                  depscore: calculateSemgrepDepscore({ severity, cweIds, category, importance }),
                 };
               });
             for (let i = 0; i < findings.length; i += 100) {

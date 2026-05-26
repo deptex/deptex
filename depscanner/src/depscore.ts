@@ -1,9 +1,10 @@
 /**
  * Depscore: context-aware vulnerability score (0–100).
- * Supports both legacy 4-tier enum and custom tier multipliers from organization_asset_tiers.
+ *
+ * Per-project `importance` (numeric, [0.5, 2.0]) is multiplied directly into
+ * the score as `tierWeight`. Replaces the legacy AssetTier enum + custom
+ * organization_asset_tiers multiplier (both dropped in phase41).
  */
-
-export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
 
 export interface DepscoreContext {
   cvss: number;
@@ -11,9 +12,7 @@ export interface DepscoreContext {
   cisaKev: boolean;
   isReachable: boolean;
   reachabilityLevel?: string;
-  assetTier: AssetTier;
-  tierMultiplier?: number;
-  tierRank?: number;
+  importance: number;
   isDirect?: boolean;
   isDevDependency?: boolean;
   isMalicious?: boolean;
@@ -24,8 +23,7 @@ export interface BaseDepscoreContext {
   cvss: number;
   epss: number;
   cisaKev: boolean;
-  assetTier: AssetTier;
-  tierMultiplier?: number;
+  importance: number;
   isDirect?: boolean;
   isDevDependency?: boolean;
   isMalicious?: boolean;
@@ -46,13 +44,6 @@ export const SEVERITY_TO_CVSS: Record<string, number> = {
   low: 2.0,
 };
 
-const TIER_WEIGHT: Record<AssetTier, number> = {
-  CROWN_JEWELS: 1.3,
-  EXTERNAL: 1.1,
-  INTERNAL: 0.9,
-  NON_PRODUCTION: 0.6,
-};
-
 /** Explicit `reachabilityLevel === 'unreachable'` — the extractor confirmed
  * the dep is transitive AND no source file imports it. Drops out of the
  * depscore ranking entirely (still visible in the UI). */
@@ -70,6 +61,11 @@ function packageReputationWeight(score: number | null | undefined): number {
   return 1.0;
 }
 
+function clampImportance(value: number): number {
+  if (!Number.isFinite(value)) return 1.0;
+  return Math.max(0.5, Math.min(2.0, value));
+}
+
 function computeBaseImpactAndMultipliers(ctx: BaseDepscoreContext): { baseImpact: number; threatMultiplier: number; dependencyContextMultiplier: number; tierWeight: number } {
   const cvss = Math.max(0, Math.min(10, ctx.cvss));
   const epss = Math.max(0, Math.min(1, ctx.epss));
@@ -79,7 +75,7 @@ function computeBaseImpactAndMultipliers(ctx: BaseDepscoreContext): { baseImpact
     ? 1.2
     : 0.6 + 0.6 * Math.sqrt(epss);
 
-  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const tierWeight = clampImportance(ctx.importance);
 
   const directnessWeight = ctx.isDirect === false ? 0.75 : 1.0;
   const envWeight = ctx.isDevDependency === true ? 0.4 : 1.0;
@@ -146,15 +142,14 @@ export interface SecretDepscoreContext {
   detectorType: string;
   isVerified: boolean;
   isCurrent: boolean;
-  assetTier: AssetTier;
-  tierMultiplier?: number;
+  importance: number;
 }
 
 export function calculateSecretDepscore(ctx: SecretDepscoreContext): number {
   const base = ctx.isVerified ? 90 : 60;
   const detectorWeight = DETECTOR_TYPE_WEIGHT[ctx.detectorType] ?? 0.6;
   const currentWeight = ctx.isCurrent ? 1.0 : 0.8;
-  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const tierWeight = clampImportance(ctx.importance);
 
   const score = base * detectorWeight * currentWeight * tierWeight;
   return Math.min(100, Math.round(score));
@@ -180,8 +175,7 @@ export interface SemgrepDepscoreContext {
   severity: string;
   cweIds: string[];
   category: string;
-  assetTier: AssetTier;
-  tierMultiplier?: number;
+  importance: number;
 }
 
 export function calculateSemgrepDepscore(ctx: SemgrepDepscoreContext): number {
@@ -202,7 +196,7 @@ export function calculateSemgrepDepscore(ctx: SemgrepDepscoreContext): number {
   // Security category boost
   if (ctx.category === 'security') base += 5;
 
-  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const tierWeight = clampImportance(ctx.importance);
   const score = base * tierWeight;
   return Math.min(100, Math.round(score));
 }
@@ -213,8 +207,7 @@ export interface LicenseDepscoreContext {
   reasons: string[];
   isDirect: boolean;
   isDevDependency: boolean;
-  assetTier: AssetTier;
-  tierMultiplier?: number;
+  importance: number;
 }
 
 export function calculateLicenseDepscore(ctx: LicenseDepscoreContext): number {
@@ -236,7 +229,7 @@ export function calculateLicenseDepscore(ctx: LicenseDepscoreContext): number {
 
   const directWeight = ctx.isDirect ? 1.0 : 0.75;
   const envWeight = ctx.isDevDependency ? 0.4 : 1.0;
-  const tierWeight = ctx.tierMultiplier ?? TIER_WEIGHT[ctx.assetTier];
+  const tierWeight = clampImportance(ctx.importance);
   const score = base * directWeight * envWeight * tierWeight;
   return Math.min(100, Math.round(score));
 }

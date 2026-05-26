@@ -26,12 +26,10 @@ import {
   calculateBaseDepscoreNoReachability,
   calculateDepscore,
   SEVERITY_TO_CVSS,
-  type AssetTier,
 } from '../depscore';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from '../epd';
 import type { PipelineContext } from '../pipeline-types';
 
-const VALID_TIERS: AssetTier[] = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
 
 export async function doReachabilityAndEpd(
   ctx: PipelineContext,
@@ -141,22 +139,16 @@ export async function doReachabilityAndEpd(
       .eq('extraction_run_id', runId);
 
     if (pdvsForRescore && pdvsForRescore.length > 0) {
-      const { data: projForTier } = await supabase
+      const { data: projForImp } = await supabase
         .from('projects')
-        .select('asset_tier, asset_tier_id')
+        .select('importance')
         .eq('id', projectId)
         .single();
-      let rscoreTier: AssetTier = 'EXTERNAL';
-      let rscoreTierMult: number | undefined;
-      const rawTier = (projForTier as any)?.asset_tier;
-      if (rawTier && VALID_TIERS.includes(rawTier)) rscoreTier = rawTier;
-      if ((projForTier as any)?.asset_tier_id) {
-        const { data: td } = await supabase
-          .from('organization_asset_tiers')
-          .select('environmental_multiplier')
-          .eq('id', (projForTier as any).asset_tier_id)
-          .single();
-        if (td?.environmental_multiplier != null) rscoreTierMult = Number(td.environmental_multiplier);
+      let rscoreImportance = 1.0;
+      const rawImp = (projForImp as { importance?: number | string } | null)?.importance;
+      if (rawImp != null) {
+        const parsed = typeof rawImp === 'string' ? Number(rawImp) : rawImp;
+        if (Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 2.0) rscoreImportance = parsed;
       }
       for (const row of pdvsForRescore) {
         const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 4.0) : 4.0);
@@ -164,11 +156,11 @@ export async function doReachabilityAndEpd(
           cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
           isReachable: row.is_reachable ?? false,
           reachabilityLevel: row.reachability_level ?? undefined,
-          assetTier: rscoreTier, tierMultiplier: rscoreTierMult,
+          importance: rscoreImportance,
         });
         const newBase = calculateBaseDepscoreNoReachability({
           cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
-          assetTier: rscoreTier, tierMultiplier: rscoreTierMult,
+          importance: rscoreImportance,
         });
         const { error: rescoreErr } = await supabase.from('project_dependency_vulnerabilities')
           .update({ depscore: newScore, base_depscore_no_reachability: newBase })

@@ -119,7 +119,7 @@ function pushSupabaseResponses() {
     { data: [], error: null },
     { data: [], error: null },
     { data: [{ id: 'pd1', name: 'lodash', version: '4.17.21' }, { id: 'pd2', name: 'express', version: '4.18.0' }], error: null },
-    { data: { asset_tier: 'EXTERNAL' }, error: null },
+    { data: { importance: 1.0 }, error: null },
     { data: [], error: null },
     { data: [], error: null },
     { data: [], error: null },
