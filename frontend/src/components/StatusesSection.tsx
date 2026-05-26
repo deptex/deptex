@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useOutletContext, Link } from 'react-router-dom';
 import { Plus, Lock, Trash2, Loader2, Check, X, Info, Eye, BookOpen, GripVertical } from 'lucide-react';
-import { api, OrganizationStatus, OrganizationAssetTier, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '@/lib/api';
+import { api, OrganizationStatus, OrganizationPolicyChange, ProjectPolicyChangeRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -79,7 +79,7 @@ const COLOR_PRESETS = [
 ];
 const PRESET_HEXES = COLOR_PRESETS.map((p) => p.color);
 
-type SubTab = 'statuses' | 'asset_tiers' | 'status_code' | 'change_history' | 'change_requests';
+type SubTab = 'statuses' | 'status_code' | 'change_history' | 'change_requests';
 
 interface OrganizationContextType {
   organization: { permissions?: { manage_compliance?: boolean; manage_statuses?: boolean }; role?: string } | null;
@@ -94,7 +94,6 @@ export default function StatusesSection() {
   // Drag and drop state for reordering org statuses.
   const [draggedStatusId, setDraggedStatusId] = useState<string | null>(null);
   const [dragPreviewStatuses, setDragPreviewStatuses] = useState<OrganizationStatus[] | null>(null);
-  const [assetTiers, setAssetTiers] = useState<OrganizationAssetTier[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusCodeValue, setStatusCodeValue] = useState('');
   const [statusCodeOriginal, setStatusCodeOriginal] = useState('');
@@ -140,16 +139,8 @@ export default function StatusesSection() {
   const [newStatusPassing, setNewStatusPassing] = useState(false);
   const [addingStatus, setAddingStatus] = useState(false);
 
-  // Add Tier dialog
-  const [addTierOpen, setAddTierOpen] = useState(false);
-  const [newTierName, setNewTierName] = useState('');
-  const [newTierColor, setNewTierColor] = useState('');
-  const [newTierMultiplier, setNewTierMultiplier] = useState('1.0');
-  const [addingTier, setAddingTier] = useState(false);
-
   // Delete in progress (show spinner instead of trash)
   const [deletingStatusId, setDeletingStatusId] = useState<string | null>(null);
-  const [deletingTierId, setDeletingTierId] = useState<string | null>(null);
 
   // Change history
   const [changes, setChanges] = useState<OrganizationPolicyChange[]>([]);
@@ -172,13 +163,11 @@ export default function StatusesSection() {
     if (!orgId) return;
     setLoading(true);
     try {
-      const [statusesData, tiersData, policyCode] = await Promise.all([
+      const [statusesData, policyCode] = await Promise.all([
         api.getOrganizationStatuses(orgId),
-        api.getOrganizationAssetTiers(orgId),
         api.getOrganizationPolicyCode(orgId),
       ]);
       setStatuses(statusesData);
-      setAssetTiers(tiersData);
       const fullCode = policyCode.status_code?.project_status_code || '';
       const body = extractFunctionBody(fullCode, 'projectStatus') ?? DEFAULT_PROJECT_STATUS_BODY;
       setStatusCodeValue(body);
@@ -363,44 +352,6 @@ export default function StatusesSection() {
     }
   };
 
-  const handleAddTier = async () => {
-    if (!orgId || !newTierName.trim()) return;
-    setAddingTier(true);
-    try {
-      const maxRank = assetTiers.length > 0 ? Math.max(...assetTiers.map((t) => t.rank)) : 0;
-      const tier = await api.createOrganizationAssetTier(orgId, {
-        name: newTierName.trim(),
-        color: newTierColor || '#6b7280',
-        environmental_multiplier: parseFloat(newTierMultiplier) || 1.0,
-        rank: maxRank + 10,
-      });
-      setAssetTiers((prev) => [...prev, tier].sort((a, b) => a.rank - b.rank));
-      setNewTierName('');
-      setNewTierColor('');
-      setNewTierMultiplier('1.0');
-      setAddTierOpen(false);
-      toast({ title: 'Asset tier created' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
-      setAddingTier(false);
-    }
-  };
-
-  const handleDeleteTier = async (tierId: string) => {
-    if (!orgId) return;
-    setDeletingTierId(tierId);
-    try {
-      await api.deleteOrganizationAssetTier(orgId, tierId);
-      setAssetTiers((prev) => prev.filter((t) => t.id !== tierId));
-      toast({ title: 'Asset tier deleted' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
-      setDeletingTierId(null);
-    }
-  };
-
   const closeCommitSidebar = useCallback(() => {
     setCommitSidebarVisible(false);
     if (commitSidebarCloseTimeoutRef.current) clearTimeout(commitSidebarCloseTimeoutRef.current);
@@ -507,7 +458,6 @@ export default function StatusesSection() {
 
   const subTabs: { id: SubTab; label: string }[] = [
     { id: 'statuses', label: 'Statuses' },
-    { id: 'asset_tiers', label: 'Asset Tiers' },
     { id: 'status_code', label: 'Status Code' },
     { id: 'change_history', label: 'Change History' },
     { id: 'change_requests', label: 'Change requests' },
@@ -554,15 +504,6 @@ export default function StatusesSection() {
             className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
           >
             Add Status
-          </Button>
-        )}
-        {!loading && subTab === 'asset_tiers' && (
-          <Button
-            onClick={() => setAddTierOpen(true)}
-            disabled={addingTier}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-          >
-            Add Tier
           </Button>
         )}
         {!loading && subTab === 'status_code' && hasManageCompliance && (
@@ -809,186 +750,6 @@ export default function StatusesSection() {
                 </div>
                 <p className="text-sm text-foreground-secondary min-w-0">
                   Define custom statuses for your organization. Your projects will be assigned one of these statuses based on the Status Code.
-                </p>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
-
-      {/* Asset Tiers sub-tab */}
-      {subTab === 'asset_tiers' && (
-        <div>
-          {loading ? (
-            <TableSkeleton title="Asset Tiers" />
-          ) : (
-          <>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-            <div className="px-4 py-2 border-b border-border bg-background-card-header text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
-              Asset Tiers
-            </div>
-            <div className="divide-y divide-border">
-              {[...assetTiers]
-                .sort((a, b) => b.environmental_multiplier - a.environmental_multiplier)
-                .map((tier) => (
-                  <div
-                    key={tier.id}
-                    className="px-4 py-3 flex items-center justify-between group hover:bg-table-hover transition-colors"
-                  >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="text-sm font-medium text-foreground truncate">
-                        {tier.name}
-                      </span>
-                      <span className="text-xs font-mono text-muted-foreground flex-shrink-0">{tier.environmental_multiplier}×</span>
-                      {tier.is_system && <Lock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-                    </div>
-                    <div className="flex items-center justify-end flex-shrink-0 w-36 relative">
-                      <div className={`flex justify-end transition-opacity ${!tier.is_system ? 'group-hover:opacity-0' : ''}`}>
-                        <RoleBadge
-                          role={tier.name}
-                          roleDisplayName={tier.name}
-                          roleColor={tier.color || null}
-                        />
-                      </div>
-                      {!tier.is_system && (
-                        <div className="absolute inset-0 flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => handleDeleteTier(tier.id)}
-                            disabled={deletingTierId === tier.id}
-                            className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                            title="Delete"
-                          >
-                            {deletingTierId === tier.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          {/* Add Tier Dialog */}
-          <Dialog open={addTierOpen} onOpenChange={(open) => { if (!open) { setAddTierOpen(false); setNewTierName(''); setNewTierColor(''); setNewTierMultiplier('1.0'); } }}>
-            <DialogContent className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col" hideClose>
-              <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
-                <DialogTitle>Add Asset Tier</DialogTitle>
-                <DialogDescription className="mt-1">
-                  Create a tier with an environmental multiplier for Depscore calculation.
-                </DialogDescription>
-              </div>
-              <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
-                <div>
-                  <label className="text-sm font-medium text-foreground block mb-2">Name</label>
-                  <Input
-                    value={newTierName}
-                    onChange={(e) => setNewTierName(e.target.value)}
-                    placeholder=""
-                    className="w-full"
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddTier()}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground block mb-2">Color</label>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {COLOR_PRESETS.map(({ color, name }) => (
-                      <Tooltip key={color}>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => setNewTierColor(color)}
-                            disabled={addingTier}
-                            className={`h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center ${newTierColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'}`}
-                            style={{ backgroundColor: color }}
-                          >
-                            {newTierColor === color && <Check className="h-4 w-4 text-white drop-shadow-md" />}
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>{name}</TooltipContent>
-                      </Tooltip>
-                    ))}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="relative">
-                          <input
-                            key={newTierColor || 'empty'}
-                            type="color"
-                            value={newTierColor || '#6b7280'}
-                            onChange={(e) => setNewTierColor(e.target.value)}
-                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full rounded-lg"
-                            disabled={addingTier}
-                          />
-                          <div
-                            className={`h-8 w-8 rounded-lg border-2 cursor-pointer transition-all flex items-center justify-center ${newTierColor && !PRESET_HEXES.includes(newTierColor) ? 'border-white scale-110 shadow-lg' : 'border-dashed border-border hover:border-foreground-secondary/50'}`}
-                            style={{ backgroundColor: newTierColor && !PRESET_HEXES.includes(newTierColor) ? newTierColor : 'transparent' }}
-                          >
-                            {(!newTierColor || PRESET_HEXES.includes(newTierColor)) && <Plus className="h-4 w-4 text-foreground-secondary" />}
-                            {newTierColor && !PRESET_HEXES.includes(newTierColor) && <Check className="h-4 w-4 text-white drop-shadow-md" />}
-                          </div>
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent>Custom color</TooltipContent>
-                    </Tooltip>
-                    {newTierColor ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => setNewTierColor('')}
-                            disabled={addingTier}
-                            className="h-8 w-8 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>Clear color</TooltipContent>
-                      </Tooltip>
-                    ) : null}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-foreground block mb-2">Multiplier</label>
-                  <Input
-                    value={newTierMultiplier}
-                    onChange={(e) => setNewTierMultiplier(e.target.value)}
-                    placeholder="1.0"
-                    className="h-8 w-24"
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    max="3.0"
-                  />
-                </div>
-              </div>
-              <DialogFooter className="px-6 py-4 bg-background">
-                <Button variant="outline" onClick={() => { setAddTierOpen(false); setNewTierName(''); setNewTierColor(''); setNewTierMultiplier('1.0'); }}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleAddTier}
-                  disabled={!newTierName.trim() || addingTier}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                >
-                  {addingTier ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Create Tier
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          </>
-          )}
-          {!loading && (
-            <Card className="rounded-lg border border-border bg-background-card/80 mt-4">
-              <CardContent className="p-4 flex gap-3">
-                <div className="flex-shrink-0 mt-0.5">
-                  <Info className="h-5 w-5 text-foreground-muted" />
-                </div>
-                <p className="text-sm text-foreground-secondary min-w-0">
-                  Define asset tiers for your projects. Tiers set an environmental multiplier used in Depscore and can be referenced in policy (e.g. stricter rules for Crown Jewels).
                 </p>
               </CardContent>
             </Card>

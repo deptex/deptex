@@ -366,7 +366,7 @@ export default function NotificationRulesSection({ organizationId = '', projectI
     const lib = w.monaco.languages.typescript.javascriptDefaults.addExtraLib(`
       declare const context: {
         event: { type: string; timestamp: string; source: string };
-        project: { id: string; name: string; asset_tier: string; health_score: number; status: string; status_is_passing: boolean; dependencies_count: number; team_name: string | null };
+        project: { id: string; name: string; importance: number; health_score: number; status: string; status_is_passing: boolean; dependencies_count: number; team_name: string | null };
         dependency: { name: string; version: string; license: string | null; is_direct: boolean; score: number; openssf_score: number | null; weekly_downloads: number | null; malicious_indicator: any; slsa_level: number; vulnerabilities: any[] } | null;
         vulnerability: { osv_id: string; severity: string; cvss_score: number; epss_score: number; depscore: number; is_reachable: boolean; cisa_kev: boolean; fixed_versions: string[]; summary: string } | null;
         pr: { number: number; title: string; author: string; check_result: string; check_summary: string; deps_added: number; deps_updated: number; deps_removed: number } | null;

@@ -145,19 +145,6 @@ export interface OrganizationStatus {
   updated_at: string;
 }
 
-export interface OrganizationAssetTier {
-  id: string;
-  organization_id: string;
-  name: string;
-  color: string;
-  rank: number;
-  description?: string | null;
-  is_system: boolean;
-  environmental_multiplier: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'pagerduty' | 'custom_notification' | 'custom_ticketing' | 'email';
 
 export interface CiCdConnection {
@@ -730,8 +717,7 @@ export const api = {
     data: {
       name: string;
       team_ids?: string[];
-      asset_tier?: AssetTier;
-      asset_tier_id?: string | null;
+      importance?: number;
       framework?: string | null;
       /**
        * When present, the backend performs project insert + repo connect +
@@ -779,7 +765,7 @@ export const api = {
     }
   },
 
-  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; asset_tier?: AssetTier; asset_tier_id?: string | null; notifications_paused_until?: string | null }): Promise<Project> {
+  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; importance?: number; notifications_paused_until?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -3165,33 +3151,6 @@ export const api = {
     return Array.isArray(res) ? res : (res?.statuses ?? []);
   },
 
-  // ───── Asset Tiers ─────
-
-  async getOrganizationAssetTiers(orgId: string): Promise<OrganizationAssetTier[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`);
-  },
-
-  async createOrganizationAssetTier(orgId: string, data: { name: string; color: string; description?: string; environmental_multiplier: number; rank: number }): Promise<OrganizationAssetTier> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async updateOrganizationAssetTier(orgId: string, tierId: string, data: Partial<OrganizationAssetTier>): Promise<OrganizationAssetTier> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async deleteOrganizationAssetTier(orgId: string, tierId: string, reassignToId?: string): Promise<void> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
-      method: 'DELETE',
-      body: JSON.stringify({ reassign_to_id: reassignToId }),
-    });
-  },
-
   // ───── Split Policy Code ─────
 
   async getOrganizationPolicyCode(orgId: string): Promise<{
@@ -3232,7 +3191,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`);
   },
 
-  async updateSlaPolicies(orgId: string, policies: Array<{ id?: string; severity: string; asset_tier_id?: string | null; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }>): Promise<{ policies: SlaPolicy[] }> {
+  async updateSlaPolicies(orgId: string, policies: Array<{ id?: string; severity: string; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }>): Promise<{ policies: SlaPolicy[] }> {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`, {
       method: 'PUT',
       body: JSON.stringify({ policies }),
@@ -3772,8 +3731,6 @@ export interface TeamMember {
   created_at?: string;
 }
 
-export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
-
 export interface Project {
   id: string;
   organization_id: string;
@@ -3800,17 +3757,15 @@ export interface Project {
   extraction_error?: string | null;
   last_extracted_at?: string | null;
   role?: string;
-  asset_tier?: AssetTier;
+  /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
+  importance: number;
   notifications_paused_until?: string | null;
-  // Custom statuses and tiers
+  // Custom statuses
   status_id?: string | null;
   status_name?: string;
   status_color?: string;
   status_is_passing?: boolean | null;
   status_violations?: string[];
-  asset_tier_id?: string | null;
-  asset_tier_name?: string;
-  asset_tier_color?: string;
   policy_evaluated_at?: string | null;
   /** Percent of dependencies with passing licenses/policy (0–100). Used on org Compliance tab. */
   compliance_score_pct?: number | null;
@@ -4657,7 +4612,6 @@ export interface SlaPolicy {
   id: string;
   organization_id: string;
   severity: string;
-  asset_tier_id: string | null;
   max_hours: number;
   warning_threshold_percent: number;
   enabled: boolean;
@@ -5507,10 +5461,8 @@ export interface VulnerabilityDetail {
   version_candidates: VersionCandidate[];
   timeline_events: VulnerabilityEvent[];
   reachable_flows?: ReachableFlow[];
-  /** For depscore breakdown: project asset tier enum (e.g. EXTERNAL). */
-  project_asset_tier?: string | null;
-  /** For depscore breakdown: custom tier multiplier when project uses org asset tier. */
-  project_tier_multiplier?: number | null;
+  /** For depscore breakdown: per-project importance in [0.5, 2.0] (the number IS the depscore multiplier). */
+  project_importance?: number | null;
 }
 
 export interface DependencySecuritySummary {
@@ -5715,7 +5667,6 @@ export interface ReachabilitySettings {
   auto_generate_enabled: boolean;
   trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
   trigger_kev: boolean;
-  trigger_asset_tier_max_rank: number;
   trigger_newly_discovered: boolean;
   trigger_reevaluate_existing: boolean;
   ai_provider: 'anthropic' | 'openai' | 'google';
@@ -5828,7 +5779,8 @@ export interface ProjectCommit {
 export interface ProjectStats {
   health_score: number;
   status: { id: string; name: string; color: string; is_passing: boolean } | null;
-  asset_tier: { id: string; name: string; color: string } | null;
+  /** Per-project importance multiplier in [0.5, 2.0]. */
+  importance: number;
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };

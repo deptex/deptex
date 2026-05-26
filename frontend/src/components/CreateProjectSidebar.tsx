@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Search, Check, Lock, Loader2, Save, HelpCircle, ChevronDown, PackageSearch, Inbox } from 'lucide-react';
-import { api, Team, type Project, type AssetTier, type CiCdConnection, type RepoWithProvider, type OrganizationAssetTier } from '../lib/api';
+import { api, Team, type Project, type CiCdConnection, type RepoWithProvider } from '../lib/api';
+import { ImportanceSlider, IMP_DEFAULT } from './ImportanceSlider';
 import { supabase } from '../lib/supabase';
 import { useToast } from '../hooks/use-toast';
 import { Button } from './ui/button';
@@ -52,10 +53,7 @@ export function CreateProjectSidebar({
   const { toast } = useToast();
   const [projectName, setProjectName] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [assetTier, setAssetTier] = useState<AssetTier>('EXTERNAL');
-  const [selectedAssetTierId, setSelectedAssetTierId] = useState<string | null>(null);
-  const [orgAssetTiers, setOrgAssetTiers] = useState<OrganizationAssetTier[]>([]);
-  const [orgAssetTiersLoading, setOrgAssetTiersLoading] = useState(false);
+  const [importance, setImportance] = useState<number>(IMP_DEFAULT);
   const [creating, setCreating] = useState(false);
   const [sidebarConnectionsLoading, setSidebarConnectionsLoading] = useState(false);
   const [sidebarConnectionsError, setSidebarConnectionsError] = useState(false);
@@ -160,17 +158,9 @@ export function CreateProjectSidebar({
   }, [open, organizationId]);
 
   useEffect(() => {
-    if (!open || !organizationId) return;
-    setOrgAssetTiersLoading(true);
-    setOrgAssetTiers([]);
-    api.getOrganizationAssetTiers(organizationId)
-      .then((tiers) => {
-        setOrgAssetTiers(tiers);
-        setSelectedAssetTierId(tiers.length > 0 ? tiers[0].id : null);
-      })
-      .catch(() => setOrgAssetTiers([]))
-      .finally(() => setOrgAssetTiersLoading(false));
-  }, [open, organizationId]);
+    if (!open) return;
+    setImportance(IMP_DEFAULT);
+  }, [open]);
 
   const closeModal = () => {
     // Abort any in-flight repo list / scan so their resolves don't
@@ -183,8 +173,7 @@ export function CreateProjectSidebar({
     onClose();
     setProjectName('');
     setSelectedTeamId(teamLocked && lockedTeam ? lockedTeam.id : null);
-    setAssetTier('EXTERNAL');
-    setSelectedAssetTierId(null);
+    setImportance(IMP_DEFAULT);
     setCreatedProjectId(null);
     setCreatedProjectName('');
     setSidebarConnectionsLoading(false);
@@ -358,12 +347,8 @@ export function CreateProjectSidebar({
       name: projectName.trim(),
       team_ids: teamIds,
       framework: effectiveFramework || undefined,
+      importance,
     };
-    if (orgAssetTiers.length > 0 && selectedAssetTierId) {
-      createPayload.asset_tier_id = selectedAssetTierId;
-    } else {
-      createPayload.asset_tier = assetTier;
-    }
 
     // Combined create-and-connect: backend creates the project + repo link +
     // extraction queue in one shot, with rollback on any failure. No more
@@ -890,94 +875,19 @@ export function CreateProjectSidebar({
           <div className="border-t border-border" />
 
           <div>
-            <div className="flex items-center gap-1.5 mb-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
-                Asset tier
-              </label>
+            <div className="flex items-center gap-1.5 mb-3">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="inline-flex cursor-help text-foreground-secondary hover:text-foreground" aria-label="What is asset tier?">
+                  <span className="inline-flex cursor-help text-foreground-secondary hover:text-foreground" aria-label="What is project importance?">
                     <HelpCircle className="h-3.5 w-3.5" />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-[260px]">
-                  Used by Depscore to weight vulnerability scores and blast radius (e.g. Crown Jewels vs non-production).
+                  Multiplied into every depscore for this project. 1.0 = default. Drag up for critical projects, down for low-priority experiments.
                 </TooltipContent>
               </Tooltip>
             </div>
-            <div className="space-y-2" role="radiogroup" aria-label="Asset tier">
-              {orgAssetTiersLoading ? (
-                [1, 2, 3, 4].map((i) => (
-                  <div key={i} className="rounded-lg border border-border bg-background-card px-4 py-3 flex items-center justify-between gap-3" aria-hidden>
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="h-4 w-4 flex-shrink-0 rounded-full bg-muted animate-pulse" />
-                      <div className="h-4 rounded bg-muted animate-pulse flex-1 min-w-0" style={{ maxWidth: `${40 + i * 15}%` }} />
-                    </div>
-                    <div className="h-6 w-16 rounded-md bg-muted animate-pulse flex-shrink-0" />
-                  </div>
-                ))
-              ) : orgAssetTiers.length > 0 ? (
-                orgAssetTiers.map((tier) => {
-                  const isSelected = selectedAssetTierId === tier.id;
-                  const tierColor = tier.color?.trim() ? (tier.color.startsWith('#') ? tier.color : `#${tier.color}`) : null;
-                  return (
-                    <button
-                      key={tier.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={isSelected}
-                      onClick={() => setSelectedAssetTierId(tier.id)}
-                      className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                        isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
-                      }`}
-                    >
-                      <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
-                        {isSelected && <Check className="h-2.5 w-2.5" />}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-foreground truncate">{tier.name}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">{tier.environmental_multiplier}x multiplier</div>
-                      </div>
-                      <span
-                        className="flex-shrink-0 rounded-md border px-2 py-0.5 text-xs font-medium"
-                        style={
-                          tierColor
-                            ? { backgroundColor: `${tierColor}18`, color: tierColor, borderColor: `${tierColor}40` }
-                            : { backgroundColor: 'var(--muted)', color: 'var(--muted-foreground)', borderColor: 'var(--border)' }
-                        }
-                      >
-                        {tier.name}
-                      </span>
-                    </button>
-                  );
-                })
-              ) : (
-                ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'].map((value) => {
-                  const label = value === 'CROWN_JEWELS' ? 'Crown Jewels' : value === 'NON_PRODUCTION' ? 'Non-production' : value.charAt(0) + value.slice(1).toLowerCase();
-                  const isSelected = assetTier === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      role="radio"
-                      aria-checked={isSelected}
-                      onClick={() => setAssetTier(value as AssetTier)}
-                      className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                        isSelected ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20' : 'bg-background-card border-border hover:border-foreground-secondary/30'
-                      }`}
-                    >
-                      <div className={`h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'}`} aria-hidden>
-                        {isSelected && <Check className="h-2.5 w-2.5" />}
-                      </div>
-                      <div className="min-w-0 flex-1 font-medium text-foreground">{label}</div>
-                      <span className="flex-shrink-0 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                        {label}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+            <ImportanceSlider value={importance} onChange={setImportance} />
           </div>
 
           <div className="border-t border-border" />

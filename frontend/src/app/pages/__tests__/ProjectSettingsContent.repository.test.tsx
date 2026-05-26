@@ -5,7 +5,6 @@ import ProjectSettingsPage from '../ProjectSettingsContent';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
-const mockGetOrganizationAssetTiers = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
 const mockGetTeamMembers = vi.fn();
@@ -17,7 +16,7 @@ const mockSetSearchParams = vi.fn();
 const mockReloadProject = vi.fn().mockResolvedValue(undefined);
 
 let mockProjectContext: {
-  project: { id: string; name: string; asset_tier: string };
+  project: { id: string; name: string; importance: number };
   reloadProject: ReturnType<typeof vi.fn>;
   organizationId: string;
   organization: null;
@@ -39,7 +38,6 @@ vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
-    getOrganizationAssetTiers: (...args: unknown[]) => mockGetOrganizationAssetTiers(...args),
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
     getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
@@ -65,7 +63,6 @@ describe('ProjectSettingsPage – Repository', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetCachedProjectRepositories.mockReturnValue(null);
-    mockGetOrganizationAssetTiers.mockResolvedValue([]);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
     mockGetTeamMembers.mockResolvedValue([]);
@@ -74,7 +71,7 @@ describe('ProjectSettingsPage – Repository', () => {
     mockReloadProject.mockResolvedValue(undefined);
 
     mockProjectContext = {
-      project: { id: 'proj-1', name: 'Test Project', asset_tier: 'EXTERNAL' },
+      project: { id: 'proj-1', name: 'Test Project', importance: 1.0 },
       reloadProject: mockReloadProject,
       organizationId: 'org-1',
       organization: null,

@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType, Position } from '@xyflow/react';
 import type { SupplyChainResponse, SupplyChainChild, SupplyChainAvailableVersion, SupplyChainBumpPr, ProjectEffectivePolicies, BannedVersion, VersionVulnerabilitySummaryItem } from '../../lib/api';
-import type { AssetTier } from '../../lib/api';
 import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 
 // Node dimensions for layout calculation
@@ -194,10 +193,10 @@ export function useGraphLayout(
     safeVersion?: string | null;
     versionSwitching?: boolean;
     onOpenVersionsSidebar?: () => void;
-    assetTier?: AssetTier;
+    importance?: number;
   }
 ) {
-  const tier: AssetTier = extras?.assetTier ?? 'EXTERNAL';
+  const importance = extras?.importance ?? 1.0;
 
   const vulnToNodeData = (vuln: { osv_id: string; severity: string; summary: string | null; aliases: string[]; depscore?: number | null; cvss_score?: number | null; epss_score?: number | null; cisa_kev?: boolean; is_reachable?: boolean; sla_status?: string | null; sla_deadline_at?: string | null; [k: string]: unknown }): VulnerabilityNodeData => {
     const cvss = vuln.cvss_score ?? (vuln.severity ? (SEVERITY_TO_CVSS[vuln.severity] ?? 0) : 0);
@@ -208,7 +207,7 @@ export function useGraphLayout(
           epss: vuln.epss_score ?? 0,
           cisaKev: vuln.cisa_kev ?? false,
           isReachable: vuln.is_reachable ?? true,
-          assetTier: tier,
+          importance,
         });
     return {
       osvId: vuln.osv_id,
@@ -589,5 +588,5 @@ export function useGraphLayout(
     });
 
     return { nodes, edges };
-  }, [data, versionSwitcher?.selectedVersionId, versionSwitcher?.availableVersions, versionSwitcher?.selectedVersion, versionSwitcher?.onVersionChange, extras?.policies, extras?.isViewingAlternateVersion, extras?.originalVersion, extras?.bumpPrs, extras?.dependencyId, extras?.orgId, extras?.projectId, extras?.onPrCreated, extras?.canManage, extras?.bannedVersions, extras?.bannedVersionsLoading, extras?.bumpScopeLoading, extras?.onBanClick, extras?.onUnbanClick, extras?.currentVersion, extras?.safeVersion, extras?.versionSwitching, extras?.onOpenVersionsSidebar, extras?.assetTier, data?.versionVulnerabilitySummary]);
+  }, [data, versionSwitcher?.selectedVersionId, versionSwitcher?.availableVersions, versionSwitcher?.selectedVersion, versionSwitcher?.onVersionChange, extras?.policies, extras?.isViewingAlternateVersion, extras?.originalVersion, extras?.bumpPrs, extras?.dependencyId, extras?.orgId, extras?.projectId, extras?.onPrCreated, extras?.canManage, extras?.bannedVersions, extras?.bannedVersionsLoading, extras?.bumpScopeLoading, extras?.onBanClick, extras?.onUnbanClick, extras?.currentVersion, extras?.safeVersion, extras?.versionSwitching, extras?.onOpenVersionsSidebar, extras?.importance, data?.versionVulnerabilitySummary]);
 }

@@ -5,7 +5,6 @@ import ProjectSettingsPage from '../ProjectSettingsContent';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
-const mockGetOrganizationAssetTiers = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
 const mockGetTeamMembers = vi.fn();
@@ -18,7 +17,7 @@ const mockSetSearchParams = vi.fn();
 const mockReloadProject = vi.fn().mockResolvedValue(undefined);
 
 let mockProjectContext: {
-  project: { id: string; name: string; asset_tier: string; asset_tier_id?: string | null };
+  project: { id: string; name: string; importance: number };
   reloadProject: ReturnType<typeof vi.fn>;
   organizationId: string;
   userPermissions: { view_settings: boolean; edit_settings: boolean };
@@ -39,7 +38,6 @@ vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
-    getOrganizationAssetTiers: (...args: unknown[]) => mockGetOrganizationAssetTiers(...args),
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
     getTeamMembers: (...args: unknown[]) => mockGetTeamMembers(...args),
@@ -61,9 +59,6 @@ describe('ProjectSettingsPage – General', () => {
       connectedRepository: null,
     });
     mockGetCachedProjectRepositories.mockReturnValue(null);
-    mockGetOrganizationAssetTiers.mockResolvedValue([
-      { id: 't1', organization_id: 'org-1', name: 'External', color: '#888', rank: 0, environmental_multiplier: 1, is_default: true },
-    ]);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
     mockGetTeamMembers.mockResolvedValue([]);
@@ -75,8 +70,7 @@ describe('ProjectSettingsPage – General', () => {
       project: {
         id: 'proj-1',
         name: 'Test Project',
-        asset_tier: 'EXTERNAL',
-        asset_tier_id: 't1',
+        importance: 1.0,
       },
       reloadProject: mockReloadProject,
       organizationId: 'org-1',
@@ -84,34 +78,31 @@ describe('ProjectSettingsPage – General', () => {
     };
   });
 
-  it('shows Project Name and Asset Tier sections when on general tab', async () => {
+  it('shows Project Name section when on general tab', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Project Name' })).toBeInTheDocument();
     });
-    expect(screen.getByRole('heading', { name: 'Asset Tier' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Save' }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByRole('button', { name: 'Save' }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows project name input and asset tier select', async () => {
+  it('shows project name input', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Enter project name')).toBeInTheDocument();
     });
-    expect(screen.getByRole('heading', { name: 'Asset Tier' })).toBeInTheDocument();
     const saveBtns = screen.getAllByRole('button', { name: 'Save' });
     expect(saveBtns.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('Save buttons are disabled when name and asset tier unchanged', async () => {
+  it('Save buttons are disabled when name unchanged', async () => {
     render(<ProjectSettingsPage />);
     await waitFor(() => {
       expect(screen.getAllByRole('button', { name: 'Save' }).length).toBeGreaterThanOrEqual(1);
     });
     const saveBtns = screen.getAllByRole('button', { name: 'Save' });
     expect(saveBtns[0]).toBeDisabled();
-    expect(saveBtns[1]).toBeDisabled();
   });
 
   it('Save calls api.updateProject when name changed and Save clicked in name card', async () => {

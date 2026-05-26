@@ -1,15 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, Shield, Loader2, PauseCircle, PlayCircle, Info, Trash2 } from 'lucide-react';
-import { api, type SlaPolicy, type OrganizationAssetTier } from '../../lib/api';
+import { api, type SlaPolicy } from '../../lib/api';
 import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
 import { Slider } from '../ui/slider';
-import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
-import { cn } from '../../lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -73,39 +71,23 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
   const gate = usePlan()?.getPlanGate('security_slas');
   const [policies, setPolicies] = useState<SlaPolicy[]>([]);
   const [slaPausedAt, setSlaPausedAt] = useState<string | null>(null);
-  const [assetTiers, setAssetTiers] = useState<OrganizationAssetTier[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [pausing, setPausing] = useState(false);
-  const [activeTierTab, setActiveTierTab] = useState<string>('default');
   const [disabling, setDisabling] = useState(false);
   const [showDisableConfirm, setShowDisableConfirm] = useState(false);
-  /** Draft per tier (key = 'default' | asset_tier_id). Only saved when user clicks Save. */
-  const [draftByTier, setDraftByTier] = useState<Record<string, SlaRow[]>>({});
+  /** Draft rows for the (single, flat) policy table. Only saved when user clicks Save. */
+  const [draftRows, setDraftRows] = useState<SlaRow[]>([]);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
     setLoading(true);
     try {
-      const [slaRes, tiersRes] = await Promise.all([
-        api.getSlaPolicies(organizationId),
-        api.getOrganizationAssetTiers(organizationId),
-      ]);
+      const slaRes = await api.getSlaPolicies(organizationId);
       const pols = slaRes.policies ?? [];
       setPolicies(pols);
       setSlaPausedAt(slaRes.sla_paused_at);
-      setAssetTiers(tiersRes);
-      const byTier = (pols as SlaPolicy[]).reduce((acc, p) => {
-        const key = p.asset_tier_id ?? 'default';
-        if (!acc[key]) acc[key] = [];
-        acc[key].push(p);
-        return acc;
-      }, {} as Record<string, SlaPolicy[]>);
-      const draft: Record<string, SlaRow[]> = {};
-      for (const key of ['default', ...(tiersRes?.map((t) => t.id) ?? [])]) {
-        draft[key] = rowsFromPolicies(byTier[key] ?? []);
-      }
-      setDraftByTier(draft);
+      setDraftRows(rowsFromPolicies(pols));
     } catch (err) {
       console.error('Failed to load SLA policies:', err);
       toast({ title: 'Failed to load SLA settings', variant: 'destructive' });
@@ -118,63 +100,44 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
     load();
   }, [load]);
 
-  const policiesByTier = policies.reduce((acc, p) => {
-    const key = p.asset_tier_id ?? 'default';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(p);
-    return acc;
-  }, {} as Record<string, SlaPolicy[]>);
-
   const handleEnable = async () => {
     if (!organizationId) return;
     setSaving(true);
     try {
       const res = await api.enableSlaPolicies(organizationId);
       setPolicies(res.policies);
+      setDraftRows(rowsFromPolicies(res.policies));
       toast({ title: 'Security SLAs enabled', description: `Backfilled ${res.backfill_updated} existing vulnerabilities.` });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } catch (err) {
+      console.error('Failed to enable SLAs:', err);
+      toast({ title: 'Error', description: 'Failed to enable Security SLAs', variant: 'destructive' });
     } finally {
       setSaving(false);
     }
   };
 
-  const updateDraft = (tierKey: string, updater: (rows: SlaRow[]) => SlaRow[]) => {
-    setDraftByTier((prev) => ({
-      ...prev,
-      [tierKey]: updater(prev[tierKey] ?? []),
-    }));
+  const updateDraft = (updater: (rows: SlaRow[]) => SlaRow[]) => {
+    setDraftRows((prev) => updater(prev));
   };
 
   const handleSave = async () => {
     if (!organizationId) return;
-    const rows = draftByTier[activeTierTab];
-    if (!rows?.length) return;
+    if (!draftRows.length) return;
     setSaving(true);
     try {
-      const assetTierId = activeTierTab === 'default' ? null : activeTierTab;
-      const policiesPayload = rows.map((r) => ({
+      const policiesPayload = draftRows.map((r) => ({
         severity: r.severity,
-        asset_tier_id: assetTierId,
         max_hours: r.max_hours,
         warning_threshold_percent: r.warning_threshold_percent,
         enabled: r.enabled,
       }));
       const res = await api.updateSlaPolicies(organizationId, policiesPayload);
       setPolicies(res.policies);
-      const byTier = (res.policies ?? []).reduce((acc: Record<string, SlaPolicy[]>, p) => {
-        const key = p.asset_tier_id ?? 'default';
-        if (!acc[key]) acc[key] = [];
-        acc[key].push(p);
-        return acc;
-      }, {});
-      setDraftByTier((prev) => ({
-        ...prev,
-        [activeTierTab]: rowsFromPolicies(byTier[activeTierTab] ?? []),
-      }));
+      setDraftRows(rowsFromPolicies(res.policies));
       toast({ title: 'SLA policies saved' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } catch (err) {
+      console.error('Failed to save SLA policies:', err);
+      toast({ title: 'Error', description: 'Failed to save SLA policies', variant: 'destructive' });
     } finally {
       setSaving(false);
     }
@@ -187,7 +150,7 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
       warning_threshold_percent: 75,
       enabled: true,
     }));
-    updateDraft(activeTierTab, () => rows);
+    updateDraft(() => rows);
   };
 
   const handlePause = async () => {
@@ -197,8 +160,9 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
       const res = await api.pauseSlaPolicies(organizationId);
       setSlaPausedAt(res.sla_paused_at);
       toast({ title: 'SLA timers paused' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } catch (err) {
+      console.error('Failed to pause SLAs:', err);
+      toast({ title: 'Error', description: 'Failed to pause SLA timers', variant: 'destructive' });
     } finally {
       setPausing(false);
     }
@@ -211,8 +175,9 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
       await api.resumeSlaPolicies(organizationId);
       setSlaPausedAt(null);
       toast({ title: 'SLA timers resumed' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } catch (err) {
+      console.error('Failed to resume SLAs:', err);
+      toast({ title: 'Error', description: 'Failed to resume SLA timers', variant: 'destructive' });
     } finally {
       setPausing(false);
     }
@@ -225,10 +190,12 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
     try {
       await api.disableSlaPolicies(organizationId);
       setPolicies([]);
+      setDraftRows([]);
       setSlaPausedAt(null);
       toast({ title: 'Security SLAs disabled', description: 'You can re-enable at any time to start tracking again.' });
-    } catch (err: any) {
-      toast({ title: 'Error', description: err?.message ?? 'Failed to disable SLAs', variant: 'destructive' });
+    } catch (err) {
+      console.error('Failed to disable SLAs:', err);
+      toast({ title: 'Error', description: 'Failed to disable SLAs', variant: 'destructive' });
     } finally {
       setDisabling(false);
     }
@@ -298,11 +265,6 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
     );
   }
 
-  const tierTabs = [
-    { key: 'default', label: 'Default (org-wide)' },
-    ...assetTiers.map((t) => ({ key: t.id, label: t.name })),
-  ];
-
   return (
     <TooltipProvider>
       <div className="space-y-8">
@@ -348,123 +310,98 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
           )}
         </div>
 
-        {/* Tier sub-tabs — same style as Members / Notifications / Statuses */}
-        <div className="flex gap-1 border-b border-border">
-          {tierTabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTierTab(tab.key)}
-              className={cn(
-                'px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px',
-                activeTierTab === tab.key
-                  ? 'border-foreground text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Table + Save/Reset below (current tier only) */}
-        {tierTabs.map((tab) => {
-          if (activeTierTab !== tab.key) return null;
-          const rows = draftByTier[tab.key] ?? rowsFromPolicies(policiesByTier[tab.key] ?? []);
-          return (
-            <div key={tab.key} className="space-y-4">
-              <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-background-card-header border-b border-border">
-                      <tr>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[120px]">Severity</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[180px]">Max hours</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Warning at %</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Enabled</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {rows.map((row) => (
-                        <tr key={row.severity} className="hover:bg-table-hover transition-colors">
-                          <td className="px-4 py-3">
-                            <Badge variant={row.severity === 'critical' ? 'destructive' : row.severity === 'high' ? 'default' : 'secondary'}>
-                              {row.severity}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <Input
-                                type="number"
-                                min={1}
-                                value={row.max_hours}
-                                onChange={(e) => {
-                                  const v = parseInt(e.target.value, 10);
-                                  if (!isNaN(v) && v > 0) {
-                                    updateDraft(tab.key, (r) =>
-                                      r.map((x) => (x.severity === row.severity ? { ...x, max_hours: v } : x))
-                                    );
-                                  }
-                                }}
-                                className="w-20 h-8 text-sm"
-                              />
-                              <span className="text-xs text-muted-foreground">{formatHours(row.max_hours)}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2 max-w-[200px]">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-xs text-muted-foreground shrink-0">Alert when % of time elapsed</span>
-                                </TooltipTrigger>
-                                <TooltipContent>Alert when this percentage of the SLA time has elapsed (e.g. 75% = 36h for 48h critical).</TooltipContent>
-                              </Tooltip>
-                              <Slider
-                                value={row.warning_threshold_percent}
-                                min={10}
-                                max={95}
-                                step={5}
-                                onValueChange={(v) => {
-                                  updateDraft(tab.key, (r) =>
-                                    r.map((x) => (x.severity === row.severity ? { ...x, warning_threshold_percent: v } : x))
-                                  );
-                                }}
-                                className="flex-1"
-                              />
-                              <span className="text-xs text-muted-foreground w-8">{row.warning_threshold_percent}%</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <Switch
-                                checked={row.enabled}
-                                onCheckedChange={(checked) => {
-                                  updateDraft(tab.key, (r) =>
-                                    r.map((x) => (x.severity === row.severity ? { ...x, enabled: checked } : x))
-                                  );
-                                }}
-                              />
-                              <span className="text-sm text-muted-foreground">{row.enabled ? 'On' : 'Off'}</span>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="flex items-center justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={handleResetToDefaults}>
-                  Reset to defaults
-                </Button>
-                <Button size="sm" onClick={handleSave} disabled={saving}>
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Save changes
-                </Button>
-              </div>
+        {/* Flat single-table layout: one row per severity */}
+        <div className="space-y-4">
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-background-card-header border-b border-border">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[120px]">Severity</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[180px]">Max hours</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Warning at %</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[100px]">Enabled</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {draftRows.map((row) => (
+                    <tr key={row.severity} className="hover:bg-table-hover transition-colors">
+                      <td className="px-4 py-3">
+                        <Badge variant={row.severity === 'critical' ? 'destructive' : row.severity === 'high' ? 'default' : 'secondary'}>
+                          {row.severity}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.max_hours}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              if (!isNaN(v) && v > 0) {
+                                updateDraft((r) =>
+                                  r.map((x) => (x.severity === row.severity ? { ...x, max_hours: v } : x))
+                                );
+                              }
+                            }}
+                            className="w-20 h-8 text-sm"
+                          />
+                          <span className="text-xs text-muted-foreground">{formatHours(row.max_hours)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2 max-w-[200px]">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-xs text-muted-foreground shrink-0">Alert when % of time elapsed</span>
+                            </TooltipTrigger>
+                            <TooltipContent>Alert when this percentage of the SLA time has elapsed (e.g. 75% = 36h for 48h critical).</TooltipContent>
+                          </Tooltip>
+                          <Slider
+                            value={row.warning_threshold_percent}
+                            min={10}
+                            max={95}
+                            step={5}
+                            onValueChange={(v) => {
+                              updateDraft((r) =>
+                                r.map((x) => (x.severity === row.severity ? { ...x, warning_threshold_percent: v } : x))
+                              );
+                            }}
+                            className="flex-1"
+                          />
+                          <span className="text-xs text-muted-foreground w-8">{row.warning_threshold_percent}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={row.enabled}
+                            onCheckedChange={(checked) => {
+                              updateDraft((r) =>
+                                r.map((x) => (x.severity === row.severity ? { ...x, enabled: checked } : x))
+                              );
+                            }}
+                          />
+                          <span className="text-sm text-muted-foreground">{row.enabled ? 'On' : 'Off'}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          );
-        })}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={handleResetToDefaults}>
+              Reset to defaults
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save changes
+            </Button>
+          </div>
+        </div>
 
         <Dialog open={showDisableConfirm} onOpenChange={setShowDisableConfirm}>
           <DialogContent>
