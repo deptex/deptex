@@ -1596,7 +1596,7 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
         try {
           const { data: project } = await supabase
             .from('projects')
-            .select('organization_id, asset_tier_id')
+            .select('organization_id')
             .eq('id', projectId)
             .single();
           if (!project) throw new Error('Project not found');
@@ -1628,7 +1628,6 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
               const { data: policyRows } = await supabase.rpc('get_effective_sla_policy', {
                 p_organization_id: project.organization_id,
                 p_severity: pdv.severity,
-                p_asset_tier_id: (project as any).asset_tier_id,
               });
               const policy = Array.isArray(policyRows) && policyRows.length > 0 ? policyRows[0] : null;
               if (!policy?.max_hours) continue;

@@ -416,21 +416,12 @@ export async function buildNotificationContext(
     try {
       const { data: project } = await supabase
         .from('projects')
-        .select('id, name, health_score, framework, asset_tier_id, status_id')
+        .select('id, name, health_score, framework, importance, status_id')
         .eq('id', event.project_id)
         .single();
 
       if (project) {
-        let tierName = 'Unknown';
-        let tierRank = 99;
-        if (project.asset_tier_id) {
-          const { data: tier } = await supabase
-            .from('organization_asset_tiers')
-            .select('name, rank')
-            .eq('id', project.asset_tier_id)
-            .single();
-          if (tier) { tierName = tier.name; tierRank = tier.rank; }
-        }
+        const importance: number = typeof project.importance === 'number' ? project.importance : 1.0;
 
         let statusName = 'Unknown';
         let statusIsPassing = true;
@@ -461,8 +452,7 @@ export async function buildNotificationContext(
         context.project = {
           id: project.id,
           name: project.name,
-          asset_tier: tierName,
-          asset_tier_rank: tierRank,
+          importance,
           health_score: project.health_score ?? 0,
           status: statusName,
           status_is_passing: statusIsPassing,
@@ -479,8 +469,7 @@ export async function buildNotificationContext(
     context.project = {
       id: event.project_id ?? null,
       name: event.payload.project_name,
-      asset_tier: event.payload.asset_tier || 'Unknown',
-      asset_tier_rank: 99,
+      importance: typeof event.payload.importance === 'number' ? event.payload.importance : 1.0,
       health_score: event.payload.health_score ?? 0,
       status: 'Unknown',
       status_is_passing: true,

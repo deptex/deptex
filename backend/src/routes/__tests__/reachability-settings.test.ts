@@ -209,30 +209,6 @@ describe('Reachability Settings Routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('rejects trigger_asset_tier_max_rank=0 (filters out all projects)', async () => {
-      // The asset-tier filter min is 1; allowing 0 would disable generation
-      // for every project silently.
-      setPerm({ manage_organization_settings: true });
-
-      const res = await request(app)
-        .patch(`/api/organizations/${ORG_ID}/reachability-settings`)
-        .set('Authorization', `Bearer ${TOKEN}`)
-        .send({ trigger_asset_tier_max_rank: 0 });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('rejects trigger_asset_tier_max_rank > 5', async () => {
-      setPerm({ manage_organization_settings: true });
-
-      const res = await request(app)
-        .patch(`/api/organizations/${ORG_ID}/reachability-settings`)
-        .set('Authorization', `Bearer ${TOKEN}`)
-        .send({ trigger_asset_tier_max_rank: 6 });
-
-      expect(res.status).toBe(400);
-    });
-
     it('rejects unknown ai_provider', async () => {
       setPerm({ manage_organization_settings: true });
 

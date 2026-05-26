@@ -13,7 +13,7 @@
  */
 
 import { parsePurl, type ParsedPurl } from '../../../depscanner/src/purl';
-import { calculateDepscore, type DepscoreContext, type AssetTier } from '../../../depscanner/src/depscore';
+import { calculateDepscore, type DepscoreContext } from '../../../depscanner/src/depscore';
 
 // =====================================================================
 // Tests 7-11: PURL Resolution
@@ -452,7 +452,7 @@ describe('Depscore with tiered reachability', () => {
     cvss: 7.0,
     epss: 0.05,
     cisaKev: false,
-    assetTier: 'EXTERNAL' as AssetTier,
+    importance: 1.0,
   };
 
   test('41. reachabilityLevel data_flow uses weight 0.9', () => {

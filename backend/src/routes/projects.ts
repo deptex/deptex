@@ -787,16 +787,12 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fetch status and asset tier display names/colors for list (org overview cards)
+    // Fetch status display names/colors for list (org overview cards)
     const statusById: Record<string, { name: string; color: string | null; is_passing: boolean | null }> = {};
-    const tierById: Record<string, { name: string; color: string | null }> = {};
     // Direct dependency counts per project (for org overview cards: "X direct deps")
     let directDepsByProject: Record<string, number> = {};
-    const [[statusRes, tierRes], directDepsResult] = await Promise.all([
-      Promise.all([
-        supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
-        supabase.from('organization_asset_tiers').select('id, name, color').eq('organization_id', id),
-      ]),
+    const [statusRes, directDepsResult] = await Promise.all([
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
       projectIds.length > 0
         ? supabase
             .from('project_dependencies')
@@ -807,11 +803,9 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         : Promise.resolve({ data: [] }),
     ]);
     const statusRows = (statusRes as any)?.data ?? [];
-    const tierRows = (tierRes as any)?.data ?? [];
     (statusRows || []).forEach((s: any) => {
       statusById[s.id] = { name: s.name, color: s.color ?? null, is_passing: s.is_passing };
     });
-    (tierRows || []).forEach((t: any) => { tierById[t.id] = { name: t.name, color: t.color ?? null }; });
     (directDepsResult.data || []).forEach((row: any) => {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
     });
@@ -889,7 +883,6 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
 
       const repoStatus = repoStatusByProject[project.id] ?? null;
       const statusInfo = project.status_id ? statusById[project.status_id] : null;
-      const tierInfo = project.asset_tier_id ? tierById[project.asset_tier_id] : null;
       return {
         id: project.id,
         organization_id: project.organization_id,
@@ -916,9 +909,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         status_id: project.status_id ?? null,
         status_name: statusInfo?.name ?? null,
         status_color: statusInfo?.color ?? null,
-        asset_tier_id: project.asset_tier_id ?? null,
-        asset_tier_name: tierInfo?.name ?? null,
-        asset_tier_color: tierInfo?.color ?? null,
+        importance: typeof project.importance === 'number' ? project.importance : 1.0,
         compliance_score_pct: compliancePctByProject[project.id] ?? null,
         policy_evaluated_at: project.policy_evaluated_at ?? null,
         status_violations: project.status_violations ?? [],
@@ -1140,7 +1131,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, framework: frameworkRaw, repo: repoRaw } = req.body;
+    const { name, team_ids, importance: importanceRaw, framework: frameworkRaw, repo: repoRaw } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ error: 'Project name is required' });
@@ -1212,27 +1203,13 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    const assetTier =
-      typeof assetTierRaw === 'string' && VALID_ASSET_TIERS.includes(assetTierRaw)
-        ? assetTierRaw
-        : 'EXTERNAL';
-
-    let insertAssetTierId: string | null = null;
-    if (assetTierIdRaw !== undefined && assetTierIdRaw !== null && assetTierIdRaw !== '') {
-      const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
-      if (tierId) {
-        const { data: tier, error: tierError } = await supabase
-          .from('organization_asset_tiers')
-          .select('id')
-          .eq('id', tierId)
-          .eq('organization_id', id)
-          .single();
-        if (tierError || !tier) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
-        }
-        insertAssetTierId = tier.id;
+    let insertImportance = 1.0;
+    if (importanceRaw !== undefined && importanceRaw !== null) {
+      const parsed = typeof importanceRaw === 'number' ? importanceRaw : Number(importanceRaw);
+      if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2.0) {
+        return res.status(400).json({ error: 'importance must be a number in [0.5, 2.0]' });
       }
+      insertImportance = parsed;
     }
 
     // Server-side re-resolve every repo field from the integration. Trusting
@@ -1306,10 +1283,9 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       organization_id: id,
       name: name.trim(),
       health_score: 0,
-      asset_tier: insertAssetTierId ? 'EXTERNAL' : assetTier,
+      importance: insertImportance,
     };
     if (defaultOrgStatus?.id) insertPayload.status_id = defaultOrgStatus.id;
-    if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
     if (resolvedRepo?.framework) insertPayload.framework = resolvedRepo.framework;
     else if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
 
@@ -1495,6 +1471,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       status_name: defaultOrgStatus?.name ?? null,
       status_color: defaultOrgStatus?.color ?? null,
       repo: repoInfo,
+      importance: typeof project.importance === 'number' ? project.importance : insertImportance,
     };
 
     try {
@@ -1530,7 +1507,7 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, notifications_paused_until } = req.body;
+    const { name, team_ids, auto_bump: autoBump, importance: importanceRaw, notifications_paused_until } = req.body;
 
     // Check if user has access to this project
     const accessCheck = await checkProjectAccess(userId, id, projectId);
@@ -1542,16 +1519,16 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     // When updating only auto_bump, also allow users with project-level edit_settings.
     const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
     const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
-    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
-    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && (assetTierRaw !== undefined || assetTierIdRaw !== undefined) && notifications_paused_until === undefined;
-    const onlyNotificationsPause = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
-    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier || onlyNotificationsPause;
+    const onlyAutoBump = name === undefined && team_ids === undefined && importanceRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
+    const onlyImportance = name === undefined && team_ids === undefined && autoBump === undefined && importanceRaw !== undefined && notifications_paused_until === undefined;
+    const onlyNotificationsPause = name === undefined && team_ids === undefined && importanceRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
+    const onlyNonStructuralUpdate = onlyAutoBump || onlyImportance || onlyNotificationsPause;
 
     if (!isOrgOwner && !hasOrgPermission) {
       if (!onlyNonStructuralUpdate) {
         return res.status(403).json({ error: 'Only org owners or users with manage_teams_and_projects permission can update projects' });
       }
-      // Check project-level edit_settings for auto_bump- or asset_tier-only update
+      // Check project-level edit_settings for auto_bump- or importance-only update
       const { data: projectTeams } = await supabase
         .from('project_teams')
         .select('team_id, is_owner')
@@ -1614,34 +1591,12 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       updateData.auto_bump = autoBump;
     }
 
-    const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    if (assetTierIdRaw !== undefined) {
-      if (assetTierIdRaw === null || assetTierIdRaw === '') {
-        updateData.asset_tier_id = null;
-        updateData.asset_tier = assetTierRaw ?? 'EXTERNAL';
-      } else {
-        const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
-        if (!tierId) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid UUID' });
-        }
-        const { data: tier, error: tierError } = await supabase
-          .from('organization_asset_tiers')
-          .select('id')
-          .eq('id', tierId)
-          .eq('organization_id', id)
-          .single();
-        if (tierError || !tier) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
-        }
-        updateData.asset_tier_id = tier.id;
-        updateData.asset_tier = 'EXTERNAL';
+    if (importanceRaw !== undefined) {
+      const parsed = typeof importanceRaw === 'number' ? importanceRaw : Number(importanceRaw);
+      if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2.0) {
+        return res.status(400).json({ error: 'importance must be a number in [0.5, 2.0]' });
       }
-    } else if (assetTierRaw !== undefined) {
-      if (typeof assetTierRaw !== 'string' || !VALID_ASSET_TIERS.includes(assetTierRaw)) {
-        return res.status(400).json({ error: 'asset_tier must be one of: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION' });
-      }
-      updateData.asset_tier = assetTierRaw;
-      updateData.asset_tier_id = null;
+      updateData.importance = parsed;
     }
 
     if (notifications_paused_until !== undefined) {
@@ -2037,8 +1992,7 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       auto_bump: project.auto_bump !== false,
       role: userRole,
       permissions: userPermissions,
-      asset_tier: project.asset_tier ?? null,
-      asset_tier_id: project.asset_tier_id ?? null,
+      importance: typeof project.importance === 'number' ? project.importance : 1.0,
       status_id: project.status_id ?? null,
       status_name: projectStatusName,
       /** Matches organization_statuses.is_passing — used by Aegis embed cards */
@@ -8787,7 +8741,7 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
     res.json({
       allowed: result.allowed,
       reasons: result.reasons,
-      tierName: result.tierName,
+      importance: result.importance,
       ecosystem: ecosystem || 'npm',
       license: result.license ?? undefined,
       dependencyScore: result.dependencyScore ?? undefined,
@@ -9751,21 +9705,13 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       affectedDeps = deps ?? [];
     }
 
-    // Project and tier for depscore breakdown (asset_tier, custom tier multiplier)
+    // Project importance for depscore breakdown
     const { data: project } = await supabase
       .from('projects')
-      .select('asset_tier, asset_tier_id')
+      .select('importance')
       .eq('id', projectId)
       .single();
-    let projectTierMultiplier: number | null = null;
-    if (project?.asset_tier_id) {
-      const { data: tierRow } = await supabase
-        .from('organization_asset_tiers')
-        .select('environmental_multiplier')
-        .eq('id', project.asset_tier_id)
-        .single();
-      projectTierMultiplier = tierRow?.environmental_multiplier ?? null;
-    }
+    const projectImportance: number = typeof project?.importance === 'number' ? project.importance : 1.0;
 
     // Package reputation scores for affected dependencies (for depscore breakdown)
     const depIdsForScore = [...new Set((affectedDeps as any[]).map((d: any) => d.dependency_id).filter(Boolean))];
@@ -9876,8 +9822,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       version_candidates: versionCandidates,
       timeline_events: events ?? [],
       reachable_flows: reachableFlows,
-      project_asset_tier: project?.asset_tier ?? null,
-      project_tier_multiplier: projectTierMultiplier,
+      project_importance: projectImportance,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);
@@ -10942,7 +10887,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       maliciousResult,
       latestJobMaliciousStatus,
     ] = await Promise.all([
-      supabase.from('projects').select('health_score, status_id, asset_tier_id').eq('id', projectId).single().then(r => r.data),
+      supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
       supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
       supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).then(r => r.data ?? []),
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
@@ -10954,17 +10899,13 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
     ]);
 
-    // Status & tier lookups
+    // Status lookup
     let status: any = null;
     if (projectRow?.status_id) {
       const { data: s } = await supabase.from('organization_statuses').select('id, name, color, is_passing').eq('id', projectRow.status_id).single();
       status = s;
     }
-    let assetTier: any = null;
-    if (projectRow?.asset_tier_id) {
-      const { data: t } = await supabase.from('organization_asset_tiers').select('id, name, color').eq('id', projectRow.asset_tier_id).single();
-      assetTier = t;
-    }
+    const importance: number = typeof (projectRow as any)?.importance === 'number' ? (projectRow as any).importance : 1.0;
 
     // Compliance
     const compliant = depsRows.filter((d: any) => d.policy_result?.allowed === true).length;
@@ -11080,7 +11021,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const result = {
       health_score: projectRow?.health_score ?? 0,
       status,
-      asset_tier: assetTier,
+      importance,
       compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
       vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
