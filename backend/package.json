@@ -54,6 +54,7 @@
     "nodemailer": "^7.0.11",
     "openai": "^4.20.0",
     "pacote": "^21.3.1",
+    "resend": "^6.12.4",
     "safe-regex2": "^5.1.1",
     "semver": "^7.7.4",
     "simple-git": "^3.22.0",
