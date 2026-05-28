@@ -154,7 +154,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
       <header>
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">Usage</h2>
         <p className="mt-1 text-sm text-foreground-secondary">
-          Itemized billing across AI tokens and worker time. Balance and top-ups live on the Plan & Billing tab.
+          Itemized billing across AI tokens and worker time. Balance and top-ups live on the Billing tab.
         </p>
       </header>
 

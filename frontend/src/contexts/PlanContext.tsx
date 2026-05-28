@@ -19,7 +19,6 @@ export interface BillingState {
     monthlyCapCents: number | null;
   };
   lowBalanceAlertThresholdCents: number;
-  billingEmailOverride: string | null;
   paymentMethod: BillingPaymentMethod | null;
 }
 
@@ -81,6 +80,52 @@ export function BillingProvider({ organizationId, children }: BillingProviderPro
   useEffect(() => {
     void fetchBilling();
   }, [fetchBilling]);
+
+  // Refetch when the tab regains focus or visibility (e.g. user comes back
+  // after a top-up, or after auto-recharge ran in the background).
+  useEffect(() => {
+    if (!organizationId) return;
+    const onFocus = () => void fetchBilling();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void fetchBilling();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [organizationId, fetchBilling]);
+
+  // Realtime subscription on organization_billing — any UPDATE to balance,
+  // auto-recharge state, or PM triggers an immediate refetch. Catches the
+  // server-side auto-recharge case where the user never leaves the page.
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      await (supabase.realtime as unknown as { setAuth: (t: string | null) => Promise<void> }).setAuth(
+        session?.access_token ?? null,
+      );
+      if (cancelled) return;
+      channel = supabase
+        .channel(`billing-org-${organizationId}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'organization_billing', filter: `organization_id=eq.${organizationId}` },
+          () => {
+            void fetchBilling();
+          },
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [organizationId, fetchBilling]);
 
   const openTopUp = useCallback(
     (reason: BillingContextValue['topUpReason'] = 'manual') => {

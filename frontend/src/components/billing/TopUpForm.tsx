@@ -1,152 +1,188 @@
 import React, { useState } from 'react';
-import { CardElement, useElements, useStripe } from '@stripe/react-stripe-js';
+import { Elements, useElements, useStripe } from '@stripe/react-stripe-js';
+import { Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { stripePromise } from '../../lib/stripe-client';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { cn } from '../../lib/utils';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-const QUICK_AMOUNTS_CENTS = [500, 1000, 2500, 5000];
-const POLL_INTERVAL_MS = 1000;
-const POLL_TIMEOUT_MS = 10_000;
 
 interface TopUpFormProps {
   organizationId: string;
-  onSuccess: () => Promise<void> | void;
+  onSuccess?: () => Promise<void> | void;
+}
+
+interface TopUpResponse {
+  status: 'succeeded' | 'requires_action' | 'requires_payment_method' | 'needs_setup';
+  client_secret: string | null;
+  payment_intent_id: string | null;
+  invoice_id: string;
+  subtotal_cents: number;
+  tax_cents: number;
+  total_cents: number;
+}
+
+async function authedFetch(input: string, init?: RequestInit) {
+  const { data: session } = await supabase.auth.getSession();
+  const token = session.session?.access_token;
+  if (!token) throw new Error('Not authenticated');
+  return fetch(input, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
 }
 
 export function TopUpForm({ organizationId, onSuccess }: TopUpFormProps) {
-  const stripe = useStripe();
-  const elements = useElements();
-
-  const [amountCents, setAmountCents] = useState<number>(2500);
-  const [customAmount, setCustomAmount] = useState<string>('');
+  const [amount, setAmount] = useState('25');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [polling, setPolling] = useState(false);
+  const [actionClientSecret, setActionClientSecret] = useState<string | null>(null);
 
-  const effectiveCents = customAmount.trim()
-    ? Math.round(Number(customAmount) * 100)
-    : amountCents;
+  const numericAmount = Number(amount);
+  const cents = Math.round(numericAmount * 100);
+  const isValid = Number.isFinite(numericAmount) && cents >= 500;
+  const belowMinimum = amount.trim() !== '' && Number.isFinite(numericAmount) && cents < 500;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stripe || !elements) return;
-    if (effectiveCents < 500) {
-      setError('Minimum top-up is $5.');
-      return;
-    }
-
     setError(null);
+    if (!isValid) return;
+
     setSubmitting(true);
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session.session?.access_token;
-      if (!token) throw new Error('Not authenticated');
-
-      const createRes = await fetch(`${API_BASE_URL}/api/organizations/${organizationId}/billing/topup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ amount_cents: effectiveCents }),
-      });
-      if (!createRes.ok) {
-        const { error: apiErr } = (await createRes.json().catch(() => ({}))) as { error?: string };
-        throw new Error(apiErr ?? `Failed to start top-up (${createRes.status})`);
+      const res = await authedFetch(
+        `${API_BASE_URL}/api/organizations/${organizationId}/billing/topup-intent`,
+        { method: 'POST', body: JSON.stringify({ amount_cents: cents }) },
+      );
+      if (!res.ok) {
+        const { error: apiErr } = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(apiErr ?? `Failed (${res.status})`);
       }
-      const { clientSecret } = (await createRes.json()) as { clientSecret: string };
+      const data = (await res.json()) as TopUpResponse;
 
-      const cardElement = elements.getElement(CardElement);
-      if (!cardElement) throw new Error('Card form not ready');
-
-      const confirmResult = await stripe.confirmCardPayment(clientSecret, {
-        payment_method: { card: cardElement },
-      });
-      if (confirmResult.error) {
-        throw new Error(confirmResult.error.message ?? 'Payment failed');
+      if (data.status === 'succeeded') {
+        if (onSuccess) await onSuccess();
+        setSubmitting(false);
+        return;
       }
-
-      setPolling(true);
-      const pollStart = Date.now();
-      while (Date.now() - pollStart < POLL_TIMEOUT_MS) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        try {
-          await onSuccess();
-        } catch {
-          // ignore — keep polling
-        }
-        if (Date.now() - pollStart >= POLL_TIMEOUT_MS) break;
+      if (data.status === 'needs_setup') {
+        setError('Billing address missing. Re-add your card to capture it.');
+        setSubmitting(false);
+        return;
       }
-      setPolling(false);
-
-      cardElement.clear();
-      setCustomAmount('');
+      if (data.status === 'requires_payment_method') {
+        setError('Add a payment method first.');
+        setSubmitting(false);
+        return;
+      }
+      if (data.status === 'requires_action' && data.client_secret) {
+        setActionClientSecret(data.client_secret);
+        // Keep submitting=true until 3DS resolves
+        return;
+      }
+      setError('Unexpected response — try again.');
+      setSubmitting(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Top-up failed');
-    } finally {
       setSubmitting(false);
-      setPolling(false);
     }
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4 rounded-lg border border-border bg-background-card p-6">
-      <div>
-        <p className="text-xs text-foreground-secondary mb-2">Amount</p>
-        <div className="flex flex-wrap gap-2">
-          {QUICK_AMOUNTS_CENTS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => {
-                setAmountCents(c);
-                setCustomAmount('');
-              }}
-              className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
-                customAmount === '' && amountCents === c
-                  ? 'border-primary bg-primary/10 text-foreground'
-                  : 'border-border text-foreground-secondary hover:bg-background-card-hover'
-              }`}
-            >
-              ${(c / 100).toFixed(0)}
-            </button>
-          ))}
-          <Input
-            type="number"
-            min="5"
-            step="0.01"
-            placeholder="Custom"
-            value={customAmount}
-            onChange={(e) => setCustomAmount(e.target.value)}
-            className="max-w-[140px]"
-          />
-        </div>
-      </div>
-
-      <div>
-        <p className="text-xs text-foreground-secondary mb-2">Card</p>
-        <div className="rounded-md border border-border bg-background px-3 py-3">
-          <CardElement
-            options={{
-              style: {
-                base: {
-                  fontSize: '14px',
-                  color: '#f5f5f5',
-                  '::placeholder': { color: '#888' },
-                },
-                invalid: { color: '#ef4444' },
-              },
+    <>
+      <TooltipProvider delayDuration={150}>
+        <form onSubmit={submit} noValidate className="flex items-center gap-3">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="relative">
+                <span
+                  className={cn(
+                    'pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm',
+                    belowMinimum ? 'text-destructive' : 'text-foreground-secondary',
+                  )}
+                >
+                  $
+                </span>
+                <Input
+                  type="number"
+                  step="1"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className={cn(
+                    'h-8 w-32 rounded-lg pl-6',
+                    belowMinimum
+                      ? '!border-destructive !text-destructive focus-visible:!border-destructive focus-visible:!ring-destructive/30'
+                      : 'focus-visible:!border-foreground-secondary/60 focus-visible:!ring-foreground-secondary/30',
+                  )}
+                  placeholder="Amount"
+                />
+              </div>
+            </TooltipTrigger>
+            {belowMinimum && (
+              <TooltipContent side="top">Minimum top-up is $5</TooltipContent>
+            )}
+          </Tooltip>
+          <Button type="submit" variant="white" disabled={!isValid || submitting} className="relative">
+            <span className={submitting ? 'invisible' : undefined}>Add credit</span>
+            {submitting && (
+              <span className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-4 w-4 animate-spin" />
+              </span>
+            )}
+          </Button>
+        </form>
+        {error && <p className="mt-1 text-right text-xs text-destructive">{error}</p>}
+      </TooltipProvider>
+      {actionClientSecret && (
+        <Elements
+          stripe={stripePromise}
+          options={{
+            clientSecret: actionClientSecret,
+            appearance: { theme: 'night', variables: { colorPrimary: '#047857' } },
+          }}
+        >
+          <ThreeDSResolver
+            clientSecret={actionClientSecret}
+            onResolved={async (ok) => {
+              setActionClientSecret(null);
+              setSubmitting(false);
+              if (ok && onSuccess) await onSuccess();
+              else if (!ok) setError('Card verification failed. Try a different card.');
             }}
           />
-        </div>
-      </div>
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {polling && <p className="text-sm text-foreground-secondary">Payment confirmed. Updating balance…</p>}
-
-      <div className="flex justify-end">
-        <Button type="submit" variant="green" disabled={!stripe || !elements || submitting || polling}>
-          {submitting ? 'Processing…' : `Top up $${(effectiveCents / 100).toFixed(2)}`}
-        </Button>
-      </div>
-    </form>
+        </Elements>
+      )}
+    </>
   );
+}
+
+function ThreeDSResolver({
+  clientSecret,
+  onResolved,
+}: {
+  clientSecret: string;
+  onResolved: (success: boolean) => Promise<void> | void;
+}) {
+  const stripe = useStripe();
+  const ranRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!stripe || ranRef.current) return;
+    ranRef.current = true;
+    (async () => {
+      const result = await stripe.handleNextAction({ clientSecret });
+      const status = result.paymentIntent?.status;
+      await onResolved(status === 'succeeded');
+    })();
+  }, [stripe, clientSecret, onResolved]);
+
+  return null;
 }
