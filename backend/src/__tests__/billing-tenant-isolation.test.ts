@@ -71,13 +71,6 @@ describe('billing routes — tenant isolation', () => {
           .send({ threshold_cents: 100 }),
     ],
     [
-      'PUT /billing-email',
-      () =>
-        request(app)
-          .put(`/api/organizations/${ORG_B}/billing/billing-email`)
-          .send({ email: 'attacker@example.com' }),
-    ],
-    [
       'DELETE /payment-method',
       () => request(app).delete(`/api/organizations/${ORG_B}/billing/payment-method`),
     ],

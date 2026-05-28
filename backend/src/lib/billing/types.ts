@@ -65,7 +65,6 @@ export interface BillingState {
     monthlyCapCents: number | null;
   };
   lowBalanceAlertThresholdCents: number;
-  billingEmailOverride: string | null;
   paymentMethod: BillingPaymentMethod | null;
 }
 

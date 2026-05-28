@@ -1,6 +1,7 @@
 import { supabase } from '../supabase';
 import { isBillingEnforcementEnabled } from './enforcement';
-import { createPaymentIntent } from './stripe-billing';
+import { createTopUpInvoice } from './stripe-billing';
+import { resolveBillingRecipients, sendAutoRechargeFailed } from './alerts';
 
 const STUCK_FLAG_RECOVERY_MS = 30 * 60 * 1000;
 
@@ -110,21 +111,54 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
   }
 
   try {
-    const { paymentIntent } = await createPaymentIntent({
+    const recipients = await resolveBillingRecipients(orgId).catch(() => [] as string[]);
+    const fallbackEmail = recipients[0];
+
+    const result = await createTopUpInvoice({
       orgId,
       amountCents: billing.auto_recharge_amount_cents,
       purpose: 'auto_recharge_topup',
-      offSession: true,
-      paymentMethodId: billing.stripe_default_payment_method_id,
+      fallbackEmail,
     });
-    return { attempted: true, reason: 'pi_created', paymentIntentId: paymentIntent.id };
+
+    if (result.status === 'succeeded') {
+      // payment_intent.succeeded webhook will credit balance + clear in_progress flag.
+      return { attempted: true, reason: 'pi_created', paymentIntentId: result.paymentIntentId ?? undefined };
+    }
+
+    // Off-session failure modes. For off-session 3DS-required cards Stripe does NOT fire
+    // payment_intent.payment_failed — it fires invoice.payment_failed instead. So we can't
+    // rely on the webhook to disable + email; do it inline for every non-success status.
+    console.warn('[auto-recharge] non-success status from createTopUpInvoice', {
+      orgId,
+      status: result.status,
+    });
+    await clearStuckFlag(orgId);
+
+    const reasonByStatus: Record<'needs_setup' | 'requires_action' | 'requires_payment_method', string> = {
+      needs_setup: 'Billing address missing on Stripe customer',
+      requires_action: 'Card requires authentication and cannot be charged off-session',
+      requires_payment_method: 'Card was declined',
+    };
+    const reason = reasonByStatus[result.status] ?? 'Auto-recharge failed';
+
+    await supabase
+      .from('organization_billing')
+      .update({ auto_recharge_enabled: false })
+      .eq('organization_id', orgId);
+    await sendAutoRechargeFailed(orgId, reason).catch((err) =>
+      console.error('[auto-recharge] sendAutoRechargeFailed failed', err),
+    );
+
+    return { attempted: true, reason: 'pi_failed' };
   } catch (err) {
-    console.error('[auto-recharge] PaymentIntent creation failed', err);
+    console.error('[auto-recharge] createTopUpInvoice threw', err);
     await clearStuckFlag(orgId);
     await supabase
       .from('organization_billing')
       .update({ auto_recharge_enabled: false })
       .eq('organization_id', orgId);
+    await sendAutoRechargeFailed(orgId, err instanceof Error ? err.message : 'unknown').catch(() => {});
     return { attempted: true, reason: 'pi_failed' };
   }
 }

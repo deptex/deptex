@@ -1,6 +1,6 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { sendCreditAddedEmail, sendAutoRechargeFailed } from '../lib/billing/alerts';
+import { sendAutoRechargeFailed } from '../lib/billing/alerts';
 
 const router = express.Router();
 
@@ -39,6 +39,10 @@ router.post('/', async (req, res) => {
       case 'payment_intent.payment_failed':
         await handlePaymentIntentFailed(event.data.object);
         break;
+      case 'invoice.payment_failed':
+      case 'invoice.payment_action_required':
+        await handleInvoicePaymentFailed(event.data.object);
+        break;
       case 'payment_method.detached':
         await handlePaymentMethodDetached(event.data.object);
         break;
@@ -56,13 +60,27 @@ router.post('/', async (req, res) => {
 
 async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
   const metadata = pi.metadata || {};
-  const orgId: string | undefined = metadata.organization_id;
-  const purpose: string | undefined = metadata.purpose;
+  let orgId: string | undefined = metadata.organization_id;
+  let purpose: string | undefined = metadata.purpose;
+
+  // Fallback: if metadata was wiped (race with Stripe's auto-charge during invoice finalize),
+  // pull it from the invoice this PI is attached to.
+  if ((!orgId || !purpose) && pi.invoice) {
+    try {
+      const stripeLib = require('../lib/billing/stripe-billing') as typeof import('../lib/billing/stripe-billing');
+      const invMeta = await stripeLib.getInvoiceMetadata(pi.invoice);
+      orgId = orgId ?? invMeta?.organization_id;
+      purpose = purpose ?? invMeta?.purpose;
+    } catch (err) {
+      console.warn('[billing-webhook] invoice metadata fallback failed', err);
+    }
+  }
 
   if (!orgId || !purpose) {
     console.error('[billing-webhook] missing metadata.organization_id or purpose', {
       pi_id: pi.id,
       metadata,
+      invoice: pi.invoice,
     });
     return;
   }
@@ -119,9 +137,7 @@ async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
       .eq('organization_id', orgId);
   }
 
-  await sendCreditAddedEmail(orgId, amountCents, purpose as 'topup' | 'auto_recharge_topup').catch(
-    (err) => console.error('[billing-webhook] receipt email failed', err),
-  );
+  // Receipt email is sent by Stripe's hosted-invoice email (we enabled invoice_creation).
 }
 
 async function handlePaymentIntentFailed(pi: any): Promise<void> {
@@ -145,6 +161,32 @@ async function handlePaymentIntentFailed(pi: any): Promise<void> {
       console.error('[billing-webhook] auto-recharge failed alert failed', err),
     );
   }
+}
+
+async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
+  // For off-session auto-recharge of a 3DS-required card, Stripe fires invoice.payment_failed
+  // (not payment_intent.payment_failed), so the PI-failure handler never runs. We treat any
+  // failure on an auto_recharge_topup invoice as a hard auto-recharge failure: disable, clear
+  // the in-progress flag, and notify the org's billing recipients.
+  const metadata = invoice.metadata || {};
+  const orgId: string | undefined = metadata.organization_id;
+  const purpose: string | undefined = metadata.purpose;
+  if (!orgId || purpose !== 'auto_recharge_topup') return;
+
+  await supabase
+    .from('organization_billing')
+    .update({
+      auto_recharge_enabled: false,
+      auto_recharge_in_progress: false,
+      auto_recharge_in_progress_started_at: null,
+    })
+    .eq('organization_id', orgId);
+
+  const last = invoice.last_finalization_error || invoice.last_payment_error;
+  const reason: string = last?.message || last?.code || 'Payment attempt failed';
+  await sendAutoRechargeFailed(orgId, reason).catch((err) =>
+    console.error('[billing-webhook] sendAutoRechargeFailed (invoice path) failed', err),
+  );
 }
 
 async function handlePaymentMethodDetached(pm: any): Promise<void> {

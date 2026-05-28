@@ -3,6 +3,7 @@ import {
   clearTableRegistry,
   clearRpcRegistry,
   queryBuilder,
+  supabase,
 } from '../../../test/mocks/supabaseSingleton';
 
 jest.mock('../../email', () => ({
@@ -25,7 +26,6 @@ function setBillingRow(overrides: Partial<Record<string, unknown>> = {}) {
   setTableResponse('organization_billing', 'single', {
     data: {
       organization_id: ORG_ID,
-      billing_email_override: null,
       low_balance_alert_threshold_cents: 500,
       auto_recharge_enabled: false,
       low_balance_alert_sent_at: null,
@@ -58,18 +58,12 @@ describe('resolveBillingRecipients', () => {
     (sendEmail as jest.Mock).mockReset();
   });
 
-  it('returns billing_email_override when set', async () => {
-    setBillingRow({ billing_email_override: 'billing@acme.test' });
-    const recipients = await resolveBillingRecipients(ORG_ID);
-    expect(recipients).toEqual(['billing@acme.test']);
-  });
-
-  it('returns members with manage_billing role permission when no override', async () => {
+  it('returns members with manage_billing role permission', async () => {
     setBillingRow();
     setTableResponse('organization_members', 'then', {
       data: [
-        { user_id: 'u1', role: 'owner', user_profiles: { email: 'owner@acme.test' } },
-        { user_id: 'u2', role: 'member', user_profiles: { email: 'member@acme.test' } },
+        { user_id: 'u1', role: 'owner' },
+        { user_id: 'u2', role: 'member' },
       ],
       error: null,
     });
@@ -79,6 +73,12 @@ describe('resolveBillingRecipients', () => {
         { name: 'member', permissions: { manage_billing: false } },
       ],
       error: null,
+    });
+    // emails now resolve via supabase.auth.admin.getUserById per member id
+    (supabase.auth.admin.getUserById as jest.Mock).mockImplementation(async (userId: string) => {
+      if (userId === 'u1') return { data: { user: { email: 'owner@acme.test' } } };
+      if (userId === 'u2') return { data: { user: { email: 'member@acme.test' } } };
+      return { data: { user: null } };
     });
 
     const recipients = await resolveBillingRecipients(ORG_ID);
@@ -103,7 +103,8 @@ describe('sendLowBalanceAlert', () => {
 
   it('releases slot when no recipients', async () => {
     mockUpdateCount(1);
-    setBillingRow({ billing_email_override: null });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [], error: null });
     setTableResponse('organization_members', 'then', { data: [], error: null });
     setOrgName();
 
@@ -115,7 +116,10 @@ describe('sendLowBalanceAlert', () => {
 
   it('sends and keeps flag when send succeeds', async () => {
     mockUpdateCount(1);
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true, messageId: 'm1' });
 
@@ -131,7 +135,10 @@ describe('sendLowBalanceAlert', () => {
 
   it('releases flag when send fails', async () => {
     mockUpdateCount(1);
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: false, error: 'smtp down' });
 
@@ -150,24 +157,30 @@ describe('sendZeroBalanceAlert', () => {
 
   it('content varies with auto_recharge_enabled = true', async () => {
     mockUpdateCount(1);
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true });
 
     await sendZeroBalanceAlert(ORG_ID, true);
     const call = (sendEmail as jest.Mock).mock.calls[0][0];
-    expect(call.html).toContain('Auto-recharge appears to have failed');
+    expect(call.text).toContain('Auto-recharge appears to have failed');
   });
 
   it('content varies with auto_recharge_enabled = false', async () => {
     mockUpdateCount(1);
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true });
 
     await sendZeroBalanceAlert(ORG_ID, false);
     const call = (sendEmail as jest.Mock).mock.calls[0][0];
-    expect(call.html).toContain('Top up to resume');
+    expect(call.text).toContain('please top up in billing');
   });
 });
 
@@ -179,7 +192,10 @@ describe('sendCreditAddedEmail', () => {
   });
 
   it('renders topup receipt', async () => {
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true });
 
@@ -187,17 +203,20 @@ describe('sendCreditAddedEmail', () => {
     expect(result.sent).toBe(true);
     const call = (sendEmail as jest.Mock).mock.calls[0][0];
     expect(call.subject).toContain('$25.00');
-    expect(call.html).toContain('topped up');
+    expect(call.text).toContain('topped up');
   });
 
   it('renders auto-recharge receipt', async () => {
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true });
 
     await sendCreditAddedEmail(ORG_ID, 2000, 'auto_recharge_topup');
     const call = (sendEmail as jest.Mock).mock.calls[0][0];
-    expect(call.html).toContain('auto-recharged');
+    expect(call.text).toContain('auto-recharged');
   });
 });
 
@@ -209,14 +228,17 @@ describe('sendAutoRechargeFailed', () => {
   });
 
   it('always sends (no dedup flag)', async () => {
-    setBillingRow({ billing_email_override: 'b@acme.test' });
+    setBillingRow();
+    setTableResponse('organization_members', 'then', { data: [{ user_id: 'u1', role: 'owner' }], error: null });
+    setTableResponse('organization_roles', 'then', { data: [{ name: 'owner', permissions: {} }], error: null });
+    (supabase.auth.admin.getUserById as jest.Mock).mockResolvedValue({ data: { user: { email: 'b@acme.test' } } });
     setOrgName();
     (sendEmail as jest.Mock).mockResolvedValueOnce({ sent: true });
 
     const result = await sendAutoRechargeFailed(ORG_ID, 'card_declined');
     expect(result.sent).toBe(true);
     const call = (sendEmail as jest.Mock).mock.calls[0][0];
-    expect(call.html).toContain('card_declined');
+    expect(call.text).toContain('card_declined');
   });
 });
 

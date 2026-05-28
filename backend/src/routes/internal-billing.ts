@@ -3,8 +3,6 @@ import { z } from 'zod';
 import { recordMeterEvent, canCharge } from '../lib/billing/ledger';
 import { chargedCentsForWorker } from '../lib/billing/pricing';
 import { chargedCentsForAi } from '../lib/ai/pricing';
-import { checkAndDispatchBalanceAlerts } from '../lib/billing/alerts';
-import { maybeAutoRecharge } from '../lib/billing/auto-recharge';
 
 const router = express.Router();
 
@@ -18,6 +16,12 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
       : undefined);
   const key = raw?.trim();
   if (!INTERNAL_API_KEY || key !== INTERNAL_API_KEY) {
+    console.log('[internal-billing] auth fail', {
+      env_key_len: INTERNAL_API_KEY?.length,
+      env_key_head: INTERNAL_API_KEY?.slice(0, 4),
+      header_key_len: key?.length,
+      header_key_head: key?.slice(0, 4),
+    });
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -127,10 +131,8 @@ router.post('/meter-event', async (req, res) => {
       idempotencyKey: body.idempotency_key,
     });
 
-    if (result.deducted && result.newBalanceCents != null) {
-      checkAndDispatchBalanceAlerts(body.organization_id, result.newBalanceCents).catch(() => {});
-      maybeAutoRecharge(body.organization_id).catch(() => {});
-    }
+    // Post-deduction side-effects (auto-recharge + balance alerts) fire inside
+    // recordMeterEvent itself — every caller gets them, not just this HTTP route.
 
     res.json({
       deducted: result.deducted,

@@ -44,7 +44,10 @@ export function chargedCentsForWorker(machineSize: string, seconds: number): Wor
   const rate = MACHINE_RATE_USD_PER_SECOND[machineSize] ?? DEFAULT_RATE_USD_PER_SECOND;
   const cogDollars = rate * seconds;
   const cogCents = cogDollars * 100;
-  const chargedCents = cogCents * MARKUP_FACTOR;
+  const rawChargedCents = cogCents * MARKUP_FACTOR;
+  // Postgres deduct_balance RPC requires an integer cents value; floor a 1-cent minimum
+  // on any chargeable event so sub-1-cent worker bursts still deduct.
+  const chargedCents = rawChargedCents > 0 ? Math.max(1, Math.round(rawChargedCents)) : 0;
   return { cogCents, chargedCents };
 }
 

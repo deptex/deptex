@@ -129,7 +129,28 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
     };
   }
 
-  return { deducted: true, newBalanceCents: data as number };
+  const newBalanceCents = data as number;
+
+  // Fire post-deduction side-effects. Lazy-required to avoid the static import cycle
+  // (ledger → auto-recharge → stripe-billing → ledger). Best-effort: never blocks the
+  // meter-event call. Every caller of recordMeterEvent gets these for free — don't
+  // re-implement them in HTTP routes or domain code.
+  setImmediate(() => {
+    try {
+      const { maybeAutoRecharge } = require('./auto-recharge') as typeof import('./auto-recharge');
+      const { checkAndDispatchBalanceAlerts } = require('./alerts') as typeof import('./alerts');
+      checkAndDispatchBalanceAlerts(input.organizationId, newBalanceCents).catch((err) =>
+        console.error('[billing.ledger] checkAndDispatchBalanceAlerts threw', err),
+      );
+      maybeAutoRecharge(input.organizationId).catch((err) =>
+        console.error('[billing.ledger] maybeAutoRecharge threw', err),
+      );
+    } catch (err) {
+      console.error('[billing.ledger] post-deduction side-effects setup failed', err);
+    }
+  });
+
+  return { deducted: true, newBalanceCents };
 }
 
 export async function canCharge(orgId: string, estimatedCents: number): Promise<CanChargeResponse> {
@@ -209,7 +230,6 @@ export async function getBalance(orgId: string): Promise<BillingState | null> {
       monthlyCapCents: data.auto_recharge_monthly_cap_cents,
     },
     lowBalanceAlertThresholdCents: data.low_balance_alert_threshold_cents,
-    billingEmailOverride: data.billing_email_override,
     paymentMethod,
   };
 }
@@ -218,6 +238,7 @@ export async function listTransactions(
   orgId: string,
   cursor?: string,
   limit = 50,
+  kinds?: string[],
 ): Promise<TransactionsResponse> {
   let query = supabase
     .from('billing_transactions')
@@ -226,6 +247,10 @@ export async function listTransactions(
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit + 1);
+
+  if (kinds && kinds.length > 0) {
+    query = query.in('kind', kinds);
+  }
 
   if (cursor) {
     const [createdAt, id] = decodeCursor(cursor);

@@ -6,7 +6,12 @@ import { getBalance, listTransactions, listUsageActivity } from '../lib/billing/
 import { loadUsageBreakdown, type UsageGranularity, type FeatureCategory } from '../lib/billing/usage-breakdown';
 import {
   createPaymentIntent,
+  createSetupIntentForOrg,
+  createTopUpInvoice,
   detachPaymentMethod,
+  detachPaymentMethodById,
+  getInvoiceUrlForPaymentIntent,
+  listSavedPaymentMethods,
   setDefaultPaymentMethod,
 } from '../lib/billing/stripe-billing';
 import { maybeAutoRecharge } from '../lib/billing/auto-recharge';
@@ -94,6 +99,99 @@ router.post('/:id/billing/topup', async (req: AuthRequest, res) => {
   }
 });
 
+const topupIntentSchema = z.object({
+  amount_cents: z.number().int().min(MIN_TOPUP_CENTS).max(100_000_00),
+  billing_email: z.string().email().optional(),
+  billing_address: z
+    .object({
+      line1: z.string().min(1),
+      line2: z.string().nullable().optional(),
+      city: z.string().min(1),
+      state: z.string().nullable().optional(),
+      postal_code: z.string().min(1),
+      country: z.string().length(2),
+    })
+    .optional(),
+});
+
+router.post('/:id/billing/topup-intent', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'manage_billing');
+  if (!orgId) return;
+  const parsed = topupIntentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid top-up request' });
+  }
+  try {
+    const result = await createTopUpInvoice({
+      orgId,
+      amountCents: parsed.data.amount_cents,
+      billingEmail: parsed.data.billing_email,
+      billingAddress: parsed.data.billing_address,
+      fallbackEmail: req.user?.email,
+    });
+    res.json({
+      status: result.status,
+      client_secret: result.clientSecret,
+      payment_intent_id: result.paymentIntentId,
+      invoice_id: result.invoiceId,
+      subtotal_cents: result.subtotalCents,
+      tax_cents: result.taxCents,
+      total_cents: result.totalCents,
+    });
+  } catch (err: any) {
+    console.error('[billing.topup-intent] failed', err?.message ?? err);
+    res.status(500).json({ error: 'Failed to start top-up. Please try again.' });
+  }
+});
+
+router.get('/:id/billing/payment-methods', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'view_settings');
+  if (!orgId) return;
+  try {
+    const methods = await listSavedPaymentMethods(orgId);
+    res.json({ payment_methods: methods });
+  } catch (err) {
+    console.error('[billing.payment-methods] failed', err);
+    res.status(500).json({ error: 'Failed to load payment methods' });
+  }
+});
+
+router.post('/:id/billing/setup-intent', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'manage_billing');
+  if (!orgId) return;
+  try {
+    const { clientSecret } = await createSetupIntentForOrg(orgId);
+    res.json({ client_secret: clientSecret });
+  } catch (err) {
+    console.error('[billing.setup-intent] failed', err);
+    res.status(500).json({ error: 'Failed to start add-card flow' });
+  }
+});
+
+router.delete('/:id/billing/payment-methods/:pmId', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'manage_billing');
+  if (!orgId) return;
+  try {
+    await detachPaymentMethodById(orgId, req.params.pmId);
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('[billing.payment-methods.detach] failed', err?.message ?? err);
+    res.status(500).json({ error: 'Failed to remove payment method' });
+  }
+});
+
+router.post('/:id/billing/payment-methods/:pmId/default', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'manage_billing');
+  if (!orgId) return;
+  try {
+    await setDefaultPaymentMethod(orgId, req.params.pmId, req.user?.email);
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('[billing.payment-methods.set-default] failed', err?.message ?? err);
+    res.status(500).json({ error: 'Failed to set default payment method' });
+  }
+});
+
 const autoRechargeSchema = z.object({
   enabled: z.boolean(),
   threshold_cents: z.number().int().positive().nullable().optional(),
@@ -168,26 +266,6 @@ router.put('/:id/billing/low-balance-threshold', async (req: AuthRequest, res) =
   res.json({ ok: true });
 });
 
-const billingEmailSchema = z.object({
-  email: z.string().email().nullable(),
-});
-
-router.put('/:id/billing/billing-email', async (req: AuthRequest, res) => {
-  const orgId = await gateBilling(req, res, 'manage_billing');
-  if (!orgId) return;
-  const parsed = billingEmailSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid email' });
-
-  const { error } = await supabase
-    .from('organization_billing')
-    .update({ billing_email_override: parsed.data.email })
-    .eq('organization_id', orgId);
-  if (error) {
-    console.error('[billing.billing-email] update failed', error);
-    return res.status(500).json({ error: 'Failed to update billing email' });
-  }
-  res.json({ ok: true });
-});
 
 router.delete('/:id/billing/payment-method', async (req: AuthRequest, res) => {
   const orgId = await gateBilling(req, res, 'manage_billing');
@@ -219,13 +297,44 @@ router.post('/:id/billing/payment-method', async (req: AuthRequest, res) => {
   }
 });
 
+router.get('/:id/billing/transactions/:txnId/receipt', async (req: AuthRequest, res) => {
+  const orgId = await gateBilling(req, res, 'view_settings');
+  if (!orgId) return;
+  const txnId = req.params.txnId;
+
+  const { data: txn, error } = await supabase
+    .from('billing_transactions')
+    .select('stripe_payment_intent_id')
+    .eq('id', txnId)
+    .eq('organization_id', orgId)
+    .single();
+  if (error || !txn || !txn.stripe_payment_intent_id) {
+    return res.status(404).json({ error: 'No invoice available' });
+  }
+  if (txn.stripe_payment_intent_id.startsWith('pi_demo_')) {
+    return res.status(404).json({ error: 'No invoice available' });
+  }
+
+  try {
+    const url = await getInvoiceUrlForPaymentIntent(txn.stripe_payment_intent_id);
+    if (!url) return res.status(404).json({ error: 'No invoice available' });
+    res.json({ url });
+  } catch (err) {
+    console.error('[billing.receipt] failed', err);
+    res.status(500).json({ error: 'Failed to load invoice' });
+  }
+});
+
 router.get('/:id/billing/transactions', async (req: AuthRequest, res) => {
   const orgId = await gateBilling(req, res, 'view_settings');
   if (!orgId) return;
   const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const kinds = typeof req.query.kinds === 'string' && req.query.kinds.length > 0
+    ? req.query.kinds.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
   try {
-    const result = await listTransactions(orgId, cursor, limit);
+    const result = await listTransactions(orgId, cursor, limit, kinds);
     res.json(result);
   } catch (err) {
     console.error('[billing.transactions] failed', err);

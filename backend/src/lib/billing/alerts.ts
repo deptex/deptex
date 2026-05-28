@@ -1,8 +1,6 @@
 import { supabase } from '../supabase';
 import { sendEmail } from '../email';
 
-const APP_BASE_URL = process.env.APP_BASE_URL || 'https://app.deptex.dev';
-
 type BillingAlertKind =
   | 'low_balance'
   | 'zero_balance'
@@ -12,23 +10,16 @@ type BillingAlertKind =
 interface OrgMemberRow {
   user_id: string;
   role: string;
-  user_profiles?: { email: string } | null;
 }
 
 export async function resolveBillingRecipients(orgId: string): Promise<string[]> {
-  const { data: billing } = await supabase
-    .from('organization_billing')
-    .select('billing_email_override')
-    .eq('organization_id', orgId)
-    .single();
-
-  if (billing?.billing_email_override) {
-    return [billing.billing_email_override];
-  }
+  // Always send to every org member with manage_billing permission. No override
+  // column — the billing_email_recipients column is kept in DB for future use
+  // but no code reads it today.
 
   const { data: members } = await supabase
     .from('organization_members')
-    .select('user_id, role, user_profiles!inner(email)')
+    .select('user_id, role')
     .eq('organization_id', orgId);
 
   if (!members || members.length === 0) return [];
@@ -46,34 +37,28 @@ export async function resolveBillingRecipients(orgId: string): Promise<string[]>
     }
   }
 
-  const recipients: string[] = [];
-  for (const m of members as unknown as OrgMemberRow[]) {
-    if (!billingRoleNames.has(m.role)) continue;
-    const email = m.user_profiles?.email;
-    if (email) recipients.push(email);
-  }
-  return recipients;
+  const billingMembers = (members as unknown as OrgMemberRow[]).filter((m) =>
+    billingRoleNames.has(m.role),
+  );
+
+  const emails = await Promise.all(
+    billingMembers.map(async (m) => {
+      try {
+        const { data } = await supabase.auth.admin.getUserById(m.user_id);
+        return data.user?.email ?? null;
+      } catch (err) {
+        console.warn('[billing.alerts] getUserById failed for', m.user_id, err);
+        return null;
+      }
+    }),
+  );
+
+  return emails.filter((e): e is string => !!e);
 }
 
 async function orgName(orgId: string): Promise<string> {
   const { data } = await supabase.from('organizations').select('name').eq('id', orgId).single();
   return data?.name ?? 'Your organization';
-}
-
-function billingPageUrl(orgId: string): string {
-  return `${APP_BASE_URL}/organizations/${orgId}/settings/plan`;
-}
-
-function emailShell(orgName: string, body: string, ctaLabel: string, ctaUrl: string): string {
-  return `<!doctype html>
-<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#111">
-  <p style="font-size:14px;color:#555">${orgName} — Deptex billing</p>
-  ${body}
-  <p style="margin:32px 0">
-    <a href="${ctaUrl}" style="background:#047857;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:500">${ctaLabel}</a>
-  </p>
-  <p style="font-size:12px;color:#888;margin-top:32px">You're receiving this because you manage billing for ${orgName}. Reply to set a single billing email override in settings.</p>
-</body></html>`;
 }
 
 async function tryClaimAlertSlot(orgId: string, column: 'low_balance_alert_sent_at' | 'zero_balance_alert_sent_at'): Promise<boolean> {
@@ -102,26 +87,18 @@ export async function sendLowBalanceAlert(orgId: string, balanceCents: number): 
   const claimed = await tryClaimAlertSlot(orgId, 'low_balance_alert_sent_at');
   if (!claimed) return { sent: false, reason: 'already_sent' };
 
-  const [recipients, name] = await Promise.all([resolveBillingRecipients(orgId), orgName(orgId)]);
+  const recipients = await resolveBillingRecipients(orgId);
+  const name = await orgName(orgId);
   if (recipients.length === 0) {
     await releaseAlertSlot(orgId, 'low_balance_alert_sent_at');
     return { sent: false, reason: 'no_recipients' };
   }
 
   const dollars = (balanceCents / 100).toFixed(2);
-  const html = emailShell(
-    name,
-    `<h2 style="margin:0 0 12px">Your balance is low</h2>
-     <p>Your current balance is <strong>$${dollars}</strong>. Top up to avoid an interruption.</p>`,
-    'Top up now',
-    billingPageUrl(orgId),
-  );
-
   const result = await sendEmail({
     to: recipients,
-    subject: `[${name}] Low balance — $${dollars} remaining`,
-    html,
-    text: `Your Deptex balance is low: $${dollars}. Top up: ${billingPageUrl(orgId)}`,
+    subject: `Low balance ${name} — $${dollars} remaining`,
+    text: `Your account balance is low: $${dollars}.\n\nTo avoid disruptions, please consider topping up in billing.`,
   });
 
   if (!result.sent) {
@@ -135,30 +112,21 @@ export async function sendZeroBalanceAlert(orgId: string, autoRechargeEnabled: b
   const claimed = await tryClaimAlertSlot(orgId, 'zero_balance_alert_sent_at');
   if (!claimed) return { sent: false, reason: 'already_sent' };
 
-  const [recipients, name] = await Promise.all([resolveBillingRecipients(orgId), orgName(orgId)]);
+  const recipients = await resolveBillingRecipients(orgId);
+  const name = await orgName(orgId);
   if (recipients.length === 0) {
     await releaseAlertSlot(orgId, 'zero_balance_alert_sent_at');
     return { sent: false, reason: 'no_recipients' };
   }
 
-  const tail = autoRechargeEnabled
-    ? `<p>Auto-recharge appears to have failed. Check your payment method.</p>`
-    : `<p>Top up to resume Aegis chats and scans.</p>`;
-
-  const html = emailShell(
-    name,
-    `<h2 style="margin:0 0 12px">Your balance is at $0</h2>
-     <p>Aegis chats and metered scans are paused until you top up.</p>
-     ${tail}`,
-    'Top up now',
-    billingPageUrl(orgId),
-  );
+  const tailText = autoRechargeEnabled
+    ? `Auto-recharge appears to have failed. Please check your payment method in billing.`
+    : `To resume Aegis chats and scans, please top up in billing.`;
 
   const result = await sendEmail({
     to: recipients,
-    subject: `[${name}] Account out of credit`,
-    html,
-    text: `Your Deptex balance is $0. Top up: ${billingPageUrl(orgId)}`,
+    subject: `Account out of credit — ${name}`,
+    text: `Your account balance is at $0.00.\n\nAegis chats and metered scans are paused until you top up.\n\n${tailText}`,
   });
 
   if (!result.sent) {
@@ -173,47 +141,30 @@ export async function sendCreditAddedEmail(
   amountCents: number,
   source: 'topup' | 'auto_recharge_topup',
 ): Promise<AlertSendResult> {
-  const [recipients, name] = await Promise.all([resolveBillingRecipients(orgId), orgName(orgId)]);
+  const recipients = await resolveBillingRecipients(orgId);
+  const name = await orgName(orgId);
   if (recipients.length === 0) return { sent: false, reason: 'no_recipients' };
 
   const dollars = (amountCents / 100).toFixed(2);
   const verb = source === 'auto_recharge_topup' ? 'auto-recharged' : 'topped up';
-  const html = emailShell(
-    name,
-    `<h2 style="margin:0 0 12px">Receipt: $${dollars} ${verb}</h2>
-     <p>Your account was ${verb} by <strong>$${dollars}</strong>.</p>`,
-    'View activity',
-    billingPageUrl(orgId),
-  );
-
   const result = await sendEmail({
     to: recipients,
-    subject: `[${name}] Receipt — $${dollars} added`,
-    html,
-    text: `$${dollars} was added to your Deptex balance.`,
+    subject: `Receipt ${name} — $${dollars} added`,
+    text: `Your account was ${verb} by $${dollars}.`,
   });
 
   return result.sent ? { sent: true } : { sent: false, reason: 'send_failed' };
 }
 
 export async function sendAutoRechargeFailed(orgId: string, reason: string): Promise<AlertSendResult> {
-  const [recipients, name] = await Promise.all([resolveBillingRecipients(orgId), orgName(orgId)]);
+  const recipients = await resolveBillingRecipients(orgId);
+  const name = await orgName(orgId);
   if (recipients.length === 0) return { sent: false, reason: 'no_recipients' };
-
-  const html = emailShell(
-    name,
-    `<h2 style="margin:0 0 12px">Auto-recharge failed</h2>
-     <p>We couldn't auto-recharge your account: <em>${reason}</em>.</p>
-     <p>Auto-recharge has been disabled until you update your payment method.</p>`,
-    'Update payment method',
-    billingPageUrl(orgId),
-  );
 
   const result = await sendEmail({
     to: recipients,
-    subject: `[${name}] Auto-recharge failed`,
-    html,
-    text: `Auto-recharge failed: ${reason}. Disabled until payment method updated.`,
+    subject: `Auto-recharge failed — ${name}`,
+    text: `Auto-recharge failed: ${reason}.\n\nAuto-recharge has been disabled. Please update your payment method in billing to re-enable it.`,
   });
 
   return result.sent ? { sent: true } : { sent: false, reason: 'send_failed' };

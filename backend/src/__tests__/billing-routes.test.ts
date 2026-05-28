@@ -73,7 +73,6 @@ function setBillingState() {
       auto_recharge_amount_cents: null,
       auto_recharge_monthly_cap_cents: null,
       low_balance_alert_threshold_cents: 500,
-      billing_email_override: null,
       stripe_customer_id: null,
       stripe_default_payment_method_id: null,
     },

@@ -5,11 +5,17 @@ import {
 } from '../../../test/mocks/supabaseSingleton';
 
 jest.mock('../stripe-billing', () => ({
-  createPaymentIntent: jest.fn(),
+  createTopUpInvoice: jest.fn(),
+}));
+
+jest.mock('../alerts', () => ({
+  resolveBillingRecipients: jest.fn().mockResolvedValue(['owner@example.com']),
+  sendAutoRechargeFailed: jest.fn().mockResolvedValue({ sent: true }),
 }));
 
 import { maybeAutoRecharge } from '../auto-recharge';
-import { createPaymentIntent } from '../stripe-billing';
+import { createTopUpInvoice } from '../stripe-billing';
+import { sendAutoRechargeFailed } from '../alerts';
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -36,7 +42,8 @@ describe('maybeAutoRecharge', () => {
     clearTableRegistry();
     clearRpcRegistry();
     process.env.DEPTEX_BILLING_ENFORCEMENT = 'on';
-    (createPaymentIntent as jest.Mock).mockReset();
+    (createTopUpInvoice as jest.Mock).mockReset();
+    (sendAutoRechargeFailed as jest.Mock).mockClear();
   });
 
   afterEach(() => {
@@ -47,7 +54,7 @@ describe('maybeAutoRecharge', () => {
     process.env.DEPTEX_BILLING_ENFORCEMENT = 'off';
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result).toEqual({ attempted: false, reason: 'enforcement_off' });
-    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
   it('returns disabled when auto_recharge_enabled = false', async () => {
@@ -57,7 +64,7 @@ describe('maybeAutoRecharge', () => {
     });
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result.reason).toBe('disabled');
-    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
   it('returns disabled when threshold or amount missing', async () => {
@@ -85,7 +92,7 @@ describe('maybeAutoRecharge', () => {
     });
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result.reason).toBe('above_threshold');
-    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
   it('clears stuck flag when in_progress > 30 minutes old', async () => {
@@ -113,7 +120,7 @@ describe('maybeAutoRecharge', () => {
 
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result.reason).toBe('in_progress');
-    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
   it('returns monthly_cap_reached when adding amount would exceed cap', async () => {
@@ -128,14 +135,19 @@ describe('maybeAutoRecharge', () => {
 
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result.reason).toBe('monthly_cap_reached');
-    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
-  it('creates PaymentIntent on happy path', async () => {
+  it('creates invoice top-up on happy path', async () => {
     setTableResponse('organization_billing', 'single', { data: billingRow(), error: null });
-    (createPaymentIntent as jest.Mock).mockResolvedValueOnce({
-      paymentIntent: { id: 'pi_x' },
-      customerId: 'cus_x',
+    (createTopUpInvoice as jest.Mock).mockResolvedValueOnce({
+      status: 'succeeded',
+      clientSecret: null,
+      paymentIntentId: 'pi_x',
+      invoiceId: 'in_x',
+      subtotalCents: 2000,
+      taxCents: 0,
+      totalCents: 2000,
     });
 
     const result = await maybeAutoRecharge(ORG_ID);
@@ -144,26 +156,49 @@ describe('maybeAutoRecharge', () => {
       reason: 'pi_created',
       paymentIntentId: 'pi_x',
     });
-    expect(createPaymentIntent).toHaveBeenCalledWith(
+    expect(createTopUpInvoice).toHaveBeenCalledWith(
       expect.objectContaining({
         orgId: ORG_ID,
         amountCents: 2000,
         purpose: 'auto_recharge_topup',
-        offSession: true,
-        paymentMethodId: 'pm_test',
+        fallbackEmail: 'owner@example.com',
       }),
     );
   });
 
-  it('returns pi_failed and disables auto-recharge when PI creation throws', async () => {
+  it('returns pi_failed when invoice top-up throws', async () => {
     setTableResponse('organization_billing', 'single', { data: billingRow(), error: null });
-    (createPaymentIntent as jest.Mock).mockRejectedValueOnce(new Error('card_declined'));
+    (createTopUpInvoice as jest.Mock).mockRejectedValueOnce(new Error('card_declined'));
     const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await maybeAutoRecharge(ORG_ID);
     expect(result.reason).toBe('pi_failed');
     expect(result.attempted).toBe(true);
+    expect(sendAutoRechargeFailed).toHaveBeenCalledWith(ORG_ID, 'card_declined');
 
     errSpy.mockRestore();
+  });
+
+  it('returns pi_failed and disables auto-recharge when needs_setup', async () => {
+    setTableResponse('organization_billing', 'single', { data: billingRow(), error: null });
+    (createTopUpInvoice as jest.Mock).mockResolvedValueOnce({
+      status: 'needs_setup',
+      clientSecret: null,
+      paymentIntentId: null,
+      invoiceId: '',
+      subtotalCents: 2000,
+      taxCents: 0,
+      totalCents: 2000,
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await maybeAutoRecharge(ORG_ID);
+    expect(result.reason).toBe('pi_failed');
+    expect(sendAutoRechargeFailed).toHaveBeenCalledWith(
+      ORG_ID,
+      expect.stringContaining('Billing address'),
+    );
+
+    warnSpy.mockRestore();
   });
 });
