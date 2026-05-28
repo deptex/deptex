@@ -35,7 +35,7 @@ export const VALID_SETTINGS_SECTIONS = new Set([
   'mfa',
   'ip_allowlist',
   'usage',
-  'plan',
+  'billing',
 ]);
 
 export type OrgSettingsCategoryEntry = {
@@ -158,7 +158,7 @@ export function buildOrgSettingsSections(
   if (perms.manage_billing) {
     entries.push({ id: 'category_plan', label: 'Plan', isCategory: true });
     entries.push({ id: 'usage', label: 'Usage', icon: <BarChart className={iconClass} /> });
-    entries.push({ id: 'plan', label: 'Plan & Billing', icon: <CreditCard className={iconClass} /> });
+    entries.push({ id: 'billing', label: 'Billing', icon: <CreditCard className={iconClass} /> });
   }
 
   return entries;

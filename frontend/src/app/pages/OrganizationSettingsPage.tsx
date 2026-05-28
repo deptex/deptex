@@ -673,7 +673,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
           </div>
         </div>
       );
-    case 'plan':
+    case 'billing':
       return (
         <div className="space-y-8">
           <div>
@@ -3319,7 +3319,7 @@ export default function OrganizationSettingsPage() {
                 </div>
               )}
 
-              {activeSection === 'plan' && (
+              {activeSection === 'billing' && (
                 <PlanBillingSectionContent organizationId={id || ''} />
               )}
 

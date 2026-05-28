@@ -189,7 +189,7 @@ describe('PermissionEditor', () => {
     const auditLogs = screen.getByRole('button', { name: 'View Audit Logs' });
     expect(auditLogs).not.toBeDisabled();
 
-    const manageBilling = screen.getByRole('button', { name: 'Manage Plan & Billing' });
+    const manageBilling = screen.getByRole('button', { name: 'Manage Billing' });
     expect(manageBilling).toBeDisabled();
 
     // Trying to click the disabled button should not invoke onChange.
