@@ -10,57 +10,46 @@ const router = express.Router();
 
 router.use(requireInternalKey);
 
-// Job-binding: when the worker tells us which job this charge is for
-// (attribution.resource_type + resource_id), we look up that job and derive its
-// real org_id. If the body's organization_id disagrees with the job's, we reject —
-// a compromised INTERNAL_API_KEY can therefore only charge orgs with legitimate
-// active work, not arbitrary tenants.
+// Job-binding (fail-closed): every HTTP meter-event caller binds its charge to a job row —
+// depscanner sends scan_job, fix-worker sends fix_task. We look that row up and derive its
+// real org_id; if the body's organization_id disagrees, or the attribution can't be bound to
+// a real resource, we REJECT. A leaked INTERNAL_API_KEY therefore can't drain an arbitrary
+// org — it can only charge orgs with legitimate active work it can actually name.
+//
+// In-process callers (aegis-v3, EPD, rule generation) call recordMeterEvent directly with a
+// trusted org_id and never reach this HTTP route, so they need no mapping here.
 //
 // Returns:
-//   { ok: true }                   — attribution matches, charge ok
-//   { ok: true, missing: true }    — no attribution provided; legacy path (logged)
-//   { ok: false, reason: string }  — attribution provided but doesn't resolve / mismatches
+//   { ok: true }                  — attribution resolved and org matches
+//   { ok: false, reason: string } — missing / unbindable / mismatched (caller returns 403)
 async function verifyAttribution(
   bodyOrgId: string,
   attribution: { resource_type?: string; resource_id?: string } | undefined,
-): Promise<{ ok: true; missing?: boolean } | { ok: false; reason: string }> {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const resourceType = attribution?.resource_type;
   const resourceId = attribution?.resource_id;
   if (!resourceType || !resourceId) {
-    return { ok: true, missing: true };
+    return { ok: false, reason: 'attribution required (resource_type + resource_id)' };
   }
 
-  let actualOrgId: string | null = null;
-  switch (resourceType) {
-    case 'aegis_chat': {
-      const { data } = await supabase
-        .from('aegis_chat_threads')
-        .select('organization_id')
-        .eq('id', resourceId)
-        .maybeSingle();
-      actualOrgId = (data as any)?.organization_id ?? null;
-      break;
-    }
-    case 'scan_job': {
-      const { data } = await supabase
-        .from('scan_jobs')
-        .select('organization_id')
-        .eq('id', resourceId)
-        .maybeSingle();
-      actualOrgId = (data as any)?.organization_id ?? null;
-      break;
-    }
-    case 'fix_task':
-    case 'rule_generation':
-    case 'epd_scoring':
-      // These resource types don't have a dedicated table with organization_id today —
-      // log + skip the binding check. Listed here so a future schema for them can be
-      // wired into the switch without changing the route signature.
-      return { ok: true, missing: true };
-    default:
-      return { ok: false, reason: `unknown resource_type: ${resourceType}` };
+  // Each bindable resource type → the table that owns organization_id. Types with no HTTP
+  // caller (rule_generation / epd_scoring) aren't listed, so they fall through to reject.
+  const tableByType: Record<string, string> = {
+    aegis_chat: 'aegis_chat_threads',
+    scan_job: 'scan_jobs',
+    fix_task: 'project_security_fixes',
+  };
+  const table = tableByType[resourceType];
+  if (!table) {
+    return { ok: false, reason: `unbindable resource_type: ${resourceType}` };
   }
 
+  const { data } = await supabase
+    .from(table)
+    .select('organization_id')
+    .eq('id', resourceId)
+    .maybeSingle();
+  const actualOrgId = (data as any)?.organization_id ?? null;
   if (!actualOrgId) {
     return { ok: false, reason: `${resourceType} ${resourceId} not found` };
   }
@@ -136,9 +125,9 @@ router.post('/meter-event', async (req, res) => {
   }
   const body = parsed.data;
 
-  // Job-binding check (P0-2 mitigation). When attribution is present, the org_id MUST
-  // resolve from the job — body.organization_id can't be trusted on its own because
-  // INTERNAL_API_KEY is a single shared secret across all workers.
+  // Job-binding check (P0-2 mitigation, fail-closed). org_id MUST resolve from a job row the
+  // caller names — body.organization_id can't be trusted on its own because INTERNAL_API_KEY
+  // is a single shared secret across all workers. Unbindable/missing attribution → 403.
   const attrResult = await verifyAttribution(body.organization_id, body.attribution);
   if (attrResult.ok === false) {
     console.error('[billing] meter-event attribution rejected', {
@@ -147,13 +136,6 @@ router.post('/meter-event', async (req, res) => {
       reason: attrResult.reason,
     });
     return res.status(403).json({ error: 'attribution_mismatch', detail: attrResult.reason });
-  }
-  if (attrResult.missing) {
-    console.warn('[billing] meter-event without attribution — accepting (legacy path)', {
-      orgId: body.organization_id,
-      feature: body.feature,
-      eventType: body.event_type,
-    });
   }
 
   let cogCents = 0;
