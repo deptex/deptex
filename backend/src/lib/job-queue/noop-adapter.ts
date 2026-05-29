@@ -4,6 +4,7 @@
  */
 
 import type { JobQueue, PublishMessage } from './types';
+import { isValidInternalKey } from '../../middleware/internal-key';
 
 let warned = false;
 
@@ -29,10 +30,8 @@ export const noopAdapter: JobQueue = {
     return messages.map(() => null);
   },
   async verifyRequest(headers) {
-    const internalKey = process.env.INTERNAL_API_KEY;
-    if (!internalKey) return false;
     const presented = headers['x-internal-api-key'];
     const presentedStr = Array.isArray(presented) ? presented[0] : presented;
-    return presentedStr === internalKey;
+    return isValidInternalKey(presentedStr);
   },
 };
