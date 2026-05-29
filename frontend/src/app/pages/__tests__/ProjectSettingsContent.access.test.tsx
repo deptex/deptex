@@ -120,10 +120,11 @@ describe('ProjectSettingsPage – Access', () => {
 
   it('shows Contributing Teams with Add Team button', async () => {
     render(<ProjectSettingsPage />);
-    await waitFor(() => {
-      expect(screen.getByText('Contributing Teams')).toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: /Add Team/ })).toBeInTheDocument();
+    // The loading skeleton also renders "Contributing Teams" text but no Add
+    // Team button — wait for the button itself (findByRole) rather than the
+    // shared text, so we don't race the skeleton on slow CI runners (same fix
+    // the sibling tests below already use).
+    expect(await screen.findByRole('button', { name: /Add Team/ })).toBeInTheDocument();
   });
 
   it('shows contributing team name in list', async () => {
