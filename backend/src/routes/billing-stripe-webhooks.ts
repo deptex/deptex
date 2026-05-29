@@ -74,17 +74,23 @@ router.post('/', async (req, res) => {
       }
       res.json({ received: true });
     } catch (handlerErr: any) {
-      // The event is already claimed, so Stripe retrying this event_id will be no-op.
-      // Returning 200 prevents Stripe's exponential dunning on a transient handler error
-      // (e.g. Supabase blip). For events we genuinely need replayed, we'd release the
-      // claim — but our handlers are idempotent (ledger uniqueness on stripe_payment_intent_id
-      // + per-row updates) so it's safer to accept the loss-of-retry trade-off.
-      console.error('[billing-webhook] handler threw after claim', {
+      // Handlers throw ONLY on retryable failures (a DB write that must land). The event is
+      // already claimed, so a Stripe retry would no-op unless we release the claim first —
+      // release it and return 500 to ask Stripe to retry. Re-running is safe: credits are
+      // idempotent (uq on stripe_payment_intent_id) and the per-row updates are idempotent.
+      // Terminal conditions (missing metadata, unknown purpose, cross-tenant mismatch) `return`
+      // inside the handlers rather than throwing, so they don't reach here and aren't retried.
+      console.error('[billing-webhook] handler threw after claim — releasing claim for retry', {
         event_id: event.id,
         event_type: event.type,
         err: handlerErr?.message ?? handlerErr,
       });
-      res.json({ received: true, status: 'handler_error_logged' });
+      try {
+        await stripeLib.releaseWebhookEvent(event.id);
+      } catch (relErr) {
+        console.error('[billing-webhook] releaseWebhookEvent failed', { event_id: event.id, err: relErr });
+      }
+      res.status(500).json({ error: 'handler_failed_retry' });
     }
   } catch (err: any) {
     console.error('[billing-webhook] error', err?.message);
@@ -92,19 +98,21 @@ router.post('/', async (req, res) => {
   }
 });
 
-export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
-  // Kill-switch: when DEPTEX_BILLING_ENFORCEMENT is off we must not credit balances,
-  // otherwise an in-flight Stripe webhook fires during an ops "billing off" window and
-  // credits the org. Skip the credit but still clear the in_progress flag below so the
-  // org isn't stuck if enforcement is later turned back on.
-  if (!isBillingEnforcementEnabled()) {
-    console.warn('[billing-webhook] enforcement off — skipping credit', {
-      pi_id: pi.id,
-      amount: pi.amount,
-    });
-    return;
+// Clears the auto-recharge in-progress lock. Throws on DB error so the webhook router can
+// release the claim and let Stripe retry — a stuck flag would otherwise block the org's next
+// auto-recharge until the 60-minute stuck-flag recovery kicks in.
+async function clearAutoRechargeInProgress(orgId: string): Promise<void> {
+  const { error } = await supabase
+    .from('organization_billing')
+    .update({ auto_recharge_in_progress: false, auto_recharge_in_progress_started_at: null })
+    .eq('organization_id', orgId);
+  if (error) {
+    console.error('[billing-webhook] failed to clear auto_recharge_in_progress', { org_id: orgId, err: error });
+    throw new Error(`clear auto_recharge_in_progress failed for ${orgId}: ${error.message}`);
   }
+}
 
+export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
   const metadata = pi.metadata || {};
   let orgId: string | undefined = metadata.organization_id;
   let purpose: string | undefined = metadata.purpose;
@@ -132,6 +140,18 @@ export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
   }
   if (purpose !== 'topup' && purpose !== 'auto_recharge_topup') {
     console.error('[billing-webhook] unknown metadata.purpose', { pi_id: pi.id, purpose });
+    return;
+  }
+
+  // Kill switch: when DEPTEX_BILLING_ENFORCEMENT is off we must not credit balances (an
+  // in-flight webhook during an ops "billing off" window would otherwise credit the org).
+  // Skip the credit — but still clear the in_progress flag for an auto-recharge PI so the
+  // org isn't wedged once enforcement is turned back on.
+  if (!isBillingEnforcementEnabled()) {
+    console.warn('[billing-webhook] enforcement off — skipping credit', { pi_id: pi.id, amount: pi.amount, org_id: orgId });
+    if (purpose === 'auto_recharge_topup') {
+      await clearAutoRechargeInProgress(orgId);
+    }
     return;
   }
 
@@ -172,17 +192,17 @@ export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
         pi_id: pi.id,
       });
     } else {
-      // Do NOT throw — the event is claimed, so a 500 → Stripe retry would no-op via
-      // the claim guard, but the credit would be lost forever. Log loudly and let
-      // ops/Sentry pick it up; the customer balance will need a manual reconciliation.
-      console.error('[billing] webhook credit_balance failed (UNRECOVERABLE — needs manual reconciliation)', {
+      // Retryable: throw so the router releases the claim and Stripe retries. The credit is
+      // idempotent (uq_billing_transactions_pi_credit on stripe_payment_intent_id), so a
+      // re-run can't double-credit — far safer than silently losing the credit forever.
+      console.error('[billing] webhook credit_balance failed — releasing claim for retry', {
         correlationId,
         pi_id: pi.id,
         org_id: orgId,
         amount_cents: amountCents,
         err: rpcErr,
       });
-      return;
+      throw new Error(`credit_balance failed for pi ${pi.id}: ${rpcErr.message ?? rpcErr.code}`);
     }
   } else {
     console.info('[billing] webhook credited', {
@@ -195,19 +215,7 @@ export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
   }
 
   if (purpose === 'auto_recharge_topup') {
-    const { error: clearErr } = await supabase
-      .from('organization_billing')
-      .update({
-        auto_recharge_in_progress: false,
-        auto_recharge_in_progress_started_at: null,
-      })
-      .eq('organization_id', orgId);
-    if (clearErr) {
-      console.error('[billing-webhook] failed to clear auto_recharge_in_progress', {
-        org_id: orgId,
-        err: clearErr,
-      });
-    }
+    await clearAutoRechargeInProgress(orgId);
   }
 
   // After a successful credit the balance may have crossed back above the alert threshold.
@@ -290,10 +298,11 @@ export async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
     })
     .eq('organization_id', orgId);
   if (updErr) {
-    console.error('[billing-webhook] failed to disable auto_recharge after invoice failure', {
+    console.error('[billing-webhook] failed to disable auto_recharge after invoice failure — releasing for retry', {
       org_id: orgId,
       err: updErr,
     });
+    throw new Error(`disable auto_recharge after invoice failure failed for ${orgId}: ${updErr.message}`);
   }
 
   if (invoice.id) {
@@ -332,10 +341,11 @@ export async function handlePaymentMethodDetached(pm: any): Promise<void> {
     })
     .eq('organization_id', billing.organization_id);
   if (updErr) {
-    console.error('[billing-webhook] PM detach update failed', {
+    console.error('[billing-webhook] PM detach update failed — releasing for retry', {
       org_id: billing.organization_id,
       err: updErr,
     });
+    throw new Error(`PM detach update failed for ${billing.organization_id}: ${updErr.message}`);
   }
 }
 

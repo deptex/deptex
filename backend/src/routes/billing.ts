@@ -15,6 +15,7 @@ import {
   setDefaultPaymentMethod,
 } from '../lib/billing/stripe-billing';
 import { maybeAutoRecharge } from '../lib/billing/auto-recharge';
+import { isBillingEnforcementEnabled } from '../lib/billing/enforcement';
 import { supabase } from '../lib/supabase';
 
 const router = express.Router();
@@ -77,6 +78,11 @@ const topupSchema = z.object({
 router.post('/:id/billing/topup', async (req: AuthRequest, res) => {
   const orgId = await gateBilling(req, res, 'manage_billing');
   if (!orgId) return;
+  // Kill switch: don't start a Stripe charge the credit webhook would refuse to honor —
+  // otherwise the customer pays and the balance never credits (charged-but-no-credit).
+  if (!isBillingEnforcementEnabled()) {
+    return res.status(503).json({ error: 'Billing is temporarily unavailable. Please try again shortly.' });
+  }
   const parsed = topupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid top-up amount' });
@@ -117,6 +123,9 @@ const topupIntentSchema = z.object({
 router.post('/:id/billing/topup-intent', async (req: AuthRequest, res) => {
   const orgId = await gateBilling(req, res, 'manage_billing');
   if (!orgId) return;
+  if (!isBillingEnforcementEnabled()) {
+    return res.status(503).json({ error: 'Billing is temporarily unavailable. Please try again shortly.' });
+  }
   const parsed = topupIntentSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid top-up request' });

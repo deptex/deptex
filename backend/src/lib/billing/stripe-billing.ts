@@ -60,6 +60,19 @@ export async function claimWebhookEvent(
   return { claimed: false };
 }
 
+// Undo a claim so a failed handler can be retried by Stripe. Safe because the webhook
+// handlers are idempotent; the worst case on a re-run is a duplicate-credit attempt blocked
+// by the uq_billing_transactions_pi_credit constraint.
+export async function releaseWebhookEvent(eventId: string): Promise<void> {
+  const { error } = await supabase
+    .from('billing_stripe_webhook_events')
+    .delete()
+    .eq('event_id', eventId);
+  if (error) {
+    console.error('[stripe-billing] releaseWebhookEvent failed', { eventId, error });
+  }
+}
+
 export async function ensureStripeCustomer(orgId: string): Promise<string> {
   const { data: billing, error } = await supabase
     .from('organization_billing')
@@ -272,9 +285,11 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     throw new Error('Stripe invoice creation returned no id');
   }
 
-  let finalized = await stripe.invoices.finalizeInvoice(invoice.id, {
-    expand: ['payments'],
-  });
+  let finalized = await stripe.invoices.finalizeInvoice(
+    invoice.id,
+    { expand: ['payments'] },
+    { idempotencyKey: `finalize:${idemSuffix}` },
+  );
 
   type InvoiceWithPayments = Stripe.Invoice & {
     payments?: { data?: Array<{ payment?: { payment_intent?: string | null } }> };
@@ -335,11 +350,15 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
 
   if (defaultPmId && (finalized.status === 'open' || finalized.status === 'draft')) {
     try {
-      finalized = await stripe.invoices.pay(invoice.id, {
-        payment_method: defaultPmId,
-        off_session: true,
-        expand: ['payments'],
-      });
+      finalized = await stripe.invoices.pay(
+        invoice.id,
+        {
+          payment_method: defaultPmId,
+          off_session: true,
+          expand: ['payments'],
+        },
+        { idempotencyKey: `pay:${idemSuffix}` },
+      );
       piId = extractPiId(finalized) ?? piId;
       console.log('[topup] paid', { status: finalized.status, piId });
     } catch (err: any) {
