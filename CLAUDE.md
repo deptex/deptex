@@ -153,7 +153,8 @@ Auto-recharge: balance < auto_recharge_threshold_cents AND rolling-30-day sum +
                  auto_recharge_amount_cents <= auto_recharge_monthly_cap_cents
                  → createTopUpInvoice (off-session) → succeeds = pi_created (webhook credits)
                  → fails inline = disable + void open invoice + sendAutoRechargeFailed
-Alerts:    low_balance / zero_balance / cap_reached / auto_recharge_failed — Resend (or
+Alerts:    low_balance / zero_balance / credit_added / auto_recharge_failed /
+           auto_recharge_cap_reached — Resend (or
            Gmail SMTP fallback) to all org members with manage_billing. Dedup via slot
            columns on organization_billing. Subjects carry UTC timestamp suffix so each
            alert is its own Gmail thread.
