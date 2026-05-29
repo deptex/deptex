@@ -12,7 +12,8 @@
     "type-check": "tsc --noEmit",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:baseline": "tsx scripts/migrate.ts baseline",
-    "migrate:status": "tsx scripts/migrate.ts status"
+    "migrate:status": "tsx scripts/migrate.ts status",
+    "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts"
   },
   "keywords": [
     "dependency-tracking",
