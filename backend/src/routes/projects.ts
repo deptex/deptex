@@ -20,7 +20,7 @@ import {
 import { detectMonorepo, findDockerizedPaths, peekRepoRoot, RepoPeek, isDockerFile } from '../lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
 import { queueExtractionJob, cancelExtractionJob } from '../lib/extraction-jobs';
-import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
+import { MANIFEST_FILES, MANIFEST_EXTENSIONS, IGNORED_DIRS, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { createRemovePrForProject } from '../lib/create-remove-pr';
 import { isVersionAffected, isVersionFixed } from '../lib/semver-affected';
@@ -1130,8 +1130,6 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
     const rawEntries = await provider.listDirectory(repo_full_name, default_branch, dirPath);
 
     // Drop noisy directories (node_modules, dist, .git, etc.) — they're never the target of a scan.
-    const { IGNORED_DIRS, MANIFEST_FILES, MANIFEST_EXTENSIONS } = await import('../lib/ecosystems');
-
     type Entry = {
       name: string;
       path: string;

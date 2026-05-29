@@ -60,23 +60,10 @@ export function isDockerFile(fileName: string): boolean {
   return false;
 }
 
-/** Root-level filenames that strongly suggest a monorepo workspace. */
-const MONOREPO_ROOT_MARKERS = new Set([
-  'pnpm-workspace.yaml',
-  'lerna.json',
-  'nx.json',
-  'rush.json',
-  'turbo.json',
-]);
-
 export interface RepoPeek {
   framework: string;
   ecosystem: string;
   hasRootManifest: boolean;
-  /** Heuristic: root contains a workspace marker (pnpm-workspace, lerna.json, nx.json, etc.)
-   * or top-level `apps/` / `packages/` directories. Used to decide whether to pre-warm the
-   * full monorepo scan in the background. */
-  looksLikeMonorepo: boolean;
   /** Root contains a Dockerfile / Containerfile / compose file. */
   rootDockerized: boolean;
 }
@@ -94,11 +81,9 @@ export async function peekRepoRoot(
 ): Promise<RepoPeek> {
   const rootFiles = await provider.getRootContents(repoFullName, defaultBranch);
   const rootBlobNames = new Set<string>();
-  const rootTreeNames = new Set<string>();
   for (const f of rootFiles) {
-    const name = f.path.split('/').pop() || f.path;
-    if (f.type === 'blob') rootBlobNames.add(name);
-    else if (f.type === 'tree') rootTreeNames.add(name);
+    if (f.type !== 'blob') continue;
+    rootBlobNames.add(f.path.split('/').pop() || f.path);
   }
 
   let framework = 'unknown';
@@ -133,20 +118,12 @@ export async function peekRepoRoot(
     }
   }
 
-  let looksLikeMonorepo = false;
-  for (const marker of MONOREPO_ROOT_MARKERS) {
-    if (rootBlobNames.has(marker)) { looksLikeMonorepo = true; break; }
-  }
-  if (!looksLikeMonorepo && (rootTreeNames.has('apps') || rootTreeNames.has('packages'))) {
-    looksLikeMonorepo = true;
-  }
-
   let rootDockerized = false;
   for (const name of rootBlobNames) {
     if (isDockerFile(name)) { rootDockerized = true; break; }
   }
 
-  return { framework, ecosystem, hasRootManifest, looksLikeMonorepo, rootDockerized };
+  return { framework, ecosystem, hasRootManifest, rootDockerized };
 }
 
 /**

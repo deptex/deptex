@@ -31,7 +31,6 @@ type ScanResult = {
   framework?: string;
   ecosystem?: string;
   dockerizedPaths?: string[];
-  treeTruncated?: boolean;
 };
 
 
@@ -87,6 +86,11 @@ export default function NewProjectPage() {
   const [repoScanLoading, setRepoScanLoading] = useState<string | null>(null);
   const [repoScanResultsByRepo, setRepoScanResultsByRepo] = useState<Record<string, ScanResult>>({});
   const [selectedPath, setSelectedPath] = useState('');
+  // Ecosystem for the currently-committed path. Captured from the picker's per-layer
+  // list-dir probe when the user picks a sub-path; from peek/scan when the user uses
+  // the repo root. Without this, picker-discovered sub-paths would fall back to root's
+  // ecosystem at submit time (wrong for monorepos with mixed-language sub-projects).
+  const [selectedPathEcosystem, setSelectedPathEcosystem] = useState<string | undefined>();
   const [pathPickerOpen, setPathPickerOpen] = useState(false);
   const [repoScanError, setRepoScanError] = useState<string | null>(null);
   const [repoNoManifest, setRepoNoManifest] = useState(false);
@@ -233,6 +237,7 @@ export default function NewProjectPage() {
     setRepos([]);
     setRepoToConnect(null);
     setSelectedPath('');
+    setSelectedPathEcosystem(undefined);
     setRepoPeekLoading(null);
     setRepoPeekByRepo({});
     setRepoScanLoading(null);
@@ -260,12 +265,18 @@ export default function NewProjectPage() {
   // Auto-fill `projectName` from a repo/path-derived value, but only if the
   // user hasn't manually edited the field. Tracks `lastAutoNameRef` so a
   // later auto-fill can overwrite a previous auto-fill but not user input.
+  // Reads via the functional setter so an in-flight handler resuming after an
+  // await still sees the LATEST projectName — not a render-time snapshot that
+  // would silently clobber what the user typed during the wait.
   const maybeAutoSetProjectName = (newName: string) => {
-    const current = projectName.trim();
-    if (current === '' || current === lastAutoNameRef.current) {
-      setProjectName(newName);
-      lastAutoNameRef.current = newName;
-    }
+    setProjectName((prev) => {
+      const current = prev.trim();
+      if (current === '' || current === lastAutoNameRef.current) {
+        lastAutoNameRef.current = newName;
+        return newName;
+      }
+      return prev;
+    });
   };
 
   /** Fetch the full recursive-tree scan for a repo and cache it. Called lazily — only when
@@ -300,7 +311,6 @@ export default function NewProjectPage() {
         framework: scanData.framework,
         ecosystem: scanData.ecosystem,
         dockerizedPaths: scanData.dockerizedPaths,
-        treeTruncated: scanData.treeTruncated,
       };
       setRepoScanResultsByRepo((prev) => seq === scanSeqRef.current ? { ...prev, [repo.full_name]: result } : prev);
       return result;
@@ -341,6 +351,7 @@ export default function NewProjectPage() {
     setRepoScanError(null);
     setRepoNoManifest(false);
     setSelectedPath('');
+    setSelectedPathEcosystem(undefined);
     maybeAutoSetProjectName(repoNameOnly(repo.full_name));
     if (!organizationId) return;
 
@@ -355,6 +366,7 @@ export default function NewProjectPage() {
           const firstUnlinked = scanResult.potentialProjects.find((p) => !p.isLinked);
           if (firstUnlinked) {
             setSelectedPath(firstUnlinked.path);
+            setSelectedPathEcosystem(firstUnlinked.ecosystem);
             maybeAutoSetProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : toProjectName(firstUnlinked.name));
           }
         }
@@ -382,6 +394,7 @@ export default function NewProjectPage() {
           const firstUnlinked = scanResult.potentialProjects.find((p) => !p.isLinked);
           if (firstUnlinked) {
             setSelectedPath(firstUnlinked.path);
+            setSelectedPathEcosystem(firstUnlinked.ecosystem);
             maybeAutoSetProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : toProjectName(firstUnlinked.name));
           }
         }
@@ -423,6 +436,8 @@ export default function NewProjectPage() {
     const teamIds = teamLocked && lockedTeam ? [lockedTeam.id] : effectiveTeamId ? [effectiveTeamId] : undefined;
     const cachedScan = repoToConnect ? repoScanResultsByRepo[repoToConnect.full_name] : null;
     const cachedPeek = repoToConnect ? repoPeekByRepo[repoToConnect.full_name] : null;
+    // If user picked a sub-path via the picker, that ecosystem came from per-layer list-dir
+    // (not the full scan's potentialProjects) so prefer it over root-derived fallbacks.
     const effectiveFramework = cachedScan?.framework || cachedPeek?.framework || repoToConnect?.framework || null;
     const createPayload: Parameters<typeof api.createProject>[1] = {
       name: projectName.trim(),
@@ -444,7 +459,9 @@ export default function NewProjectPage() {
         repo_full_name: repoToConnect.full_name,
         integration_id: repoToConnect.integration_id ?? '',
         package_json_path: pathToConnect || undefined,
-        ecosystem: selectedProject?.ecosystem || cachedScan?.ecosystem || cachedPeek?.ecosystem || repoToConnect.ecosystem,
+        // Ecosystem precedence: per-layer picker pick (the user's explicit choice) wins over
+        // full-scan's potentialProjects, then root-derived peek/scan/repo defaults.
+        ecosystem: selectedPathEcosystem || selectedProject?.ecosystem || cachedScan?.ecosystem || cachedPeek?.ecosystem || repoToConnect.ecosystem,
         framework: cachedScan?.framework || cachedPeek?.framework || repoToConnect.framework || undefined,
       };
     }
@@ -996,8 +1013,11 @@ export default function NewProjectPage() {
           defaultBranch={repoToConnect.default_branch}
           integrationId={repoToConnect.integration_id ?? ''}
           initialPath={selectedPath}
-          onConfirm={(path) => {
+          onConfirm={(path, ecosystem) => {
             setSelectedPath(path);
+            // For root selection fall back to peek/scan-derived ecosystem; for sub-paths the
+            // picker provides its per-layer probed ecosystem directly.
+            setSelectedPathEcosystem(path === '' ? rootEcosystem : ecosystem);
             const segment = path === '' ? repoNameOnly(repoToConnect.full_name) : (path.split('/').pop() || repoNameOnly(repoToConnect.full_name));
             maybeAutoSetProjectName(toProjectName(segment));
           }}
@@ -1006,11 +1026,12 @@ export default function NewProjectPage() {
           rootEcosystem={rootEcosystem}
           rootDockerized={peek?.rootDockerized}
           initialEcosystem={
-            // For the root selection use peek/scan's ecosystem; for sub-paths use the scan's
-            // potentialProjects metadata. Falls back to undefined if nothing is known yet.
+            // Root row uses peek/scan-derived ecosystem; sub-paths use the value captured
+            // via the picker's onConfirm. Falls back to scan's potentialProjects in case the
+            // full scan ran for a no-root-manifest repo.
             selectedPath === ''
               ? rootEcosystem
-              : scan?.potentialProjects.find((p) => p.path === selectedPath)?.ecosystem
+              : selectedPathEcosystem || scan?.potentialProjects.find((p) => p.path === selectedPath)?.ecosystem
           }
           pathHints={(() => {
             const hints: Record<string, string | undefined> = {};

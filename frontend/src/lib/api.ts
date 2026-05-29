@@ -179,7 +179,6 @@ export interface RepoPeek {
   framework: string;
   ecosystem: string;
   hasRootManifest: boolean;
-  looksLikeMonorepo: boolean;
   rootDockerized: boolean;
 }
 
@@ -1688,10 +1687,6 @@ export const api = {
     framework?: string;
     ecosystem?: string;
     dockerizedPaths?: string[];
-    /** True if the provider returned a truncated tree (GitHub ~100k entry cap,
-     * Bitbucket max-depth cap, etc.). Detection may have missed deep
-     * packages / Dockerfiles. Surface a warning to the user. */
-    treeTruncated?: boolean;
   }> {
     const key = `${organizationId}:${repoFullName}:${defaultBranch}:${integrationId}`;
     const cached = this._organizationRepositoryScanCache.get(key);
