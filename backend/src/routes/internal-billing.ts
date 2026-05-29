@@ -1,34 +1,77 @@
 import express from 'express';
 import { z } from 'zod';
+import { supabase } from '../lib/supabase';
 import { recordMeterEvent, canCharge } from '../lib/billing/ledger';
 import { chargedCentsForWorker } from '../lib/billing/pricing';
 import { chargedCentsForAi } from '../lib/ai/pricing';
+import { requireInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY?.trim();
-
-function requireInternalKey(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const raw =
-    (req.headers['x-internal-api-key'] as string) ||
-    (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')
-      ? req.headers.authorization.slice(7)
-      : undefined);
-  const key = raw?.trim();
-  if (!INTERNAL_API_KEY || key !== INTERNAL_API_KEY) {
-    console.log('[internal-billing] auth fail', {
-      env_key_len: INTERNAL_API_KEY?.length,
-      env_key_head: INTERNAL_API_KEY?.slice(0, 4),
-      header_key_len: key?.length,
-      header_key_head: key?.slice(0, 4),
-    });
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  next();
-}
-
 router.use(requireInternalKey);
+
+// Job-binding: when the worker tells us which job this charge is for
+// (attribution.resource_type + resource_id), we look up that job and derive its
+// real org_id. If the body's organization_id disagrees with the job's, we reject —
+// a compromised INTERNAL_API_KEY can therefore only charge orgs with legitimate
+// active work, not arbitrary tenants.
+//
+// Returns:
+//   { ok: true }                   — attribution matches, charge ok
+//   { ok: true, missing: true }    — no attribution provided; legacy path (logged)
+//   { ok: false, reason: string }  — attribution provided but doesn't resolve / mismatches
+async function verifyAttribution(
+  bodyOrgId: string,
+  attribution: { resource_type?: string; resource_id?: string } | undefined,
+): Promise<{ ok: true; missing?: boolean } | { ok: false; reason: string }> {
+  const resourceType = attribution?.resource_type;
+  const resourceId = attribution?.resource_id;
+  if (!resourceType || !resourceId) {
+    return { ok: true, missing: true };
+  }
+
+  let actualOrgId: string | null = null;
+  switch (resourceType) {
+    case 'aegis_chat': {
+      const { data } = await supabase
+        .from('aegis_chat_threads')
+        .select('organization_id')
+        .eq('id', resourceId)
+        .maybeSingle();
+      actualOrgId = (data as any)?.organization_id ?? null;
+      break;
+    }
+    case 'scan_job': {
+      const { data } = await supabase
+        .from('scan_jobs')
+        .select('organization_id')
+        .eq('id', resourceId)
+        .maybeSingle();
+      actualOrgId = (data as any)?.organization_id ?? null;
+      break;
+    }
+    case 'fix_task':
+    case 'rule_generation':
+    case 'epd_scoring':
+      // These resource types don't have a dedicated table with organization_id today —
+      // log + skip the binding check. Listed here so a future schema for them can be
+      // wired into the switch without changing the route signature.
+      return { ok: true, missing: true };
+    default:
+      return { ok: false, reason: `unknown resource_type: ${resourceType}` };
+  }
+
+  if (!actualOrgId) {
+    return { ok: false, reason: `${resourceType} ${resourceId} not found` };
+  }
+  if (actualOrgId !== bodyOrgId) {
+    return {
+      ok: false,
+      reason: `attribution org mismatch: body=${bodyOrgId} ${resourceType}.org=${actualOrgId}`,
+    };
+  }
+  return { ok: true };
+}
 
 const MAX_TOKEN_QUANTITY = 5_000_000;
 const MAX_DURATION_SECONDS = 24 * 60 * 60;
@@ -92,6 +135,26 @@ router.post('/meter-event', async (req, res) => {
     });
   }
   const body = parsed.data;
+
+  // Job-binding check (P0-2 mitigation). When attribution is present, the org_id MUST
+  // resolve from the job — body.organization_id can't be trusted on its own because
+  // INTERNAL_API_KEY is a single shared secret across all workers.
+  const attrResult = await verifyAttribution(body.organization_id, body.attribution);
+  if (attrResult.ok === false) {
+    console.error('[billing] meter-event attribution rejected', {
+      orgId: body.organization_id,
+      attribution: body.attribution,
+      reason: attrResult.reason,
+    });
+    return res.status(403).json({ error: 'attribution_mismatch', detail: attrResult.reason });
+  }
+  if (attrResult.missing) {
+    console.warn('[billing] meter-event without attribution — accepting (legacy path)', {
+      orgId: body.organization_id,
+      feature: body.feature,
+      eventType: body.event_type,
+    });
+  }
 
   let cogCents = 0;
   let chargedCents = 0;

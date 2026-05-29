@@ -298,7 +298,10 @@ router.post('/:id/billing/payment-method', async (req: AuthRequest, res) => {
 });
 
 router.get('/:id/billing/transactions/:txnId/receipt', async (req: AuthRequest, res) => {
-  const orgId = await gateBilling(req, res, 'view_settings');
+  // Receipts contain Stripe-hosted invoice URLs with card last4 + billing address. That's
+  // a higher sensitivity tier than the general balance/transactions read — gate on the
+  // explicit billing-management permission, not the broader view_settings.
+  const orgId = await gateBilling(req, res, 'manage_billing');
   if (!orgId) return;
   const txnId = req.params.txnId;
 
