@@ -302,31 +302,47 @@ export const startDastMachine = (detectedRuntime: DetectedRuntime = 'unknown') =
 export const startFixMachine = () => startFlyMachine(FIX_CONFIG);
 
 /**
- * The pinned depscanner image (release digest, e.g. `registry.fly.io/deptex-depscanner@sha256:…`).
- * The fleet dispatcher pins this explicitly so a cold start from zero machines
- * never gambles on `:latest`. Throws if unset on the dispatcher path — a missing
- * pin is a deploy bug, not something to silently fall back from.
+ * Resolve the image a depscanner burst machine should boot. Resolution order:
+ *   1. FLY_DEPSCANNER_IMAGE env — an EXPLICIT pin. Set this only to force a
+ *      specific image (e.g. a deliberate worker rollback). Leave it UNSET for
+ *      normal operation — a stale pin would boot stale code on every burst.
+ *   2. The image of any existing machine on the app (running OR stopped). The
+ *      app's persistent machine carries the current deployed release after every
+ *      `flyctl deploy`, so this tracks deploys automatically — no manual re-pin.
+ *   3. Throw — a true cold start with nothing deployed and no pin. Deploy the
+ *      depscanner worker first so we never gamble on a possibly-absent `:latest`.
+ *
+ * Pass `machines` (e.g. the dispatcher's per-tick `listMachines` result) to skip
+ * a redundant API round-trip; omit it and we fetch the list ourselves.
  */
-export function getDepscannerImage(): string {
-  const img = process.env.FLY_DEPSCANNER_IMAGE?.trim();
-  if (!img) {
-    throw new Error(
-      'FLY_DEPSCANNER_IMAGE is not set — the fleet dispatcher requires a pinned release image. ' +
-        'Set it to the just-built registry digest as part of the depscanner deploy.',
-    );
+export async function resolveDepscannerImage(machines?: FlyMachine[]): Promise<string> {
+  const pinned = process.env.FLY_DEPSCANNER_IMAGE?.trim();
+  if (pinned) return pinned;
+
+  const list = machines ?? (await listMachines(DEPSCANNER_CONFIG.app));
+  for (const m of list) {
+    const img = getImageFromMachine(m);
+    if (img) return img;
   }
-  return img;
+
+  throw new Error(
+    `Cannot resolve a depscanner image: FLY_DEPSCANNER_IMAGE is unset and no machine on ` +
+      `${DEPSCANNER_CONFIG.app} carries an image. Deploy the depscanner worker first ` +
+      `(flyctl deploy -a ${DEPSCANNER_CONFIG.app}), or set FLY_DEPSCANNER_IMAGE to a release digest.`,
+  );
 }
 
 /**
- * Create ONE extraction burst machine for the dispatcher: pinned image,
- * `SCAN_TYPE=extraction`, `auto_destroy`. Throws FlyRateLimitError on 429 (the
- * dispatcher stops the tick); retries once on other transient errors. The
- * dispatcher owns the MAX_FLEET accounting, so this does not consult the pool
- * count — the caller decides how many to create.
+ * Create ONE extraction burst machine for the dispatcher: `SCAN_TYPE=extraction`,
+ * `auto_destroy`. The image is auto-resolved from the live deployment (see
+ * resolveDepscannerImage) unless `imageOverride` is passed — the dispatcher
+ * resolves it once per tick and passes it here to avoid re-listing per machine.
+ * Throws FlyRateLimitError on 429 (the dispatcher stops the tick); retries once
+ * on other transient errors. The dispatcher owns the MAX_FLEET accounting, so
+ * this does not consult the pool count — the caller decides how many to create.
  */
-export async function createDepscannerBurst(): Promise<string> {
-  const image = getDepscannerImage();
+export async function createDepscannerBurst(imageOverride?: string): Promise<string> {
+  const image = imageOverride ?? (await resolveDepscannerImage());
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {

@@ -6,6 +6,7 @@ import {
   listMachines,
   startMachine,
   createDepscannerBurst,
+  resolveDepscannerImage,
   machineMatchesScanType,
   ACTIVE_MACHINE_STATES,
   FlyRateLimitError,
@@ -275,6 +276,19 @@ export async function dispatchFleet(type: string = 'extraction'): Promise<FleetT
       .filter((m) => m.state === 'stopped' && machineMatchesScanType(m, type))
       .map((m) => m.id);
 
+    // Resolve the burst image ONCE per tick from this tick's machine list. It
+    // tracks the live deployment (the persistent machine carries the current
+    // release after each `flyctl deploy`) so there's no manual re-pin, and it
+    // avoids a per-burst API call. If it can't resolve (no pin + no machine
+    // carrying an image), still reuse stopped machines but never gamble on
+    // `:latest` for a fresh burst.
+    let burstImage: string | undefined;
+    try {
+      burstImage = await resolveDepscannerImage(flyMachines);
+    } catch (e: any) {
+      console.warn(`[FLEET] burst image unresolved — reusing stopped only this tick: ${e?.message ?? e}`);
+    }
+
     for (let i = 0; i < startN; i++) {
       let id: string | null = null;
       try {
@@ -282,8 +296,11 @@ export async function dispatchFleet(type: string = 'extraction'): Promise<FleetT
         if (reuseId) {
           await startMachine(app, reuseId);
           id = reuseId;
+        } else if (burstImage) {
+          id = await createDepscannerBurst(burstImage);
         } else {
-          id = await createDepscannerBurst();
+          console.warn('[FLEET] no stopped machine to reuse and no resolvable image — stopping tick');
+          break;
         }
       } catch (e: any) {
         if (e instanceof FlyRateLimitError) {
