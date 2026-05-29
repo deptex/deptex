@@ -9,7 +9,10 @@ function getStripe(): Stripe {
   if (!stripeClient) {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
-    stripeClient = new Stripe(key);
+    // Pin to a specific API version so the Stripe account default can't drift under us.
+    // We rely on the 2025-11-17 schema (Invoice.payments[].payment.payment_intent) in
+    // extractPiId — bumping this version is a deliberate decision, not an accident.
+    stripeClient = new Stripe(key, { apiVersion: '2025-11-17' as Stripe.LatestApiVersion });
   }
   return stripeClient;
 }
@@ -37,6 +40,26 @@ export async function markEventProcessed(eventId: string, eventType: string): Pr
   return !error;
 }
 
+// Atomic claim — INSERT first; if the row already exists (Postgres 23505) the event was
+// already processed (or is being processed by a concurrent replica) and we return false.
+// Replaces the check-then-insert pattern which had a TOCTOU window letting two retries
+// run handlers in parallel.
+export async function claimWebhookEvent(
+  eventId: string,
+  eventType: string,
+): Promise<{ claimed: boolean }> {
+  const { error } = await supabase
+    .from('billing_stripe_webhook_events')
+    .insert({ event_id: eventId, event_type: eventType });
+  if (!error) return { claimed: true };
+  // 23505 = unique_violation. Anything else (DB down, etc.) we treat as not-claimed so
+  // the webhook handler skips and Stripe retries — better than running the handler twice.
+  if ((error as any).code !== '23505') {
+    console.error('[stripe-billing] claimWebhookEvent unexpected error', error);
+  }
+  return { claimed: false };
+}
+
 export async function ensureStripeCustomer(orgId: string): Promise<string> {
   const { data: billing, error } = await supabase
     .from('organization_billing')
@@ -54,10 +77,16 @@ export async function ensureStripeCustomer(orgId: string): Promise<string> {
     .eq('id', orgId)
     .single();
 
-  const customer = await getStripe().customers.create({
-    name: org?.name ?? `org_${orgId}`,
-    metadata: { organization_id: orgId },
-  });
+  // Idempotency keyed on org_id — if two ensureStripeCustomer calls race on first-time
+  // creation, Stripe returns the same customer for the second call instead of creating a
+  // duplicate. The key is stable across retries and is org-scoped (no cross-tenant collision).
+  const customer = await getStripe().customers.create(
+    {
+      name: org?.name ?? `org_${orgId}`,
+      metadata: { organization_id: orgId },
+    },
+    { idempotencyKey: `customer:${orgId}` },
+  );
 
   const { error: updateErr } = await supabase
     .from('organization_billing')
@@ -106,7 +135,12 @@ export async function createPaymentIntent(
     params.setup_future_usage = input.setupFutureUsage;
   }
 
-  const paymentIntent = await stripe.paymentIntents.create(params);
+  // Per-attempt idempotency key. Bucketed to the minute so a user retrying within the
+  // same minute (network hiccup) re-uses the same PI instead of creating a duplicate
+  // charge. Different amount or different minute → fresh PI.
+  const minuteBucket = Math.floor(Date.now() / 60_000);
+  const idempotencyKey = `pi:${input.orgId}:${input.purpose}:${input.amountCents}:${minuteBucket}`;
+  const paymentIntent = await stripe.paymentIntents.create(params, { idempotencyKey });
   return { paymentIntent, customerId };
 }
 
@@ -126,6 +160,9 @@ export interface CreateTopUpInvoiceInput {
   billingAddress?: StripeBillingAddress;
   fallbackEmail?: string;
   purpose?: 'topup' | 'auto_recharge_topup';
+  // Optional correlation ID stamped on Stripe PI/Invoice metadata so logs from the
+  // webhook handler can link back to the originating auto-recharge / top-up attempt.
+  correlationId?: string;
 }
 
 export type TopUpStatus = 'succeeded' | 'requires_action' | 'requires_payment_method' | 'needs_setup';
@@ -200,23 +237,36 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     }
   }
 
-  // Create the invoice item first so it's "pending" and attached on invoice creation.
-  await stripe.invoiceItems.create({
-    customer: customerId,
-    amount: input.amountCents,
-    currency: 'usd',
-    description: itemDescription,
-    tax_behavior: 'exclusive',
-  });
+  // Per-attempt idempotency. Same minute + same orgId + same amount + same purpose →
+  // Stripe returns the existing invoice item / invoice instead of creating duplicates on
+  // network retries. Different minute → fresh attempt (this is intentional: a user clicking
+  // "Add credit" 2 minutes apart should get a new invoice, not the stale failed one).
+  const minuteBucket = Math.floor(Date.now() / 60_000);
+  const idemSuffix = `${input.orgId}:${purpose}:${input.amountCents}:${minuteBucket}`;
 
-  const invoice = await stripe.invoices.create({
-    customer: customerId,
-    collection_method: 'charge_automatically',
-    automatic_tax: { enabled: true },
-    auto_advance: false,
-    pending_invoice_items_behavior: 'include',
-    metadata: { organization_id: input.orgId, purpose },
-  });
+  // Create the invoice item first so it's "pending" and attached on invoice creation.
+  await stripe.invoiceItems.create(
+    {
+      customer: customerId,
+      amount: input.amountCents,
+      currency: 'usd',
+      description: itemDescription,
+      tax_behavior: 'exclusive',
+    },
+    { idempotencyKey: `invoiceitem:${idemSuffix}` },
+  );
+
+  const invoice = await stripe.invoices.create(
+    {
+      customer: customerId,
+      collection_method: 'charge_automatically',
+      automatic_tax: { enabled: true },
+      auto_advance: false,
+      pending_invoice_items_behavior: 'include',
+      metadata: { organization_id: input.orgId, purpose },
+    },
+    { idempotencyKey: `invoice:${idemSuffix}` },
+  );
 
   if (!invoice.id) {
     throw new Error('Stripe invoice creation returned no id');
@@ -234,7 +284,8 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     ((inv as InvoiceWithPayments).payments?.data ?? [])[0]?.payment?.payment_intent ?? undefined;
 
   let piId = extractPiId(finalized);
-  console.log('[topup] finalized', {
+  console.log('[billing] topup finalized', {
+    correlationId: input.correlationId,
     invoiceId: finalized.id,
     status: finalized.status,
     piId,
@@ -244,14 +295,20 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     throw new Error('Finalized invoice has no payment_intent attached');
   }
 
+  const metadataBase: Record<string, string> = {
+    organization_id: input.orgId,
+    purpose,
+    ...(input.correlationId ? { correlation_id: input.correlationId } : {}),
+  };
+
   // Also stamp metadata on the invoice — the webhook handler reads this as a fallback when
   // the PI's own metadata was wiped by Stripe's auto-charge-on-finalize racing us.
   try {
     await stripe.invoices.update(invoice.id, {
-      metadata: { organization_id: input.orgId, purpose },
+      metadata: metadataBase,
     });
   } catch (err) {
-    console.warn('[topup] invoices.update metadata failed', err);
+    console.warn('[billing] topup invoices.update metadata failed', err);
   }
 
   // Stamp PI metadata BEFORE attempting payment so payment_intent.succeeded webhook
@@ -259,7 +316,7 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
   // Also set receipt_email so Stripe sends a PI receipt independent of invoice emails.
   try {
     await stripe.paymentIntents.update(piId, {
-      metadata: { organization_id: input.orgId, purpose, invoice_id: finalized.id ?? '' },
+      metadata: { ...metadataBase, invoice_id: finalized.id ?? '' },
       receipt_email: input.fallbackEmail ?? input.billingEmail,
     });
   } catch (err) {
@@ -324,6 +381,23 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     taxCents,
     totalCents: finalized.total,
   };
+}
+
+// Void an open/uncollectible invoice so Stripe Smart Retries don't keep attempting to charge a
+// card we've already disabled auto-recharge on. Safe to call after any failed top-up: if the
+// invoice isn't void-able (already paid, already void, etc.) we just log and move on.
+export async function voidOpenInvoice(invoiceId: string): Promise<void> {
+  if (!invoiceId) return;
+  try {
+    await getStripe().invoices.voidInvoice(invoiceId);
+    console.log('[stripe-billing] voided invoice after failed top-up', { invoiceId });
+  } catch (err: any) {
+    console.warn('[stripe-billing] voidOpenInvoice failed (likely not void-able)', {
+      invoiceId,
+      code: err?.code,
+      message: err?.message,
+    });
+  }
 }
 
 export async function getInvoiceMetadata(invoiceId: string): Promise<Record<string, string> | null> {
@@ -433,6 +507,29 @@ export async function detachPaymentMethodById(orgId: string, paymentMethodId: st
   const wasDefault = billing?.stripe_default_payment_method_id === paymentMethodId;
   const customerId = billing?.stripe_customer_id ?? null;
 
+  // Verify the PM actually belongs to this org's Stripe customer before detaching. Without
+  // this check, an authenticated user could pass another org's pm_xxx id and detach their
+  // card (Stripe accepts the detach regardless of who calls). The route layer already
+  // gates on manage_billing for THIS org — this check binds the PM to THIS org's customer.
+  if (customerId) {
+    try {
+      const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+      const pmCustomer = typeof pm.customer === 'string' ? pm.customer : pm.customer?.id ?? null;
+      if (pmCustomer && pmCustomer !== customerId) {
+        console.error('[stripe-billing] detach refused — PM belongs to different customer', {
+          org_id: orgId,
+          pm_id: paymentMethodId,
+          pm_customer: pmCustomer,
+          org_customer: customerId,
+        });
+        throw new Error('Payment method does not belong to this organization');
+      }
+    } catch (err: any) {
+      if (err?.message === 'Payment method does not belong to this organization') throw err;
+      console.warn('[stripe-billing] PM ownership check failed (proceeding cautiously)', err);
+    }
+  }
+
   try {
     await stripe.paymentMethods.detach(paymentMethodId);
   } catch (err) {
@@ -479,12 +576,18 @@ export async function detachPaymentMethodById(orgId: string, paymentMethodId: st
 export async function createSetupIntentForOrg(orgId: string): Promise<{ clientSecret: string }> {
   const customerId = await ensureStripeCustomer(orgId);
   const stripe = getStripe();
-  const si = await stripe.setupIntents.create({
-    customer: customerId,
-    usage: 'off_session',
-    payment_method_types: ['card'],
-    metadata: { organization_id: orgId, purpose: 'add_card' },
-  });
+  // Per-attempt idempotency. If the network drops the response, retrying within the
+  // minute returns the same SetupIntent (same client_secret) instead of generating two.
+  const minuteBucket = Math.floor(Date.now() / 60_000);
+  const si = await stripe.setupIntents.create(
+    {
+      customer: customerId,
+      usage: 'off_session',
+      payment_method_types: ['card'],
+      metadata: { organization_id: orgId, purpose: 'add_card' },
+    },
+    { idempotencyKey: `setupintent:${orgId}:${minuteBucket}` },
+  );
   if (!si.client_secret) {
     throw new Error('SetupIntent has no client_secret');
   }
@@ -535,6 +638,30 @@ export async function setDefaultPaymentMethod(
 ): Promise<void> {
   const customerId = await ensureStripeCustomer(orgId);
   const stripe = getStripe();
+
+  // Verify the PM is either unattached or already attached to THIS org's customer before
+  // we attach it. Without this, an attacker could pass another org's pm_xxx ID — Stripe
+  // refuses to re-attach already-attached PMs but the error mode is generic, so we'd let
+  // the request error out without explaining why. Explicit refusal is more honest.
+  try {
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+    const pmCustomer = typeof pm.customer === 'string' ? pm.customer : pm.customer?.id ?? null;
+    if (pmCustomer && pmCustomer !== customerId) {
+      console.error('[stripe-billing] setDefault refused — PM belongs to different customer', {
+        org_id: orgId,
+        pm_id: paymentMethodId,
+        pm_customer: pmCustomer,
+        org_customer: customerId,
+      });
+      throw new Error('Payment method does not belong to this organization');
+    }
+  } catch (err: any) {
+    if (err?.message === 'Payment method does not belong to this organization') throw err;
+    // Stripe API timeout etc. — fall through. The attach call below will fail cleanly
+    // if the PM is really not ours; we've already logged the ambiguous state.
+    console.warn('[stripe-billing] PM ownership check failed (proceeding to attach)', err);
+  }
+
   await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
   await stripe.customers.update(customerId, {
     invoice_settings: { default_payment_method: paymentMethodId },

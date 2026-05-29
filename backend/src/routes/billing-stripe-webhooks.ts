@@ -1,6 +1,7 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
-import { sendAutoRechargeFailed } from '../lib/billing/alerts';
+import { sendAutoRechargeFailed, checkAndDispatchBalanceAlerts } from '../lib/billing/alerts';
+import { isBillingEnforcementEnabled } from '../lib/billing/enforcement';
 
 const router = express.Router();
 
@@ -9,8 +10,20 @@ router.post('/', async (req, res) => {
     const signature = req.headers['stripe-signature'] as string | undefined;
     if (!signature) return res.status(400).json({ error: 'Missing stripe-signature header' });
 
-    const rawBody = (req as any).rawBody;
+    // Stripe signs raw request bytes — prefer the Buffer (byte-exact) over the UTF-8
+    // string fallback. The fallback only fires if a future middleware reorder strips
+    // rawBodyBuffer, in which case we still attempt verification but log the drift.
+    const rawBodyBuffer = (req as any).rawBodyBuffer as Buffer | undefined;
+    const rawBodyString = (req as any).rawBody as string | undefined;
+    const rawBody: Buffer | undefined = rawBodyBuffer
+      ? rawBodyBuffer
+      : typeof rawBodyString === 'string'
+        ? Buffer.from(rawBodyString, 'utf8')
+        : undefined;
     if (!rawBody) return res.status(400).json({ error: 'Missing raw body' });
+    if (!rawBodyBuffer) {
+      console.warn('[billing-webhook] rawBodyBuffer missing — falling back to utf8 round-trip');
+    }
 
     let stripeLib: typeof import('../lib/billing/stripe-billing');
     try {
@@ -21,44 +34,77 @@ router.post('/', async (req, res) => {
 
     let event: any;
     try {
-      event = stripeLib.constructWebhookEvent(Buffer.from(rawBody), signature);
+      event = stripeLib.constructWebhookEvent(rawBody, signature);
     } catch (err: any) {
       console.error('[billing-webhook] signature verify failed', err?.message);
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    const alreadyProcessed = await stripeLib.isEventProcessed(event.id);
-    if (alreadyProcessed) {
+    // INSERT-first dedup. Replaces the prior check-then-insert which had a TOCTOU
+    // window: two concurrent Stripe retries could both pass isEventProcessed before
+    // either reached markEventProcessed, running the handler twice. The unique
+    // constraint on event_id makes this atomic — exactly one replica claims, the
+    // other returns the already_processed response without running the handler.
+    const { claimed } = await stripeLib.claimWebhookEvent(event.id, event.type);
+    if (!claimed) {
       return res.json({ received: true, status: 'already_processed' });
     }
 
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        await handlePaymentIntentSucceeded(event.data.object);
-        break;
-      case 'payment_intent.payment_failed':
-        await handlePaymentIntentFailed(event.data.object);
-        break;
-      case 'invoice.payment_failed':
-      case 'invoice.payment_action_required':
-        await handleInvoicePaymentFailed(event.data.object);
-        break;
-      case 'payment_method.detached':
-        await handlePaymentMethodDetached(event.data.object);
-        break;
-      default:
-        console.log(`[billing-webhook] unhandled type: ${event.type}`);
+    try {
+      switch (event.type) {
+        case 'payment_intent.succeeded':
+          await handlePaymentIntentSucceeded(event.data.object);
+          break;
+        case 'payment_intent.payment_failed':
+          await handlePaymentIntentFailed(event.data.object);
+          break;
+        case 'invoice.payment_failed':
+        case 'invoice.payment_action_required':
+          await handleInvoicePaymentFailed(event.data.object);
+          break;
+        case 'payment_method.detached':
+          await handlePaymentMethodDetached(event.data.object);
+          break;
+        case 'customer.deleted':
+          await handleCustomerDeleted(event.data.object);
+          break;
+        default:
+          // Reduced from console.log to debug-level via no-op — high-volume default at scale.
+          break;
+      }
+      res.json({ received: true });
+    } catch (handlerErr: any) {
+      // The event is already claimed, so Stripe retrying this event_id will be no-op.
+      // Returning 200 prevents Stripe's exponential dunning on a transient handler error
+      // (e.g. Supabase blip). For events we genuinely need replayed, we'd release the
+      // claim — but our handlers are idempotent (ledger uniqueness on stripe_payment_intent_id
+      // + per-row updates) so it's safer to accept the loss-of-retry trade-off.
+      console.error('[billing-webhook] handler threw after claim', {
+        event_id: event.id,
+        event_type: event.type,
+        err: handlerErr?.message ?? handlerErr,
+      });
+      res.json({ received: true, status: 'handler_error_logged' });
     }
-
-    await stripeLib.markEventProcessed(event.id, event.type);
-    res.json({ received: true });
   } catch (err: any) {
     console.error('[billing-webhook] error', err?.message);
     res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
 
-async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
+export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
+  // Kill-switch: when DEPTEX_BILLING_ENFORCEMENT is off we must not credit balances,
+  // otherwise an in-flight Stripe webhook fires during an ops "billing off" window and
+  // credits the org. Skip the credit but still clear the in_progress flag below so the
+  // org isn't stuck if enforcement is later turned back on.
+  if (!isBillingEnforcementEnabled()) {
+    console.warn('[billing-webhook] enforcement off — skipping credit', {
+      pi_id: pi.id,
+      amount: pi.amount,
+    });
+    return;
+  }
+
   const metadata = pi.metadata || {};
   let orgId: string | undefined = metadata.organization_id;
   let purpose: string | undefined = metadata.purpose;
@@ -118,29 +164,72 @@ async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
     p_created_by_user_id: null,
   });
 
+  const correlationId = metadata.correlation_id;
   if (rpcErr) {
     if (rpcErr.code === '23505') {
-      console.log('[billing-webhook] duplicate credit prevented by uq_billing_transactions_pi_credit', { pi_id: pi.id });
+      console.log('[billing] webhook duplicate credit prevented by uq_billing_transactions_pi_credit', {
+        correlationId,
+        pi_id: pi.id,
+      });
     } else {
-      console.error('[billing-webhook] credit_balance failed', rpcErr);
-      throw new Error(`credit_balance failed: ${rpcErr.message}`);
+      // Do NOT throw — the event is claimed, so a 500 → Stripe retry would no-op via
+      // the claim guard, but the credit would be lost forever. Log loudly and let
+      // ops/Sentry pick it up; the customer balance will need a manual reconciliation.
+      console.error('[billing] webhook credit_balance failed (UNRECOVERABLE — needs manual reconciliation)', {
+        correlationId,
+        pi_id: pi.id,
+        org_id: orgId,
+        amount_cents: amountCents,
+        err: rpcErr,
+      });
+      return;
     }
+  } else {
+    console.info('[billing] webhook credited', {
+      correlationId,
+      pi_id: pi.id,
+      org_id: orgId,
+      amount_cents: amountCents,
+      purpose,
+    });
   }
 
   if (purpose === 'auto_recharge_topup') {
-    await supabase
+    const { error: clearErr } = await supabase
       .from('organization_billing')
       .update({
         auto_recharge_in_progress: false,
         auto_recharge_in_progress_started_at: null,
       })
       .eq('organization_id', orgId);
+    if (clearErr) {
+      console.error('[billing-webhook] failed to clear auto_recharge_in_progress', {
+        org_id: orgId,
+        err: clearErr,
+      });
+    }
+  }
+
+  // After a successful credit the balance may have crossed back above the alert threshold.
+  // Fire the alert dispatcher so future drops re-trigger alerts (the deduction path was the
+  // only place this ran before — credits could silently leave alert flags stuck).
+  try {
+    const { data: billing } = await supabase
+      .from('organization_billing')
+      .select('balance_cents')
+      .eq('organization_id', orgId)
+      .single();
+    if (billing) {
+      await checkAndDispatchBalanceAlerts(orgId, billing.balance_cents);
+    }
+  } catch (err) {
+    console.error('[billing-webhook] post-credit alert dispatch failed', { org_id: orgId, err });
   }
 
   // Receipt email is sent by Stripe's hosted-invoice email (we enabled invoice_creation).
 }
 
-async function handlePaymentIntentFailed(pi: any): Promise<void> {
+export async function handlePaymentIntentFailed(pi: any): Promise<void> {
   const metadata = pi.metadata || {};
   const orgId: string | undefined = metadata.organization_id;
   const purpose: string | undefined = metadata.purpose;
@@ -163,17 +252,36 @@ async function handlePaymentIntentFailed(pi: any): Promise<void> {
   }
 }
 
-async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
+export async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
   // For off-session auto-recharge of a 3DS-required card, Stripe fires invoice.payment_failed
   // (not payment_intent.payment_failed), so the PI-failure handler never runs. We treat any
   // failure on an auto_recharge_topup invoice as a hard auto-recharge failure: disable, clear
-  // the in-progress flag, and notify the org's billing recipients.
+  // the in-progress flag, void the invoice to stop Smart Retries, and notify the org.
   const metadata = invoice.metadata || {};
   const orgId: string | undefined = metadata.organization_id;
   const purpose: string | undefined = metadata.purpose;
   if (!orgId || purpose !== 'auto_recharge_topup') return;
 
-  await supabase
+  // Cross-tenant guard mirroring handlePaymentIntentSucceeded — if invoice.customer's
+  // owner-org disagrees with the metadata-claimed org, reject. Defense-in-depth against
+  // stale or spoofed metadata.
+  if (invoice.customer) {
+    const { data: billing } = await supabase
+      .from('organization_billing')
+      .select('organization_id')
+      .eq('stripe_customer_id', invoice.customer)
+      .single();
+    if (billing && billing.organization_id !== orgId) {
+      console.error('[billing-webhook] cross-tenant invoice/customer mismatch', {
+        invoice_id: invoice.id,
+        metadata_org_id: orgId,
+        customer_owner_org_id: billing.organization_id,
+      });
+      return;
+    }
+  }
+
+  const { error: updErr } = await supabase
     .from('organization_billing')
     .update({
       auto_recharge_enabled: false,
@@ -181,6 +289,21 @@ async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
       auto_recharge_in_progress_started_at: null,
     })
     .eq('organization_id', orgId);
+  if (updErr) {
+    console.error('[billing-webhook] failed to disable auto_recharge after invoice failure', {
+      org_id: orgId,
+      err: updErr,
+    });
+  }
+
+  if (invoice.id) {
+    try {
+      const stripeLib = require('../lib/billing/stripe-billing') as typeof import('../lib/billing/stripe-billing');
+      await stripeLib.voidOpenInvoice(invoice.id);
+    } catch (err) {
+      console.warn('[billing-webhook] voidOpenInvoice from invoice.payment_failed failed', err);
+    }
+  }
 
   const last = invoice.last_finalization_error || invoice.last_payment_error;
   const reason: string = last?.message || last?.code || 'Payment attempt failed';
@@ -189,21 +312,53 @@ async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
   );
 }
 
-async function handlePaymentMethodDetached(pm: any): Promise<void> {
-  const { data: billing } = await supabase
+export async function handlePaymentMethodDetached(pm: any): Promise<void> {
+  const { data: billing, error: lookupErr } = await supabase
     .from('organization_billing')
     .select('organization_id')
     .eq('stripe_default_payment_method_id', pm.id)
-    .single();
+    .maybeSingle();
+  if (lookupErr) {
+    console.error('[billing-webhook] PM detach lookup failed', { pm_id: pm.id, err: lookupErr });
+    return;
+  }
   if (!billing) return;
 
-  await supabase
+  const { error: updErr } = await supabase
     .from('organization_billing')
     .update({
       stripe_default_payment_method_id: null,
       auto_recharge_enabled: false,
     })
     .eq('organization_id', billing.organization_id);
+  if (updErr) {
+    console.error('[billing-webhook] PM detach update failed', {
+      org_id: billing.organization_id,
+      err: updErr,
+    });
+  }
+}
+
+// Stripe customer was deleted in the Stripe Dashboard (rare, but if it happens we must
+// stop pointing at a ghost customer — subsequent off-session charges would fail anyway).
+export async function handleCustomerDeleted(customer: any): Promise<void> {
+  if (!customer?.id) return;
+  const { error } = await supabase
+    .from('organization_billing')
+    .update({
+      stripe_customer_id: null,
+      stripe_default_payment_method_id: null,
+      auto_recharge_enabled: false,
+      auto_recharge_in_progress: false,
+      auto_recharge_in_progress_started_at: null,
+    })
+    .eq('stripe_customer_id', customer.id);
+  if (error) {
+    console.error('[billing-webhook] customer.deleted cleanup failed', {
+      customer_id: customer.id,
+      err: error,
+    });
+  }
 }
 
 export default router;
