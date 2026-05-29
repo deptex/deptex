@@ -23,16 +23,16 @@
  */
 import express from 'express';
 import { supabase } from '../lib/supabase';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
 function verifyInternal(req: express.Request): boolean {
-  const internalKey = process.env.INTERNAL_API_KEY?.trim();
-  if (!internalKey) return false;
   const h = req.headers['x-internal-api-key'];
-  if (h && h === internalKey) return true;
+  if (typeof h === 'string' && isValidInternalKey(h)) return true;
   const auth = req.headers.authorization;
-  return Boolean(auth && auth === `Bearer ${internalKey}`);
+  if (typeof auth === 'string' && auth.startsWith('Bearer ') && isValidInternalKey(auth.slice(7))) return true;
+  return false;
 }
 
 function retentionDays(): number {

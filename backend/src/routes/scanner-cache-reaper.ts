@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../lib/supabase';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = Router();
 
@@ -34,7 +35,6 @@ const router = Router();
  *     -d '{"destination": "https://api.deptex.dev/api/workers/scanner-cache-reap"}'
  */
 router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
-  const internalKey = process.env.INTERNAL_API_KEY;
   const providedKey = req.headers['x-internal-api-key'] as string | undefined;
   const rawBody = (req as any).rawBody;
 
@@ -57,7 +57,7 @@ router.post('/scanner-cache-reap', async (req: Request, res: Response) => {
     }
   }
 
-  if (!authorized && internalKey && providedKey === internalKey) {
+  if (!authorized && isValidInternalKey(providedKey)) {
     authorized = true;
   }
 
