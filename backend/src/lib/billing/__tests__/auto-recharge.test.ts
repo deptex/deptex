@@ -43,6 +43,10 @@ describe('maybeAutoRecharge', () => {
     clearTableRegistry();
     clearRpcRegistry();
     process.env.DEPTEX_BILLING_ENFORCEMENT = 'on';
+    // The auto-recharge lock now uses .update().eq().eq().select() and treats zero returned
+    // rows as "lock not acquired". Default organization_billing's .then() to one row so tests
+    // that reach the lock acquire it; lock-contention is covered by its own test.
+    setTableResponse('organization_billing', 'then', { data: [{ organization_id: ORG_ID }], error: null });
     (createTopUpInvoice as jest.Mock).mockReset();
     (sendAutoRechargeFailed as jest.Mock).mockClear();
   });
@@ -165,6 +169,17 @@ describe('maybeAutoRecharge', () => {
         fallbackEmail: 'owner@example.com',
       }),
     );
+  });
+
+  it('returns in_progress when the lock UPDATE affects zero rows (concurrent acquisition)', async () => {
+    setTableResponse('organization_billing', 'single', { data: billingRow(), error: null });
+    // A concurrent attempt already holds the lock → the conditional UPDATE matches no rows and
+    // .select() returns []. The loser must NOT proceed to charge the card.
+    setTableResponse('organization_billing', 'then', { data: [], error: null });
+
+    const result = await maybeAutoRecharge(ORG_ID);
+    expect(result.reason).toBe('in_progress');
+    expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
   it('returns pi_failed when invoice top-up throws', async () => {

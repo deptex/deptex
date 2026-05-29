@@ -44,10 +44,16 @@ function setOrgName(name = 'Acme Inc') {
 }
 
 function mockUpdateCount(returnCount: number) {
+  // tryClaimAlertSlot / tryClaimRollingSlot now do .update().eq().is()/.or().select() and
+  // count the returned rows, so return `returnCount` org rows from .select(). .then() is kept
+  // for releaseAlertSlot's bare .update().eq() await.
+  const rows = Array.from({ length: returnCount }, () => ({ organization_id: ORG_ID }));
   (queryBuilder.update as jest.Mock).mockReturnValue({
     eq: jest.fn().mockReturnThis(),
     is: jest.fn().mockReturnThis(),
-    then: (resolve: any) => resolve({ count: returnCount, error: null }),
+    or: jest.fn().mockReturnThis(),
+    select: jest.fn().mockResolvedValue({ data: rows, error: null }),
+    then: (resolve: any) => resolve({ data: rows, error: null }),
   });
 }
 

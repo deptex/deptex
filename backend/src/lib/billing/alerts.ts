@@ -81,16 +81,21 @@ function nowStamp(): string {
 }
 
 async function tryClaimAlertSlot(orgId: string, column: 'low_balance_alert_sent_at' | 'zero_balance_alert_sent_at'): Promise<boolean> {
-  const { error, count } = await supabase
+  // Atomic claim via conditional UPDATE: `… WHERE column IS NULL` lets exactly one concurrent
+  // caller win (Postgres serializes the row write). .select() returns the rows actually
+  // updated — reliable affected-row detection that doesn't depend on PostgREST populating a
+  // count header on an UPDATE (which is undocumented and may silently no-op the claim).
+  const { data, error } = await supabase
     .from('organization_billing')
-    .update({ [column]: new Date().toISOString() }, { count: 'exact' })
+    .update({ [column]: new Date().toISOString() })
     .eq('organization_id', orgId)
-    .is(column, null);
+    .is(column, null)
+    .select('organization_id');
   if (error) {
     console.error('[billing.alerts] tryClaimAlertSlot failed', error);
     return false;
   }
-  return (count ?? 0) > 0;
+  return (data?.length ?? 0) > 0;
 }
 
 async function releaseAlertSlot(orgId: string, column: 'low_balance_alert_sent_at' | 'zero_balance_alert_sent_at'): Promise<void> {
@@ -175,9 +180,9 @@ export async function sendCreditAddedEmail(
   return result.sent ? { sent: true } : { sent: false, reason: 'send_failed' };
 }
 
-// 30-day rolling cooldown on the cap-reached email — matches the rolling-30-day window
-// the cap itself uses. Read-then-write (not atomic) is acceptable for a low-frequency
-// signal where a duplicate email is a minor UX bump, not a correctness problem.
+// 30-day rolling cooldown on the cap-reached email — matches the rolling-30-day window the
+// cap itself uses. Atomic conditional UPDATE (WHERE column IS NULL OR column < cutoff) so two
+// concurrent cap-reached events can't both pass the cooldown check and both send the email.
 const CAP_ALERT_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTO_RECHARGE_FAILED_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -186,26 +191,19 @@ async function tryClaimRollingSlot(
   column: 'auto_recharge_cap_alert_sent_at',
   cooldownMs: number,
 ): Promise<boolean> {
-  const { data } = await supabase
-    .from('organization_billing')
-    .select(column)
-    .eq('organization_id', orgId)
-    .single();
-  const lastIso = (data as Record<string, string | null> | null)?.[column] ?? null;
-  const last = lastIso ? new Date(lastIso) : null;
   const now = new Date();
-  if (last && now.getTime() - last.getTime() < cooldownMs) {
-    return false;
-  }
-  const { error } = await supabase
+  const cutoffIso = new Date(now.getTime() - cooldownMs).toISOString();
+  const { data, error } = await supabase
     .from('organization_billing')
     .update({ [column]: now.toISOString() })
-    .eq('organization_id', orgId);
+    .eq('organization_id', orgId)
+    .or(`${column}.is.null,${column}.lt.${cutoffIso}`)
+    .select('organization_id');
   if (error) {
     console.error('[billing.alerts] tryClaimRollingSlot failed', { column, error });
     return false;
   }
-  return true;
+  return (data?.length ?? 0) > 0;
 }
 
 async function releaseRollingSlot(

@@ -111,7 +111,12 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
     }
   }
 
-  const { error: lockErr } = await supabase
+  // Atomic lock acquisition. The conditional UPDATE (… WHERE auto_recharge_in_progress = false)
+  // is applied atomically by Postgres, but a *zero-row* update returns error=null — so we must
+  // check the returned rows, not just the error, or two concurrent attempts both believe they
+  // acquired the lock and both charge the card. .select() returns only the row we actually
+  // updated, so exactly one caller gets a row back.
+  const { data: lockRows, error: lockErr } = await supabase
     .from('organization_billing')
     .update({
       auto_recharge_in_progress: true,
@@ -119,9 +124,10 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
       auto_recharge_last_attempt_at: new Date().toISOString(),
     })
     .eq('organization_id', orgId)
-    .eq('auto_recharge_in_progress', false);
+    .eq('auto_recharge_in_progress', false)
+    .select('organization_id');
 
-  if (lockErr) {
+  if (lockErr || !lockRows || lockRows.length === 0) {
     return { attempted: false, reason: 'in_progress' };
   }
 
@@ -188,7 +194,9 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
       .from('organization_billing')
       .update({ auto_recharge_enabled: false })
       .eq('organization_id', orgId);
-    await sendAutoRechargeFailed(orgId, err instanceof Error ? err.message : 'unknown').catch(() => {});
+    await sendAutoRechargeFailed(orgId, err instanceof Error ? err.message : 'unknown').catch((alertErr) =>
+      console.error('[billing] sendAutoRechargeFailed failed', { correlationId, err: alertErr }),
+    );
     return { attempted: true, reason: 'pi_failed' };
   }
 }
