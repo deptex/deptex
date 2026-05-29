@@ -11,6 +11,7 @@ import type {
   PublishResult,
 } from './types';
 import { isValidInternalKey } from '../../middleware/internal-key';
+import { captureInfraError, captureInfraMessage } from '../observability/capture';
 
 function getRegionPrefix(): string | null {
   const region = process.env.QSTASH_REGION;
@@ -101,12 +102,14 @@ export const qstashAdapter: JobQueue = {
       });
       if (!res.ok) {
         console.error('[job-queue:qstash] publish failed', res.status, await res.text());
+        captureInfraMessage(`qstash publish failed (${res.status})`, 'qstash', { url, status: res.status });
         return null;
       }
       const j = (await res.json()) as { messageId?: string };
       return j.messageId ? { messageId: j.messageId } : null;
     } catch (e) {
       console.error('[job-queue:qstash] publish error', e);
+      captureInfraError(e, 'qstash', { url });
       return null;
     }
   },
@@ -134,6 +137,7 @@ export const qstashAdapter: JobQueue = {
       });
       if (!res.ok) {
         console.error('[job-queue:qstash] batch publish failed', res.status, await res.text());
+        captureInfraMessage(`qstash batch publish failed (${res.status})`, 'qstash', { status: res.status, count: messages.length });
         return messages.map(() => null);
       }
       const results = await res.json();
@@ -141,6 +145,7 @@ export const qstashAdapter: JobQueue = {
       return results.map((r: any) => (r?.messageId ? { messageId: r.messageId as string } : null));
     } catch (e) {
       console.error('[job-queue:qstash] batch error', e);
+      captureInfraError(e, 'qstash', { count: messages.length });
       return messages.map(() => null);
     }
   },

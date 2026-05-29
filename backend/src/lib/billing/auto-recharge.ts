@@ -3,6 +3,7 @@ import { supabase } from '../supabase';
 import { isBillingEnforcementEnabled } from './enforcement';
 import { createTopUpInvoice, voidOpenInvoice } from './stripe-billing';
 import { resolveBillingRecipients, sendAutoRechargeFailed, sendAutoRechargeCapReached } from './alerts';
+import { captureBillingError } from '../observability/capture';
 
 // Recovery window for a stuck auto_recharge_in_progress flag. Bumped from 30 → 60 min
 // because Stripe's async invoice settlement (especially 3DS retries + slow gateways) can
@@ -105,7 +106,10 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
     if (sumWindow + billing.auto_recharge_amount_cents > billing.auto_recharge_monthly_cap_cents) {
       // Fire-and-forget: email the org once per UTC month so cap-reached is never silent.
       sendAutoRechargeCapReached(orgId, sumWindow, billing.auto_recharge_monthly_cap_cents).catch(
-        (err) => console.error('[auto-recharge] sendAutoRechargeCapReached failed', err),
+        (err) => {
+          console.error('[auto-recharge] sendAutoRechargeCapReached failed', err);
+          captureBillingError(err, 'cap_reached_email_failed', { orgId });
+        },
       );
       return { attempted: false, reason: 'monthly_cap_reached' };
     }
@@ -182,21 +186,24 @@ export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResu
       .from('organization_billing')
       .update({ auto_recharge_enabled: false })
       .eq('organization_id', orgId);
-    await sendAutoRechargeFailed(orgId, reason).catch((err) =>
-      console.error('[billing] sendAutoRechargeFailed failed', { correlationId, err }),
-    );
+    await sendAutoRechargeFailed(orgId, reason).catch((err) => {
+      console.error('[billing] sendAutoRechargeFailed failed', { correlationId, err });
+      captureBillingError(err, 'auto_recharge_failed_email_failed', { orgId, extra: { correlationId, path: 'non_success' } });
+    });
 
     return { attempted: true, reason: 'pi_failed' };
   } catch (err) {
     console.error('[billing] auto-recharge createTopUpInvoice threw', { correlationId, orgId, err });
+    captureBillingError(err, 'auto_recharge_invoice_threw', { orgId, extra: { correlationId } });
     await clearStuckFlag(orgId);
     await supabase
       .from('organization_billing')
       .update({ auto_recharge_enabled: false })
       .eq('organization_id', orgId);
-    await sendAutoRechargeFailed(orgId, err instanceof Error ? err.message : 'unknown').catch((alertErr) =>
-      console.error('[billing] sendAutoRechargeFailed failed', { correlationId, err: alertErr }),
-    );
+    await sendAutoRechargeFailed(orgId, err instanceof Error ? err.message : 'unknown').catch((alertErr) => {
+      console.error('[billing] sendAutoRechargeFailed failed', { correlationId, err: alertErr });
+      captureBillingError(alertErr, 'auto_recharge_failed_email_failed', { orgId, extra: { correlationId, path: 'catch' } });
+    });
     return { attempted: true, reason: 'pi_failed' };
   }
 }

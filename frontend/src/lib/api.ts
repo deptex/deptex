@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import * as Sentry from '@sentry/react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
@@ -341,6 +342,12 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
     const e = new Error(error.error || `HTTP error! status: ${response.status}`);
     (e as Error & { responseBody?: unknown }).responseBody = error;
+    // Only server errors (5xx) are real bugs worth a Sentry issue — 4xx are
+    // expected client/validation/auth responses the UI already handles. No-op
+    // without a DSN. The global beforeSend scrubber strips any secrets.
+    if (response.status >= 500) {
+      Sentry.captureException(e, { tags: { kind: 'api_error', status: String(response.status) }, extra: { url } });
+    }
     throw e;
   }
 

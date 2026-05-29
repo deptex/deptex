@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import { sendEmail } from '../email';
+import { captureBillingError } from '../observability/capture';
 
 type BillingAlertKind =
   | 'low_balance'
@@ -93,6 +94,7 @@ async function tryClaimAlertSlot(orgId: string, column: 'low_balance_alert_sent_
     .select('organization_id');
   if (error) {
     console.error('[billing.alerts] tryClaimAlertSlot failed', error);
+    captureBillingError(error, 'alert_slot_claim_failed', { orgId, extra: { column } });
     return false;
   }
   return (data?.length ?? 0) > 0;
@@ -201,6 +203,7 @@ async function tryClaimRollingSlot(
     .select('organization_id');
   if (error) {
     console.error('[billing.alerts] tryClaimRollingSlot failed', { column, error });
+    captureBillingError(error, 'rolling_slot_claim_failed', { orgId, extra: { column } });
     return false;
   }
   return (data?.length ?? 0) > 0;
@@ -302,6 +305,7 @@ export async function checkAndDispatchBalanceAlerts(
   if (newBalanceCents <= 0 && !billing.zero_balance_alert_sent_at) {
     await sendZeroBalanceAlert(orgId, billing.auto_recharge_enabled).catch((err) => {
       console.error('[billing.alerts] sendZeroBalanceAlert failed', err);
+      captureBillingError(err, 'zero_balance_alert_failed', { orgId });
     });
     return;
   }
@@ -313,6 +317,7 @@ export async function checkAndDispatchBalanceAlerts(
   ) {
     await sendLowBalanceAlert(orgId, newBalanceCents).catch((err) => {
       console.error('[billing.alerts] sendLowBalanceAlert failed', err);
+      captureBillingError(err, 'low_balance_alert_failed', { orgId });
     });
   }
 }

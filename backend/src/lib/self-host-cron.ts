@@ -14,6 +14,8 @@
  * — if a precise clock alignment is needed later, swap to node-cron.
  */
 
+import { captureInfraError, captureInfraMessage } from './observability/capture';
+
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 
@@ -50,9 +52,11 @@ async function fire(tick: Tick) {
     });
     if (!res.ok) {
       console.error(`[self-host-cron] ${tick.label} -> ${res.status}`);
+      captureInfraMessage(`self-host-cron ${tick.label} -> ${res.status}`, 'self-host-cron', { tick: tick.label, status: res.status });
     }
   } catch (e: any) {
     console.error(`[self-host-cron] ${tick.label} failed:`, e?.message || e);
+    captureInfraError(e, 'self-host-cron', { tick: tick.label });
   }
 }
 

@@ -1,4 +1,6 @@
-import { createBrowserRouter, Navigate, useParams, useLocation, Outlet } from "react-router-dom";
+import { createBrowserRouter, Navigate, useParams, useLocation, Outlet, useRouteError, isRouteErrorResponse } from "react-router-dom";
+import { useEffect } from "react";
+import * as Sentry from "@sentry/react";
 import { AuthProvider } from "../contexts/AuthContext";
 import App from "./App";
 import DocsApp from "./DocsApp";
@@ -70,9 +72,30 @@ function RootLayout() {
   );
 }
 
+/**
+ * Root error boundary for the data router — catches errors thrown during route
+ * render/loaders and reports them to Sentry (no-op without a DSN). Expected
+ * route responses (e.g. 404s thrown via the router) are NOT reported.
+ */
+function RootErrorBoundary() {
+  const error = useRouteError();
+  useEffect(() => {
+    if (!isRouteErrorResponse(error)) {
+      Sentry.captureException(error);
+    }
+  }, [error]);
+  return (
+    <div style={{ padding: 24, textAlign: "center" }}>
+      <p>Something went wrong loading this page.</p>
+      <button onClick={() => window.location.reload()}>Reload</button>
+    </div>
+  );
+}
+
 export const router = createBrowserRouter([
   {
     element: <RootLayout />,
+    errorElement: <RootErrorBoundary />,
     children: [
   // ============================================
   // AUTHENTICATED ROUTES

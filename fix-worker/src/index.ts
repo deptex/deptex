@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import './instrument';
+import * as Sentry from '@sentry/node';
+import { captureInfraError, captureInfraMessage } from './observability/capture';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   claimJob,
@@ -36,6 +39,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   const fullRow = await loadFullRow(supabase, job.id);
   if (!fullRow) {
     console.error(`[FIX] Could not reload row ${job.id}`);
+    captureInfraMessage('fix row could not be reloaded', 'fix-worker', { jobId: job.id });
     return;
   }
 
@@ -138,6 +142,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   } catch (err: any) {
     const message = err?.message ?? String(err);
     const category = err instanceof FixPipelineError ? err.category : undefined;
+    Sentry.captureException(err, {
+      tags: { component: 'fix-worker', ...(category ? { category } : {}) },
+      user: { id: fullRow.organization_id },
+      contexts: { fix_task: { fix_id: job.id, project_id: fullRow.project_id, run_id: fullRow.run_id } },
+    });
     await logger.error('complete', `Fix failed: ${message}`, err);
     await markFailed(supabase, job.id, message, category);
   } finally {
@@ -173,6 +182,10 @@ async function runWorker(): Promise<void> {
           console.log(`[FIX] Job ${job.id} done`);
         } catch (e: any) {
           console.error(`[FIX] Job ${job.id} fatal: ${e.message}`);
+          Sentry.captureException(e, {
+            tags: { component: 'fix-worker', phase: 'process-escape' },
+            contexts: { fix_task: { fix_id: job.id } },
+          });
         }
         continue;
       }
@@ -184,21 +197,51 @@ async function runWorker(): Promise<void> {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     } catch (e: any) {
       console.error('[FIX] Worker loop error:', e?.message ?? e);
+      captureInfraError(e, 'fix-worker', { phase: 'claim' });
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   }
 }
 
+// Flush Sentry then exit. Never let a slow/failing flush block shutdown:
+// Sentry.close has its own internal timeout, and we swallow any rejection so
+// process.exit always runs even if close() rejects (Fly sends SIGINT on
+// scale-to-zero with a 5-min grace, so 2s is comfortably within budget).
+async function flushSentryAndExit(code: number): Promise<void> {
+  try {
+    await Sentry.close(2000);
+  } catch {
+    /* never block exit on flush */
+  }
+  process.exit(code);
+}
+
 process.on('SIGTERM', () => {
   console.log('SIGTERM received');
-  process.exit(0);
+  void flushSentryAndExit(0);
 });
 process.on('SIGINT', () => {
   console.log('SIGINT received');
-  process.exit(0);
+  void flushSentryAndExit(0);
+});
+
+// No global handlers existed before — a stray rejection or uncaught exception
+// would crash with no trace (Node's default is to crash on both). Capture to
+// Sentry first, then exit non-zero so the machine restarts clean rather than
+// limping on in a half-broken/zombie state (restores the prior crash default).
+process.on('unhandledRejection', (reason) => {
+  console.error('[FIX] Unhandled rejection:', reason);
+  Sentry.captureException(reason, { tags: { component: 'fix-worker', kind: 'unhandledRejection' } });
+  void flushSentryAndExit(1);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FIX] Uncaught exception:', err);
+  Sentry.captureException(err, { tags: { component: 'fix-worker', kind: 'uncaughtException' } });
+  void flushSentryAndExit(1);
 });
 
 runWorker().catch((e) => {
   console.error('Fatal:', e);
-  process.exit(1);
+  Sentry.captureException(e, { tags: { component: 'fix-worker', kind: 'fatal' } });
+  void flushSentryAndExit(1);
 });

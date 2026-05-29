@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import { isBillingEnforcementEnabled } from './enforcement';
+import { captureBillingError } from '../observability/capture';
 import type {
   RecordMeterEventInput,
   RecordMeterEventResult,
@@ -174,22 +175,24 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
       if (checkAndDispatchBalanceAlerts) {
         Promise.resolve()
           .then(() => checkAndDispatchBalanceAlerts!(input.organizationId, newBalanceCents))
-          .catch((err) =>
+          .catch((err) => {
             console.error('[billing] checkAndDispatchBalanceAlerts threw', {
               orgId: input.organizationId,
               err,
-            }),
-          );
+            });
+            captureBillingError(err, 'balance_alerts_threw', { orgId: input.organizationId });
+          });
       }
       if (maybeAutoRecharge) {
         Promise.resolve()
           .then(() => maybeAutoRecharge!(input.organizationId))
-          .catch((err) =>
+          .catch((err) => {
             console.error('[billing] maybeAutoRecharge threw', {
               orgId: input.organizationId,
               err,
-            }),
-          );
+            });
+            captureBillingError(err, 'auto_recharge_threw', { orgId: input.organizationId });
+          });
       }
     } catch (err) {
       // Last-ditch guard. Should not reach here given the inner guards above, but if
@@ -199,6 +202,7 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
           orgId: input.organizationId,
           err,
         });
+        captureBillingError(err, 'side_effects_setup_failed', { orgId: input.organizationId });
       } catch {
         // Swallow: console itself failed; nothing safe to do.
       }

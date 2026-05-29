@@ -2,6 +2,7 @@ import express from 'express';
 import { supabase } from '../lib/supabase';
 import { sendAutoRechargeFailed, checkAndDispatchBalanceAlerts } from '../lib/billing/alerts';
 import { isBillingEnforcementEnabled } from '../lib/billing/enforcement';
+import { captureBillingError } from '../lib/observability/capture';
 
 const router = express.Router();
 
@@ -85,15 +86,18 @@ router.post('/', async (req, res) => {
         event_type: event.type,
         err: handlerErr?.message ?? handlerErr,
       });
+      captureBillingError(handlerErr, 'webhook_handler_threw', { extra: { event_id: event.id, event_type: event.type } });
       try {
         await stripeLib.releaseWebhookEvent(event.id);
       } catch (relErr) {
         console.error('[billing-webhook] releaseWebhookEvent failed', { event_id: event.id, err: relErr });
+        captureBillingError(relErr, 'webhook_release_claim_failed', { extra: { event_id: event.id } });
       }
       res.status(500).json({ error: 'handler_failed_retry' });
     }
   } catch (err: any) {
     console.error('[billing-webhook] error', err?.message);
+    captureBillingError(err, 'webhook_processing_failed');
     res.status(500).json({ error: 'Webhook processing failed' });
   }
 });
@@ -232,6 +236,7 @@ export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
     }
   } catch (err) {
     console.error('[billing-webhook] post-credit alert dispatch failed', { org_id: orgId, err });
+    captureBillingError(err, 'webhook_post_credit_alert_failed', { orgId });
   }
 
   // Receipt email is sent by Stripe's hosted-invoice email (we enabled invoice_creation).
@@ -258,9 +263,10 @@ export async function handlePaymentIntentFailed(pi: any): Promise<void> {
     }
 
     const reason: string = pi.last_payment_error?.message || pi.last_payment_error?.code || 'unknown';
-    await sendAutoRechargeFailed(orgId, reason).catch((err) =>
-      console.error('[billing-webhook] auto-recharge failed alert failed', err),
-    );
+    await sendAutoRechargeFailed(orgId, reason).catch((err) => {
+      console.error('[billing-webhook] auto-recharge failed alert failed', err);
+      captureBillingError(err, 'webhook_recharge_failed_email_failed', { orgId, extra: { path: 'pi' } });
+    });
   }
 }
 
@@ -320,9 +326,10 @@ export async function handleInvoicePaymentFailed(invoice: any): Promise<void> {
 
   const last = invoice.last_finalization_error || invoice.last_payment_error;
   const reason: string = last?.message || last?.code || 'Payment attempt failed';
-  await sendAutoRechargeFailed(orgId, reason).catch((err) =>
-    console.error('[billing-webhook] sendAutoRechargeFailed (invoice path) failed', err),
-  );
+  await sendAutoRechargeFailed(orgId, reason).catch((err) => {
+    console.error('[billing-webhook] sendAutoRechargeFailed (invoice path) failed', err);
+    captureBillingError(err, 'webhook_recharge_failed_email_failed', { orgId, extra: { path: 'invoice' } });
+  });
 }
 
 export async function handlePaymentMethodDetached(pm: any): Promise<void> {
