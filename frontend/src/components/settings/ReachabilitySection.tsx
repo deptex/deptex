@@ -276,33 +276,6 @@ export default function ReachabilitySection({ organizationId, canManage }: Reach
             />
           </div>
 
-          <div>
-            <Label className="text-sm text-foreground mb-2 block">Maximum asset tier rank</Label>
-            <p className="text-xs text-foreground-secondary mb-2">
-              Generate rules only for projects in tiers ranked at or below this value.
-              Lower rank = more critical (e.g. Crown Jewels = 1).
-            </p>
-            <div className="flex items-center gap-2">
-              <Select
-                value={String(settings.trigger_asset_tier_max_rank)}
-                onValueChange={(v) => updateField('trigger_asset_tier_max_rank', Number(v))}
-                disabled={disabled || savingField === 'trigger_asset_tier_max_rank'}
-              >
-                <SelectTrigger className="h-9 text-sm w-[120px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {savingField === 'trigger_asset_tier_max_rank' && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground-secondary" />
-              )}
-            </div>
-          </div>
-
           <div className="flex items-start justify-between gap-4 pt-1">
             <div className="min-w-0">
               <p className="text-sm text-foreground">Newly discovered vulnerabilities</p>

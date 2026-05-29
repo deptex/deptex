@@ -24,7 +24,7 @@ vi.mock('../../../lib/api', () => ({
     getSupplyChainForVersion: vi.fn(),
     bumpAllProjects: vi.fn(),
     getCachedProject: vi.fn().mockReturnValue(null),
-    getProject: vi.fn().mockResolvedValue({ asset_tier: 'EXTERNAL' }),
+    getProject: vi.fn().mockResolvedValue({ importance: 1.0 }),
   },
 }));
 

@@ -7,7 +7,6 @@
 
 import type { Storage } from './storage';
 import type { ExtractionLogger } from './logger';
-import type { AssetTier } from './depscore';
 
 /**
  * Logger interface for pipeline; full ExtractionLogger or minimal mock for tests.
@@ -87,9 +86,9 @@ export interface PipelineContext {
   workspaceRoot: string;
 
   // === Cross-step scoring inputs ===
-  /** Asset tier resolved once before depscore-touching steps run. */
-  assetTier: AssetTier;
-  tierMultiplier: number | undefined;
+  /** Project importance multiplier, in [0.5, 2.0]. Resolved once before
+   * depscore-touching steps run. Multiplied into the score as tierWeight. */
+  importance: number;
 
   /**
    * Whether the direct/transitive split on `project_dependencies` is

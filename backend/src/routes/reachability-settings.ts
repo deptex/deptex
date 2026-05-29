@@ -23,7 +23,6 @@ const DEFAULTS = {
   auto_generate_enabled: false,
   trigger_severities: ['critical', 'high'],
   trigger_kev: true,
-  trigger_asset_tier_max_rank: 2,
   trigger_newly_discovered: true,
   trigger_reevaluate_existing: false,
   ai_provider: 'anthropic',
@@ -111,14 +110,6 @@ router.patch('/:id/reachability-settings', authenticateUser, async (req: AuthReq
         }
         updates[flag] = body[flag];
       }
-    }
-
-    if ('trigger_asset_tier_max_rank' in body) {
-      const v = body.trigger_asset_tier_max_rank;
-      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 5) {
-        return res.status(400).json({ error: 'trigger_asset_tier_max_rank must be an integer 1-5' });
-      }
-      updates.trigger_asset_tier_max_rank = v;
     }
 
     if ('ai_provider' in body) {

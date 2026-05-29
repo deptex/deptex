@@ -22,63 +22,25 @@ export const DEFAULT_STATUSES = [
   },
 ];
 
-// Asset tier colors: Crown Jewels = premium, External = teal, Internal = default/neutral (same as default role color), Non-Production = muted
-export const DEFAULT_ASSET_TIERS = [
-  {
-    name: 'Crown Jewels',
-    description: 'Mission-critical systems with highest security requirements',
-    color: '#8b5cf6',
-    rank: 1,
-    is_system: true,
-    environmental_multiplier: 1.5,
-  },
-  {
-    name: 'External',
-    description: 'External-facing applications',
-    color: '#14b8a6',
-    rank: 2,
-    is_system: true,
-    environmental_multiplier: 1.2,
-  },
-  {
-    name: 'Internal',
-    description: 'Internal tools and services',
-    color: '#6b7280',
-    rank: 3,
-    is_system: true,
-    environmental_multiplier: 1.0,
-  },
-  {
-    name: 'Non-Production',
-    description: 'Development, staging, and test environments',
-    color: '#64748b',
-    rank: 4,
-    is_system: true,
-    environmental_multiplier: 0.6,
-  },
-];
-
 export const DEFAULT_PACKAGE_POLICY_CODE = `function packagePolicy(context) {
-  // Block malicious packages for all tiers
+  // Block malicious packages
   if (context.dependency.maliciousIndicator) {
     return { allowed: false, reasons: ['Package flagged as malicious: ' + (context.dependency.maliciousIndicator.reason || 'unknown')] };
   }
 
-  // Critical tiers (Crown Jewels, External): stricter rules
-  if (context.tier.rank <= 2) {
+  // For higher-importance projects (importance >= 1.3), apply stricter rules
+  if (context.importance >= 1.3) {
     const BANNED_LICENSES = ['GPL-3.0', 'AGPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later', 'AGPL-3.0-only', 'AGPL-3.0-or-later'];
     if (context.dependency.license && BANNED_LICENSES.some(b => context.dependency.license.includes(b))) {
-      return { allowed: false, reasons: ['Banned license for ' + context.tier.name + ': ' + context.dependency.license] };
+      return { allowed: false, reasons: ['Banned license for high-importance project: ' + context.dependency.license] };
     }
     if (context.dependency.dependencyScore != null && context.dependency.dependencyScore < 40) {
-      return { allowed: false, reasons: ['Low reputation score for ' + context.tier.name + ': ' + context.dependency.dependencyScore] };
+      return { allowed: false, reasons: ['Low reputation score for high-importance project: ' + context.dependency.dependencyScore] };
     }
-  }
-
-  // Internal tier: block AGPL only
-  if (context.tier.rank === 3) {
+  } else {
+    // Lower-importance projects: block AGPL only
     if (context.dependency.license && context.dependency.license.includes('AGPL')) {
-      return { allowed: false, reasons: ['AGPL not allowed for Internal projects'] };
+      return { allowed: false, reasons: ['AGPL not allowed'] };
     }
   }
 
@@ -108,13 +70,3 @@ export const DEFAULT_PROJECT_STATUS_CODE = `function projectStatus(context) {
 export const DEFAULT_PR_CHECK_CODE = `function pullRequestCheck(context) {
   return { passed: true, violations: [] };
 }`;
-
-/**
- * Maps legacy asset_tier enum values to default tier names.
- */
-export const LEGACY_TIER_MAP: Record<string, string> = {
-  CROWN_JEWELS: 'Crown Jewels',
-  EXTERNAL: 'External',
-  INTERNAL: 'Internal',
-  NON_PRODUCTION: 'Non-Production',
-};

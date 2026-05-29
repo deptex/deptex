@@ -1,0 +1,55 @@
+# Expected findings for the fastapi dogfood fixture.
+# HYPOTHESIS-GRADE until M3 walkthrough.
+# Authority: docs/runbooks/depscanner-dogfood.md.
+
+reachable_vulns:
+  # sqlalchemy@1.3.0 — `text()` raw concatenation is the classic reachable
+  # SQLi shape. We pick a representative CVE for the pinned version.
+  - osv_id: CVE-2019-7164
+    aliases: [GHSA-7164-9776-9phr]
+    file: main.py
+    line: 14
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  - osv_id: CVE-2020-1747
+    aliases: [GHSA-6757-jp84-gxfx]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  - osv_id: CVE-2019-5010
+    aliases: []
+    base_image: python:3.7.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 4
+
+malicious_pkg:
+  - package: ctx
+    ecosystem: pypi
+    note: historical-malicious — 2022 ctx pypi compromise
+
+semgrep_findings:
+  - rule_id: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    file: main.py
+    line: 14
+
+dast_findings:
+  - alert: SQL Injection
+    url_pattern: /users/lookup

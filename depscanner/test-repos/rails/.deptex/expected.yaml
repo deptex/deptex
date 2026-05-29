@@ -1,0 +1,55 @@
+# Expected findings for the rails dogfood fixture.
+# HYPOTHESIS-GRADE until M5 walkthrough.
+
+reachable_vulns:
+  # rails 6.0.0 — multiple advisories. CVE-2020-8166 is a representative
+  # one for this version range.
+  - osv_id: CVE-2020-8166
+    aliases: [GHSA-jp5v-5gx4-jmj9]
+    file: app/controllers/users_controller.rb
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  # nokogiri 1.10.4 — declared but never required from app/.
+  - osv_id: CVE-2020-26247
+    aliases: [GHSA-vr8q-g5c7-m54m]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  - osv_id: CVE-2020-1971
+    aliases: []
+    base_image: ruby:2.7.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 3
+
+malicious_pkg:
+  - package: rest-client
+    ecosystem: gem
+    note: historical-malicious — 2019 RubyGems compromise (1.6.13)
+
+semgrep_findings:
+  - rule_id: ruby.rails.security.audit.rails-find-by-sql.rails-find-by-sql
+    file: app/controllers/users_controller.rb
+    line: 6
+
+dast_findings:
+  - alert: SQL Injection
+    url_pattern: /users/search

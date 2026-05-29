@@ -15,6 +15,7 @@ Deptex is an AI-powered open-core dependency security platform. It combines depe
 - See `.cursor/skills/add-new-features/SKILL.md` for where to add routes and libs
 - See `.cursor/skills/frontend-design/SKILL.md` and `.cursor/skills/ui-principles/SKILL.md` for UI standards
 - See `docs/flow-code-sandbox.md` before changing the flow / policy code execution sandbox (isolated-vm setup, exposed helpers, return cap)
+- Dogfood corpus: `depscanner/test-repos/` holds 12 hand-authored framework fixtures (one per ecosystem we ship), each seeded with intentional vulnerabilities across every scanner category. `npm run dogfood:check` (in `depscanner/`) is the executable cross-batch regression gate; the runbook for the end-to-end manual walkthrough is `docs/runbooks/depscanner-dogfood.md`. Don't modify the upstream taint-engine fixtures in `depscanner/fixtures/test-*` — those are byte-stable inputs for the snapshot suite. The dogfood copies are intentionally separate.
 - Roadmap: `.cursor/plans/deptex_projects_roadmap_index.plan.md`
 
 ---
@@ -195,7 +196,7 @@ Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emai
 
 ## Depscore
 
-Composite vulnerability priority score. Uses `tierMultiplier` from `organization_asset_tiers` (project's `asset_tier_id`). Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring adds `epd_factor` for execution path dominance.
+Composite vulnerability priority score. Uses `projects.importance` (a numeric scalar in `[0.5, 2.0]`, default `1.0`) multiplied directly into the score as `tierWeight` — no enum, no lookup table. Tiered `reachabilityLevel` weights: confirmed=1.0, data_flow=0.9, function=0.7, module=0.5. EPD contextual scoring adds `epd_factor` for execution path dominance. (The legacy `asset_tier` enum + `organization_asset_tiers` table were dropped in `phase41_drop_asset_tiers.sql`.)
 
 ---
 

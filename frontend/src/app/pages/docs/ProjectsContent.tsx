@@ -156,43 +156,15 @@ export default function ProjectsContent() {
         </p>
 
         <div className="space-y-6">
-          {/* Asset Tier */}
+          {/* Importance */}
           <div className="rounded-lg border border-border bg-background-card overflow-hidden">
             <div className="px-4 py-3 border-b border-border bg-background-card-header">
-              <h3 className="text-sm font-semibold text-foreground">Asset Tier</h3>
+              <h3 className="text-sm font-semibold text-foreground">Importance</h3>
             </div>
             <div className="p-4">
               <p className="text-foreground/90 leading-relaxed mb-3 text-sm">
-                The asset tier reflects the criticality of the repository and influences vulnerability scoring.
+                Each project carries an <strong className="text-foreground">importance</strong> value in <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">[0.5, 2.0]</code> (default <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">1.0</code>). The number is multiplied directly into Depscore, so a project at importance <code className="rounded bg-background-subtle px-1 py-0.5 text-xs font-mono">1.5</code> ranks vulnerabilities 50% higher than the default. Lower the value for non-production / sandbox projects, raise it for critical systems.
               </p>
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-background-card-header border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider w-[180px]">Tier</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    <tr className="hover:bg-table-hover transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs text-foreground">CROWN_JEWELS</td>
-                      <td className="px-4 py-3 text-foreground/90">Business-critical systems. Highest severity multiplier for vulnerability scoring.</td>
-                    </tr>
-                    <tr className="hover:bg-table-hover transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs text-foreground">EXTERNAL</td>
-                      <td className="px-4 py-3 text-foreground/90">Public-facing applications. Elevated risk due to attack surface exposure.</td>
-                    </tr>
-                    <tr className="hover:bg-table-hover transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs text-foreground">INTERNAL</td>
-                      <td className="px-4 py-3 text-foreground/90">Internal tools and services. Moderate severity multiplier.</td>
-                    </tr>
-                    <tr className="hover:bg-table-hover transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs text-foreground">NON_PRODUCTION</td>
-                      <td className="px-4 py-3 text-foreground/90">Development, staging, or sandbox environments. Lowest severity multiplier.</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
 

@@ -13,7 +13,9 @@ import {
 import { useToast } from '../../../hooks/use-toast';
 import {
   apiAdminListExtractionFailures,
+  apiAdminFleetMetrics,
   type ExtractionFailure,
+  type FleetMetrics,
 } from '../../../lib/api';
 
 const PER_PAGE = 50;
@@ -36,6 +38,99 @@ function formatDate(s: string | null): string {
 function truncate(s: string, n: number): string {
   if (!s) return '';
   return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <div className="text-xs text-foreground-secondary">{label}</div>
+      <div className="text-xl font-semibold text-foreground tabular-nums">{value}</div>
+      {sub ? <div className="text-xs text-foreground-secondary mt-0.5">{sub}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Live fleet-dispatcher metrics. Polls every 5s — "watch the autoscaler react
+ * to load." Inflight vs MAX_FLEET shows the hard cap; queue-wait percentiles +
+ * throughput show drain health.
+ */
+function FleetPanel() {
+  const [m, setM] = useState<FleetMetrics | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const data = await apiAdminFleetMetrics('extraction');
+        if (alive) {
+          setM(data);
+          setError(false);
+        }
+      } catch {
+        if (alive) setError(true);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  if (error && !m) return null; // fleet metrics unavailable (CE / Fly not configured) — hide silently
+  if (!m) {
+    return (
+      <div className="rounded-lg border border-border bg-background-card p-4 mb-4">
+        <div className="h-5 w-32 bg-muted rounded animate-pulse mb-3" />
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-16 bg-muted/40 rounded-lg animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const fleetPct = m.maxFleet > 0 ? Math.min(100, Math.round((m.inflight / m.maxFleet) * 100)) : 0;
+  const fmtSec = (s: number | null) => (s == null ? '—' : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`);
+
+  return (
+    <div className="rounded-lg border border-border bg-background-card p-4 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-foreground">Extraction fleet</h2>
+        <div className="flex items-center gap-2">
+          {m.spendBlocked ? (
+            <Badge variant="destructive">spend cap reached</Badge>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs text-foreground-secondary">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" /> live
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Queue depth" value={String(m.queued)} />
+        <Stat label="Running" value={String(m.running)} sub={`${m.starting} starting`} />
+        <Stat label="Inflight / max" value={`${m.inflight} / ${m.maxFleet}`} sub={`${fleetPct}% of cap`} />
+        <Stat label="Throughput" value={`${m.throughputPerHour}/hr`} />
+        <Stat label="Queue wait p50 / p95" value={`${fmtSec(m.p50QueueSeconds)} / ${fmtSec(m.p95QueueSeconds)}`} />
+        <Stat
+          label="Spend (this hour)"
+          value={`$${m.spendThisHourUsd.toFixed(2)}`}
+          sub={m.spendCapUsd != null ? `cap $${m.spendCapUsd.toFixed(2)}` : 'no cap'}
+        />
+      </div>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-300 ${fleetPct >= 100 ? 'bg-amber-500' : 'bg-primary'}`}
+          style={{ width: `${fleetPct}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 function SkeletonRows({ rows }: { rows: number }) {
@@ -148,6 +243,9 @@ export default function ExtractionFailuresPage() {
   return (
     <div className="container mx-auto py-8 px-4 max-w-7xl">
       <h1 className="text-2xl font-semibold mb-6">Extraction Failures</h1>
+
+      {/* Live fleet dispatcher metrics */}
+      <FleetPanel />
 
       {/* Filter bar */}
       <div className="rounded-lg border border-border bg-background-card p-4 mb-4">

@@ -26,7 +26,7 @@ import {
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
-import { api, type SupplyChainResponse, type SupplyChainChild, type SupplyChainBumpPr, type ProjectEffectivePolicies, type LatestSafeVersionResponse, type BannedVersion, type DependencyVersionsResponse, type DependencyVersionItem, type DependencyVersionVulnerability, type AssetTier } from '../../lib/api';
+import { api, type SupplyChainResponse, type SupplyChainChild, type SupplyChainBumpPr, type ProjectEffectivePolicies, type LatestSafeVersionResponse, type BannedVersion, type DependencyVersionsResponse, type DependencyVersionItem, type DependencyVersionVulnerability } from '../../lib/api';
 import { calculateDepscore, SEVERITY_TO_CVSS } from '../../lib/scoring/depscore';
 import { Button } from '../../components/ui/button';
 import { CenterNode } from '../../components/supply-chain/CenterNode';
@@ -160,7 +160,7 @@ function RecentVersionBlock({
   onUnbanClick,
   safeVersion,
   bumpPrs,
-  assetTier,
+  importance,
 }: {
   version: DependencyVersionItem;
   currentVersion: string;
@@ -172,7 +172,7 @@ function RecentVersionBlock({
   onUnbanClick: (banId: string) => void;
   safeVersion: string | null;
   bumpPrs: SupplyChainBumpPr[];
-  assetTier: AssetTier;
+  importance: number;
 }) {
   const direct = version.vulnerabilities ?? [];
   const transitive = version.transitiveVulnerabilities ?? [];
@@ -199,7 +199,7 @@ function RecentVersionBlock({
       epss: vuln.epss_score ?? 0,
       cisaKev: vuln.cisa_kev ?? false,
       isReachable: vuln.is_reachable ?? true,
-      assetTier,
+      importance,
     });
   };
 
@@ -501,7 +501,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
   const [data, setData] = useState<SupplyChainResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [projectAssetTier, setProjectAssetTier] = useState<AssetTier>('EXTERNAL');
+  const [projectImportance, setProjectImportance] = useState<number>(1.0);
   const [showAllPaths, setShowAllPaths] = useState(false);
   const [versionsData, setVersionsData] = useState<DependencyVersionsResponse | null>(null);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -592,15 +592,15 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
       .finally(() => setBumpScopeLoading(false));
   }, [orgId, projectId]);
 
-  // Load project asset tier for Depscore (use cache or fetch)
+  // Load project importance for Depscore (use cache or fetch)
   useEffect(() => {
     if (!orgId || !projectId) return;
     const cached = api.getCachedProject(orgId, projectId);
-    if (cached?.asset_tier) {
-      setProjectAssetTier(cached.asset_tier);
+    if (cached && typeof cached.importance === 'number') {
+      setProjectImportance(cached.importance);
       return;
     }
-    api.getProject(orgId, projectId, false).then((p) => setProjectAssetTier(p.asset_tier ?? 'EXTERNAL')).catch(() => {});
+    api.getProject(orgId, projectId, false).then((p) => setProjectImportance(typeof p.importance === 'number' ? p.importance : 1.0)).catch(() => {});
   }, [orgId, projectId]);
 
   useEffect(() => {
@@ -999,7 +999,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
             safeVersion: safeVersionData?.safeVersion ?? null,
             versionSwitching: graphLoading && (versionLoadSource === 'dropdown' || versionLoadSource === 'sidebar'),
             onOpenVersionsSidebar: () => setVersionSidebarOpen(true),
-            assetTier: projectAssetTier,
+            importance: projectImportance,
           }
         : undefined,
     [
@@ -1012,7 +1012,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
       dependencyId,
       orgId,
       projectId,
-      projectAssetTier,
+      projectImportance,
       stableHandlePrCreated,
       canManage,
       bannedVersions,
@@ -1281,7 +1281,7 @@ export function SupplyChainContent({ orgId, projectId, dependencyId, dependencyN
                 orgId={orgId!}
                 projectId={projectId!}
                 dependencyId={dependencyId!}
-                assetTier={projectAssetTier}
+                importance={projectImportance}
               />
             ))}
             {hasMoreVersions && (

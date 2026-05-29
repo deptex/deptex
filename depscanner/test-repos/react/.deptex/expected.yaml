@@ -1,0 +1,68 @@
+# Expected findings for the react dogfood fixture.
+#
+# Authority: see docs/runbooks/depscanner-dogfood.md for the schema +
+# match semantics (subset, alias-aware, bucket-tolerant). The harness
+# (`npm run dogfood:check -- --fixture react --project-id <uuid>`) reads
+# this file as the sole source of truth.
+#
+# These values are HYPOTHESIS-GRADE until the M2 walkthrough — Henry's
+# pass iterates expected vs. actual until the harness reports PASS.
+
+reachable_vulns:
+  # lodash@4.17.20 — _.template called with user-tainted query param
+  # in src/App.jsx. Same CVE as express's reachable seed, exercised
+  # through the React client-render trust boundary.
+  - osv_id: CVE-2021-23337
+    aliases: [GHSA-35jh-r3h4-6jhm]
+    file: src/App.jsx
+    line: 22
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  # moment@2.29.1 — declared in package.json but never imported.
+  # Tree-sitter extractor reports zero usages → classifier marks
+  # unreachable.
+  - osv_id: CVE-2022-31129
+    aliases: [GHSA-wc69-rhjr-hc9g]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  # nginx:1.19.0 base image — many os-package CVEs. We assert ONE
+  # canonical, persistent CVE here as the smoke check; extras categorized
+  # in RESULTS.md.
+  - osv_id: CVE-2021-23017
+    aliases: [GHSA-6vp7-5pvq-3qrw]
+    base_image: nginx:1.19.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 4
+
+malicious_pkg:
+  - package: event-stream
+    ecosystem: npm
+    note: historical-not-published — see .github/dependabot.yml exclusion
+
+semgrep_findings:
+  # _.template called with non-literal argument; tainted-template
+  # injection rule. Rule id is hypothesis-grade; iterated in M2.3.
+  - rule_id: javascript.lang.security.audit.detect-non-literal-template.detect-non-literal-template
+    file: src/App.jsx
+    line: 22
+
+# No dast_findings: react is a pure SPA, no application attack surface.

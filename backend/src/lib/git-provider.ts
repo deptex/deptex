@@ -2,8 +2,8 @@ import {
   createInstallationToken,
   listInstallationRepositories,
   getRepositoryFileContent as ghGetFileContent,
-  getRepositoryTreeRecursive as ghGetTreeRecursive,
-  getRepositoryRootContents as ghGetRootContents,
+  getRepositoryTreeRecursiveWithFlag as ghGetTreeRecursiveWithFlag,
+  getRepositoryDirectoryContents as ghGetDirContents,
 } from './github';
 
 export interface RepoInfo {
@@ -15,15 +15,27 @@ export interface RepoInfo {
 
 export interface TreeEntry {
   path: string;
+  /** 'tree' (subdirectory), 'blob' (file), or 'submodule' (gitlink). */
   type: string;
+}
+
+/** Result of a recursive tree walk. `truncated` means the provider didn't return
+ * the full tree — either hit a provider-side entry/size cap (GitHub ~100k entries)
+ * or our own pagination/depth cap (Bitbucket max_depth, page cap). Downstream
+ * consumers should surface this so users know detection may be incomplete. */
+export interface RecursiveTreeResult {
+  entries: TreeEntry[];
+  truncated: boolean;
 }
 
 export interface GitProvider {
   readonly provider: 'github' | 'gitlab' | 'bitbucket';
   listRepositories(): Promise<RepoInfo[]>;
   getFileContent(repo: string, filePath: string, ref: string): Promise<string>;
-  getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]>;
+  getTreeRecursive(repo: string, ref: string): Promise<RecursiveTreeResult>;
   getRootContents(repo: string, ref: string): Promise<TreeEntry[]>;
+  /** Single-level directory listing. Empty path lists the repository root. */
+  listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]>;
   getCloneUrl(repo: string): string;
   getCloneToken(): Promise<string>;
 }
@@ -31,19 +43,16 @@ export interface GitProvider {
 export class GitHubProvider implements GitProvider {
   readonly provider = 'github' as const;
   private installationId: string;
-  private tokenCache: { token: string; expiresAt: number } | null = null;
 
   constructor(installationId: string) {
     this.installationId = installationId;
   }
 
-  private async getToken(): Promise<string> {
-    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt) {
-      return this.tokenCache.token;
-    }
-    const token = await createInstallationToken(this.installationId);
-    this.tokenCache = { token, expiresAt: Date.now() + 50 * 60 * 1000 };
-    return token;
+  // Installation tokens are cached + deduplicated at module scope in
+  // github.ts (createInstallationToken) so a fresh provider instance per
+  // HTTP request doesn't mint a new token every time.
+  private getToken(): Promise<string> {
+    return createInstallationToken(this.installationId);
   }
 
   async listRepositories(): Promise<RepoInfo[]> {
@@ -56,14 +65,19 @@ export class GitHubProvider implements GitProvider {
     return ghGetFileContent(token, repo, filePath, ref);
   }
 
-  async getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]> {
+  async getTreeRecursive(repo: string, ref: string): Promise<RecursiveTreeResult> {
     const token = await this.getToken();
-    return ghGetTreeRecursive(token, repo, ref);
+    const result = await ghGetTreeRecursiveWithFlag(token, repo, ref);
+    return { entries: result.entries, truncated: result.truncated };
   }
 
   async getRootContents(repo: string, ref: string): Promise<TreeEntry[]> {
+    return this.listDirectory(repo, ref, '');
+  }
+
+  async listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]> {
     const token = await this.getToken();
-    const items = await ghGetRootContents(token, repo, ref);
+    const items = await ghGetDirContents(token, repo, path, ref);
     return items.map((i) => ({ path: i.path, type: i.type === 'dir' ? 'tree' : 'blob' }));
   }
 
@@ -102,7 +116,7 @@ export function createProvider(integration: OrgIntegration): GitProvider {
         throw new Error('GitLab integration missing access_token');
       }
       const gitlabUrl = integration.metadata?.gitlab_url || process.env.GITLAB_URL || 'https://gitlab.com';
-      return new GL(integration.access_token, gitlabUrl);
+      return new GL(integration.access_token, gitlabUrl, integration.refresh_token ?? null, integration.id);
     }
     case 'bitbucket': {
       const { BitbucketProvider: BB } = require('./bitbucket-api');
@@ -110,7 +124,7 @@ export function createProvider(integration: OrgIntegration): GitProvider {
         throw new Error('Bitbucket integration missing access_token');
       }
       const workspace = integration.metadata?.workspace;
-      return new BB(integration.access_token, workspace);
+      return new BB(integration.access_token, workspace, integration.refresh_token ?? null, integration.id);
     }
     default:
       throw new Error(`Unsupported provider: ${integration.provider}`);

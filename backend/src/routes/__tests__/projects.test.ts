@@ -6,6 +6,12 @@ jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSi
 jest.mock('../../lib/activities', () => ({
   createActivity: jest.fn(),
 }));
+// Rate limiter uses real Upstash Redis when env vars are set, which would
+// throttle the 11+ POST /:id/projects tests below against shared per-user
+// quota. Mock it to always allow for the test suite.
+jest.mock('../../lib/rate-limit', () => ({
+  checkRateLimit: jest.fn(async () => ({ allowed: true, remaining: 999 })),
+}));
 
 const mockGetCached = jest.fn().mockResolvedValue(null);
 const mockSetCached = jest.fn().mockResolvedValue(undefined);
@@ -92,6 +98,161 @@ describe('Project Routes', () => {
         name: 'New Project',
         organization_id: orgId
       }));
+    });
+
+    it('rejects a project name that is whitespace-only', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: '   ' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/required/i);
+    });
+
+    it('rejects a project name longer than 200 characters', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'a'.repeat(201) });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/200 characters/i);
+    });
+
+    it('rejects a member who lacks manage_teams_and_projects', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'member' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: {} }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'Forbidden Project' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/permission/i);
+    });
+
+    it('does NOT accept the legacy role==="admin" check as proof of authority', async () => {
+      // The dropped legacy check used to authorize any member whose role
+      // was literally named "admin", regardless of permissions JSONB.
+      // With the audit fix it requires manage_teams_and_projects too.
+      setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: {} }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ name: 'Still Forbidden' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects a repo block whose package_json_path traverses outside the repo', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          name: 'Traversal Attempt',
+          repo: {
+            repo_full_name: 'acme/api',
+            integration_id: 'integ-1',
+            package_json_path: '../../etc/passwd',
+          },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/package_json_path/i);
+    });
+
+    it('rejects a repo block with a leading slash in package_json_path', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          name: 'Bad Path',
+          repo: {
+            repo_full_name: 'acme/api',
+            integration_id: 'integ-1',
+            package_json_path: '/etc/passwd',
+          },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/package_json_path/i);
+    });
+
+    it('requires integration_id when a repo block is sent', async () => {
+      setTableResponse('organization_members', 'single', { data: { role: 'owner' }, error: null });
+      setTableResponse('organization_roles', 'single', { data: { permissions: { manage_teams_and_projects: true } }, error: null });
+
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          name: 'Missing Integration',
+          repo: {
+            repo_full_name: 'acme/api',
+            integration_id: '',
+          },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/integration_id/i);
+    });
+  });
+
+  describe('POST /api/organizations/:id/projects/:projectId/repositories/connect', () => {
+    const projectId = 'proj-1';
+
+    it('rejects an invalid package_json_path (traversal)', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/repositories/connect`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          repo_full_name: 'acme/api',
+          integration_id: 'integ-1',
+          package_json_path: '../../secrets',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/package_json_path/i);
+    });
+
+    it('rejects when repo_full_name is missing', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/repositories/connect`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          integration_id: 'integ-1',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/repo_full_name/i);
+    });
+
+    it('rejects when integration_id is missing', async () => {
+      const res = await request(app)
+        .post(`/api/organizations/${orgId}/projects/${projectId}/repositories/connect`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({
+          repo_full_name: 'acme/api',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/integration_id/i);
     });
   });
 

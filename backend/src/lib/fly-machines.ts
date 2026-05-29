@@ -6,6 +6,24 @@ export interface FlyMachineConfig {
   guest: { cpus: number; memory_mb: number; cpu_kind: 'shared' | 'performance' };
   maxBurst: number;
   region?: string;
+  /**
+   * Machine kind, stamped onto each created machine as the `SCAN_TYPE` env var.
+   * The worker intersects its supported job types with `SCAN_TYPE` so an
+   * extraction-shaped (64GB) machine never claims a small dast job and a
+   * dast-shaped (16GB) machine never claims a 64GB extraction job (OOM). It
+   * also lets the fleet dispatcher count only extraction machines on the
+   * shared `deptex-depscanner` app, and lets the legacy `startFlyMachine`
+   * burst check count only its own kind. See the scalable-extraction-infra plan.
+   */
+  scanType: 'extraction' | 'dast' | 'fix';
+}
+
+/** A Fly machine create-error caused by API rate limiting (HTTP 429). */
+export class FlyRateLimitError extends Error {
+  constructor(message: string) {
+    super(`429 ${message}`);
+    this.name = 'FlyRateLimitError';
+  }
 }
 
 // Phase 23: extraction-worker → depscanner. The new Fly app name is `deptex-depscanner`.
@@ -27,6 +45,7 @@ export const DEPSCANNER_CONFIG: FlyMachineConfig = {
   app: depscannerApp(),
   guest: { cpus: 8, memory_mb: 65536, cpu_kind: 'performance' },
   maxBurst: parseInt(process.env.FLY_MAX_BURST_MACHINES || '5', 10),
+  scanType: 'extraction',
 };
 
 // Phase 23b: DAST scans run on the same depscanner Fly app but on a smaller
@@ -51,6 +70,7 @@ export function getDastMachineConfig(detectedRuntime: DetectedRuntime): FlyMachi
       app: depscannerApp(),
       guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
       maxBurst: DAST_MAX_BURST,
+      scanType: 'dast',
     };
   }
   // 'unknown' or 'spa' → performance-4x 16GB.
@@ -58,6 +78,7 @@ export function getDastMachineConfig(detectedRuntime: DetectedRuntime): FlyMachi
     app: depscannerApp(),
     guest: { cpus: 4, memory_mb: 16384, cpu_kind: 'performance' },
     maxBurst: DAST_MAX_BURST,
+    scanType: 'dast',
   };
 }
 
@@ -70,14 +91,40 @@ export const FIX_CONFIG: FlyMachineConfig = {
   app: process.env.FLY_FIX_APP || 'deptex-fix-worker',
   guest: { cpus: 4, memory_mb: 8192, cpu_kind: 'shared' },
   maxBurst: parseInt(process.env.FLY_FIX_MAX_BURST || '3', 10),
+  scanType: 'fix',
 };
 
-interface FlyMachine {
+export interface FlyMachine {
   id: string;
   name: string;
   state: string;
   region: string;
+  created_at?: string;
   config?: Record<string, unknown>;
+}
+
+/** Fly machine states that consume resources / count as "exists and running". */
+export const ACTIVE_MACHINE_STATES = ['created', 'starting', 'started', 'replacing'];
+
+/**
+ * Read the `SCAN_TYPE` env stamped on a machine at create time. Returns null for
+ * untagged machines (legacy / test fixtures created before SCAN_TYPE tagging).
+ */
+export function machineScanType(m: FlyMachine): string | null {
+  const env = (m.config as { env?: Record<string, unknown> } | undefined)?.env;
+  const t = env?.SCAN_TYPE;
+  return typeof t === 'string' && t ? t : null;
+}
+
+/**
+ * Whether a machine belongs to a given scan kind. Untagged machines match any
+ * kind (back-compat: pre-tagging machines + unit-test fixtures). Real machines
+ * created after this change are always tagged, so kinds are fully separated in
+ * practice.
+ */
+export function machineMatchesScanType(m: FlyMachine, scanType: string): boolean {
+  const t = machineScanType(m);
+  return t === null || t === scanType;
 }
 
 function getToken(): string {
@@ -100,7 +147,7 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function listMachines(app: string): Promise<FlyMachine[]> {
+export async function listMachines(app: string): Promise<FlyMachine[]> {
   const res = await flyFetch(app, '/machines');
   if (!res.ok) {
     throw new Error(`Failed to list machines: ${res.status} ${res.statusText}`);
@@ -108,10 +155,11 @@ async function listMachines(app: string): Promise<FlyMachine[]> {
   return res.json() as Promise<FlyMachine[]>;
 }
 
-async function startMachine(app: string, machineId: string): Promise<void> {
+export async function startMachine(app: string, machineId: string): Promise<void> {
   const res = await flyFetch(app, `/machines/${machineId}/start`, { method: 'POST' });
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 429) throw new FlyRateLimitError(`start ${machineId}: ${text}`);
     throw new Error(`Failed to start machine ${machineId}: ${res.status} ${text}`);
   }
 }
@@ -146,12 +194,16 @@ async function createBurstMachine(config: FlyMachineConfig, imageOverride?: stri
         restart: { policy: 'no' },
         image,
         guest: config.guest,
+        // Stamp the machine kind so the worker only claims matching job types
+        // and the dispatcher / legacy burst-count only count their own kind.
+        env: { SCAN_TYPE: config.scanType },
       },
     }),
   });
 
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 429) throw new FlyRateLimitError(`create burst machine: ${text}`);
     throw new Error(`Failed to create burst machine: ${res.status} ${text}`);
   }
 
@@ -176,13 +228,21 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const machines = await listMachines(config.app);
+      const allMachines = await listMachines(config.app);
+      // Only count/reuse machines of THIS kind. Extraction and dast share the
+      // `deptex-depscanner` app; without this filter a busy extraction fleet
+      // would make dast see "at burst limit" and starve, and vice-versa.
+      const machines = allMachines.filter((m) => machineMatchesScanType(m, config.scanType));
       const stopped = machines.filter((m) => m.state === 'stopped');
 
-      // Resolve the image from an existing machine so burst machines use the
-      // same deployed image instead of guessing `:latest` (which may not exist).
+      // Resolve the image from ANY existing machine on the app — extraction and
+      // dast share one Fly app and one deployed release, so the digest is
+      // identical across kinds. Scanning only the kind-filtered list would let a
+      // dast burst (usually 0 dast machines on an extraction-flooded app) fall
+      // back to `:latest`, which may not exist. Kind filtering stays for the
+      // burst COUNT + stopped-pool reuse below, not image resolution.
       let resolvedImage: string | null = null;
-      for (const m of machines) {
+      for (const m of allMachines) {
         resolvedImage = getImageFromMachine(m);
         if (resolvedImage) break;
       }
@@ -234,7 +294,48 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
 
 export const startDepscannerMachine = () => startFlyMachine(DEPSCANNER_CONFIG);
 // Back-compat alias — extraction is one of several scan types depscanner runs.
+// Still used by recovery.ts as a redundant provision fallback; the primary
+// extraction provisioning path is now the fleet dispatcher (createDepscannerBurst).
 export const startExtractionMachine = startDepscannerMachine;
 export const startDastMachine = (detectedRuntime: DetectedRuntime = 'unknown') =>
   startFlyMachine(getDastMachineConfig(detectedRuntime));
 export const startFixMachine = () => startFlyMachine(FIX_CONFIG);
+
+/**
+ * The pinned depscanner image (release digest, e.g. `registry.fly.io/deptex-depscanner@sha256:…`).
+ * The fleet dispatcher pins this explicitly so a cold start from zero machines
+ * never gambles on `:latest`. Throws if unset on the dispatcher path — a missing
+ * pin is a deploy bug, not something to silently fall back from.
+ */
+export function getDepscannerImage(): string {
+  const img = process.env.FLY_DEPSCANNER_IMAGE?.trim();
+  if (!img) {
+    throw new Error(
+      'FLY_DEPSCANNER_IMAGE is not set — the fleet dispatcher requires a pinned release image. ' +
+        'Set it to the just-built registry digest as part of the depscanner deploy.',
+    );
+  }
+  return img;
+}
+
+/**
+ * Create ONE extraction burst machine for the dispatcher: pinned image,
+ * `SCAN_TYPE=extraction`, `auto_destroy`. Throws FlyRateLimitError on 429 (the
+ * dispatcher stops the tick); retries once on other transient errors. The
+ * dispatcher owns the MAX_FLEET accounting, so this does not consult the pool
+ * count — the caller decides how many to create.
+ */
+export async function createDepscannerBurst(): Promise<string> {
+  const image = getDepscannerImage();
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await createBurstMachine(DEPSCANNER_CONFIG, image);
+    } catch (e) {
+      if (e instanceof FlyRateLimitError) throw e; // do not retry a 429
+      lastErr = e;
+      if (attempt < 2) await sleep(1000);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}

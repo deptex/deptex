@@ -31,6 +31,16 @@ export function getSupportedJobTypes(): string[] {
   if (process.env.DAST_CREDENTIAL_KEY) {
     types.push('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run');
   }
+  // The fleet provisioner stamps each machine with SCAN_TYPE at create time.
+  // When set, the machine only claims jobs of that kind — so an extraction-
+  // shaped (64GB) machine never claims a small dast job, and a dast-shaped
+  // (16GB) machine never claims a 64GB extraction job (which would OOM). Both
+  // kinds share the single `deptex-depscanner` Fly app, so this intersection is
+  // what keeps them from poaching each other's work. Untagged machines (legacy
+  // / local dev) keep the previous behaviour of claiming anything they support.
+  const scanType = process.env.SCAN_TYPE?.trim();
+  if (scanType === 'extraction') return ['extraction'];
+  if (scanType === 'dast') return types.filter((t) => t.startsWith('dast'));
   return types;
 }
 
@@ -39,9 +49,17 @@ export async function claimJob(
   machineId: string,
   supportedTypes: string[] = getSupportedJobTypes(),
 ): Promise<ExtractionJobRow | null> {
+  // Per-org in-flight cap so one tenant can't monopolize the fleet. Parse
+  // defensively: a Fly secret that is empty ('') or non-numeric ('abc') must
+  // NOT become 0 or NaN→null — either would make the RPC's `(count) < cap`
+  // condition never true and silently halt ALL claiming. Mirror the dispatcher's
+  // parseInt(... || '5') + finite/positive guard.
+  const parsedCap = parseInt(process.env.FLY_MAX_PER_ORG || '5', 10);
+  const maxPerOrg = Number.isFinite(parsedCap) && parsedCap > 0 ? parsedCap : 5;
   const { data, error } = await supabase.rpc('claim_scan_job', {
     p_machine_id: machineId,
     p_supported_types: supportedTypes,
+    p_max_per_org: maxPerOrg,
   });
 
   // A claim RPC error (e.g. Supabase outage) is NOT "no job available" —

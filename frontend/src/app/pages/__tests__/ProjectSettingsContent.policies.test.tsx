@@ -5,7 +5,6 @@ import ProjectSettingsPage from '../ProjectSettingsContent';
 
 const mockGetProjectRepositories = vi.fn();
 const mockGetCachedProjectRepositories = vi.fn();
-const mockGetOrganizationAssetTiers = vi.fn();
 const mockGetTeams = vi.fn();
 const mockGetProjectTeams = vi.fn();
 const mockGetProjectMembers = vi.fn();
@@ -20,7 +19,7 @@ const mockSetSearchParams = vi.fn();
 const mockReloadProject = vi.fn().mockResolvedValue(undefined);
 
 let mockProjectContext: {
-  project: { id: string; name: string; asset_tier: string };
+  project: { id: string; name: string; importance: number };
   reloadProject: ReturnType<typeof vi.fn>;
   organizationId: string;
   userPermissions: { view_settings: boolean; edit_settings: boolean };
@@ -64,7 +63,6 @@ vi.mock('../../../lib/api', () => ({
   api: {
     getProjectRepositories: (...args: unknown[]) => mockGetProjectRepositories(...args),
     getCachedProjectRepositories: () => mockGetCachedProjectRepositories() ?? null,
-    getOrganizationAssetTiers: (...args: unknown[]) => mockGetOrganizationAssetTiers(...args),
     getTeams: (...args: unknown[]) => mockGetTeams(...args),
     getProjectTeams: (...args: unknown[]) => mockGetProjectTeams(...args),
     getProjectMembers: (...args: unknown[]) => mockGetProjectMembers(...args),
@@ -101,9 +99,6 @@ describe('ProjectSettingsPage – Policies', () => {
     hoisted.mockUseParams.mockReturnValue({ orgId: 'org-1', projectId: 'proj-1', section: 'policies' });
     mockGetProjectRepositories.mockResolvedValue({ repositories: [], connectedRepository: null });
     mockGetCachedProjectRepositories.mockReturnValue(null);
-    mockGetOrganizationAssetTiers.mockResolvedValue([
-      { id: 't1', organization_id: 'org-1', name: 'External', color: '#888', rank: 0, environmental_multiplier: 1, is_default: true },
-    ]);
     mockGetTeams.mockResolvedValue([]);
     mockGetProjectTeams.mockResolvedValue({ owner_team: null, contributing_teams: [] });
     mockGetProjectMembers.mockResolvedValue({ direct_members: [], team_members: [] });
@@ -115,7 +110,7 @@ describe('ProjectSettingsPage – Policies', () => {
     mockReloadProject.mockResolvedValue(undefined);
 
     mockProjectContext = {
-      project: { id: 'proj-1', name: 'Test Project', asset_tier: 'EXTERNAL' },
+      project: { id: 'proj-1', name: 'Test Project', importance: 1.0 },
       reloadProject: mockReloadProject,
       organizationId: 'org-1',
       userPermissions: { view_settings: true, edit_settings: true },

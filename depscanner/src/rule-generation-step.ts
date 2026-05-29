@@ -32,7 +32,7 @@
  * `cve-generation/` for the helper modules:
  *   - provider-resolution  — provider concurrency caps + platform-key resolution
  *   - cost-cap             — readRuleGenMonthlySpend / applyBudgetCap / logRuleGenAiUsage
- *   - trigger-filter       — applyTriggerPolicy / loadOrgExistingRuleCves / fetchAssetTierRank
+ *   - trigger-filter       — applyTriggerPolicy / loadOrgExistingRuleCves
  *   - generate-with-retry  — per-CVE retry loop + RateLimitGate
  *   - persist              — persistGeneratedRule + persistJobTelemetry
  *   - telemetry            — aggregateBreakdowns

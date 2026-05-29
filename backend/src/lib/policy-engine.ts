@@ -36,11 +36,11 @@ export interface PolicyDependencyContext {
   slsaLevel: number | null;
 }
 
-export interface PolicyTierContext {
-  name: string;
-  rank: number;
-  multiplier: number;
-}
+/**
+ * Project importance — a numeric depscore multiplier in [0.5, 2.0]
+ * that policies receive via `context.importance`.
+ */
+export type PolicyImportance = number;
 
 export interface PackagePolicyResult {
   allowed: boolean;
@@ -434,14 +434,14 @@ const __ctxWithHelpers = Object.assign({}, __context, {
 export async function runPackagePolicy(
   code: string,
   dependency: PolicyDependencyContext,
-  tier: PolicyTierContext,
+  importance: PolicyImportance,
   organizationId?: string,
 ): Promise<PackagePolicyResult> {
   try {
     const result = await executePolicyFunction({
       code,
       functionName: 'packagePolicy',
-      context: { dependency, tier },
+      context: { dependency, importance },
       organizationId,
       codeType: 'package_policy',
     });
@@ -756,7 +756,7 @@ function buildSampleContext(
 
   if (codeType === 'project_status') {
     return {
-      project: { name: 'test-project', tier: { name: 'Internal', rank: 3, multiplier: 1.0 }, teamName: 'Test Team' },
+      project: { name: 'test-project', importance: 1.0, teamName: 'Test Team' },
       dependencies: sampleDeps,
       statuses: ['Compliant', 'Non-Compliant'],
     };
@@ -764,7 +764,7 @@ function buildSampleContext(
 
   // pr_check (richer context: ecosystem, changed_files, per-dep license, vulnerability_counts, is_direct)
   return {
-    project: { name: 'test-project', id: 'test-project-id', asset_tier: 'Internal', tier: { name: 'Internal', rank: 3, multiplier: 1.0 } },
+    project: { name: 'test-project', id: 'test-project-id', importance: 1.0 },
     ecosystem: 'npm',
     changed_files: ['package.json', 'package-lock.json'],
     added: [
@@ -800,24 +800,13 @@ export async function evaluateProjectPolicies(
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name, asset_tier_id, effective_package_policy_code, effective_project_status_code')
+    .select('id, name, importance, effective_package_policy_code, effective_project_status_code')
     .eq('id', projectId)
     .single();
 
   if (!project) throw new Error(`Project ${projectId} not found`);
 
-  let tier: PolicyTierContext = { name: 'Internal', rank: 3, multiplier: 1.0 };
-  if (project.asset_tier_id) {
-    const { data: tierData } = await supabase
-      .from('organization_asset_tiers')
-      .select('name, rank, environmental_multiplier')
-      .eq('id', project.asset_tier_id)
-      .single();
-
-    if (tierData) {
-      tier = { name: tierData.name, rank: tierData.rank, multiplier: Number(tierData.environmental_multiplier) };
-    }
-  }
+  const importance: PolicyImportance = typeof project.importance === 'number' ? project.importance : 1.0;
 
   // Load package policy code
   let packagePolicyCode: string | null = project.effective_package_policy_code;
@@ -867,7 +856,7 @@ export async function evaluateProjectPolicies(
           slsaLevel: versionData?.slsa_level ?? null,
         };
 
-        const policyResult = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
+        const policyResult = await runPackagePolicy(packagePolicyCode, depContext, importance, organizationId);
 
         await supabase
           .from('project_dependencies')
@@ -953,7 +942,7 @@ export async function evaluateProjectPolicies(
 
   if (statusCode) {
     const projectStatusContext = {
-      project: { name: project.name, tier, teamName: '' },
+      project: { name: project.name, importance, teamName: '' },
       dependencies: depContextForStatus,
       statuses: statusNames,
     };
@@ -1014,7 +1003,7 @@ export async function preflightCheck(
   enriched?: PreflightEnrichedInput | null,
 ): Promise<
   PackagePolicyResult & {
-    tierName: string;
+    importance: number;
     license: string | null;
     dependencyScore: number | null;
     openSsfScore: number | null;
@@ -1023,21 +1012,11 @@ export async function preflightCheck(
 > {
   const { data: project } = await supabase
     .from('projects')
-    .select('asset_tier_id, effective_package_policy_code')
+    .select('importance, effective_package_policy_code')
     .eq('id', projectId)
     .single();
 
-  let tier: PolicyTierContext = { name: 'Internal', rank: 3, multiplier: 1.0 };
-  if (project?.asset_tier_id) {
-    const { data: tierData } = await supabase
-      .from('organization_asset_tiers')
-      .select('name, rank, environmental_multiplier')
-      .eq('id', project.asset_tier_id)
-      .single();
-    if (tierData) {
-      tier = { name: tierData.name, rank: tierData.rank, multiplier: Number(tierData.environmental_multiplier) };
-    }
-  }
+  const importance: PolicyImportance = typeof project?.importance === 'number' ? project.importance : 1.0;
 
   let packagePolicyCode = project?.effective_package_policy_code;
   if (!packagePolicyCode) {
@@ -1050,7 +1029,7 @@ export async function preflightCheck(
   }
 
   if (!packagePolicyCode) {
-    return { allowed: true, reasons: [], tierName: tier.name, license: null, dependencyScore: null, openSsfScore: null, slsaLevel: null };
+    return { allowed: true, reasons: [], importance, license: null, dependencyScore: null, openSsfScore: null, slsaLevel: null };
   }
 
   let license: string | null = null;
@@ -1107,10 +1086,10 @@ export async function preflightCheck(
     slsaLevel,
   };
 
-  const result = await runPackagePolicy(packagePolicyCode, depContext, tier, organizationId);
+  const result = await runPackagePolicy(packagePolicyCode, depContext, importance, organizationId);
   return {
     ...result,
-    tierName: tier.name,
+    importance,
     license,
     dependencyScore,
     openSsfScore,

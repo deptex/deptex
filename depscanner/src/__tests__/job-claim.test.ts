@@ -53,6 +53,7 @@ describe('claimJob', () => {
     expect(mockRpc).toHaveBeenCalledWith('claim_scan_job', {
       p_machine_id: machineId,
       p_supported_types: ['extraction', 'dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run'],
+      p_max_per_org: 5,
     });
     expect(result).toEqual(job);
   });

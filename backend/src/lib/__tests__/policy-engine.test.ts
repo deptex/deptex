@@ -4,11 +4,11 @@ import {
   runPRCheck,
   validatePolicyCode,
   type PolicyDependencyContext,
-  type PolicyTierContext,
+  type PolicyImportance,
 } from '../policy-engine';
 
-const TIER_INTERNAL: PolicyTierContext = { name: 'Internal', rank: 3, multiplier: 1.0 };
-const TIER_CROWN_JEWELS: PolicyTierContext = { name: 'Crown Jewels', rank: 1, multiplier: 1.5 };
+const IMPORTANCE_DEFAULT: PolicyImportance = 1.0;
+const IMPORTANCE_HIGH: PolicyImportance = 1.5;
 
 function makeDep(overrides: Partial<PolicyDependencyContext> = {}): PolicyDependencyContext {
   return {
@@ -35,40 +35,40 @@ describe('runPackagePolicy', () => {
   }`;
 
   it('allows a clean dependency', async () => {
-    const result = await runPackagePolicy(SIMPLE_POLICY, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(SIMPLE_POLICY, makeDep(), IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(true);
     expect(result.reasons).toEqual([]);
   });
 
   it('blocks a malicious dependency', async () => {
     const dep = makeDep({ maliciousIndicator: { source: 'socket', confidence: 1, reason: 'typosquat' } });
-    const result = await runPackagePolicy(SIMPLE_POLICY, dep, TIER_INTERNAL);
+    const result = await runPackagePolicy(SIMPLE_POLICY, dep, IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(false);
     expect(result.reasons).toContain('Malicious');
   });
 
   it('returns error result on syntax error in code', async () => {
-    const result = await runPackagePolicy('function packagePolicy(ctx) { {{{{ }', makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy('function packagePolicy(ctx) { {{{{ }', makeDep(), IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(false);
     expect(result.reasons[0]).toContain('Policy execution error');
   });
 
   it('returns error result on runtime throw', async () => {
     const code = `function packagePolicy(ctx) { throw new Error('boom'); }`;
-    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(false);
     expect(result.reasons[0]).toContain('boom');
   });
 
-  it('receives tier context correctly', async () => {
+  it('receives importance context correctly', async () => {
     const code = `function packagePolicy(ctx) {
-      if (ctx.tier.rank <= 2) return { allowed: false, reasons: ['Blocked for ' + ctx.tier.name] };
+      if (ctx.importance >= 1.3) return { allowed: false, reasons: ['Blocked for high-importance project (' + ctx.importance + ')'] };
       return { allowed: true, reasons: [] };
     }`;
-    const crownResult = await runPackagePolicy(code, makeDep(), TIER_CROWN_JEWELS);
+    const crownResult = await runPackagePolicy(code, makeDep(), IMPORTANCE_HIGH);
     expect(crownResult.allowed).toBe(false);
 
-    const internalResult = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const internalResult = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     expect(internalResult.allowed).toBe(true);
   });
 
@@ -80,7 +80,7 @@ describe('runPackagePolicy', () => {
       return { allowed: true, reasons: [] };
     }`;
     const dep = makeDep({ dependencyScore: null });
-    const result = await runPackagePolicy(code, dep, TIER_INTERNAL);
+    const result = await runPackagePolicy(code, dep, IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(true);
   });
 });
@@ -93,7 +93,7 @@ describe('runProjectStatus', () => {
       return { status: 'Compliant', violations: [] };
     }`;
     const context = {
-      project: { name: 'test', tier: TIER_INTERNAL, teamName: 'Team' },
+      project: { name: 'test', tier: IMPORTANCE_DEFAULT, teamName: 'Team' },
       dependencies: [{ name: 'a', policyResult: { allowed: true, reasons: [] }, vulnerabilities: [] }],
       statuses: ['Compliant', 'Non-Compliant'],
     };
@@ -109,7 +109,7 @@ describe('runProjectStatus', () => {
       return { status: 'Compliant', violations: [] };
     }`;
     const context = {
-      project: { name: 'test', tier: TIER_INTERNAL, teamName: 'Team' },
+      project: { name: 'test', tier: IMPORTANCE_DEFAULT, teamName: 'Team' },
       dependencies: [{ name: 'bad-pkg', policyResult: { allowed: false, reasons: ['banned'] }, vulnerabilities: [] }],
       statuses: ['Compliant', 'Non-Compliant'],
     };
@@ -134,7 +134,7 @@ describe('runPRCheck', () => {
       return { passed: true, violations: [] };
     }`;
     const context = {
-      project: { name: 'test', tier: TIER_INTERNAL },
+      project: { name: 'test', tier: IMPORTANCE_DEFAULT },
       added: [{ name: 'new-pkg', policyResult: { allowed: true, reasons: [] } }],
       updated: [],
       removed: [],
@@ -152,7 +152,7 @@ describe('runPRCheck', () => {
       return { passed: true, violations: [] };
     }`;
     const context = {
-      project: { name: 'test', tier: TIER_INTERNAL },
+      project: { name: 'test', tier: IMPORTANCE_DEFAULT },
       added: [{ name: 'bad-pkg', policyResult: { allowed: false, reasons: ['banned license'] } }],
       updated: [],
       removed: [],
@@ -303,9 +303,9 @@ describe('isolated-vm sandbox invariants', () => {
       var leaked = (obj).__leaked;
       return { allowed: leaked == null, reasons: leaked == null ? [] : ['LEAK: ' + leaked] };
     }`;
-    const a = await runPackagePolicy(pollute, makeDep(), TIER_INTERNAL);
+    const a = await runPackagePolicy(pollute, makeDep(), IMPORTANCE_DEFAULT);
     expect(a.allowed).toBe(true);
-    const b = await runPackagePolicy(observe, makeDep(), TIER_INTERNAL);
+    const b = await runPackagePolicy(observe, makeDep(), IMPORTANCE_DEFAULT);
     expect(b.allowed).toBe(true);
     expect(b.reasons).toEqual([]);
   });
@@ -313,7 +313,7 @@ describe('isolated-vm sandbox invariants', () => {
   it('CPU cap preempts an infinite loop and surfaces a timeout error', async () => {
     const code = `function packagePolicy(ctx) { while (true) {} return { allowed: true, reasons: [] }; }`;
     const start = Date.now();
-    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     const elapsed = Date.now() - start;
     expect(result.allowed).toBe(false);
     expect(result.reasons[0]).toMatch(/Policy execution error/i);
@@ -329,7 +329,7 @@ describe('isolated-vm sandbox invariants', () => {
       var big = 'x'.repeat(300000);
       return { allowed: true, reasons: [big] };
     }`;
-    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     expect(result.allowed).toBe(false);
     expect(result.reasons[0]).toMatch(/256KB cap|exceeds/i);
   });
@@ -343,7 +343,7 @@ describe('isolated-vm sandbox invariants', () => {
       return { allowed: true, reasons: [], extra: hostile };
     }`;
     const start = Date.now();
-    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     const elapsed = Date.now() - start;
     expect(result.allowed).toBe(false);
     // Host did not infinite-loop — must complete well inside the CPU cap.
@@ -366,7 +366,7 @@ describe('isolated-vm sandbox invariants', () => {
     const sweepStart = Date.now();
     for (let i = 0; i < N; i++) {
       const t0 = Date.now();
-      await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+      await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
       samples[i] = Date.now() - t0;
     }
     const sweepMs = Date.now() - sweepStart;
@@ -397,7 +397,7 @@ describe('isolated-vm sandbox invariants', () => {
       if (typeof ds !== 'number' || ds < 1000) reasons.push('daysSince broke: ' + ds);
       return { allowed: reasons.length === 0, reasons: reasons };
     }`;
-    const result = await runPackagePolicy(code, makeDep(), TIER_INTERNAL);
+    const result = await runPackagePolicy(code, makeDep(), IMPORTANCE_DEFAULT);
     expect(result.reasons).toEqual([]);
     expect(result.allowed).toBe(true);
   });

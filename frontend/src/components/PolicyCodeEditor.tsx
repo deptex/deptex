@@ -8,18 +8,6 @@ import {
 } from './policy-monaco-setup';
 
 const POLICY_TYPEDEFS = `
-/** Asset criticality tier (legacy enum). */
-type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
-
-/** Custom asset tier from organization settings. */
-interface Tier {
-  /** Tier display name. */
-  name: string;
-  /** Tier rank (lower = more critical). */
-  rank: number;
-  /** Environmental multiplier for Depscore (e.g. 1.5 for Crown Jewels). */
-  multiplier: number;
-}
 
 /** Malicious indicator data (null if not flagged). */
 interface MaliciousIndicator {
@@ -109,8 +97,8 @@ interface RemovedDependency {
 interface Project {
   /** Project name. */
   name: string;
-  /** Asset criticality tier. */
-  asset_tier: AssetTier;
+  /** Per-project importance multiplier in [0.5, 2.0]. The number IS the depscore multiplier. */
+  importance: number;
 }
 
 /** Context passed to pullRequestCheck(). */
@@ -164,7 +152,7 @@ declare function projectCompliance(context: ProjectComplianceContext): Complianc
 
 // ───── New function signatures ─────
 
-/** Context for packagePolicy() - runs per dependency with tier info. */
+/** Context for packagePolicy() - runs per dependency. */
 interface PackagePolicyContext {
   dependency: {
     name: string;
@@ -178,7 +166,8 @@ interface PackagePolicyContext {
     maliciousIndicator: MaliciousIndicator | null;
     slsaLevel: number | null;
   };
-  tier: Tier;
+  /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
+  importance: number;
   fetch: (url: string) => Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }>;
 }
 
@@ -189,7 +178,7 @@ interface PackagePolicyResult {
 
 /** Context for projectStatus() - runs per project with all dep policy results. */
 interface ProjectStatusContext {
-  project: { name: string; tier: Tier; teamName: string };
+  project: { name: string; importance: number; teamName: string };
   dependencies: Array<{
     name: string;
     version: string;
@@ -237,13 +226,13 @@ declare function daysSince(dateString: string): number;
 
 /** Shared context field definitions for completion and hover. */
 const CONTEXT_FIELDS = [
-  { label: 'project', detail: 'Project', doc: 'Project metadata (name, asset_tier).' },
+  { label: 'project', detail: 'Project', doc: 'Project metadata (name, importance).' },
   { label: 'dependencies', detail: 'Dependency[]', doc: 'All project dependencies (projectCompliance / projectStatus).' },
   { label: 'added', detail: 'Dependency[]', doc: 'Newly added dependencies (pullRequestCheck).' },
   { label: 'updated', detail: 'UpdatedDependency[]', doc: 'Updated dependencies (pullRequestCheck).' },
   { label: 'removed', detail: 'RemovedDependency[]', doc: 'Removed dependencies (pullRequestCheck).' },
   { label: 'dependency', detail: 'PackageDependency', doc: 'Package data (packagePolicy).' },
-  { label: 'tier', detail: 'Tier', doc: 'Asset tier: { name, rank, multiplier } (packagePolicy / projectStatus).' },
+  { label: 'importance', detail: 'number', doc: 'Per-project importance multiplier in [0.5, 2.0] (packagePolicy / projectStatus).' },
   { label: 'statuses', detail: 'string[]', doc: 'Available status names (projectStatus / pullRequestCheck).' },
   { label: 'fetch', detail: 'function', doc: 'Controlled fetch() for external API calls.' },
 ] as const;
@@ -256,7 +245,7 @@ const POLICY_GLOBALS: Array<{
   kind: 'function' | 'variable';
   snippet?: string;
 }> = [
-  { label: 'context', detail: 'PackagePolicyContext | ProjectStatusContext | ...', doc: 'Parameter passed to packagePolicy, projectStatus, pullRequestCheck, or projectCompliance. Contains dependency, tier, project, dependencies, fetch, etc.', kind: 'variable' },
+  { label: 'context', detail: 'PackagePolicyContext | ProjectStatusContext | ...', doc: 'Parameter passed to packagePolicy, projectStatus, pullRequestCheck, or projectCompliance. Contains dependency, importance, project, dependencies, fetch, etc.', kind: 'variable' },
   { label: 'packagePolicy', detail: '(context) => PackagePolicyResult', doc: 'Evaluate a single package against org policy. Return { allowed, reasons }.', kind: 'function' },
   { label: 'projectStatus', detail: '(context) => ProjectStatusResult', doc: 'Determine project status from dependency policy results and vulnerabilities. Return { status, violations }.', kind: 'function' },
   { label: 'pullRequestCheck', detail: '(context) => PullRequestCheckResult', doc: 'Define the PR/merge gate policy function.', kind: 'function', snippet: 'function pullRequestCheck(context) {\n\tconst violations = [];\n\t$0\n\treturn { passed: violations.length === 0, violations };\n}' },
@@ -444,24 +433,6 @@ export function PolicyCodeEditor({
           return { suggestions };
         }
 
-        if (/\.tier\.\s*$/.test(textUntilPosition)) {
-          for (const f of [
-            { label: 'name', detail: 'string', doc: 'Tier display name (e.g. "Crown Jewels").' },
-            { label: 'rank', detail: 'number', doc: 'Tier rank (lower = more critical).' },
-            { label: 'multiplier', detail: 'number', doc: 'Environmental multiplier for Depscore.' },
-          ]) {
-            suggestions.push({
-              label: f.label,
-              kind: monaco.languages.CompletionItemKind.Field,
-              detail: f.detail,
-              documentation: f.doc,
-              insertText: f.label,
-              range,
-            });
-          }
-          return { suggestions };
-        }
-
         if (/\.dependency\.\s*$/.test(textUntilPosition)) {
           const pkgFields = [
             { label: 'name', detail: 'string', doc: 'Package name.' },
@@ -491,8 +462,7 @@ export function PolicyCodeEditor({
         if (/\.project\.\s*$/.test(textUntilPosition)) {
           for (const f of [
             { label: 'name', detail: 'string', doc: 'Project name.' },
-            { label: 'asset_tier', detail: 'AssetTier', doc: '"CROWN_JEWELS" | "EXTERNAL" | "INTERNAL" | "NON_PRODUCTION"' },
-            { label: 'tier', detail: 'Tier', doc: 'Custom tier: { name, rank, multiplier }.' },
+            { label: 'importance', detail: 'number', doc: 'Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier.' },
             { label: 'teamName', detail: 'string', doc: 'Owning team name.' },
           ]) {
             suggestions.push({

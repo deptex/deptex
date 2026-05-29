@@ -26,7 +26,7 @@ import { doResolve } from './pipeline-steps/resolve';
 import { doSbom } from './pipeline-steps/sbom';
 import { doDepsSync } from './pipeline-steps/deps-sync';
 import { doUsageExtraction } from './pipeline-steps/usage-extraction';
-import { loadAssetTier } from './pipeline-steps/asset-tier';
+import { loadImportance } from './pipeline-steps/importance';
 import { doDepScan } from './pipeline-steps/dep-scan';
 import { doRuleGeneration } from './pipeline-steps/rule-generation';
 import { doTaintEngine } from './pipeline-steps/taint-engine';
@@ -59,7 +59,7 @@ export async function runPipeline(
   } as PipelineLogger);
 
   // Build the shared context once. doClone fills in repoPath, workspaceRoot,
-  // jobEcosystem, runId before any other step touches them. asset tier is
+  // jobEcosystem, runId before any other step touches them. importance is
   // hydrated mid-pipeline before the first depscore-touching step.
   const ctx: PipelineContext = {
     job,
@@ -73,8 +73,7 @@ export async function runPipeline(
     heartbeat,
     repoPath: null,
     workspaceRoot: '',
-    assetTier: 'EXTERNAL',
-    tierMultiplier: undefined,
+    importance: 1.0,
     graphTrusted: true,
     projectDepsCount: 0,
     newDepsToPopulate: [],
@@ -104,9 +103,9 @@ export async function runPipeline(
     if (checkCancelled && await checkCancelled()) return;
     await doUsageExtraction(ctx);
 
-    // Asset tier: hydrate ctx.assetTier + tierMultiplier once before any
-    // depscore-touching step (vuln_scan, semgrep, trufflehog) consumes them.
-    await loadAssetTier(ctx);
+    // Importance: hydrate ctx.importance once before any depscore-touching
+    // step (vuln_scan, semgrep, trufflehog, reachability) consumes it.
+    await loadImportance(ctx);
 
     // === Vulnerability scan (OPTIONAL) — dep-scan + post-process VDR rows ===
     if (checkCancelled && await checkCancelled()) return;

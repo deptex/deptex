@@ -300,10 +300,8 @@ export interface OverviewProjectItem {
   statusColor?: string | null;
   /** Status id for filtering (organization_statuses.id). */
   statusId?: string | null;
-  /** Asset tier name shown in badge on project card (e.g. Crown Jewels, External). */
-  assetTierName?: string | null;
-  /** Hex color for asset tier badge (from organization_asset_tiers). */
-  assetTierColor?: string | null;
+  /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
+  importance?: number | null;
   /** When true, extraction pipeline is running (sync button spins, etc.). */
   isExtracting?: boolean;
   /** When true, this is the first-ever extraction — block UI with ExtractionProgressCard / grey node. */
@@ -650,6 +648,7 @@ export function useOrganizationOverviewGraphLayout(
                       statusBadge: proj.statusName ?? undefined,
                       statusBadgeColor: proj.statusColor ?? undefined,
                       dependenciesCount: proj.dependenciesCount ?? undefined,
+                      importance: proj.importance ?? undefined,
                       ...(proj.isExtracting ? { isExtracting: true } : {}),
                     }),
             },
@@ -700,6 +699,7 @@ export function useOrganizationOverviewGraphLayout(
               : {
                   statusBadge: proj.statusName ?? undefined,
                   statusBadgeColor: proj.statusColor ?? undefined,
+                  importance: proj.importance ?? undefined,
                   ...(proj.isExtracting ? { isExtracting: true } : {}),
                 }),
         },

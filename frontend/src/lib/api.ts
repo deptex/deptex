@@ -145,19 +145,6 @@ export interface OrganizationStatus {
   updated_at: string;
 }
 
-export interface OrganizationAssetTier {
-  id: string;
-  organization_id: string;
-  name: string;
-  color: string;
-  rank: number;
-  description?: string | null;
-  is_system: boolean;
-  environmental_multiplier: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export type CiCdProvider = 'github' | 'gitlab' | 'bitbucket' | 'slack' | 'discord' | 'jira' | 'linear' | 'asana' | 'pagerduty' | 'custom_notification' | 'custom_ticketing' | 'email';
 
 export interface CiCdConnection {
@@ -184,6 +171,15 @@ export interface RepoWithProvider {
   provider?: CiCdProvider;
   integration_id?: string;
   display_name?: string;
+}
+
+/** Cheap root-only repo inspection. Returned by `getOrganizationRepositoryPeek`.
+ * Backend source of truth: `backend/src/lib/detect-monorepo.ts` RepoPeek. */
+export interface RepoPeek {
+  framework: string;
+  ecosystem: string;
+  hasRootManifest: boolean;
+  rootDockerized: boolean;
 }
 
 export interface OrganizationInvitation {
@@ -725,17 +721,60 @@ export const api = {
     return this._projectDataCache.get(cacheKey) || null;
   },
 
-  async createProject(organizationId: string, data: { name: string; team_ids?: string[]; asset_tier?: AssetTier; asset_tier_id?: string | null; framework?: string | null }): Promise<Project> {
+  async createProject(
+    organizationId: string,
+    data: {
+      name: string;
+      team_ids?: string[];
+      importance?: number;
+      framework?: string | null;
+      /**
+       * When present, the backend performs project insert + repo connect +
+       * extraction queue inline and rolls the project back on failure. Use
+       * this for the create-with-repo flow where a project is always paired
+       * with a repository on creation.
+       */
+      repo?: {
+        repo_full_name: string;
+        integration_id: string;
+        package_json_path?: string;
+        ecosystem?: string;
+        framework?: string;
+      };
+    }
+  ): Promise<Project & { repo?: { repo_full_name: string; default_branch: string; status: string } | null }> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
     const cacheKey = `${organizationId}:${project.id}`;
     this._projectDataCache.set(cacheKey, project as ProjectWithRole);
+    if (data.repo) {
+      // The combined endpoint created a project_repositories row, so any
+      // cached scan result for that (org, repo) is now stale.
+      this.invalidateOrganizationRepositoryScanCache(organizationId, data.repo.repo_full_name);
+    }
     return project;
   },
 
-  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; asset_tier?: AssetTier; asset_tier_id?: string | null; notifications_paused_until?: string | null }): Promise<Project> {
+  invalidateOrganizationRepositoriesCache(organizationId: string): void {
+    for (const key of this._organizationRepositoriesCache.keys()) {
+      if (key.startsWith(`${organizationId}:`)) {
+        this._organizationRepositoriesCache.delete(key);
+      }
+    }
+  },
+
+  invalidateOrganizationRepositoryScanCache(organizationId: string, repoFullName?: string): void {
+    const prefix = repoFullName ? `${organizationId}:${repoFullName}:` : `${organizationId}:`;
+    for (const key of this._organizationRepositoryScanCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this._organizationRepositoryScanCache.delete(key);
+      }
+    }
+  },
+
+  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; importance?: number; notifications_paused_until?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1572,7 +1611,8 @@ export const api = {
 
   async getOrganizationRepositories(
     organizationId: string,
-    integrationId?: string
+    integrationId?: string,
+    options?: { signal?: AbortSignal }
   ): Promise<{
     repositories: RepoWithProvider[];
   }> {
@@ -1582,7 +1622,10 @@ export const api = {
       return { repositories: cached.repositories };
     }
     const params = integrationId ? `?integration_id=${integrationId}` : '';
-    const result = await fetchWithAuth(`/api/organizations/${organizationId}/repositories${params}`);
+    const result = await fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     this._organizationRepositoriesCache.set(cacheKey, { repositories: result.repositories, fetchedAt: Date.now() });
     return result;
   },
@@ -1607,11 +1650,29 @@ export const api = {
     }
   >(),
 
+  /** Cheap root-only peek used when the user picks a repo in the create-project picker.
+   * One root-contents call + at most one manifest read on the backend. The heavier
+   * `getOrganizationRepositoryScan` is only triggered when the user opens the path picker. */
+  async getOrganizationRepositoryPeek(
+    organizationId: string,
+    repoFullName: string,
+    defaultBranch: string,
+    integrationId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<RepoPeek> {
+    const params = new URLSearchParams({ repo_full_name: repoFullName, default_branch: defaultBranch, integration_id: integrationId });
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/scan-quick?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  },
+
   async getOrganizationRepositoryScan(
     organizationId: string,
     repoFullName: string,
     defaultBranch: string,
-    integrationId: string
+    integrationId: string,
+    options?: { signal?: AbortSignal }
   ): Promise<{
     isMonorepo: boolean;
     confidence?: 'high' | 'medium';
@@ -1625,6 +1686,7 @@ export const api = {
     }>;
     framework?: string;
     ecosystem?: string;
+    dockerizedPaths?: string[];
   }> {
     const key = `${organizationId}:${repoFullName}:${defaultBranch}:${integrationId}`;
     const cached = this._organizationRepositoryScanCache.get(key);
@@ -1632,9 +1694,44 @@ export const api = {
       return cached.data;
     }
     const params = new URLSearchParams({ repo_full_name: repoFullName, default_branch: defaultBranch, integration_id: integrationId });
-    const data = await fetchWithAuth(`/api/organizations/${organizationId}/repositories/scan?${params}`);
+    const data = await fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/scan?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     this._organizationRepositoryScanCache.set(key, { data, fetchedAt: Date.now() });
     return data;
+  },
+
+  async listRepositoryDirectory(
+    organizationId: string,
+    repoFullName: string,
+    defaultBranch: string,
+    integrationId: string,
+    path: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    path: string;
+    entries: Array<{
+      name: string;
+      path: string;
+      type: 'tree' | 'file' | 'submodule';
+      ecosystem?: string;
+      /** True if the folder contains a Dockerfile / Containerfile / compose file at its root. */
+      hasDocker?: boolean;
+      isLinked?: boolean;
+      linkedByProjectName?: string;
+    }>;
+  }> {
+    const params = new URLSearchParams({
+      repo_full_name: repoFullName,
+      default_branch: defaultBranch,
+      integration_id: integrationId,
+      path,
+    });
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/list-dir?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
   },
 
   async getProjectRepositories(
@@ -1701,8 +1798,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    const scanKey = `${organizationId}:${data.repo_full_name}:${data.default_branch}`;
-    this._organizationRepositoryScanCache.delete(scanKey);
+    // Cache key shape is `${org}:${repo}:${branch}:${integrationId}` — the
+    // 3-part variant used here previously never matched and left the cache
+    // stale for the full TTL after every connect. Iterate-and-prefix-delete
+    // to invalidate every cached scan for this (org, repo).
+    this.invalidateOrganizationRepositoryScanCache(organizationId, data.repo_full_name);
     return result;
   },
 
@@ -3110,33 +3210,6 @@ export const api = {
     return Array.isArray(res) ? res : (res?.statuses ?? []);
   },
 
-  // ───── Asset Tiers ─────
-
-  async getOrganizationAssetTiers(orgId: string): Promise<OrganizationAssetTier[]> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`);
-  },
-
-  async createOrganizationAssetTier(orgId: string, data: { name: string; color: string; description?: string; environmental_multiplier: number; rank: number }): Promise<OrganizationAssetTier> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async updateOrganizationAssetTier(orgId: string, tierId: string, data: Partial<OrganizationAssetTier>): Promise<OrganizationAssetTier> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  },
-
-  async deleteOrganizationAssetTier(orgId: string, tierId: string, reassignToId?: string): Promise<void> {
-    return fetchWithAuth(`/api/organizations/${orgId}/asset-tiers/${tierId}`, {
-      method: 'DELETE',
-      body: JSON.stringify({ reassign_to_id: reassignToId }),
-    });
-  },
-
   // ───── Split Policy Code ─────
 
   async getOrganizationPolicyCode(orgId: string): Promise<{
@@ -3177,7 +3250,7 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`);
   },
 
-  async updateSlaPolicies(orgId: string, policies: Array<{ id?: string; severity: string; asset_tier_id?: string | null; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }>): Promise<{ policies: SlaPolicy[] }> {
+  async updateSlaPolicies(orgId: string, policies: Array<{ id?: string; severity: string; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }>): Promise<{ policies: SlaPolicy[] }> {
     return fetchWithAuth(`/api/organizations/${orgId}/sla-policies`, {
       method: 'PUT',
       body: JSON.stringify({ policies }),
@@ -3717,8 +3790,6 @@ export interface TeamMember {
   created_at?: string;
 }
 
-export type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
-
 export interface Project {
   id: string;
   organization_id: string;
@@ -3745,17 +3816,15 @@ export interface Project {
   extraction_error?: string | null;
   last_extracted_at?: string | null;
   role?: string;
-  asset_tier?: AssetTier;
+  /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
+  importance: number;
   notifications_paused_until?: string | null;
-  // Custom statuses and tiers
+  // Custom statuses
   status_id?: string | null;
   status_name?: string;
   status_color?: string;
   status_is_passing?: boolean | null;
   status_violations?: string[];
-  asset_tier_id?: string | null;
-  asset_tier_name?: string;
-  asset_tier_color?: string;
   policy_evaluated_at?: string | null;
   /** Percent of dependencies with passing licenses/policy (0–100). Used on org Compliance tab. */
   compliance_score_pct?: number | null;
@@ -4602,7 +4671,6 @@ export interface SlaPolicy {
   id: string;
   organization_id: string;
   severity: string;
-  asset_tier_id: string | null;
   max_hours: number;
   warning_threshold_percent: number;
   enabled: boolean;
@@ -5452,10 +5520,8 @@ export interface VulnerabilityDetail {
   version_candidates: VersionCandidate[];
   timeline_events: VulnerabilityEvent[];
   reachable_flows?: ReachableFlow[];
-  /** For depscore breakdown: project asset tier enum (e.g. EXTERNAL). */
-  project_asset_tier?: string | null;
-  /** For depscore breakdown: custom tier multiplier when project uses org asset tier. */
-  project_tier_multiplier?: number | null;
+  /** For depscore breakdown: per-project importance in [0.5, 2.0] (the number IS the depscore multiplier). */
+  project_importance?: number | null;
 }
 
 export interface DependencySecuritySummary {
@@ -5660,7 +5726,6 @@ export interface ReachabilitySettings {
   auto_generate_enabled: boolean;
   trigger_severities: Array<'critical' | 'high' | 'medium' | 'low'>;
   trigger_kev: boolean;
-  trigger_asset_tier_max_rank: number;
   trigger_newly_discovered: boolean;
   trigger_reevaluate_existing: boolean;
   ai_provider: 'anthropic' | 'openai' | 'google';
@@ -5773,7 +5838,8 @@ export interface ProjectCommit {
 export interface ProjectStats {
   health_score: number;
   status: { id: string; name: string; color: string; is_passing: boolean } | null;
-  asset_tier: { id: string; name: string; color: string } | null;
+  /** Per-project importance multiplier in [0.5, 2.0]. */
+  importance: number;
   compliance: { percent: number; compliant: number; failing: number; not_evaluated: number; total: number };
   vulnerabilities: { total: number; critical: number; high: number; medium: number; low: number; reachable_count: number };
   code_findings: { semgrep_count: number; secret_count: number; verified_secret_count: number };
@@ -6043,6 +6109,26 @@ export interface AdminExtractionFailuresResponse {
 
 export async function apiAdminPing(): Promise<{ ok: boolean; email: string }> {
   return fetchWithAuth('/api/admin/ping');
+}
+
+export interface FleetMetrics {
+  type: string;
+  queued: number;
+  running: number;
+  starting: number;
+  flyActive: number;
+  inflight: number;
+  maxFleet: number;
+  spendThisHourUsd: number;
+  spendCapUsd: number | null;
+  spendBlocked: boolean;
+  p50QueueSeconds: number | null;
+  p95QueueSeconds: number | null;
+  throughputPerHour: number;
+}
+
+export async function apiAdminFleetMetrics(type = 'extraction'): Promise<FleetMetrics> {
+  return fetchWithAuth(`/api/admin/fleet-metrics?type=${encodeURIComponent(type)}`);
 }
 
 export async function apiAdminListExtractionFailures(params: {

@@ -59,6 +59,24 @@ async function callInternal(path: string, method: 'POST' = 'POST', body?: object
 }
 
 /**
+ * POST /api/internal/cron/every-min
+ * Run every minute (cron: `* * * * *`). Safety-net trigger for the fleet
+ * dispatcher — the in-process enqueue nudge handles sub-minute responsiveness;
+ * this guarantees the queue still drains if a nudge was dropped. The dispatcher
+ * is single-flight, so overlapping with a nudge is a harmless no-op.
+ */
+router.post('/every-min', async (req, res) => {
+  if (!(await verifyInternalAuth(req))) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const r = await callInternal('/api/internal/dispatch/extraction');
+  if (!r.ok && r.status !== 404) {
+    console.error('[cron-dispatcher] every-min dispatch:', r.error);
+  }
+  res.json({ success: r.ok, job: r });
+});
+
+/**
  * POST /api/internal/cron/every-5-min
  * Run every 5 minutes (cron: 5-min interval).
  * Jobs: extraction recovery, fix recovery, Aegis due automations.

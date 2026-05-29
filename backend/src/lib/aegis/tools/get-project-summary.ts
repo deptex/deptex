@@ -4,7 +4,7 @@ import { supabase } from '../../supabase';
 export function getProjectSummaryTool(ctx: { organizationId: string }) {
   return dynamicTool({
     description:
-      'Get summary for a single project: metadata, asset tier, current status, dependency counts (direct vs transitive), vulnerability counts by severity, semgrep and secret finding counts.',
+      'Get summary for a single project: metadata, importance (depscore multiplier in [0.5, 2.0]), current status, dependency counts (direct vs transitive), vulnerability counts by severity, semgrep and secret finding counts.',
     inputSchema: jsonSchema({
       type: 'object',
       properties: {
@@ -18,7 +18,7 @@ export function getProjectSummaryTool(ctx: { organizationId: string }) {
 
       const { data: project, error } = await supabase
         .from('projects')
-        .select('id, name, organization_id, health_score, asset_tier, asset_tier_id, status_id, status_violations, updated_at')
+        .select('id, name, organization_id, health_score, importance, status_id, status_violations, updated_at')
         .eq('id', projectId)
         .single();
 
@@ -27,7 +27,7 @@ export function getProjectSummaryTool(ctx: { organizationId: string }) {
         return { error: 'Project not in current organization' };
       }
 
-      const [repoRes, directDepRes, totalDepRes, vulnsRes, semgrepRes, secretsRes, tierRes, statusRes] = await Promise.all([
+      const [repoRes, directDepRes, totalDepRes, vulnsRes, semgrepRes, secretsRes, statusRes] = await Promise.all([
         supabase
           .from('project_repositories')
           .select('repo_full_name, ecosystem, default_branch, last_extracted_at, status')
@@ -55,9 +55,6 @@ export function getProjectSummaryTool(ctx: { organizationId: string }) {
           .select('id', { count: 'exact', head: true })
           .eq('project_id', projectId)
           .eq('is_current', true),
-        project.asset_tier_id
-          ? supabase.from('organization_asset_tiers').select('name').eq('id', project.asset_tier_id).single()
-          : Promise.resolve({ data: null, error: null } as any),
         project.status_id
           ? supabase.from('organization_statuses').select('name, is_passing').eq('id', project.status_id).single()
           : Promise.resolve({ data: null, error: null } as any),
@@ -77,7 +74,7 @@ export function getProjectSummaryTool(ctx: { organizationId: string }) {
         id: project.id,
         name: project.name,
         healthScore: project.health_score,
-        assetTier: tierRes.data?.name ?? project.asset_tier,
+        importance: typeof project.importance === 'number' ? project.importance : 1.0,
         status: statusRes.data?.name ?? null,
         statusPassing: statusRes.data?.is_passing ?? null,
         statusViolations: project.status_violations ?? [],

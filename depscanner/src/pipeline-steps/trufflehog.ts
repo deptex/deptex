@@ -17,7 +17,7 @@ import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
 export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
-  const { supabase, job, projectId, log, workspaceRoot, runId, assetTier, tierMultiplier } = ctx;
+  const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('trufflehog')) {
     await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
@@ -132,7 +132,7 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
                 description: `${detectorType} detected`,
                 redacted_value: redacted,
                 code_snippet: codeSnippet,
-                depscore: calculateSecretDepscore({ detectorType, isVerified, isCurrent, assetTier, tierMultiplier }),
+                depscore: calculateSecretDepscore({ detectorType, isVerified, isCurrent, importance }),
               };
             })
               .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')

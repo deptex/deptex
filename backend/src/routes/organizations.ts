@@ -17,7 +17,6 @@ const router = express.Router();
 
 import {
   DEFAULT_STATUSES,
-  DEFAULT_ASSET_TIERS,
   DEFAULT_PACKAGE_POLICY_CODE,
   DEFAULT_PROJECT_STATUS_CODE,
   DEFAULT_PR_CHECK_CODE,
@@ -310,8 +309,6 @@ router.post('/', async (req: AuthRequest, res) => {
       ]),
       supabase.from('organization_statuses')
         .insert(DEFAULT_STATUSES.map((s) => ({ ...s, organization_id: organization.id }))),
-      supabase.from('organization_asset_tiers')
-        .insert(DEFAULT_ASSET_TIERS.map((t) => ({ ...t, organization_id: organization.id }))),
       supabase.from('organization_package_policies')
         .insert({ organization_id: organization.id, package_policy_code: DEFAULT_PACKAGE_POLICY_CODE, updated_by_id: userId }),
       supabase.from('organization_status_codes')
@@ -2814,215 +2811,6 @@ router.delete('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
   }
 });
 
-// ───── Organization Asset Tiers CRUD ─────
-
-// GET /api/organizations/:id/asset-tiers
-router.get('/:id/asset-tiers', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
-    }
-
-    const { data: tiers, error } = await supabase
-      .from('organization_asset_tiers')
-      .select('*')
-      .eq('organization_id', id)
-      .order('rank', { ascending: true });
-
-    if (error) throw error;
-    res.json(tiers ?? []);
-  } catch (error: any) {
-    console.error('Error fetching asset tiers:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch asset tiers' });
-  }
-});
-
-// POST /api/organizations/:id/asset-tiers
-router.post('/:id/asset-tiers', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-
-    if (!(await canManageStatuses(id, userId))) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    const { name, color, description, environmental_multiplier, rank } = req.body;
-    if (!name || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({ error: 'Tier name is required' });
-    }
-
-    const multiplier = typeof environmental_multiplier === 'number' ? environmental_multiplier : 1.0;
-
-    const { data: tier, error } = await supabase
-      .from('organization_asset_tiers')
-      .insert({
-        organization_id: id,
-        name: name.trim(),
-        color: color || '#6b7280',
-        description: description || null,
-        environmental_multiplier: multiplier,
-        rank: rank ?? 50,
-        is_system: false,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
-        return res.status(409).json({ error: 'A tier with this name already exists' });
-      }
-      throw error;
-    }
-
-    await createActivity({
-      organization_id: id,
-      user_id: userId,
-      activity_type: 'created_asset_tier',
-      description: `created asset tier "${name.trim()}"`,
-      metadata: { tier_name: name.trim() },
-    });
-
-    res.status(201).json(tier);
-  } catch (error: any) {
-    console.error('Error creating asset tier:', error);
-    res.status(500).json({ error: error.message || 'Failed to create asset tier' });
-  }
-});
-
-// PUT /api/organizations/:id/asset-tiers/:tierId
-router.put('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, tierId } = req.params;
-
-    if (!(await canManageStatuses(id, userId))) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    const updates: Record<string, unknown> = {};
-    if (req.body.name !== undefined) updates.name = req.body.name;
-    if (req.body.color !== undefined) updates.color = req.body.color;
-    if (req.body.description !== undefined) updates.description = req.body.description;
-    if (req.body.environmental_multiplier !== undefined) updates.environmental_multiplier = req.body.environmental_multiplier;
-    if (req.body.rank !== undefined) updates.rank = req.body.rank;
-
-    const { data: tier, error } = await supabase
-      .from('organization_asset_tiers')
-      .update(updates)
-      .eq('id', tierId)
-      .eq('organization_id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    if (!tier) return res.status(404).json({ error: 'Tier not found' });
-
-    res.json(tier);
-  } catch (error: any) {
-    console.error('Error updating asset tier:', error);
-    res.status(500).json({ error: error.message || 'Failed to update asset tier' });
-  }
-});
-
-// PUT /api/organizations/:id/asset-tiers/reorder
-router.put('/:id/asset-tiers/reorder', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-
-    if (!(await canManageStatuses(id, userId))) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    const { order } = req.body;
-    if (!Array.isArray(order)) {
-      return res.status(400).json({ error: 'order must be an array of { id, rank }' });
-    }
-
-    for (const item of order) {
-      await supabase
-        .from('organization_asset_tiers')
-        .update({ rank: item.rank })
-        .eq('id', item.id)
-        .eq('organization_id', id);
-    }
-
-    const { data: tiers } = await supabase
-      .from('organization_asset_tiers')
-      .select('*')
-      .eq('organization_id', id)
-      .order('rank', { ascending: true });
-
-    res.json(tiers ?? []);
-  } catch (error: any) {
-    console.error('Error reordering asset tiers:', error);
-    res.status(500).json({ error: error.message || 'Failed to reorder asset tiers' });
-  }
-});
-
-// DELETE /api/organizations/:id/asset-tiers/:tierId
-router.delete('/:id/asset-tiers/:tierId', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, tierId } = req.params;
-
-    if (!(await canManageStatuses(id, userId))) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    const { data: tier } = await supabase
-      .from('organization_asset_tiers')
-      .select('is_system, name')
-      .eq('id', tierId)
-      .eq('organization_id', id)
-      .single();
-
-    if (!tier) return res.status(404).json({ error: 'Tier not found' });
-    if (tier.is_system) return res.status(400).json({ error: 'Cannot delete system tiers' });
-
-    const reassignTo = req.body?.reassign_to_id;
-    if (reassignTo) {
-      await supabase
-        .from('projects')
-        .update({ asset_tier_id: reassignTo })
-        .eq('organization_id', id)
-        .eq('asset_tier_id', tierId);
-    }
-
-    const { error } = await supabase
-      .from('organization_asset_tiers')
-      .delete()
-      .eq('id', tierId)
-      .eq('organization_id', id);
-
-    if (error) throw error;
-
-    await createActivity({
-      organization_id: id,
-      user_id: userId,
-      activity_type: 'deleted_asset_tier',
-      description: `deleted asset tier "${tier.name}"`,
-      metadata: { tier_name: tier.name },
-    });
-
-    res.json({ message: 'Tier deleted' });
-  } catch (error: any) {
-    console.error('Error deleting asset tier:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete asset tier' });
-  }
-});
-
 // ───── Security SLA Management ─────
 
 const SLA_DEFAULT_HOURS: Record<string, number> = {
@@ -3098,7 +2886,7 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Permission denied.' });
     }
 
-    const { policies: policiesPayload } = req.body as { policies?: Array<{ id?: string; severity: string; asset_tier_id?: string | null; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }> };
+    const { policies: policiesPayload } = req.body as { policies?: Array<{ id?: string; severity: string; max_hours: number; warning_threshold_percent?: number; enabled?: boolean }> };
     if (!Array.isArray(policiesPayload)) {
       return res.status(400).json({ error: 'policies array is required' });
     }
@@ -3111,8 +2899,7 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
 
     const existingMap = new Map<string, any>();
     for (const p of existing ?? []) {
-      const key = `${p.severity}:${p.asset_tier_id ?? 'default'}`;
-      existingMap.set(key, p);
+      existingMap.set(p.severity, p);
     }
 
     for (const row of policiesPayload) {
@@ -3120,9 +2907,7 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
       const maxHours = typeof row.max_hours === 'number' && row.max_hours > 0 ? row.max_hours : SLA_DEFAULT_HOURS[row.severity];
       const warningPct = typeof row.warning_threshold_percent === 'number' ? Math.min(99, Math.max(1, row.warning_threshold_percent)) : 75;
       const enabled = row.enabled !== false;
-      const assetTierId = row.asset_tier_id === undefined || row.asset_tier_id === '' ? null : row.asset_tier_id;
-      const key = `${row.severity}:${assetTierId ?? 'default'}`;
-      const existingRow = existingMap.get(key);
+      const existingRow = existingMap.get(row.severity);
 
       if (existingRow) {
         const prev = { max_hours: existingRow.max_hours, warning_threshold_percent: existingRow.warning_threshold_percent, enabled: existingRow.enabled };
@@ -3144,7 +2929,6 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
           .insert({
             organization_id: id,
             severity: row.severity,
-            asset_tier_id: assetTierId,
             max_hours: maxHours,
             warning_threshold_percent: warningPct,
             enabled,
@@ -3154,7 +2938,7 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
           organization_id: id,
           changed_by: userId,
           change_type: 'created',
-          new_values: { severity: row.severity, asset_tier_id: assetTierId, max_hours: maxHours, warning_threshold_percent: warningPct, enabled },
+          new_values: { severity: row.severity, max_hours: maxHours, warning_threshold_percent: warningPct, enabled },
         });
       }
     }
@@ -3209,7 +2993,6 @@ router.post('/:id/sla-policies/enable', async (req: AuthRequest, res) => {
         .insert({
           organization_id: id,
           severity,
-          asset_tier_id: null,
           max_hours: SLA_DEFAULT_HOURS[severity],
           warning_threshold_percent: 75,
           enabled: true,
@@ -3448,7 +3231,7 @@ router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const { data: projects } = await supabase.from('projects').select('id, name, asset_tier_id, team_id, active_extraction_run_id').eq('organization_id', orgId);
+    const { data: projects } = await supabase.from('projects').select('id, name, importance, team_id, active_extraction_run_id').eq('organization_id', orgId);
     const projectList = projects ?? [];
     const projectIds = projectList.map((p: any) => p.id);
     const projectNameMap = new Map(projectList.map((p: any) => [p.id, p.name]));
@@ -4432,20 +4215,20 @@ router.post('/:id/test-notification-rule', async (req: AuthRequest, res) => {
     const SAMPLE_CONTEXTS: Record<string, any> = {
       vulnerability_discovered: {
         event: { type: 'vulnerability_discovered', timestamp: new Date().toISOString(), source: 'vuln_monitor' },
-        project: { id: 'test-id', name: 'api-service', asset_tier: 'Crown Jewels', asset_tier_rank: 1, health_score: 72, status: 'Compliant', status_is_passing: true, dependencies_count: 145, team_name: 'Platform' },
+        project: { id: 'test-id', name: 'api-service', importance: 1.5, health_score: 72, status: 'Compliant', status_is_passing: true, dependencies_count: 145, team_name: 'Platform' },
         dependency: { name: 'lodash', version: '4.17.20', license: 'MIT', is_direct: true, is_dev_dependency: false, environment: 'production', score: 82, dependency_score: 82, openssf_score: 7.2, weekly_downloads: 45000000, malicious_indicator: null, slsa_level: 0, vulnerabilities: [] },
         vulnerability: { osv_id: 'GHSA-test-0000-0000', severity: 'critical', cvss_score: 9.8, epss_score: 0.45, depscore: 88, is_reachable: true, cisa_kev: false, fixed_versions: ['4.17.21'], summary: 'Prototype Pollution in lodash' },
         pr: null, previous: null, batch: null,
       },
       dependency_added: {
         event: { type: 'dependency_added', timestamp: new Date().toISOString(), source: 'extraction' },
-        project: { id: 'test-id', name: 'web-app', asset_tier: 'External', asset_tier_rank: 2, health_score: 85, status: 'Compliant', status_is_passing: true, dependencies_count: 200, team_name: 'Frontend' },
+        project: { id: 'test-id', name: 'web-app', importance: 1.0, health_score: 85, status: 'Compliant', status_is_passing: true, dependencies_count: 200, team_name: 'Frontend' },
         dependency: { name: 'new-pkg', version: '1.0.0', license: 'MIT', is_direct: true, is_dev_dependency: false, environment: 'production', score: 45, dependency_score: 45, openssf_score: 3.1, weekly_downloads: 1200, malicious_indicator: null, slsa_level: 0, vulnerabilities: [] },
         vulnerability: null, pr: null, previous: null, batch: null,
       },
       status_changed: {
         event: { type: 'status_changed', timestamp: new Date().toISOString(), source: 'policy_eval' },
-        project: { id: 'test-id', name: 'api-service', asset_tier: 'Crown Jewels', asset_tier_rank: 1, health_score: 45, status: 'Blocked', status_is_passing: false, dependencies_count: 145, team_name: 'Platform' },
+        project: { id: 'test-id', name: 'api-service', importance: 1.5, health_score: 45, status: 'Blocked', status_is_passing: false, dependencies_count: 145, team_name: 'Platform' },
         dependency: null, vulnerability: null, pr: null,
         previous: { status: 'Compliant', status_is_passing: true, health_score: 72 }, batch: null,
       },
@@ -4745,7 +4528,7 @@ router.get('/:id/notification-rule-templates', async (req: AuthRequest, res) => 
     { id: 'policy-violation', name: 'Policy Violation Alert', description: 'Alert when a dependency violates package policy', code: "return context.event.type === 'policy_violation' || context.event.type === 'license_violation';", suggestedDestinations: ['slack', 'jira'] },
     { id: 'extraction-failure', name: 'Extraction Failure Alert', description: 'Alert when dependency extraction fails', code: "return context.event.type === 'extraction_failed';", suggestedDestinations: ['slack', 'email'] },
     { id: 'pr-check-failure', name: 'PR Check Failure', description: 'Alert when a PR fails dependency policy checks', code: "if (context.event.type !== 'pr_check_completed') return false;\nreturn context.pr && context.pr.check_result === 'failed';", suggestedDestinations: ['slack', 'discord'] },
-    { id: 'crown-jewels-any-change', name: 'Crown Jewels - Any Change', description: 'Alert on any event affecting Crown Jewels projects', code: "return context.project.asset_tier === 'Crown Jewels';", suggestedDestinations: ['slack', 'pagerduty'] },
+    { id: 'high-importance-any-change', name: 'High-Importance Project - Any Change', description: 'Alert on any event affecting high-importance projects (importance >= 1.5)', code: "return context.project.importance >= 1.5;", suggestedDestinations: ['slack', 'pagerduty'] },
     { id: 'new-dep-low-score', name: 'New Dependency with Low Score', description: 'Alert when a new dependency is added with a low reputation score', code: "if (context.event.type !== 'dependency_added') return false;\nreturn context.dependency && context.dependency.score < 50;", suggestedDestinations: ['slack', 'jira'] },
   ];
   res.json(RULE_TEMPLATES);
@@ -4774,7 +4557,6 @@ router.post('/:id/notifications/ai-assist', async (req: AuthRequest, res) => {
     }
 
     const NOTIFICATION_TYPEDEFS = `
-type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
 type AnalysisStatus = 'pass' | 'warning' | 'fail';
 
 interface NotificationEvent {
@@ -4810,7 +4592,7 @@ interface Dependency {
 
 interface Project {
   name: string;
-  asset_tier: AssetTier;
+  importance: number;       // 0.5 - 2.0 (depscore multiplier)
   health_score: number;     // 0-100
   is_compliant: boolean;
   dependencies_count: number;
@@ -4851,10 +4633,10 @@ if (!context.dependency) return false;
 return context.dependency.is_direct && context.dependency.openssf_score < 3;
 \`\`\`
 
-EXAMPLE 4 - Crown Jewel projects — any vulnerability:
+EXAMPLE 4 - High-importance projects — any vulnerability:
 \`\`\`
 if (context.event.type !== 'vulnerability_discovered') return false;
-return context.project.asset_tier === 'CROWN_JEWELS';
+return context.project.importance >= 1.5;
 \`\`\`
 
 EXAMPLE 5 - License violation for banned licenses:
@@ -5112,7 +4894,6 @@ router.post('/:id/policies/ai-assist', async (req: AuthRequest, res) => {
     }
 
     const POLICY_TYPEDEFS = `
-type AssetTier = 'CROWN_JEWELS' | 'EXTERNAL' | 'INTERNAL' | 'NON_PRODUCTION';
 type AnalysisStatus = 'pass' | 'warning' | 'fail';
 
 interface Vulnerability {
@@ -5156,7 +4937,7 @@ interface RemovedDependency {
 
 interface Project {
   name: string;
-  asset_tier: AssetTier;
+  importance: number;       // 0.5 - 2.0 (depscore multiplier)
 }
 
 // packagePolicy receives (ONE dependency per call; no context.dependencies):
@@ -5173,7 +4954,7 @@ interface PackagePolicyContext {
     maliciousIndicator: { source?: string; confidence?: number; reason?: string } | null;
     slsaLevel: number | null;
   };
-  tier: { name: string; rank: number; multiplier: number };
+  importance: number;       // project importance, 0.5 - 2.0
 }
 
 // pullRequestCheck receives:
@@ -5186,7 +4967,7 @@ interface PullRequestCheckContext {
 
 // projectStatus receives (body-only in editor; engine wraps as function projectStatus(context)):
 interface ProjectStatusContext {
-  project: { name: string; tier: { name: string; rank: number; multiplier: number }; teamName: string };
+  project: { name: string; importance: number; teamName: string };
   dependencies: Array<{
     name: string;
     version: string;
@@ -5267,23 +5048,16 @@ if (blocked.length > 0) {
 return { status: 'Compliant', violations: [] };
 \`\`\``;
 
-    // Org-specific labels for projectStatus assistant (tiers + status names)
+    // Org-specific labels for projectStatus assistant (status names)
     let orgTiersLine = '';
     let orgStatusesLine = '';
     if (targetEditor === 'projectStatus') {
-      const { data: tiers } = await supabase
-        .from('organization_asset_tiers')
-        .select('name, rank, environmental_multiplier')
-        .eq('organization_id', id)
-        .order('rank', { ascending: true });
       const { data: statuses } = await supabase
         .from('organization_statuses')
         .select('name')
         .eq('organization_id', id)
         .order('rank', { ascending: true });
-      const tierNames = (tiers ?? []).map((t: any) => `${t.name} (rank ${t.rank})`).join(', ') || 'Internal (default)';
       const statusNames = (statuses ?? []).map((s: any) => s.name).join(', ') || 'Compliant, Non-Compliant';
-      orgTiersLine = `\n## This organization's asset tiers (for context — packagePolicy runs per-dep with context.tier)\n${tierNames}\n`;
       orgStatusesLine = `\n## Status names you MUST use for context.status and return value\nReturn status as one of these strings exactly: ${statusNames}\n`;
     }
 

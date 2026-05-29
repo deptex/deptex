@@ -68,7 +68,7 @@ export function SlideInSidebar({
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-6 py-4">
           {children}
         </div>
 

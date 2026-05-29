@@ -130,10 +130,9 @@ describe('suggestFixPriority SLA sort order', () => {
 });
 
 describe('SLA policy payload shape', () => {
-  test('sla policy has severity, asset_tier_id, max_hours, warning_threshold_percent', () => {
+  test('sla policy has severity, max_hours, warning_threshold_percent', () => {
     const policy = {
       severity: 'critical' as const,
-      asset_tier_id: null as string | null,
       max_hours: 24,
       warning_threshold_percent: 75,
       enabled: true,

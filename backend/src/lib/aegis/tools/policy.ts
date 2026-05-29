@@ -175,7 +175,7 @@ registerAegisTool(
         return JSON.stringify({
           allowed: result.allowed,
           reasons: result.reasons,
-          tierName: result.tierName,
+          importance: result.importance,
           packageName,
           version: version ?? 'latest',
           ecosystem: ecosystem ?? 'npm',

@@ -1,0 +1,53 @@
+# Expected findings for the spring-boot dogfood fixture.
+# HYPOTHESIS-GRADE until M4 walkthrough.
+
+reachable_vulns:
+  # spring-core 5.3.18 — Spring4Shell-adjacent. CVE-2022-22965 itself
+  # requires newer 5.3.x; we use CVE-2022-22968 as a representative
+  # Spring vuln for this version range. Walkthrough will iterate.
+  - osv_id: CVE-2022-22968
+    aliases: [GHSA-374r-qhww-7p2q]
+    file: src/main/java/com/deptex/fixtures/OwnerController.java
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  - osv_id: CVE-2015-6420
+    aliases: [GHSA-6hgm-866r-3cjv]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  # openjdk:11.0.0-jdk — older OS package layer. Canonical assertion.
+  - osv_id: CVE-2019-2602
+    aliases: []
+    base_image: openjdk:11.0.0-jdk
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 3
+
+malicious_pkg: []
+
+semgrep_findings:
+  - rule_id: java.spring.security.injection.tainted-sql-from-http-request.tainted-sql-from-http-request
+    file: src/main/java/com/deptex/fixtures/OwnerController.java
+    line: 25
+
+dast_findings:
+  - alert: SQL Injection
+    url_pattern: /owners/find

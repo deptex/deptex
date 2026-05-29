@@ -38,4 +38,18 @@ describe('getSupportedJobTypes', () => {
     process.env.DAST_CREDENTIAL_KEY = '';
     expect(getSupportedJobTypes()).toEqual(['extraction']);
   });
+
+  it('SCAN_TYPE=extraction claims only extraction even with the DAST key set', () => {
+    process.env.DAST_CREDENTIAL_KEY = '0'.repeat(64);
+    process.env.SCAN_TYPE = 'extraction';
+    expect(getSupportedJobTypes()).toEqual(['extraction']);
+  });
+
+  it('SCAN_TYPE=dast claims only dast types (never extraction)', () => {
+    process.env.DAST_CREDENTIAL_KEY = '0'.repeat(64);
+    process.env.SCAN_TYPE = 'dast';
+    const types = getSupportedJobTypes();
+    expect(types).not.toContain('extraction');
+    expect(types).toEqual(['dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run']);
+  });
 });
