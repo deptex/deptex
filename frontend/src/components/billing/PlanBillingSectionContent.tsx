@@ -41,12 +41,7 @@ export function PlanBillingSectionContent({ organizationId }: PlanBillingSection
   };
 
   if (loading && !billing) {
-    return (
-      <div className="space-y-6 pt-8">
-        <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
-    );
+    return <BillingSectionSkeleton />;
   }
   if (error) {
     return <p className="pt-8 text-sm text-destructive">{error}</p>;
@@ -342,6 +337,10 @@ function AutoReloadDropdown({ organizationId, billing, onSaved }: AutoReloadDrop
                 className="data-[state=checked]:!bg-foreground [&>span[data-state=checked]]:!bg-background"
               />
             </div>
+            <MonthlySpendProgress
+              spentCents={billing.autoRecharge.spentLast30DaysCents}
+              capCents={savedMonthlyCapCents}
+            />
             <div className="flex flex-wrap gap-x-10 gap-y-4">
               <RechargeRow
                 label="Balance threshold"
@@ -383,6 +382,116 @@ function AutoReloadDropdown({ organizationId, billing, onSaved }: AutoReloadDrop
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BillingSectionSkeleton() {
+  return (
+    <div className="space-y-6 pt-8">
+      {/* Top card: balance + auto-reload + add credit footer */}
+      <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+        <div className="p-5">
+          <div className="overflow-hidden rounded-md border border-border bg-background-card-header">
+            {/* Balance row */}
+            <div className="flex items-center gap-4 px-4 py-4">
+              <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-7 w-24" />
+              </div>
+            </div>
+            {/* Auto-reload collapsed row */}
+            <div className="flex items-center gap-3 border-t border-border px-4 py-3">
+              <Skeleton className="h-4 w-4" />
+              <Skeleton className="h-4 w-24" />
+            </div>
+          </div>
+        </div>
+        {/* Add credit footer */}
+        <div className="flex items-center justify-between gap-3 border-t border-border bg-background-card-header px-5 py-3">
+          <Skeleton className="h-4 w-40" />
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-24" />
+          </div>
+        </div>
+      </div>
+
+      {/* Payment methods card */}
+      <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+        <div className="flex items-center justify-between border-b border-border bg-background-card-header px-5 py-3">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-8 w-20" />
+        </div>
+        <div className="space-y-3 p-5">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-8 w-8 rounded" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-6 w-6 rounded" />
+          </div>
+        </div>
+      </div>
+
+      {/* Deposits table */}
+      <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+        <div className="border-b border-border bg-background-card-header px-5 py-3">
+          <Skeleton className="h-4 w-20" />
+        </div>
+        <div className="divide-y divide-border">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="grid grid-cols-[2fr_1fr_1fr_auto] items-center gap-4 px-5 py-4"
+            >
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+              <div className="space-y-2">
+                <Skeleton className="h-3 w-12" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+              <div className="flex justify-end">
+                <Skeleton className="h-3 w-28" />
+              </div>
+              <Skeleton className="h-8 w-8 rounded" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface MonthlySpendProgressProps {
+  spentCents: number;
+  capCents: number | null;
+}
+
+function MonthlySpendProgress({ spentCents, capCents }: MonthlySpendProgressProps) {
+  if (capCents == null || capCents <= 0) return null;
+  const pct = Math.min(100, Math.round((spentCents / capCents) * 100));
+  const overCap = spentCents >= capCents;
+  const spentDollars = (spentCents / 100).toFixed(2);
+  const capDollars = (capCents / 100).toFixed(2);
+  return (
+    <div className="space-y-2">
+      <p className={`text-sm tabular-nums ${overCap ? 'text-destructive' : 'text-foreground'}`}>
+        ${spentDollars} of ${capDollars} in the last 30 days
+        {overCap && (
+          <span className="ml-1.5 font-normal">— cap reached, paused until older charges roll off</span>
+        )}
+      </p>
+      <div className="h-1 w-full overflow-hidden rounded-full bg-background-subtle">
+        <div
+          className={`h-full transition-[width] duration-300 ${overCap ? 'bg-destructive' : 'bg-foreground'}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );

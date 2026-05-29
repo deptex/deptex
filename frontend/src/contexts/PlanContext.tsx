@@ -17,6 +17,7 @@ export interface BillingState {
     thresholdCents: number | null;
     amountCents: number | null;
     monthlyCapCents: number | null;
+    spentLast30DaysCents: number;
   };
   lowBalanceAlertThresholdCents: number;
   paymentMethod: BillingPaymentMethod | null;
@@ -42,7 +43,10 @@ export interface BillingProviderProps {
 
 export function BillingProvider({ organizationId, children }: BillingProviderProps) {
   const [billing, setBilling] = useState<BillingState | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  // Start true so the skeleton shows on hard refresh — before useEffect fires the fetch
+  // there's at least one render where billing is null, and a loading=false default would
+  // flash the "Billing isn't initialized" branch.
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpReason, setTopUpReason] = useState<BillingContextValue['topUpReason']>(null);
@@ -50,6 +54,7 @@ export function BillingProvider({ organizationId, children }: BillingProviderPro
   const fetchBilling = useCallback(async () => {
     if (!organizationId) {
       setBilling(null);
+      setLoading(false);
       return;
     }
     setLoading(true);

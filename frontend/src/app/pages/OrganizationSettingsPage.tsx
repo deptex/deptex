@@ -419,129 +419,58 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'integrations':
       return (
-        <div className="space-y-8">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Integrations</h2>
-          </div>
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-foreground">CI/CD</h3>
+        <div className="space-y-6 pt-8">
+          {/* Header row: title + subtitle on left, Docs + Add buttons on right */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-2">
+              <div className={`h-7 w-36 ${pulse}`} />
+              <div className={`h-3.5 w-96 ${pulse}`} />
             </div>
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <table className="w-full table-fixed">
-                <colgroup>
-                  <col className="w-[200px]" />
-                  <col />
-                  <col className="w-[120px]" />
-                </colgroup>
-                <thead className="bg-background-subtle/30 border-b border-border">
-                  <tr>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {[1, 2, 3, 4].map((i) => (
-                    <tr key={i}>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                          <div className={`h-4 w-20 ${pulse}`} />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-6 w-6 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                          <div className={`h-4 w-28 ${pulse}`} />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex items-center gap-2">
+              <div className={`h-8 w-20 ${pulse} rounded-lg`} />
+              <div className={`h-8 w-16 ${pulse} rounded-lg`} />
             </div>
           </div>
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-foreground">Notifications</h3>
-            </div>
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <table className="w-full table-fixed">
-                <colgroup>
-                  <col className="w-[200px]" />
-                  <col />
-                  <col className="w-[120px]" />
-                </colgroup>
-                <thead className="bg-background-subtle/30 border-b border-border">
-                  <tr>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
+
+          {/* Unified integrations table — Provider | Type | Connection | Actions */}
+          <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col className="w-[220px]" />
+                <col className="w-[140px]" />
+                <col />
+                <col className="w-[160px]" />
+              </colgroup>
+              <thead className="border-b border-border bg-background-card-header">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Provider</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Type</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Connection</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wider text-foreground-secondary"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {[1, 2, 3, 4].map((i) => (
+                  <tr key={i}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className={`h-5 w-5 shrink-0 rounded-sm ${pulse}`} />
+                        <div className={`h-4 w-24 ${pulse}`} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`h-5 w-16 ${pulse} rounded-full`} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className={`h-4 w-32 ${pulse}`} />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className={`h-7 w-20 ${pulse} ml-auto`} />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {[1, 2, 3].map((i) => (
-                    <tr key={i}>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                          <div className={`h-4 w-20 ${pulse}`} />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className={`h-4 w-28 ${pulse}`} />
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-foreground">Ticketing</h3>
-            </div>
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <table className="w-full table-fixed">
-                <colgroup>
-                  <col className="w-[200px]" />
-                  <col />
-                  <col className="w-[120px]" />
-                </colgroup>
-                <thead className="bg-background-subtle/30 border-b border-border">
-                  <tr>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Account</th>
-                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {[1, 2, 3].map((i) => (
-                    <tr key={i}>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-5 w-5 rounded-sm bg-muted animate-pulse flex-shrink-0" />
-                          <div className={`h-4 w-20 ${pulse}`} />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className={`h-4 w-28 ${pulse}`} />
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className={`h-8 w-20 ${pulse} ml-auto`} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       );
@@ -675,14 +604,120 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
       );
     case 'billing':
       return (
-        <div className="space-y-8">
-          <div>
-            <div className={`h-8 w-36 ${pulse}`} />
-          </div>
-          <div className="bg-background border border-border rounded-lg p-6">
-            <div className={`h-5 w-28 ${pulse} mb-2`} />
-            <div className={`h-4 w-full max-w-md ${pulse} mb-4`} />
-            <div className={`h-4 w-48 ${pulse}`} />
+        <div className="space-y-6 pt-8">
+          {/* Balance + auto-reload + add credit card */}
+            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+              <div className="p-5">
+                <div className="overflow-hidden rounded-md border border-border bg-background-card-header">
+                  {/* Balance row */}
+                  <div className="flex items-center gap-4 px-4 py-4">
+                    <div className={`h-10 w-10 shrink-0 rounded-full ${pulse}`} />
+                    <div className="flex-1 space-y-2">
+                      <div className={`h-3 w-24 ${pulse}`} />
+                      <div className={`h-7 w-24 ${pulse}`} />
+                    </div>
+                  </div>
+                  {/* Auto-reload collapsed row */}
+                  <div className="flex items-center gap-3 border-t border-border px-4 py-3">
+                    <div className={`h-4 w-4 ${pulse}`} />
+                    <div className={`h-4 w-24 ${pulse}`} />
+                  </div>
+                </div>
+              </div>
+              {/* Add credit footer */}
+              <div className="flex items-center justify-between gap-3 border-t border-border bg-background-card-header px-5 py-3">
+                <div className={`h-4 w-40 ${pulse}`} />
+                <div className="flex items-center gap-2">
+                  <div className={`h-8 w-20 ${pulse}`} />
+                  <div className={`h-8 w-24 ${pulse}`} />
+                </div>
+              </div>
+            </div>
+
+            {/* Payment methods card */}
+            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+              <div className="flex items-center justify-between border-b border-border bg-background-card-header px-5 py-3">
+                <div className={`h-4 w-32 ${pulse}`} />
+                <div className={`h-8 w-20 ${pulse}`} />
+              </div>
+              <div className="space-y-3 p-5">
+                <div className="flex items-center gap-3">
+                  <div className={`h-8 w-8 rounded ${pulse}`} />
+                  <div className="flex-1 space-y-2">
+                    <div className={`h-4 w-40 ${pulse}`} />
+                    <div className={`h-3 w-24 ${pulse}`} />
+                  </div>
+                  <div className={`h-6 w-6 rounded ${pulse}`} />
+                </div>
+              </div>
+            </div>
+
+            {/* Deposits table */}
+            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+              <div className="border-b border-border bg-background-card-header px-5 py-3">
+                <div className={`h-4 w-20 ${pulse}`} />
+              </div>
+              <div className="divide-y divide-border">
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="grid grid-cols-[2fr_1fr_1fr_auto] items-center gap-4 px-5 py-4"
+                  >
+                    <div className="space-y-2">
+                      <div className={`h-4 w-32 ${pulse}`} />
+                      <div className={`h-3 w-24 ${pulse}`} />
+                    </div>
+                    <div className="space-y-2">
+                      <div className={`h-3 w-12 ${pulse}`} />
+                      <div className={`h-4 w-16 ${pulse}`} />
+                    </div>
+                    <div className="flex justify-end">
+                      <div className={`h-3 w-28 ${pulse}`} />
+                    </div>
+                    <div className={`h-8 w-8 rounded ${pulse}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
+        </div>
+      );
+    case 'ai':
+      return (
+        <div className="space-y-8 pt-8">
+          {/* Section heading: "AI Models" + subtitle */}
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className={`h-5 w-24 ${pulse}`} />
+              <div className={`h-3 w-64 ${pulse}`} />
+            </div>
+            {/* Models table */}
+            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+              <div className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 border-b border-border bg-background-card-header px-4 py-3">
+                <div className={`h-3 w-12 ${pulse}`} />
+                <div className={`h-3 w-20 ${pulse} ml-auto`} />
+                <div className={`h-3 w-10 ${pulse} ml-auto`} />
+                <div className={`h-3 w-14 ${pulse} mx-auto`} />
+              </div>
+              <div className="divide-y divide-border">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div
+                    key={i}
+                    className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 px-4 py-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`h-[18px] w-[18px] shrink-0 rounded-sm ${pulse}`} />
+                      <div className="min-w-0 space-y-1.5">
+                        <div className={`h-3.5 w-32 ${pulse}`} />
+                        <div className={`h-3 w-48 ${pulse} opacity-60`} />
+                      </div>
+                    </div>
+                    <div className={`h-3.5 w-10 ${pulse} ml-auto`} />
+                    <div className={`h-3.5 w-12 ${pulse} ml-auto`} />
+                    <div className={`h-7 w-[68px] ${pulse} rounded-md mx-auto`} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       );
