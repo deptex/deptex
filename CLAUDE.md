@@ -81,6 +81,7 @@ frontend/src/
 **Organization permission keys** (`organization_roles.permissions` JSONB):
 - `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `manage_teams_and_projects`, `view_all_teams_and_projects`, `view_settings`, `view_activity`, `view_members`, `add_members`, `kick_members`, `edit_roles`, `edit_permissions`
 - AI & Aegis: `interact_with_aegis`, `manage_aegis`, `trigger_fix`, `view_ai_spending`, `manage_incidents`
+- Billing: `manage_billing` — gates top-up, payment-method CRUD, auto-recharge config, receipt download. Required to be included in billing-alert email recipients.
 
 **Team roles** (`team_roles.permissions` JSONB):
 - `manage_projects`, `manage_members`, `manage_settings`, `manage_integrations`, `manage_notifications`
@@ -94,7 +95,7 @@ Note: `owner` is the only role guaranteed by name. The org-identity edits in Gen
 - All AI calls run on Deptex-owned platform keys.
 - Gemini Flash via `getPlatformProvider()` for docs assistant, policy AI, notification AI, usage analysis (when `GOOGLE_AI_API_KEY` is set).
 - Aegis + EPD + rule generation pick provider via `getPlatformKeyForProvider()` (`backend/src/lib/aegis/llm-provider.ts`), which reads `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_AI_API_KEY` from the worker env.
-- Rate limits: per-feature daily (5–50/day), Aegis 200 msg/day, 5 concurrent, monthly cost cap on Redis (`ai:cost:{orgId}:*`).
+- Rate limits: per-feature daily (5–50/day), Aegis 200 msg/day, 5 concurrent. **Cost enforcement is via the prepaid billing ledger** (see Prepaid Billing below) — the legacy Redis `ai:cost:{orgId}:*` cap was retired with the prepaid rewrite.
 - BYOK (per-organization customer keys + `organization_ai_providers` + `AI_ENCRYPTION_KEY` envelope) was retired in `phase29_drop_byok.sql`. `AI_ENCRYPTION_KEY` env var is still required because the IaC-v2 registry credentials table reuses the same encryption helper.
 
 ---
@@ -140,6 +141,34 @@ Push -> detectAffectedWorkspaces() -> queueExtractionJob() if sync_frequency=on_
 PR -> check runs + smart comments + policy engine + PR tracking
 ```
 
+### Prepaid Billing
+```
+Top up:    UI → POST /billing/topup-intent → Stripe createTopUpInvoice (invoice + auto-charge)
+                 → payment_intent.succeeded webhook → credit_balance RPC → balance_cents up
+Meter:     worker/Aegis → POST /api/internal/billing/meter-event (INTERNAL_API_KEY)
+                 → recordMeterEvent → deduct_balance RPC (FOR UPDATE, idempotent on
+                   (org, idempotency_key)) → balance_cents down → setImmediate fires
+                   maybeAutoRecharge + checkAndDispatchBalanceAlerts
+Auto-recharge: balance < auto_recharge_threshold_cents AND rolling-30-day sum +
+                 auto_recharge_amount_cents <= auto_recharge_monthly_cap_cents
+                 → createTopUpInvoice (off-session) → succeeds = pi_created (webhook credits)
+                 → fails inline = disable + void open invoice + sendAutoRechargeFailed
+Alerts:    low_balance / zero_balance / cap_reached / auto_recharge_failed — Resend (or
+           Gmail SMTP fallback) to all org members with manage_billing. Dedup via slot
+           columns on organization_billing. Subjects carry UTC timestamp suffix so each
+           alert is its own Gmail thread.
+Webhooks:  /api/stripe/webhooks — signature verified (rawBodyBuffer), atomic dedup via
+           billing_stripe_webhook_events. Handles payment_intent.succeeded,
+           payment_intent.payment_failed, invoice.payment_failed,
+           invoice.payment_action_required, payment_method.detached, customer.deleted.
+           Cross-tenant guard on every credit. Enforcement kill switch checked on
+           credit path.
+Kill switch: DEPTEX_BILLING_ENFORCEMENT=on enables charges; anything else returns
+           enforcement_off and stops all deductions and credits.
+Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emails
+           BILLING_OPS_ALERT_EMAIL if assert_balance_matches_ledger() returns any rows.
+```
+
 ---
 
 ## Key Environment Variables
@@ -155,7 +184,11 @@ PR -> check runs + smart comments + policy engine + PR tracking
 | `GOOGLE_AI_API_KEY` | Platform Gemini Flash key |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Platform OpenAI / Anthropic keys (used by Aegis, EPD Anthropic fallback, rule generation) |
 | `AI_ENCRYPTION_KEY` | AES-256-GCM key for `organization_registry_credentials` (32-byte hex). Reused encryption helper after BYOK retirement. |
-| `INTERNAL_API_KEY` | Protects internal/worker API endpoints |
+| `INTERNAL_API_KEY` | Protects internal/worker API endpoints. Compared in constant time via `middleware/internal-key.ts`; never log fragments. |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe SDK + webhook signature verification. SDK pinned to API version 2025-11-17. |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Resend transactional email (sender defaults to `Deptex <noreply@deptex.dev>`). When unset, falls back to Gmail SMTP via `EMAIL_USER`/`EMAIL_PASSWORD`. |
+| `DEPTEX_BILLING_ENFORCEMENT` | Must equal `on` for charges to actually deduct + Stripe webhooks to credit. Any other value → silent no-op + log line (`enforcement_off`). |
+| `BILLING_OPS_ALERT_EMAIL` | Recipient for the daily ledger-drift cron's alert (when set). |
 
 ---
 
