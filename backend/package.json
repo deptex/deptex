@@ -13,7 +13,8 @@
     "migrate": "tsx scripts/migrate.ts",
     "migrate:baseline": "tsx scripts/migrate.ts baseline",
     "migrate:status": "tsx scripts/migrate.ts status",
-    "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts"
+    "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts",
+    "fleet:probe": "tsx scripts/fleet-probe.ts"
   },
   "keywords": [
     "dependency-tracking",

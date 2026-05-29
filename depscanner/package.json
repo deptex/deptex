@@ -48,6 +48,7 @@
     "test:container-scan-cache-pglite": "tsx test/container-scan-cache-pglite.test.ts",
     "test:composition-pglite": "tsx test/composition-pglite.test.ts",
     "test:claim-fairness-pglite": "tsx test/claim-fairness-pglite.test.ts",
+    "test:fleet-snapshot-pglite": "tsx test/fleet-snapshot-pglite.test.ts",
     "e2e:iac-code-composition": "tsx scripts/e2e-iac-code-composition.ts",
     "test:dast-v2-1b-migration-pglite": "tsx test/dast-v2-1b-migration-pglite.ts",
     "test:dast-v2-1c-migration-pglite": "tsx test/dast-v2-1c-migration-pglite.ts",
