@@ -1,7 +1,12 @@
 import express from 'express';
 import crypto from 'crypto';
 
-const CONFIGURED_KEY = process.env.INTERNAL_API_KEY?.trim();
+// Read at call time (not module load) so the value reflects the current env — matters for
+// tests that set INTERNAL_API_KEY dynamically, and is harmless in prod where it's set before
+// boot. Never log key fragments or lengths.
+function configuredKey(): string | undefined {
+  return process.env.INTERNAL_API_KEY?.trim();
+}
 
 // Constant-time compare; returns false instantly on length mismatch (without leaking
 // which side was longer) and otherwise uses timingSafeEqual to hide per-byte timing.
@@ -34,12 +39,13 @@ export function requireInternalKey(
   next: express.NextFunction,
 ): void {
   const provided = extractKey(req);
-  if (!CONFIGURED_KEY) {
+  const configured = configuredKey();
+  if (!configured) {
     console.error('[internal-key] INTERNAL_API_KEY is not configured');
     res.status(503).json({ error: 'Internal key not configured' });
     return;
   }
-  if (!safeMatch(provided, CONFIGURED_KEY)) {
+  if (!safeMatch(provided, configured)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -48,5 +54,5 @@ export function requireInternalKey(
 
 // One-shot helper for routes that gate inside a handler rather than via router.use().
 export function isValidInternalKey(provided: string | undefined): boolean {
-  return safeMatch(provided, CONFIGURED_KEY);
+  return safeMatch(provided, configuredKey());
 }

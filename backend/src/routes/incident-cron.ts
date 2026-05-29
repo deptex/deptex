@@ -5,6 +5,7 @@
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
@@ -16,7 +17,7 @@ router.post('/escalate', async (req, res) => {
     if (!internalKey && !qstashSignature) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    if (internalKey && internalKey !== process.env.INTERNAL_API_KEY) {
+    if (internalKey && !isValidInternalKey(internalKey)) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
