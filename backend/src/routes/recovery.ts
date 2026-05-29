@@ -1,9 +1,8 @@
 import express from 'express';
 import { supabase as getSupabaseClient } from '../lib/supabase';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
-
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY?.trim();
 
 function requireInternalKey(req: express.Request, res: express.Response, next: express.NextFunction) {
   const raw =
@@ -12,7 +11,7 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
       ? req.headers.authorization.slice(7)
       : undefined);
   const key = raw?.trim();
-  if (!INTERNAL_API_KEY || key !== INTERNAL_API_KEY) {
+  if (!isValidInternalKey(key)) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }

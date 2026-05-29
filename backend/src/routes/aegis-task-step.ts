@@ -1,4 +1,5 @@
 import express from 'express';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ router.post('/execute-task-step', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    if (internalKey && internalKey !== process.env.INTERNAL_API_KEY) {
+    if (internalKey && !isValidInternalKey(internalKey)) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
@@ -85,7 +86,7 @@ router.post('/check-due-automations', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    if (internalKey && internalKey !== process.env.INTERNAL_API_KEY) {
+    if (internalKey && !isValidInternalKey(internalKey)) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
@@ -109,7 +110,7 @@ router.post('/run-automation/:id', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    if (internalKey && internalKey !== process.env.INTERNAL_API_KEY) {
+    if (internalKey && !isValidInternalKey(internalKey)) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 
@@ -134,7 +135,7 @@ router.post('/snapshot-debt', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    if (internalKey && internalKey !== process.env.INTERNAL_API_KEY) {
+    if (internalKey && !isValidInternalKey(internalKey)) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
 

@@ -6,14 +6,14 @@
 
 import express from 'express';
 import { supabase } from '../lib/supabase';
+import { isValidInternalKey } from '../middleware/internal-key';
 const router = express.Router();
 
 const MAX_JOBS_PER_INVOCATION = 20;
 const MAX_JOBS_PER_ORG = 5;
 
 async function verifyInternalAuth(req: express.Request): Promise<boolean> {
-  const internalKey = process.env.INTERNAL_API_KEY;
-  if (internalKey && req.headers['x-internal-api-key'] === internalKey) return true;
+  if (isValidInternalKey(req.headers['x-internal-api-key'] as string | undefined)) return true;
 
   try {
     const qstashKeys = {

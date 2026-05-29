@@ -10,6 +10,7 @@ import type {
   PublishOpts,
   PublishResult,
 } from './types';
+import { isValidInternalKey } from '../../middleware/internal-key';
 
 function getRegionPrefix(): string | null {
   const region = process.env.QSTASH_REGION;
@@ -145,10 +146,9 @@ export const qstashAdapter: JobQueue = {
   },
 
   async verifyRequest(headers, rawBody) {
-    const internalKey = process.env.INTERNAL_API_KEY;
     const presented = headers['x-internal-api-key'];
     const presentedStr = Array.isArray(presented) ? presented[0] : presented;
-    if (internalKey && presentedStr === internalKey) return true;
+    if (isValidInternalKey(presentedStr)) return true;
 
     const sig = headers['upstash-signature'];
     const sigStr = Array.isArray(sig) ? sig[0] : sig;

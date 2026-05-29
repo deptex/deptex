@@ -11,12 +11,12 @@ import {
   runWebhookHealthCheck,
   cleanupOldWebhookDeliveries,
 } from '../lib/watchtower-poll';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
 async function verifyInternalAuth(req: express.Request): Promise<boolean> {
-  const internalKey = process.env.INTERNAL_API_KEY;
-  if (internalKey && req.headers['x-internal-api-key'] === internalKey) return true;
+  if (isValidInternalKey(req.headers['x-internal-api-key'] as string | undefined)) return true;
 
   try {
     const qstashKeys = {

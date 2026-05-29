@@ -13,6 +13,7 @@ import {
   getSupportedJobTypes,
   type ExtractionJobRow,
 } from './job-db';
+import { postScanJobMeterEvent } from './lib/meter-event';
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -98,6 +99,7 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   const isDast = job.type === 'dast' || job.type === 'dast_zap' || job.type === 'dast_nuclei' || job.type === 'dast_zap_dry_run';
   const tag = isDast ? `[dast-${job.id}]` : `[ext-${job.id}]`;
   console.log(`${tag} Dispatching ${job.type} job for project ${job.project_id}`);
+  const jobStartedAt = Date.now();
 
   // Send one explicit heartbeat right after the claim — the first interval
   // pulse is otherwise HEARTBEAT_INTERVAL_MS away.
@@ -146,6 +148,21 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
     }
   } finally {
     clearInterval(heartbeatInterval);
+    // Emit worker_minutes meter event for billing. Best-effort: failures
+    // are logged + retried inside postScanJobMeterEvent. We don't gate
+    // worker completion on the meter event; the reconcile script catches
+    // any drops.
+    try {
+      await postScanJobMeterEvent({
+        jobId: job.id,
+        orgId: job.organization_id,
+        projectId: job.project_id,
+        type: job.type,
+        startedAtMs: jobStartedAt,
+      });
+    } catch (err) {
+      console.warn(`${tag} meter-event emit failed`, err);
+    }
   }
 }
 

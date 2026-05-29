@@ -21,6 +21,7 @@ import type {
   PublishOpts,
   PublishResult,
 } from './types';
+import { isValidInternalKey } from '../../middleware/internal-key';
 
 const DEFAULT_QUEUE = 'deptex-default';
 const QUEUE_PREFIX = 'deptex-fc-';
@@ -164,14 +165,13 @@ export const bullmqAdapter: JobQueue = {
   },
 
   async verifyRequest(headers) {
-    const internalKey = process.env.INTERNAL_API_KEY;
-    if (!internalKey) {
+    if (!process.env.INTERNAL_API_KEY) {
       console.error('[job-queue:bullmq] INTERNAL_API_KEY not set — rejecting all job requests');
       return false;
     }
     const presented = headers['x-internal-api-key'];
     const presentedStr = Array.isArray(presented) ? presented[0] : presented;
-    return presentedStr === internalKey;
+    return isValidInternalKey(presentedStr);
   },
 };
 

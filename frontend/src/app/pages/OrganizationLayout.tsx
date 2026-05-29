@@ -8,7 +8,7 @@ import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Toaster } from '../../components/ui/toaster';
-import { PlanProvider } from '../../contexts/PlanContext';
+import { BillingProvider } from '../../contexts/PlanContext';
 
 export default function OrganizationLayout() {
   const { id } = useParams<{ id: string }>();
@@ -165,7 +165,7 @@ export default function OrganizationLayout() {
 
   return (
     <>
-      <PlanProvider organizationId={id}>
+      <BillingProvider organizationId={id}>
         <SidebarProvider defaultOpen>
           <OrgSidebar
             organizationId={id}
@@ -181,7 +181,7 @@ export default function OrganizationLayout() {
             <Outlet context={{ organization, reloadOrganization, userPermissions }} />
           </SidebarInset>
         </SidebarProvider>
-      </PlanProvider>
+      </BillingProvider>
 
       {organization && (
         <InviteMemberDialog

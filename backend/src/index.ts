@@ -27,7 +27,10 @@ import watchtowerDailyPollRouter from './routes/watchtower-daily-poll';
 import notificationUnsubscribeRouter from './routes/notification-unsubscribe';
 import userNotificationsRouter from './routes/user-notifications';
 import aegisTaskStepRouter from './routes/aegis-task-step';
-import stripeWebhooksRouter from './routes/stripe-webhooks';
+import billingRouter from './routes/billing';
+import internalBillingRouter from './routes/internal-billing';
+import billingStripeWebhooksRouter from './routes/billing-stripe-webhooks';
+import billingDriftCronRouter from './routes/billing-drift-cron';
 import syncCounterResetRouter from './routes/sync-counter-reset';
 import scannerCacheReaperRouter from './routes/scanner-cache-reaper';
 import ssoRouter from './routes/sso';
@@ -138,7 +141,12 @@ const DAST_CREDENTIALS_PUT_PATH = /^\/api\/projects\/[^/]+\/dast\/targets\/[^/]+
 const globalJsonParser = express.json({
   limit: '100kb',
   verify: (req: any, res, buf) => {
+    // rawBody (string) is what QStash/GitHub/GitLab/Bitbucket signature verifiers expect.
+    // rawBodyBuffer preserves byte-fidelity for Stripe webhooks — Stripe signs the raw
+    // request bytes, and a UTF-8 round-trip through a string can drift on non-UTF-8
+    // sequences. Webhook handlers that care about exact bytes should read this field.
     req.rawBody = buf.toString();
+    req.rawBodyBuffer = buf;
   },
 });
 app.use((req, res, next) => {
@@ -171,7 +179,9 @@ app.use('/api/workers', watchtowerDailyPollRouter);
 app.use('/api/notifications', notificationUnsubscribeRouter);
 app.use('/api/user-notifications', userNotificationsRouter);
 app.use('/api/internal/aegis', aegisTaskStepRouter);
-app.use('/api/stripe/webhooks', stripeWebhooksRouter);
+app.use('/api/stripe/webhooks', billingStripeWebhooksRouter);
+app.use('/api/internal/billing', internalBillingRouter);
+app.use('/api/internal/billing', billingDriftCronRouter);
 app.use('/api/workers', syncCounterResetRouter);
 app.use('/api/workers', scannerCacheReaperRouter);
 app.use('/api/sso', ssoRouter);
@@ -186,6 +196,7 @@ app.use('/api/feedback', feedbackRouter);
 app.use('/api/demo-request', demoRequestRouter);
 app.use('/api/enterprise-contact', enterpriseContactRouter);
 // API Routes (former EE - now merged)
+app.use('/api/organizations', billingRouter);
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/organizations', taintEngineRouter);
 app.use('/api/organizations', teamsRouter);

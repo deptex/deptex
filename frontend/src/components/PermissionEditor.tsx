@@ -133,7 +133,7 @@ export function PermissionEditor({
       title: 'Admin',
       // No view_settings — any org member can open Settings; sidebar shows only sections they have permission for
       permissions: [
-        { key: 'manage_billing' as const, label: 'Manage Plan & Billing' },
+        { key: 'manage_billing' as const, label: 'Manage Billing' },
         {
           key: 'manage_security' as const,
           label: 'Manage SSO, MFA & network access',

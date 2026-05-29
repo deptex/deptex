@@ -1,5 +1,5 @@
 import { Response, NextFunction } from 'express';
-import { supabase } from './supabase';
+import { supabase } from '../lib/supabase';
 import { AuthRequest } from '../middleware/auth';
 
 export async function userHasOrgPermission(
@@ -15,6 +15,12 @@ export async function userHasOrgPermission(
     .single();
 
   if (!membership) return false;
+
+  // `owner` is the only structural role per CLAUDE.md — it carries every permission and
+  // cannot be removed. Short-circuit before the role lookup so an owner stays authorized
+  // even if their seeded `owner` row in organization_roles was renamed, deleted, or had a
+  // specific permission key flipped off.
+  if (membership.role === 'owner') return true;
 
   const { data: role } = await supabase
     .from('organization_roles')
