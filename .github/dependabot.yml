@@ -1,13 +1,20 @@
 # Dependabot configuration.
 #
-# We deliberately keep this scope minimal. The depscanner dogfood corpus
-# under `depscanner/test-repos/` seeds intentionally-vulnerable dependencies
-# (and historical-malicious package names) so a real end-to-end scan has
-# something to find. Letting Dependabot watch those directories would open
-# noisy PRs against fixtures whose CVEs are the entire point of the corpus.
+# We deliberately keep this scope minimal. The depscanner dogfood corpus under
+# `depscanner/test-repos/` seeds intentionally-vulnerable dependencies (and
+# historical-malicious package names) so a real end-to-end scan has something to
+# find — Dependabot must never open noisy bump PRs against those fixtures.
 #
-# If you need Dependabot for production packages, scope it tightly — keep
-# the `ignore` directives below so the dogfood corpus is never auto-bumped.
+# Protection is by SCOPING, not ignore rules: `directory: /` is non-recursive,
+# so Dependabot only inspects manifests at the repo root and never descends into
+# `depscanner/test-repos/` (or any other subdirectory). Dependabot's `ignore`
+# block can only filter by dependency-name / versions / update-types — it cannot
+# filter by path — which is why the previous `ignore: directories:` form was
+# rejected by Dependabot's config schema on every PR.
+#
+# If you later want Dependabot to watch real production manifests (which live in
+# subdirectories like /backend and /frontend), add per-directory update entries
+# pointing at those paths and keep test-repos out of the list.
 
 version: 2
 updates:
@@ -15,63 +22,31 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: bundler
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: composer
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: nuget
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"
   - package-ecosystem: maven
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        directories:
-          - "depscanner/test-repos/**"

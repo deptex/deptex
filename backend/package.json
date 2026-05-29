@@ -18,7 +18,8 @@
     "fleet:probe": "tsx scripts/fleet-probe.ts",
     "reconcile:billing": "tsx scripts/reconcile-billing.ts",
     "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts",
-    "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts"
+    "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts",
+    "e2e:sentry": "tsx scripts/e2e-sentry.ts"
   },
   "keywords": [
     "dependency-tracking",
@@ -40,6 +41,7 @@
     "@google/generative-ai": "^0.24.0",
     "@node-saml/node-saml": "^5.1.0",
     "@react-pdf/renderer": "^4.3.2",
+    "@sentry/node": "^10.55.0",
     "@supabase/supabase-js": "^2.39.0",
     "@upstash/qstash": "^2.9.0",
     "@upstash/redis": "^1.25.0",

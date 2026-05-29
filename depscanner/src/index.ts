@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import './instrument';
+import * as Sentry from '@sentry/node';
+import { captureInfraError } from './observability/capture';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
@@ -138,6 +141,11 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   } catch (e: any) {
     const message = e.message || 'Unknown error';
     console.error(`${tag} Job failed: ${message}`);
+    Sentry.captureException(e, {
+      tags: { component: 'depscanner', job_type: job.type },
+      user: { id: job.organization_id },
+      contexts: { job: { id: job.id, type: job.type, project_id: job.project_id, attempts: job.attempts } },
+    });
     if (job.type === 'extraction') {
       const logger = new ExtractionLogger(supabase, job.project_id, job.run_id);
       await logger.error('complete', `Extraction failed: ${message}`, e);
@@ -199,6 +207,11 @@ async function runWorker(): Promise<void> {
           console.log(`${tag} Done`);
         } catch (e: any) {
           console.error(`${tag} Failed: ${e.message}`);
+          Sentry.captureException(e, {
+            tags: { component: 'depscanner', phase: 'process-escape' },
+            user: { id: job.organization_id },
+            contexts: { job: { id: job.id, type: job.type } },
+          });
         }
 
         continue;
@@ -212,18 +225,47 @@ async function runWorker(): Promise<void> {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     } catch (e: any) {
       console.error('[depscanner] Worker error:', e.message);
+      captureInfraError(e, 'depscanner', { phase: 'claim' });
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   }
 }
 
+// Flush Sentry then exit. Never let a slow/failing flush block shutdown:
+// Sentry.close has its own internal timeout, and we swallow any rejection so
+// process.exit always runs even if close() rejects (Fly sends SIGINT on
+// scale-to-zero with a 5-min grace, so 2s is comfortably within budget).
+async function flushSentryAndExit(code: number): Promise<void> {
+  try {
+    await Sentry.close(2000);
+  } catch {
+    /* never block exit on flush */
+  }
+  process.exit(code);
+}
+
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down');
-  process.exit(0);
+  void flushSentryAndExit(0);
 });
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down');
-  process.exit(0);
+  void flushSentryAndExit(0);
+});
+
+// No global handlers existed before — a stray rejection or uncaught exception
+// would crash with no trace (Node's default is to crash on both). Capture to
+// Sentry first, then exit non-zero so the machine restarts clean rather than
+// limping on in a half-broken/zombie state (restores the prior crash default).
+process.on('unhandledRejection', (reason) => {
+  console.error('[depscanner] Unhandled rejection:', reason);
+  Sentry.captureException(reason, { tags: { component: 'depscanner', kind: 'unhandledRejection' } });
+  void flushSentryAndExit(1);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[depscanner] Uncaught exception:', err);
+  Sentry.captureException(err, { tags: { component: 'depscanner', kind: 'uncaughtException' } });
+  void flushSentryAndExit(1);
 });
 
 const memoryWatcher = setInterval(() => {
@@ -238,5 +280,6 @@ memoryWatcher.unref();
 
 runWorker().catch((e) => {
   console.error('Fatal:', e);
-  process.exit(1);
+  Sentry.captureException(e, { tags: { component: 'depscanner', kind: 'fatal' } });
+  void flushSentryAndExit(1);
 });

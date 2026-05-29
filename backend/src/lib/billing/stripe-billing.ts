@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { supabase } from '../supabase';
 import { setStripePaymentMethodFetcher } from './ledger';
 import type { BillingPaymentMethod, PaymentIntentPurpose } from './types';
+import { captureBillingError } from '../observability/capture';
 
 let stripeClient: Stripe | null = null;
 
@@ -326,6 +327,7 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     });
   } catch (err) {
     console.warn('[billing] topup invoices.update metadata failed', err);
+    captureBillingError(err, 'topup_invoice_metadata_failed', { orgId: input.orgId, extra: { correlationId: input.correlationId } });
   }
 
   // Stamp PI metadata BEFORE attempting payment so payment_intent.succeeded webhook
@@ -338,6 +340,7 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
     });
   } catch (err) {
     console.warn('[topup] paymentIntents.update metadata pre-pay failed', err);
+    captureBillingError(err, 'topup_pi_metadata_failed', { orgId: input.orgId, extra: { correlationId: input.correlationId } });
   }
 
   // Pay the invoice using the saved default PM (this is the canonical path for invoice PIs;
@@ -376,6 +379,7 @@ export async function createTopUpInvoice(input: CreateTopUpInvoiceInput): Promis
         piId = extractPiId(finalized) ?? piId;
       } catch (refetchErr) {
         console.warn('[topup] invoice refetch after pay() failure threw', refetchErr);
+        captureBillingError(refetchErr, 'topup_invoice_state_unknown', { orgId: input.orgId, extra: { correlationId: input.correlationId } });
       }
     }
   }
@@ -477,6 +481,7 @@ export async function detachPaymentMethod(orgId: string): Promise<void> {
     .eq('organization_id', orgId);
   if (error) {
     console.error('[stripe-billing] failed to clear payment method', error);
+    captureBillingError(error, 'default_pm_db_clear_failed', { orgId });
   }
 }
 
@@ -698,6 +703,7 @@ export async function setDefaultPaymentMethod(
     .eq('organization_id', orgId);
   if (error) {
     console.error('[stripe-billing] failed to persist default PM', error);
+    captureBillingError(error, 'default_pm_db_update_failed', { orgId });
   }
 }
 

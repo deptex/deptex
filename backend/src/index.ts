@@ -1,3 +1,7 @@
+// Sentry must be the first import so it can instrument http/express/pg before
+// they are required. It loads dotenv itself; see ./instrument.
+import './instrument';
+import * as Sentry from '@sentry/node';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -236,13 +240,23 @@ app.post('/api/webhook/github', githubWebhookHandler);
 app.use('/api/integrations', gitlabWebhooksRouter);
 app.use('/api/integrations', bitbucketWebhooksRouter);
 
+// Capture errors that propagate to Express (route errors passed to next(err)
+// or thrown in sync handlers). Must be registered AFTER all routes and BEFORE
+// the custom error handler below — it captures to Sentry then delegates via
+// next(err) so the handler below still sends the response. No-op when Sentry
+// is uninitialized. NB: most routes catch their own errors and res.status(500)
+// without rethrowing, so those never reach here — they are captured explicitly
+// at the call site (see billing money-paths + infra captures).
+Sentry.setupExpressErrorHandler(app);
+
 // Error handling middleware.
 //
 // Phase 36 (v1.1) — body-parser-thrown errors carry the failed body bytes on
 // `err.body` (and sometimes `err.bodyRaw`). Logging the raw err object would
 // echo those bytes to stdout, which leaks HAR contents on a parse failure
 // (POST /replay/preview with malformed JSON would otherwise emit the entire
-// failed body to Pino / Datadog forwarders bypassing console). Strip those
+// failed body to stdout — and now into Sentry's console breadcrumbs + the
+// captured error event). Strip those
 // fields off the cloned shape we hand to the logger. Route-scoped error
 // handlers in the dast router strip them too for defense-in-depth — this
 // global handler is the last gate.

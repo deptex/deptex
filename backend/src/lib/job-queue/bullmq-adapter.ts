@@ -22,6 +22,7 @@ import type {
   PublishResult,
 } from './types';
 import { isValidInternalKey } from '../../middleware/internal-key';
+import { captureInfraError } from '../observability/capture';
 
 const DEFAULT_QUEUE = 'deptex-default';
 const QUEUE_PREFIX = 'deptex-fc-';
@@ -102,6 +103,7 @@ async function ensureWorker(name: string) {
   const worker = new Worker(name, processJob, { ...conn, concurrency });
   worker.on('failed', (job: any, err: Error) => {
     console.error(`[job-queue:bullmq] job ${job?.id} on ${name} failed:`, err.message);
+    captureInfraError(err, 'bullmq', { queue: name, jobId: job?.id });
   });
   workers.set(name, worker);
 }
@@ -130,6 +132,7 @@ export const bullmqAdapter: JobQueue = {
       return { messageId: String(job.id) };
     } catch (e) {
       console.error('[job-queue:bullmq] publish error', e);
+      captureInfraError(e, 'bullmq');
       return null;
     }
   },
@@ -158,6 +161,7 @@ export const bullmqAdapter: JobQueue = {
         }
       } catch (e) {
         console.error(`[job-queue:bullmq] batch error on queue ${qn}`, e);
+        captureInfraError(e, 'bullmq', { queue: qn });
         // leave those slots null
       }
     }

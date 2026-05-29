@@ -5,6 +5,7 @@ import { recordMeterEvent, canCharge } from '../lib/billing/ledger';
 import { chargedCentsForWorker } from '../lib/billing/pricing';
 import { chargedCentsForAi } from '../lib/ai/pricing';
 import { requireInternalKey } from '../middleware/internal-key';
+import { captureBillingError } from '../lib/observability/capture';
 
 const router = express.Router();
 
@@ -188,6 +189,7 @@ router.post('/meter-event', async (req, res) => {
     });
   } catch (err) {
     console.error('[internal-billing.meter-event] failed', err);
+    captureBillingError(err, 'meter_event_failed', { orgId: body.organization_id });
     res.status(500).json({ error: 'meter_event_failed' });
   }
 });

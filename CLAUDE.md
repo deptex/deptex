@@ -191,6 +191,21 @@ Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emai
 | `RESEND_API_KEY`, `EMAIL_FROM` | Resend transactional email (sender defaults to `Deptex <noreply@deptex.dev>`). When unset, falls back to Gmail SMTP via `EMAIL_USER`/`EMAIL_PASSWORD`. |
 | `DEPTEX_BILLING_ENFORCEMENT` | Must equal `on` for charges to actually deduct + Stripe webhooks to credit. Any other value → silent no-op + log line (`enforcement_off`). |
 | `BILLING_OPS_ALERT_EMAIL` | Recipient for the daily ledger-drift cron's alert (when set). |
+| `SENTRY_DSN` | Sentry error-tracking DSN for backend + both workers. When set, errors are captured + alerted; when unset, the SDK no-ops (local dev / CI / pre-launch). `SENTRY_ENVIRONMENT` + `SENTRY_RELEASE` (git SHA) tag events. |
+| `VITE_SENTRY_DSN` | Public Sentry DSN for the frontend (build-time). `VITE_SENTRY_RELEASE` optional. |
+| `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Frontend build/CI only — uploads source maps via `@sentry/vite-plugin`. Absent locally → maps aren't uploaded (gitignored). |
+
+---
+
+## Observability (Sentry)
+
+Errors-only Sentry across all four surfaces (backend API + depscanner + fix-worker + frontend). No performance tracing, no session replay — minimal quota + PII surface. SDK pinned `>= 10.27.0` (avoids CVE-2025-65944).
+
+- **Init:** `instrument.ts` is the first import in each entry point (backend `src/index.ts`, both workers, frontend `main.tsx`). All init no-op without a DSN, so code merges before the Sentry project exists.
+- **Secret scrubbing (non-negotiable):** a shared `beforeSend` redactor (`backend/src/lib/observability/scrub.ts`, byte-identical copies in each worker + frontend `src/observability/scrub.ts`) strips secret-shaped strings (JWTs, Stripe/GitHub/AI keys, PEM, Bearer) + values under sensitive keys, drops request bodies/cookies + `user.email`, keeps `user.id` (= org id, for correlation). `sendDefaultPii: false`.
+- **What's captured:** the global Express handler + the out-of-Express paths (QStash/BullMQ adapters, self-host-cron, Stripe webhooks); per-job context + process-level `unhandledRejection`/`uncaughtException` + `Sentry.close()` on SIGINT/SIGTERM in both workers; the 16 silent billing money-path failures (auto-recharge, webhook credits/alerts, meter events) via `captureBillingError`; frontend `ErrorBoundary` + route `errorElement` + 5xx API failures.
+- **e2e:** `cd backend && npm run e2e:sentry` drives the real `@sentry/node` pipeline and asserts secrets are scrubbed before any event leaves the process + all four scrubber copies agree.
+- Datadog/APM deferred until there's traffic. The `billing_events` admin event-log is the fast-follow arc.
 
 ---
 
