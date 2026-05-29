@@ -9,10 +9,12 @@ function getStripe(): Stripe {
   if (!stripeClient) {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
-    // Pin to a specific API version so the Stripe account default can't drift under us.
-    // We rely on the 2025-11-17 schema (Invoice.payments[].payment.payment_intent) in
-    // extractPiId — bumping this version is a deliberate decision, not an accident.
-    stripeClient = new Stripe(key, { apiVersion: '2025-11-17' as Stripe.LatestApiVersion });
+    // Pin to the account's current API version so the default can't drift under us. This MUST
+    // be a version the Stripe account actually accepts — a string the account doesn't recognize
+    // 400s EVERY request ("Invalid Stripe API version"). 2026-04-22.dahlia is the account
+    // default and supports the Invoice.payments[].payment.payment_intent schema extractPiId
+    // reads. Bumping this is a deliberate decision; verify the new version is accepted first.
+    stripeClient = new Stripe(key, { apiVersion: '2026-04-22.dahlia' as Stripe.LatestApiVersion });
   }
   return stripeClient;
 }

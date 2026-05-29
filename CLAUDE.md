@@ -186,7 +186,7 @@ Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emai
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Platform OpenAI / Anthropic keys (used by Aegis, EPD Anthropic fallback, rule generation) |
 | `AI_ENCRYPTION_KEY` | AES-256-GCM key for `organization_registry_credentials` (32-byte hex). Reused encryption helper after BYOK retirement. |
 | `INTERNAL_API_KEY` | Protects internal/worker API endpoints. Compared in constant time via `middleware/internal-key.ts`; never log fragments. |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe SDK + webhook signature verification. SDK pinned to API version 2025-11-17. |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe SDK + webhook signature verification. SDK pinned to API version 2026-04-22.dahlia (the account's current version — must be one the account accepts or every call 400s). |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Resend transactional email (sender defaults to `Deptex <noreply@deptex.dev>`). When unset, falls back to Gmail SMTP via `EMAIL_USER`/`EMAIL_PASSWORD`. |
 | `DEPTEX_BILLING_ENFORCEMENT` | Must equal `on` for charges to actually deduct + Stripe webhooks to credit. Any other value → silent no-op + log line (`enforcement_off`). |
 | `BILLING_OPS_ALERT_EMAIL` | Recipient for the daily ledger-drift cron's alert (when set). |
