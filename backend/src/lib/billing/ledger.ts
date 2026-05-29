@@ -131,22 +131,77 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
 
   const newBalanceCents = data as number;
 
+  console.info('[billing] deducted', {
+    orgId: input.organizationId,
+    amountCents: input.chargedCents,
+    cogCents: input.cogCents,
+    newBalanceCents,
+    idempotencyKey: input.idempotencyKey,
+    eventType: input.eventType,
+  });
+
   // Fire post-deduction side-effects. Lazy-required to avoid the static import cycle
   // (ledger → auto-recharge → stripe-billing → ledger). Best-effort: never blocks the
   // meter-event call. Every caller of recordMeterEvent gets these for free — don't
   // re-implement them in HTTP routes or domain code.
+  //
+  // Defensive structure: the outer try/catch + per-promise .catch() ensure that no
+  // failure here can escape as an unhandled rejection (which on Node ≥16 with default
+  // --unhandled-rejections=throw would crash the process and kill billing for the org).
   setImmediate(() => {
     try {
-      const { maybeAutoRecharge } = require('./auto-recharge') as typeof import('./auto-recharge');
-      const { checkAndDispatchBalanceAlerts } = require('./alerts') as typeof import('./alerts');
-      checkAndDispatchBalanceAlerts(input.organizationId, newBalanceCents).catch((err) =>
-        console.error('[billing.ledger] checkAndDispatchBalanceAlerts threw', err),
-      );
-      maybeAutoRecharge(input.organizationId).catch((err) =>
-        console.error('[billing.ledger] maybeAutoRecharge threw', err),
-      );
+      let maybeAutoRecharge: typeof import('./auto-recharge').maybeAutoRecharge | undefined;
+      let checkAndDispatchBalanceAlerts:
+        | typeof import('./alerts').checkAndDispatchBalanceAlerts
+        | undefined;
+      try {
+        ({ maybeAutoRecharge } = require('./auto-recharge') as typeof import('./auto-recharge'));
+      } catch (err) {
+        console.error('[billing] require(./auto-recharge) failed', {
+          orgId: input.organizationId,
+          err,
+        });
+      }
+      try {
+        ({ checkAndDispatchBalanceAlerts } = require('./alerts') as typeof import('./alerts'));
+      } catch (err) {
+        console.error('[billing] require(./alerts) failed', {
+          orgId: input.organizationId,
+          err,
+        });
+      }
+
+      if (checkAndDispatchBalanceAlerts) {
+        Promise.resolve()
+          .then(() => checkAndDispatchBalanceAlerts!(input.organizationId, newBalanceCents))
+          .catch((err) =>
+            console.error('[billing] checkAndDispatchBalanceAlerts threw', {
+              orgId: input.organizationId,
+              err,
+            }),
+          );
+      }
+      if (maybeAutoRecharge) {
+        Promise.resolve()
+          .then(() => maybeAutoRecharge!(input.organizationId))
+          .catch((err) =>
+            console.error('[billing] maybeAutoRecharge threw', {
+              orgId: input.organizationId,
+              err,
+            }),
+          );
+      }
     } catch (err) {
-      console.error('[billing.ledger] post-deduction side-effects setup failed', err);
+      // Last-ditch guard. Should not reach here given the inner guards above, but if
+      // a logger or anything else throws synchronously we must not let it escape.
+      try {
+        console.error('[billing] post-deduction side-effects setup failed', {
+          orgId: input.organizationId,
+          err,
+        });
+      } catch {
+        // Swallow: console itself failed; nothing safe to do.
+      }
     }
   });
 
@@ -173,7 +228,15 @@ export async function canCharge(orgId: string, estimatedCents: number): Promise<
     .eq('organization_id', orgId)
     .single();
 
-  if (error || !billing) {
+  // Distinguish "the DB couldn't tell us the balance" from "the balance is too low".
+  // Returning insufficient_credit on a DB outage would show "your balance is too low"
+  // to a user whose balance is actually fine — a confusing failure mode during incidents.
+  // Callers can decide whether to fail-open or fail-closed on db_unavailable.
+  if (error) {
+    console.error('[billing.canCharge] DB query failed', { orgId, err: error });
+    return { allowed: false, balanceCents: 0, reason: 'db_unavailable' };
+  }
+  if (!billing) {
     return { allowed: false, balanceCents: 0, reason: 'insufficient_credit' };
   }
 
@@ -208,6 +271,21 @@ async function fetchPaymentMethod(
   }
 }
 
+// Rolling 30-day window — mirrors the cap check in auto-recharge.ts.
+const ROLLING_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function sumAutoRechargeLast30Days(orgId: string): Promise<number> {
+  const windowStart = new Date(Date.now() - ROLLING_WINDOW_MS);
+  const { data, error } = await supabase
+    .from('billing_transactions')
+    .select('amount_cents')
+    .eq('organization_id', orgId)
+    .eq('kind', 'auto_recharge_topup')
+    .gte('created_at', windowStart.toISOString());
+  if (error || !data) return 0;
+  return data.reduce((sum, row) => sum + Math.max(0, row.amount_cents), 0);
+}
+
 export async function getBalance(orgId: string): Promise<BillingState | null> {
   const { data, error } = await supabase
     .from('organization_billing')
@@ -216,10 +294,10 @@ export async function getBalance(orgId: string): Promise<BillingState | null> {
     .single();
   if (error || !data) return null;
 
-  const paymentMethod = await fetchPaymentMethod(
-    data.stripe_customer_id,
-    data.stripe_default_payment_method_id,
-  );
+  const [paymentMethod, spentLast30DaysCents] = await Promise.all([
+    fetchPaymentMethod(data.stripe_customer_id, data.stripe_default_payment_method_id),
+    sumAutoRechargeLast30Days(orgId),
+  ]);
 
   return {
     balanceCents: data.balance_cents,
@@ -228,6 +306,7 @@ export async function getBalance(orgId: string): Promise<BillingState | null> {
       thresholdCents: data.auto_recharge_threshold_cents,
       amountCents: data.auto_recharge_amount_cents,
       monthlyCapCents: data.auto_recharge_monthly_cap_cents,
+      spentLast30DaysCents,
     },
     lowBalanceAlertThresholdCents: data.low_balance_alert_threshold_cents,
     paymentMethod,

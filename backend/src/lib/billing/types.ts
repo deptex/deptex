@@ -46,7 +46,7 @@ export interface RecordMeterEventResult {
 export interface CanChargeResponse {
   allowed: boolean;
   balanceCents: number;
-  reason?: 'insufficient_credit' | 'enforcement_off';
+  reason?: 'insufficient_credit' | 'enforcement_off' | 'db_unavailable';
 }
 
 export interface BillingPaymentMethod {
@@ -63,6 +63,7 @@ export interface BillingState {
     thresholdCents: number | null;
     amountCents: number | null;
     monthlyCapCents: number | null;
+    spentLast30DaysCents: number;
   };
   lowBalanceAlertThresholdCents: number;
   paymentMethod: BillingPaymentMethod | null;

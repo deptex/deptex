@@ -497,6 +497,7 @@ CREATE TABLE IF NOT EXISTS public.organization_billing (
   auto_recharge_in_progress boolean NOT NULL DEFAULT false,
   auto_recharge_in_progress_started_at timestamp with time zone,
   auto_recharge_last_attempt_at timestamp with time zone,
+  auto_recharge_cap_alert_sent_at timestamp with time zone,
   low_balance_alert_threshold_cents integer NOT NULL DEFAULT 500,
   billing_email_override text,
   stripe_customer_id text,
