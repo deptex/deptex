@@ -1,4 +1,4 @@
-import { createMockSupabase, TableRegistry, RpcRegistry } from './supabase';
+import { createMockSupabase, TableRegistry, RpcRegistry } from './supabase-builder';
 
 const registry: TableRegistry = {};
 const rpcRegistry: RpcRegistry = {};

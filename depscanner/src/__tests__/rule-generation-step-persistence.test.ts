@@ -171,7 +171,6 @@ function makeStorage(overrides: Partial<{
       auto_generate_enabled: true,
       trigger_severities: ['critical', 'high'],
       trigger_kev: false,
-      trigger_asset_tier_max_rank: 5,
       trigger_newly_discovered: true,
       trigger_reevaluate_existing: false,
       ai_provider: 'anthropic',
@@ -185,7 +184,7 @@ function makeStorage(overrides: Partial<{
   fs.set('organization_generated_rules', []);
   fs.set('ai_usage_logs', []);
   fs.set('scan_jobs', [{ id: JOB_ID }]);
-  fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: null }]);
+  fs.set('projects', [{ id: PROJECT_ID, importance: 1.0 }]);
   fs.set('extraction_step_errors', []);
   return fs;
 }

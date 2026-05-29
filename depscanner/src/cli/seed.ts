@@ -100,7 +100,6 @@ export async function seedLocalDb(
         auto_generate_enabled: true,
         trigger_severities: ['critical', 'high', 'medium'],
         trigger_kev: false,
-        trigger_asset_tier_max_rank: 5,
         trigger_newly_discovered: true,
         trigger_reevaluate_existing: false,
         ai_provider: provider,

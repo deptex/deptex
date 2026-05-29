@@ -44,10 +44,8 @@ export interface VulnProjectNodeData {
   projectsCount?: number | null;
   /** Team nodes (org overview): number of members for bottom bar. */
   membersCount?: number | null;
-  /** Project nodes (org overview): asset tier name shown in badge (e.g. Crown Jewels, External). */
-  assetTierName?: string | null;
-  /** Project nodes (org overview): hex color for asset tier badge (from organization_asset_tiers). */
-  assetTierColor?: string | null;
+  /** Project nodes (org overview): per-project importance multiplier in [0.5, 2.0]. The number IS the depscore multiplier. */
+  importance?: number | null;
   /** Org overview: number of dependencies to show in bottom bar. */
   dependenciesCount?: number | null;
   /** Org overview: opens extraction sync sidebar when set (extracting projects). */
@@ -157,7 +155,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, assetTierName, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, importance, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -169,7 +167,16 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
   const showStatusBadge = !isInitialExtracting && !isInitialExtractionFailed && statusBadge != null && statusBadge !== '' && !isTeamNode;
   const showTeamRiskGrade = !isInitialExtracting && isTeamNode && (riskGrade ?? 'A+');
   const showProjectRiskGrade = !isInitialExtracting && !isTeamNode && neutralStyle && (riskGrade ?? 'A+');
-  const showAssetTierSubtext = !isInitialExtracting && !isInitialExtractionFailed && !isTeamNode && assetTierName != null && assetTierName !== '';
+  const showImportanceSubtext = !isInitialExtracting && !isInitialExtractionFailed && !isTeamNode && typeof importance === 'number' && Number.isFinite(importance);
+  const importanceLabel = typeof importance === 'number' && Number.isFinite(importance) ? `Importance: ${importance.toFixed(2)}` : null;
+  const importanceColors = (() => {
+    if (typeof importance !== 'number' || !Number.isFinite(importance)) return null;
+    const v = Math.max(0.5, Math.min(2.0, importance));
+    if (v >= 1.5) return { text: 'text-destructive', dotClass: 'bg-destructive', dotOpacity: 1.0 };
+    if (v >= 1.1) return { text: 'text-foreground', dotClass: 'bg-foreground', dotOpacity: 0.75 };
+    if (v >= 0.8) return { text: 'text-foreground-secondary', dotClass: 'bg-foreground-secondary', dotOpacity: 0.5 };
+    return { text: 'text-muted-foreground', dotClass: 'bg-muted-foreground', dotOpacity: 0.3 };
+  })();
   const showCardTooltip = !isTeamNode && neutralStyle && !isInitialExtracting && !isInitialExtractionFailed;
   const rawStatusColor = statusBadgeColor?.trim() ? statusBadgeColor : (showStatusBadge ? statusBadgeColorFallback(statusBadge) : null);
   const effectiveStatusColor = rawStatusColor && !rawStatusColor.startsWith('#') ? `#${rawStatusColor}` : rawStatusColor;
@@ -342,9 +349,13 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                   ) : null}
                   {!showTeamRoleBadge && isInitialExtracting ? (
                     <p className="text-[10px] text-foreground-secondary">Project still extracting</p>
-                  ) : !isTeamNode && showAssetTierSubtext ? (
-                    <p className="text-[10px] text-muted-foreground truncate" title={assetTierName ?? undefined}>
-                      {assetTierName}
+                  ) : !isTeamNode && showImportanceSubtext && importanceColors ? (
+                    <p className={`text-[10px] truncate flex items-center gap-1 ${importanceColors.text}`} title={importanceLabel ?? undefined}>
+                      <span
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${importanceColors.dotClass}`}
+                        style={{ opacity: importanceColors.dotOpacity }}
+                      />
+                      {importanceLabel}
                     </p>
                   ) : null}
                 </div>
@@ -417,9 +428,13 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               ) : null}
               {!showTeamRoleBadge && isExtracting ? (
                 <p className="text-[10px] text-foreground-secondary">Project still extracting</p>
-              ) : !isTeamNode && showAssetTierSubtext ? (
-                <p className="text-[10px] text-muted-foreground truncate" title={assetTierName ?? undefined}>
-                  {assetTierName}
+              ) : !isTeamNode && showImportanceSubtext && importanceColors ? (
+                <p className={`text-[10px] truncate flex items-center gap-1 ${importanceColors.text}`} title={importanceLabel ?? undefined}>
+                  <span
+                    className={`inline-block h-1.5 w-1.5 rounded-full ${importanceColors.dotClass}`}
+                    style={{ opacity: importanceColors.dotOpacity }}
+                  />
+                  {importanceLabel}
                 </p>
               ) : null}
             </div>

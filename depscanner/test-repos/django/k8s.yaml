@@ -1,0 +1,35 @@
+# Intentional IaC misconfigs for Checkov / Trivy IaC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deptex-dogfood-django
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deptex-dogfood-django
+  template:
+    metadata:
+      labels:
+        app: deptex-dogfood-django
+    spec:
+      containers:
+        - name: app
+          image: deptex-dogfood-django:latest
+          ports:
+            - containerPort: 4003
+          securityContext:
+            # CKV_K8S_16 — privileged containers should not be allowed.
+            privileged: true
+            # CKV_K8S_20 — containers should not run as root.
+            runAsNonRoot: false
+            # CKV_K8S_22 — allowPrivilegeEscalation should be false.
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+      volumes:
+        # CKV_K8S_8 — hostPath volume mounts are dangerous.
+        - name: host-root
+          hostPath:
+            path: /

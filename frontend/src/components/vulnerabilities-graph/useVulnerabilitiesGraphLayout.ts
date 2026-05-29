@@ -471,8 +471,7 @@ export function createVulnerabilitiesCenterNode(
   /** When true, use org-overview-style card (border, bottom bar). */
   overviewStyle?: boolean,
   dependenciesCount?: number,
-  assetTierName?: string | null,
-  assetTierColor?: string | null
+  importance?: number | null,
 ): Node {
   const worstSeverity = getWorstSeverity(depNodes);
   const directCount = depNodes.filter((d) => d.parentId === CENTER_ID).length;
@@ -491,8 +490,7 @@ export function createVulnerabilitiesCenterNode(
       statusColor: statusColor ?? undefined,
       overviewStyle: overviewStyle ?? false,
       dependenciesCount: dependenciesCount ?? directCount,
-      assetTierName: assetTierName ?? undefined,
-      assetTierColor: assetTierColor ?? undefined,
+      importance: importance ?? undefined,
     },
     draggable: true,
     selectable: false,
@@ -531,8 +529,7 @@ export function useVulnerabilitiesGraphLayout(
   statusName?: string | null,
   statusColor?: string | null,
   overviewStyle = false,
-  assetTierName?: string | null,
-  assetTierColor?: string | null
+  importance?: number | null,
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -549,8 +546,7 @@ export function useVulnerabilitiesGraphLayout(
         statusColor,
         overviewStyle,
         directCount,
-        assetTierName,
-        assetTierColor
+        importance,
       )
     );
 
@@ -559,5 +555,5 @@ export function useVulnerabilitiesGraphLayout(
     edges.push(...sub.edges);
 
     return { nodes, edges };
-  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable, statusName, statusColor, overviewStyle, assetTierName, assetTierColor]);
+  }, [projectName, depNodes, framework, _vulnerableDependenciesLabel, _centerExtras, showOnlyReachable, statusName, statusColor, overviewStyle, importance]);
 }

@@ -20,7 +20,8 @@ import {
 } from '../../components/ui/dialog';
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
-import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type ProjectPolicyChange, type AssetTier, type RepoWithProvider, type CiCdConnection, type OrganizationAssetTier, type ExtractionRun, type Organization, type PolicyValidationResult } from '../../lib/api';
+import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type ProjectPolicyChange, type RepoWithProvider, type CiCdConnection, type ExtractionRun, type Organization, type PolicyValidationResult } from '../../lib/api';
+import { ImportanceSlider, IMP_DEFAULT } from '../../components/ImportanceSlider';
 import NotificationRulesSection from './NotificationRulesSection';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -295,12 +296,6 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
 
 const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies', 'scanning', 'scanners']);
 
-const ASSET_TIER_LABEL: Record<AssetTier, string> = {
-  CROWN_JEWELS: 'Crown Jewels',
-  EXTERNAL: 'External',
-  INTERNAL: 'Internal',
-  NON_PRODUCTION: 'Non-production',
-};
 
 /** Renders a tab-specific content skeleton for the project settings loading state. */
 function ProjectSettingsTabSkeleton({ section }: { section: string }) {
@@ -594,10 +589,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   );
   const { toast } = useToast();
   const [projectName, setProjectName] = useState(project?.name || '');
-  const [assetTier, setAssetTier] = useState<AssetTier>(project?.asset_tier ?? 'EXTERNAL');
-  const [assetTierId, setAssetTierId] = useState<string>(project?.asset_tier_id ?? '');
-  const [orgAssetTiers, setOrgAssetTiers] = useState<OrganizationAssetTier[]>([]);
-  const [loadingAssetTiers, setLoadingAssetTiers] = useState(true);
+  const [importance, setImportance] = useState<number>(project?.importance ?? IMP_DEFAULT);
   const [isSaving, setIsSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -762,39 +754,18 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   }, [organizationId, projectId, sectionParam, navigate, embedInSidebar]);
 
-  // Sync projectName, assetTier, and notification pause state when project changes
+  // Sync projectName, importance, and notification pause state when project changes
   useEffect(() => {
     if (project?.name) {
       setProjectName(project.name);
     }
-    if (project?.asset_tier) {
-      setAssetTier(project.asset_tier);
-    }
-    if (project?.asset_tier_id) {
-      setAssetTierId(project.asset_tier_id);
+    if (project?.importance != null) {
+      setImportance(project.importance);
     }
     if (project?.notifications_paused_until !== undefined) {
       setNotifPausedUntil(project.notifications_paused_until ?? null);
     }
-  }, [project?.name, project?.asset_tier, project?.asset_tier_id, project?.notifications_paused_until]);
-
-  useEffect(() => {
-    if (!organizationId) return;
-    setLoadingAssetTiers(true);
-    api.getOrganizationAssetTiers(organizationId)
-      .then(setOrgAssetTiers)
-      .catch(console.error)
-      .finally(() => setLoadingAssetTiers(false));
-  }, [organizationId]);
-
-  // When org asset tiers load, if project had a tier at creation but no asset_tier_id, match by name
-  useEffect(() => {
-    if (orgAssetTiers.length === 0 || !project?.asset_tier) return;
-    if (project.asset_tier_id) return; // already set from project
-    const legacyLabel = ASSET_TIER_LABEL[project.asset_tier as AssetTier];
-    const match = orgAssetTiers.find((t) => t.name === legacyLabel || t.name === project.asset_tier);
-    if (match) setAssetTierId(match.id);
-  }, [orgAssetTiers, project?.asset_tier_id, project?.asset_tier]);
+  }, [project?.name, project?.importance, project?.notifications_paused_until]);
 
   const loadProjectRepositories = async (integrationId?: string) => {
     if (!organizationId || !projectId) return;
@@ -1702,18 +1673,16 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   };
 
-  const handleSaveAssetTier = async () => {
+  const handleSaveImportance = async () => {
     if (!organizationId || !project?.id) return;
     try {
       setIsSaving(true);
-      const payload = orgAssetTiers.length > 0 && assetTierId
-        ? { asset_tier_id: assetTierId }
-        : { asset_tier: assetTier };
-      await api.updateProject(organizationId, project.id, payload as any);
-      toast({ title: 'Success', description: 'Asset tier saved' });
+      await api.updateProject(organizationId, project.id, { importance });
+      toast({ title: 'Success', description: 'Project importance saved' });
       await reloadProject();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Failed to save asset tier' });
+      console.error('Failed to save project importance:', error);
+      toast({ title: 'Error', description: 'We couldn’t save your changes. Try again in a moment.', variant: 'destructive' });
     } finally {
       setIsSaving(false);
     }
@@ -2013,88 +1982,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                   </div>
                 </div>
 
-                {/* Asset Tier Card */}
+                {/* Importance Card */}
                 <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                   <div className="p-6">
-                    <h3 className="text-base font-semibold text-foreground mb-1">Asset Tier</h3>
+                    <h3 className="text-base font-semibold text-foreground mb-1">Importance</h3>
                     <p className="text-sm text-foreground-secondary mb-4">
-                      Used by Depscore to weight vulnerability scores and blast radius (Crown Jewels vs non-production).
+                      Multiplied into every depscore for this project. 1.0 is the default — drag up to amplify findings on a critical project, down to dampen them on a low-priority experiment.
                     </p>
-                    <div className="w-full space-y-2" role="radiogroup" aria-label="Asset tier">
-                      {loadingAssetTiers ? (
-                        <>
-                          {[1, 2, 3].map((i) => (
-                            <div key={i} className="rounded-lg border border-border bg-black/20 px-4 py-3 flex items-center gap-3">
-                              <div className="h-5 w-5 rounded-full bg-muted animate-pulse flex-shrink-0" />
-                              <div className="h-5 w-24 bg-muted rounded animate-pulse" />
-                            </div>
-                          ))}
-                        </>
-                      ) : orgAssetTiers.length > 0 ? (
-                        orgAssetTiers.map((tier) => {
-                          const isSelected = assetTierId === tier.id;
-                          return (
-                            <button
-                              key={tier.id}
-                              type="button"
-                              role="radio"
-                              aria-checked={isSelected}
-                              onClick={() => setAssetTierId(tier.id)}
-                              className={cn(
-                                'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
-                                isSelected
-                                  ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                  : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
-                              )}
-                            >
-                              <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium text-foreground">{tier.name}</div>
-                                <div className="text-xs text-muted-foreground mt-0.5">{tier.environmental_multiplier}x multiplier</div>
-                              </div>
-                              <RoleBadge role={tier.name} roleDisplayName={tier.name} roleColor={tier.color || null} className="flex-shrink-0" />
-                            </button>
-                          );
-                        })
-                      ) : (
-                        (['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'] as const).map((value) => {
-                          const isSelected = assetTier === value;
-                          const label = ASSET_TIER_LABEL[value];
-                          return (
-                            <button
-                              key={value}
-                              type="button"
-                              role="radio"
-                              aria-checked={isSelected}
-                              onClick={() => setAssetTier(value)}
-                              className={cn(
-                                'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
-                                isSelected
-                                  ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                  : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
-                              )}
-                            >
-                              <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium text-foreground">{label}</div>
-                                <div className="text-xs text-muted-foreground mt-0.5">Multiplier applies</div>
-                              </div>
-                              <RoleBadge role={label.toLowerCase()} roleDisplayName={label} roleColor={null} className="flex-shrink-0" />
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
+                    <ImportanceSlider value={importance} onChange={setImportance} disabled={!canEditSettings} />
                   </div>
                   <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
                     <p className="text-xs text-foreground-secondary">
                       Changes will be visible to all project members.
                     </p>
                     <Button
-                      onClick={handleSaveAssetTier}
-                      disabled={isSaving || (orgAssetTiers.length > 0
-                        ? assetTierId === (project?.asset_tier_id ?? '') || (!(project?.asset_tier_id) && project?.asset_tier && orgAssetTiers.find((t) => t.id === assetTierId)?.name === ASSET_TIER_LABEL[project.asset_tier as AssetTier])
-                        : assetTier === (project?.asset_tier ?? 'EXTERNAL'))}
+                      onClick={handleSaveImportance}
+                      disabled={isSaving || !canEditSettings || Math.abs(importance - (project?.importance ?? IMP_DEFAULT)) < 0.05}
                       size="sm"
                       className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                     >
@@ -2127,8 +2030,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                                 onChange={setSelectedTeamId}
                                 teams={teams}
                                 placeholder="Select a team"
-                                showNoTeamOption={false}
-                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
+                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground transition-colors"
                               />
                             </div>
                           )}

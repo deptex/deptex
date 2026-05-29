@@ -7,7 +7,7 @@ const permissions = [
   { permission: "manage_projects", description: "Create, archive, and configure projects." },
   { permission: "manage_integrations", description: "Connect and remove third-party integrations (GitHub, Slack, etc.)." },
   { permission: "manage_policies", description: "Edit the organization-wide policy code." },
-  { permission: "manage_compliance", description: "Manage policies, compliance, custom statuses, and asset tiers (bundled as Manage Policies in the role editor)." },
+  { permission: "manage_compliance", description: "Manage policies, compliance, and custom statuses (bundled as Manage Policies in the role editor)." },
   { permission: "manage_notification_rules", description: "Create, edit, and delete notification rules." },
   { permission: "view_audit_logs", description: "View the organization audit log." },
 ];
@@ -32,16 +32,16 @@ export default function OrganizationsContent() {
         <h2 className="text-lg font-semibold text-foreground mb-3">Organization Settings</h2>
         <p className="text-foreground/90 leading-relaxed">
           Access settings from the sidebar under <strong className="text-foreground">Settings</strong>. The General tab lets you update
-          the organization name, avatar, and default configurations (default asset tier for new projects, default branch to track).
+          the organization name, avatar, and default configurations (default branch to track).
           Requires <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">manage_organization</code>.
         </p>
       </div>
 
-      {/* Asset Tiers */}
+      {/* Project Importance */}
       <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">Asset Tiers</h2>
+        <h2 className="text-lg font-semibold text-foreground mb-3">Project Importance</h2>
         <p className="text-foreground/90 leading-relaxed">
-          The <strong className="text-foreground">Asset Tiers</strong> sub-tab (under Statuses) defines tiers such as Crown Jewels, External, Internal, and Non-Production. Each tier has an <strong className="text-foreground">environmental multiplier</strong> that weights Depscore by project criticality. Every project is assigned a tier; <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">packagePolicy</code> receives <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">context.tier</code> so you can apply stricter rules to higher tiers. See <Link to="/docs/policies" className="text-foreground underline hover:no-underline">Policies</Link> for how tier-aware package policy works.
+          Every project carries an <strong className="text-foreground">importance</strong> value in the range <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">[0.5, 2.0]</code> (default <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">1.0</code>). The number is multiplied directly into Depscore, so higher-criticality projects rank vulnerability risk higher. Edit a project&apos;s importance from its Settings page. Policy code receives the number as <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">context.project.importance</code> — see <Link to="/docs/policies" className="text-foreground underline hover:no-underline">Policies</Link> for examples.
         </p>
       </div>
 

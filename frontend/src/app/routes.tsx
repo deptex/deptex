@@ -35,6 +35,7 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import PublicRoute from "../components/PublicRoute";
 import NotFoundRedirect from "../components/NotFoundRedirect";
 import OrganizationFindingsPage from "./pages/OrganizationFindingsPage";
+import NewProjectPage from "./pages/NewProjectPage";
 import AegisPage from "./pages/AegisPage";
 import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
 import FlowEditorPage from "./pages/FlowEditorPage";
@@ -150,6 +151,10 @@ export const router = createBrowserRouter([
       {
         path: "projects",
         element: <Navigate to="overview" replace />,
+      },
+      {
+        path: "new-project",
+        element: <NewProjectPage />,
       },
       {
         path: "settings",

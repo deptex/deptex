@@ -1,0 +1,50 @@
+# Expected findings for the laravel dogfood fixture.
+# HYPOTHESIS-GRADE until M5 walkthrough.
+
+reachable_vulns:
+  # laravel/framework 8.6.11 — multiple advisories.
+  - osv_id: CVE-2021-3129
+    aliases: [GHSA-w68r-5p45-5dee]
+    file: app/Http/Controllers/UserController.php
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  - osv_id: CVE-2021-32708
+    aliases: [GHSA-9f46-5r25-5wfm]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  - osv_id: CVE-2019-11043
+    aliases: []
+    base_image: php:7.4.0-cli
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 3
+
+malicious_pkg: []
+
+semgrep_findings:
+  - rule_id: php.laravel.security.audit.laravel-raw-sql-concat.laravel-raw-sql-concat
+    file: app/Http/Controllers/UserController.php
+    line: 15
+
+dast_findings:
+  - alert: SQL Injection
+    url_pattern: /users/search

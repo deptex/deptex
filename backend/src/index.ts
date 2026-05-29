@@ -8,6 +8,17 @@ import path from 'path';
 // Load .env file from the backend root directory (one level up from src/)
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+// Fail loud when Fly is configured but the depscanner image pin is missing: the
+// fleet dispatcher requires FLY_DEPSCANNER_IMAGE (a release digest) so a cold
+// start from zero machines never gambles on `:latest`. A missing pin is a
+// deploy bug — surface it at boot rather than silently failing every scan.
+if (process.env.FLY_API_TOKEN && !process.env.FLY_DEPSCANNER_IMAGE?.trim()) {
+  console.error(
+    '[BOOT] FLY_API_TOKEN is set but FLY_DEPSCANNER_IMAGE is not — extraction provisioning ' +
+      'will fail until the pinned depscanner release image digest is set in the env.',
+  );
+}
+
 import express from 'express';
 import cors from 'cors';
 import userProfileRouter from './routes/userProfile';
@@ -33,6 +44,7 @@ import scimRouter from './routes/scim';
 import learningCronRouter from './routes/learning-cron';
 import incidentCronRouter from './routes/incident-cron';
 import cronDispatcherRouter from './routes/cron-dispatcher';
+import dispatchRouter from './routes/dispatch';
 import { startSelfHostCrons } from './lib/self-host-cron';
 import feedbackRouter from './routes/feedback';
 import demoRequestRouter from './routes/demo-request';
@@ -183,6 +195,7 @@ app.use('/api/scim/v2', scimRouter);
 app.use('/api/internal/learning', learningCronRouter);
 app.use('/api/internal/incidents', incidentCronRouter);
 app.use('/api/internal/cron', cronDispatcherRouter);
+app.use('/api/internal/dispatch', dispatchRouter);
 app.use('/api/feedback', feedbackRouter);
 app.use('/api/demo-request', demoRequestRouter);
 app.use('/api/enterprise-contact', enterpriseContactRouter);

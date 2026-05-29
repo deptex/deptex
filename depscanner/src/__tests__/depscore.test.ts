@@ -1,265 +1,204 @@
-import { calculateDepscore, type DepscoreContext } from '../depscore';
+import {
+  calculateDepscore,
+  calculateBaseDepscoreNoReachability,
+  calculateSecretDepscore,
+  calculateSemgrepDepscore,
+  calculateLicenseDepscore,
+  type DepscoreContext,
+} from '../depscore';
 
 describe('calculateDepscore', () => {
   describe('regression - existing formula without new optional fields', () => {
-    it('critical vuln (CVSS 9.0), CISA KEV, reachable, CROWN_JEWELS -> high score', () => {
+    it('critical vuln (CVSS 9.0), CISA KEV, reachable, importance=1.5 -> high score', () => {
       const ctx: DepscoreContext = {
         cvss: 9,
         epss: 0.5,
         cisaKev: true,
         isReachable: true,
-        assetTier: 'CROWN_JEWELS',
+        importance: 1.5,
       };
       expect(calculateDepscore(ctx)).toBe(100);
     });
 
-    it('low vuln (CVSS 2.0), no KEV, not reachable, NON_PRODUCTION -> low score', () => {
+    it('low vuln (CVSS 2.0), no KEV, not reachable, importance=0.6 -> low score', () => {
       const ctx: DepscoreContext = {
         cvss: 2,
         epss: 0,
         cisaKev: false,
         isReachable: false,
-        assetTier: 'NON_PRODUCTION',
+        importance: 0.6,
       };
+      // base 20 * 0.6 * 0.6 * 0.2 ≈ 1.44 → 1
       expect(calculateDepscore(ctx)).toBe(1);
     });
 
-    it('medium vuln, EXTERNAL tier, reachable -> mid score', () => {
+    it('medium vuln, importance=1.0, reachable -> mid score', () => {
       const ctx: DepscoreContext = {
         cvss: 4,
         epss: 0.5,
         cisaKev: false,
         isReachable: true,
-        assetTier: 'EXTERNAL',
+        importance: 1.0,
       };
       const score = calculateDepscore(ctx);
-      expect(score).toBeGreaterThanOrEqual(40);
+      expect(score).toBeGreaterThanOrEqual(35);
       expect(score).toBeLessThanOrEqual(50);
     });
   });
 
-  describe('isDirect', () => {
-    it('isDirect: false (transitive) reduces score by 25%', () => {
-      const base: DepscoreContext = {
-        cvss: 8,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const direct = calculateDepscore({ ...base, isDirect: true });
-      const transitive = calculateDepscore({ ...base, isDirect: false });
-      const ratio = transitive / direct;
-      expect(ratio).toBeCloseTo(0.75, 1);
+  describe('importance multiplier', () => {
+    const base: Omit<DepscoreContext, 'importance'> = {
+      cvss: 7.0,
+      epss: 0.3,
+      cisaKev: false,
+      isReachable: true,
+    };
+
+    it('higher importance produces higher score', () => {
+      const low = calculateDepscore({ ...base, importance: 0.5 });
+      const mid = calculateDepscore({ ...base, importance: 1.0 });
+      const high = calculateDepscore({ ...base, importance: 2.0 });
+      expect(low).toBeLessThan(mid);
+      expect(mid).toBeLessThan(high);
+    });
+
+    it('importance scales linearly when nothing saturates at 100', () => {
+      const at_05 = calculateDepscore({ ...base, importance: 0.5, cvss: 3.0, cisaKev: false });
+      const at_10 = calculateDepscore({ ...base, importance: 1.0, cvss: 3.0, cisaKev: false });
+      // doubling importance roughly doubles the un-saturated score
+      expect(at_10).toBeGreaterThanOrEqual(at_05 * 1.9);
+      expect(at_10).toBeLessThanOrEqual(at_05 * 2.1);
+    });
+
+    it('clamps importance > 2.0 to 2.0', () => {
+      const at_20 = calculateDepscore({ ...base, importance: 2.0 });
+      const at_99 = calculateDepscore({ ...base, importance: 99 });
+      expect(at_99).toBe(at_20);
+    });
+
+    it('clamps importance < 0.5 to 0.5', () => {
+      const at_05 = calculateDepscore({ ...base, importance: 0.5 });
+      const at_neg = calculateDepscore({ ...base, importance: -1 });
+      expect(at_neg).toBe(at_05);
+    });
+
+    it('falls back to 1.0 on NaN', () => {
+      const at_10 = calculateDepscore({ ...base, importance: 1.0 });
+      const at_nan = calculateDepscore({ ...base, importance: Number.NaN });
+      expect(at_nan).toBe(at_10);
     });
   });
 
-  describe('isDevDependency', () => {
-    it('isDevDependency: true reduces score by 60%', () => {
-      const base: DepscoreContext = {
-        cvss: 8,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const prod = calculateDepscore({ ...base, isDevDependency: false });
-      const dev = calculateDepscore({ ...base, isDevDependency: true });
-      const ratio = dev / prod;
-      expect(ratio).toBeCloseTo(0.4, 1);
+  describe('reachability levels', () => {
+    const base: Omit<DepscoreContext, 'reachabilityLevel'> = {
+      cvss: 7.0,
+      epss: 0.3,
+      cisaKev: false,
+      isReachable: true,
+      importance: 1.0,
+    };
+
+    it('confirmed > data_flow > function > module', () => {
+      const confirmed = calculateDepscore({ ...base, reachabilityLevel: 'confirmed' });
+      const data_flow = calculateDepscore({ ...base, reachabilityLevel: 'data_flow' });
+      const fn = calculateDepscore({ ...base, reachabilityLevel: 'function' });
+      const mod = calculateDepscore({ ...base, reachabilityLevel: 'module' });
+      expect(confirmed).toBeGreaterThanOrEqual(data_flow);
+      expect(data_flow).toBeGreaterThan(fn);
+      expect(fn).toBeGreaterThan(mod);
+    });
+
+    it('unreachable -> 0 score', () => {
+      expect(calculateDepscore({ ...base, reachabilityLevel: 'unreachable' })).toBe(0);
+    });
+
+    it('legacy isReachable=false dampens to 20% of reachable', () => {
+      const reachable = calculateDepscore({ ...base, isReachable: true });
+      const unreached = calculateDepscore({ ...base, isReachable: false });
+      expect(unreached).toBeGreaterThan(0);
+      expect(unreached).toBeLessThan(reachable);
     });
   });
+});
 
-  describe('combined transitive dev dep', () => {
-    it('transitive + dev dep yields ~70% reduction from direct prod', () => {
-      const base: DepscoreContext = {
-        cvss: 8,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const directProd = calculateDepscore({ ...base, isDirect: true, isDevDependency: false });
-      const transitiveDev = calculateDepscore({ ...base, isDirect: false, isDevDependency: true });
-      const ratio = transitiveDev / directProd;
-      expect(ratio).toBeCloseTo(0.3, 1);
+describe('calculateBaseDepscoreNoReachability', () => {
+  it('higher importance produces higher base score', () => {
+    const low = calculateBaseDepscoreNoReachability({
+      cvss: 7.0, epss: 0.3, cisaKev: false, importance: 0.5,
     });
+    const high = calculateBaseDepscoreNoReachability({
+      cvss: 7.0, epss: 0.3, cisaKev: false, importance: 2.0,
+    });
+    expect(high).toBeGreaterThan(low);
+  });
+});
+
+describe('calculateSecretDepscore', () => {
+  it('importance scales the score', () => {
+    const low = calculateSecretDepscore({
+      detectorType: 'AWS', isVerified: true, isCurrent: true, importance: 0.5,
+    });
+    const high = calculateSecretDepscore({
+      detectorType: 'AWS', isVerified: true, isCurrent: true, importance: 2.0,
+    });
+    expect(high).toBeGreaterThan(low);
   });
 
-  describe('isMalicious', () => {
-    it('isMalicious boosts score by 30%', () => {
-      const base: DepscoreContext = {
-        cvss: 6,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'INTERNAL',
-      };
-      const normal = calculateDepscore({ ...base, isMalicious: false });
-      const malicious = calculateDepscore({ ...base, isMalicious: true });
-      const ratio = malicious / normal;
-      expect(ratio).toBeCloseTo(1.3, 1);
+  it('unknown detector falls to 0.6 weight', () => {
+    const known = calculateSecretDepscore({
+      detectorType: 'AWS', isVerified: true, isCurrent: true, importance: 1.0,
     });
+    const unknown = calculateSecretDepscore({
+      detectorType: 'mystery', isVerified: true, isCurrent: true, importance: 1.0,
+    });
+    expect(unknown).toBeLessThan(known);
+  });
+});
+
+describe('calculateSemgrepDepscore', () => {
+  it('high-impact CWE boosts the score', () => {
+    const lowCwe = calculateSemgrepDepscore({
+      severity: 'ERROR', cweIds: ['CWE-200'], category: 'best-practice', importance: 1.0,
+    });
+    const highCwe = calculateSemgrepDepscore({
+      severity: 'ERROR', cweIds: ['CWE-89'], category: 'security', importance: 1.0,
+    });
+    expect(highCwe).toBeGreaterThan(lowCwe);
   });
 
-  describe('packageScore', () => {
-    it('low reputation (<30) boosts by 15%', () => {
-      const base: DepscoreContext = {
-        cvss: 5,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const neutral = calculateDepscore({ ...base, packageScore: 50 });
-      const lowRep = calculateDepscore({ ...base, packageScore: 20 });
-      const ratio = lowRep / neutral;
-      expect(ratio).toBeCloseTo(1.15, 1);
+  it('importance scales the score', () => {
+    const low = calculateSemgrepDepscore({
+      severity: 'ERROR', cweIds: ['CWE-89'], category: 'security', importance: 0.5,
     });
+    const high = calculateSemgrepDepscore({
+      severity: 'ERROR', cweIds: ['CWE-89'], category: 'security', importance: 2.0,
+    });
+    expect(high).toBeGreaterThan(low);
+  });
+});
 
-    it('high reputation (>70) reduces by 5%', () => {
-      const base: DepscoreContext = {
-        cvss: 5,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const neutral = calculateDepscore({ ...base, packageScore: 50 });
-      const highRep = calculateDepscore({ ...base, packageScore: 85 });
-      const ratio = highRep / neutral;
-      expect(ratio).toBeCloseTo(0.95, 1);
+describe('calculateLicenseDepscore', () => {
+  it('AGPL > GPL > unknown', () => {
+    const agpl = calculateLicenseDepscore({
+      reasons: ['agpl'], isDirect: true, isDevDependency: false, importance: 1.0,
     });
+    const gpl = calculateLicenseDepscore({
+      reasons: ['gpl'], isDirect: true, isDevDependency: false, importance: 1.0,
+    });
+    const unknown = calculateLicenseDepscore({
+      reasons: ['unknown license'], isDirect: true, isDevDependency: false, importance: 1.0,
+    });
+    expect(agpl).toBeGreaterThan(gpl);
+    expect(gpl).toBeGreaterThan(unknown);
   });
 
-  describe('edge cases', () => {
-    it('null packageScore uses neutral weight', () => {
-      const base: DepscoreContext = {
-        cvss: 5,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const withNull = calculateDepscore({ ...base, packageScore: null });
-      const withUndefined = calculateDepscore({ ...base });
-      expect(withNull).toBe(withUndefined);
+  it('dev-dependency dampens the score', () => {
+    const prod = calculateLicenseDepscore({
+      reasons: ['agpl'], isDirect: true, isDevDependency: false, importance: 1.0,
     });
-
-    it('undefined isDirect treated as direct (weight 1.0)', () => {
-      const base: DepscoreContext = {
-        cvss: 6,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'EXTERNAL',
-      };
-      const explicitDirect = calculateDepscore({ ...base, isDirect: true });
-      const undefinedDirect = calculateDepscore({ ...base });
-      expect(undefinedDirect).toBe(explicitDirect);
+    const dev = calculateLicenseDepscore({
+      reasons: ['agpl'], isDirect: true, isDevDependency: true, importance: 1.0,
     });
-
-    it('all multipliers combined', () => {
-      const ctx: DepscoreContext = {
-        cvss: 7,
-        epss: 0.4,
-        cisaKev: true,
-        isReachable: true,
-        assetTier: 'CROWN_JEWELS',
-        isDirect: false,
-        isDevDependency: true,
-        isMalicious: true,
-        packageScore: 15,
-      };
-      const score = calculateDepscore(ctx);
-      expect(score).toBeGreaterThan(0);
-      expect(score).toBeLessThanOrEqual(100);
-    });
-  });
-
-  describe('tierMultiplier (custom tiers)', () => {
-    it('tierMultiplier overrides legacy assetTier weight', () => {
-      const base: DepscoreContext = {
-        cvss: 7,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'INTERNAL',
-      };
-      const legacyInternal = calculateDepscore(base);
-      const customHigh = calculateDepscore({ ...base, tierMultiplier: 1.5 });
-      const customLow = calculateDepscore({ ...base, tierMultiplier: 0.3 });
-
-      expect(customHigh).toBeGreaterThan(legacyInternal);
-      expect(customLow).toBeLessThan(legacyInternal);
-    });
-
-    it('tierMultiplier affects unreachable dampening', () => {
-      const base: DepscoreContext = {
-        cvss: 7,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: false,
-        assetTier: 'INTERNAL',
-      };
-      const highMultiplier = calculateDepscore({ ...base, tierMultiplier: 1.5 });
-      const lowMultiplier = calculateDepscore({ ...base, tierMultiplier: 0.3 });
-
-      expect(highMultiplier).toBeGreaterThan(lowMultiplier);
-    });
-
-    it('reachabilityLevel=unreachable zeroes the score (Phase 2 extractor-confirmed)', () => {
-      const ctx: DepscoreContext = {
-        cvss: 9,
-        epss: 0.8,
-        cisaKev: true,
-        isReachable: true,
-        reachabilityLevel: 'unreachable',
-        assetTier: 'CROWN_JEWELS',
-      };
-      expect(calculateDepscore(ctx)).toBe(0);
-    });
-
-    it('reachabilityLevel=module keeps mild weighting (extractor import-only signal)', () => {
-      const ctx: DepscoreContext = {
-        cvss: 7,
-        epss: 0.3,
-        cisaKev: false,
-        isReachable: true,
-        reachabilityLevel: 'module',
-        assetTier: 'INTERNAL',
-      };
-      expect(calculateDepscore(ctx)).toBeGreaterThan(0);
-    });
-
-    it('tierMultiplier: 1.0 (Internal-equivalent) matches legacy INTERNAL for reachable', () => {
-      const base: DepscoreContext = {
-        cvss: 6,
-        epss: 0.2,
-        cisaKev: false,
-        isReachable: true,
-        assetTier: 'INTERNAL',
-      };
-      const legacy = calculateDepscore(base);
-      const custom = calculateDepscore({ ...base, tierMultiplier: 0.9 });
-      expect(custom).toBe(legacy);
-    });
-  });
-
-  describe('score capping', () => {
-    it('result never exceeds 100', () => {
-      const ctx: DepscoreContext = {
-        cvss: 10,
-        epss: 1,
-        cisaKev: true,
-        isReachable: true,
-        assetTier: 'CROWN_JEWELS',
-        isDirect: true,
-        isDevDependency: false,
-        isMalicious: true,
-        packageScore: 10,
-      };
-      expect(calculateDepscore(ctx)).toBe(100);
-    });
+    expect(dev).toBeLessThan(prod);
   });
 });

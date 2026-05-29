@@ -2659,39 +2659,22 @@ router.get('/:id/teams/:teamId/license-violations', async (req: AuthRequest, res
       .range(from, to);
     if (dataError) throw dataError;
 
-    // Hydrate with project details + asset tier
+    // Hydrate with project details + importance
     const projIds = [...new Set((rows || []).map((r: any) => r.project_id).filter(Boolean))];
-    const projMap = new Map<string, { name: string; framework: string | null; asset_tier: string | null; asset_tier_id: string | null }>();
+    const projMap = new Map<string, { name: string; framework: string | null; importance: number }>();
     if (projIds.length > 0) {
       const { data: projs } = await supabase
         .from('projects')
-        .select('id, name, framework, asset_tier, asset_tier_id')
+        .select('id, name, framework, importance')
         .in('id', projIds);
       for (const p of projs || []) {
         projMap.set((p as any).id, {
           name: (p as any).name ?? 'Unknown',
           framework: (p as any).framework ?? null,
-          asset_tier: (p as any).asset_tier ?? null,
-          asset_tier_id: (p as any).asset_tier_id ?? null,
+          importance: typeof (p as any).importance === 'number' ? (p as any).importance : 1.0,
         });
       }
     }
-
-    // Fetch custom tier multipliers
-    const tierIds = [...new Set([...projMap.values()].map(p => p.asset_tier_id).filter(Boolean))] as string[];
-    const tierMap = new Map<string, number>();
-    if (tierIds.length > 0) {
-      const { data: tiers } = await supabase
-        .from('organization_asset_tiers')
-        .select('id, environmental_multiplier')
-        .in('id', tierIds);
-      for (const t of tiers || []) tierMap.set((t as any).id, Number((t as any).environmental_multiplier) || 1.0);
-    }
-
-    // Default tier weights
-    const DEFAULT_TIER_WEIGHT: Record<string, number> = {
-      CROWN_JEWELS: 1.3, EXTERNAL: 1.1, INTERNAL: 0.9, NON_PRODUCTION: 0.6,
-    };
 
     // Compute depscore inline
     const data = (rows || []).map((r: any) => {
@@ -2709,8 +2692,8 @@ router.get('/:id/teams/:teamId/license-violations', async (req: AuthRequest, res
 
       const directWeight = r.is_direct ? 1.0 : 0.75;
       const envWeight = r.environment === 'dev' ? 0.4 : 1.0;
-      const tierMul = (proj?.asset_tier_id && tierMap.get(proj.asset_tier_id)) ?? DEFAULT_TIER_WEIGHT[proj?.asset_tier ?? 'EXTERNAL'] ?? 1.0;
-      const depscore = Math.min(100, Math.round(base * directWeight * envWeight * tierMul));
+      const importanceMul = proj?.importance ?? 1.0;
+      const depscore = Math.min(100, Math.round(base * directWeight * envWeight * importanceMul));
 
       return {
         id: r.id,

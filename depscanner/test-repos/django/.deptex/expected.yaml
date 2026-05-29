@@ -1,0 +1,57 @@
+# Expected findings for the django dogfood fixture.
+# HYPOTHESIS-GRADE until M3 walkthrough iterates against actual scanner output.
+# Authority: docs/runbooks/depscanner-dogfood.md.
+
+reachable_vulns:
+  # django@2.2.0 — multiple advisories. CVE-2019-12308 (XSS via
+  # AdminURLFieldWidget) is a representative one for this version range.
+  - osv_id: CVE-2019-12308
+    aliases: [GHSA-337x-4q8g-prc5]
+    file: views.py
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  # pyyaml@5.1 — declared in requirements.txt but never imported.
+  - osv_id: CVE-2020-1747
+    aliases: [GHSA-6757-jp84-gxfx]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  # python:3.7.0 base — many os-package CVEs. Canonical assertion.
+  - osv_id: CVE-2019-5010
+    aliases: []
+    base_image: python:3.7.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 5
+
+malicious_pkg:
+  - package: ctx
+    ecosystem: pypi
+    note: historical-malicious — 2022 ctx pypi compromise
+
+semgrep_findings:
+  - rule_id: python.django.security.audit.xss.mark-safe.mark-safe
+    file: views.py
+    line: 10
+
+dast_findings:
+  - alert: Cross Site Scripting (Reflected)
+    url_pattern: /msg?msg=

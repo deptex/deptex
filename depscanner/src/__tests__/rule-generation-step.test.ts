@@ -109,7 +109,6 @@ function makeStorage(settings: Partial<{
   auto_generate_enabled: boolean;
   trigger_severities: string[];
   trigger_kev: boolean;
-  trigger_asset_tier_max_rank: number;
   ai_provider: string;
   ai_model: string;
   monthly_budget_usd: number;
@@ -123,7 +122,6 @@ function makeStorage(settings: Partial<{
       auto_generate_enabled: true,
       trigger_severities: ['critical', 'high'],
       trigger_kev: false,
-      trigger_asset_tier_max_rank: 5,
       trigger_newly_discovered: true,
       trigger_reevaluate_existing: false,
       ai_provider: 'anthropic',
@@ -138,7 +136,7 @@ function makeStorage(settings: Partial<{
   fs.set('organization_generated_rules', []);
   fs.set('ai_usage_logs', []);
   fs.set('scan_jobs', [{ id: 'job-1' }]);
-  fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: null }]);
+  fs.set('projects', [{ id: PROJECT_ID, importance: 1.0 }]);
   return fs;
 }
 
@@ -324,41 +322,6 @@ describe('runRuleGenerationStep — trigger-policy edge cases', () => {
     expect(result.triggerMatched).toBe(2);
     // Two filtered out by severity_filter (medium, low).
     expect(result.skipReasons.severity_filter).toBe(2);
-  });
-
-  it('skips when project asset tier rank is greater than trigger_asset_tier_max_rank', async () => {
-    const fs = makeStorage({ trigger_asset_tier_max_rank: 2 });
-    // Crown-jewels rank 1 passes, but here we rig a rank=4 (e.g. dev) project.
-    fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: 'tier-dev' }]);
-    fs.set('organization_asset_tiers', [{ id: 'tier-dev', rank: 4 }]);
-    const result = await runRuleGenerationStep(
-      {
-        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
-        supabase: fs as unknown as Storage, log,
-        platformRulesDir: '/nonexistent',
-        resolveApiKey: async () => 'fake-key',
-      },
-      [sampleVuln],
-    );
-    expect(result.attempted).toBe(0);
-    expect(result.skipReasons.asset_tier_filter).toBe(1);
-  });
-
-  it('admits when asset tier rank equals trigger_asset_tier_max_rank (boundary)', async () => {
-    const fs = makeStorage({ trigger_asset_tier_max_rank: 3 });
-    fs.set('projects', [{ id: PROJECT_ID, asset_tier_id: 'tier-prod' }]);
-    fs.set('organization_asset_tiers', [{ id: 'tier-prod', rank: 3 }]);
-    const result = await runRuleGenerationStep(
-      {
-        organizationId: ORG_ID, projectId: PROJECT_ID, runId: RUN_ID, jobId: 'job-1',
-        supabase: fs as unknown as Storage, log,
-        platformRulesDir: '/nonexistent',
-        resolveApiKey: async () => 'fake-key',
-      },
-      [sampleVuln],
-    );
-    // Rank 3 == max 3 should pass the tier filter (the step uses >, not >=).
-    expect(result.triggerMatched).toBe(1);
   });
 
   it('demands KEV+severity together when trigger_kev=true', async () => {

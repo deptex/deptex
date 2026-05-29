@@ -186,7 +186,7 @@ export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, str
 }
 
 export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
-  const { supabase, job, projectId, log, workspaceRoot, jobEcosystem, runId, heartbeat, assetTier, tierMultiplier } = ctx;
+  const { supabase, job, projectId, log, workspaceRoot, jobEcosystem, runId, heartbeat, importance } = ctx;
 
   await updateStep(supabase, projectId, 'scanning');
   await log.info('vuln_scan', 'Running vulnerability scan...');
@@ -561,11 +561,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
           cvss,
           epss,
           cisaKev: row.cisa_kev,
-          assetTier,
-          tierMultiplier,
+          importance,
         });
         // Keep legacy depscore for compatibility during rollout.
-        row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, assetTier, tierMultiplier });
+        row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, importance });
       }
 
       if (vulnRows.length > 0) {

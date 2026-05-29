@@ -4,13 +4,13 @@ import { supabase } from '../../supabase';
 export function listProjectsTool(ctx: { organizationId: string }) {
   return dynamicTool({
     description:
-      "List all projects in the current organization with health score, ecosystem, and dependency/vulnerability counts.",
+      "List all projects in the current organization with health score, importance (depscore multiplier), ecosystem, and dependency/vulnerability counts.",
     inputSchema: jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
     execute: async () => {
       const { data: projects, error } = await supabase
         .from('projects')
         .select(
-          'id, name, health_score, asset_tier, asset_tier_id, status_id, updated_at',
+          'id, name, health_score, importance, status_id, updated_at',
         )
         .eq('organization_id', ctx.organizationId)
         .order('name', { ascending: true });
@@ -20,7 +20,7 @@ export function listProjectsTool(ctx: { organizationId: string }) {
 
       const projectIds = projects.map((p: any) => p.id);
 
-      const [repoRes, depCountRes, vulnCountRes, tiersRes, statusesRes] = await Promise.all([
+      const [repoRes, depCountRes, vulnCountRes, statusesRes] = await Promise.all([
         supabase
           .from('project_repositories')
           .select('project_id, repo_full_name, ecosystem, default_branch, last_extracted_at, status')
@@ -33,10 +33,6 @@ export function listProjectsTool(ctx: { organizationId: string }) {
           .from('project_dependency_vulnerabilities')
           .select('project_id, severity')
           .in('project_id', projectIds),
-        supabase
-          .from('organization_asset_tiers')
-          .select('id, name')
-          .eq('organization_id', ctx.organizationId),
         supabase
           .from('organization_statuses')
           .select('id, name, is_passing')
@@ -59,8 +55,6 @@ export function listProjectsTool(ctx: { organizationId: string }) {
         vulnCounts.set(row.project_id, existing);
       }
 
-      const tierById = new Map<string, string>();
-      for (const t of tiersRes.data ?? []) tierById.set(t.id, t.name);
       const statusById = new Map<string, { name: string; isPassing: boolean }>();
       for (const s of statusesRes.data ?? []) statusById.set(s.id, { name: s.name, isPassing: !!s.is_passing });
 
@@ -72,7 +66,7 @@ export function listProjectsTool(ctx: { organizationId: string }) {
           name: p.name,
           healthScore: p.health_score,
           healthGrade: healthGrade(p.health_score),
-          assetTier: p.asset_tier_id ? tierById.get(p.asset_tier_id) ?? p.asset_tier : p.asset_tier,
+          importance: typeof p.importance === 'number' ? p.importance : 1.0,
           status: p.status_id ? statusById.get(p.status_id)?.name ?? null : null,
           repoFullName: repo?.repo_full_name ?? null,
           ecosystem: repo?.ecosystem ?? null,

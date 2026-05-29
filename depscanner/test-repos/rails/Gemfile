@@ -1,0 +1,15 @@
+source "https://rubygems.org"
+
+ruby "2.7.0"
+
+# Pinned to a vulnerable rails major; the reachable taint flows through
+# ActiveRecord raw SQL in app/controllers/users_controller.rb.
+gem "rails", "6.0.0"
+gem "rack", "2.0.6"
+
+# Unreachable: declared in Gemfile but never required from app/.
+gem "nokogiri", "1.10.4"
+
+# Historical-malicious — `rest-client` 1.6.13 was the 2019 RubyGems
+# compromise (per .github/dependabot.yml exclusion).
+gem "rest-client", "1.6.13"

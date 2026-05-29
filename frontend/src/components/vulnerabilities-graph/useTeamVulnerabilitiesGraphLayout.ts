@@ -33,9 +33,8 @@ export interface ProjectWithGraphData {
   /** Org-overview-style card: status badge. */
   statusName?: string | null;
   statusColor?: string | null;
-  /** Org-overview-style card: asset tier. */
-  assetTierName?: string | null;
-  assetTierColor?: string | null;
+  /** Org-overview-style card: per-project importance multiplier in [0.5, 2.0]. */
+  importance?: number | null;
   /** Org-overview-style card: dependency count in bottom bar. */
   dependenciesCount?: number | null;
 }
@@ -123,8 +122,7 @@ export function useTeamVulnerabilitiesGraphLayout(
           neutralStyle: true,
           statusBadge: proj.statusName ?? undefined,
           statusBadgeColor: proj.statusColor ?? undefined,
-          assetTierName: proj.assetTierName ?? undefined,
-          assetTierColor: proj.assetTierColor ?? undefined,
+          importance: proj.importance ?? undefined,
           riskGrade: 'A+',
           dependenciesCount: proj.dependenciesCount ?? undefined,
         },

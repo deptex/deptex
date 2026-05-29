@@ -1,0 +1,68 @@
+# Expected findings for the express dogfood fixture.
+#
+# Authority: see docs/runbooks/depscanner-dogfood.md for the schema +
+# match semantics (subset, alias-aware, bucket-tolerant). The harness
+# (`npm run dogfood:check -- --fixture express --project-id <uuid>`) reads
+# this file as the sole source of truth.
+#
+# These values are HYPOTHESIS-GRADE until M1.8 — Henry's walkthrough
+# iterates expected vs. actual until the harness reports PASS. Drift
+# (alias rotation, OSV publisher changes) is handled per the runbook's
+# decision tree.
+
+reachable_vulns:
+  - osv_id: CVE-2021-23337
+    aliases: [GHSA-35jh-r3h4-6jhm]
+    file: routes/api.js
+    line: 9
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  # minimist@1.2.5 — present in package.json but never imported. Tree-sitter
+  # extractor reports zero usages → reachability classifier marks unreachable.
+  - osv_id: CVE-2021-44906
+    aliases: [GHSA-xvch-5gv4-984h]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  # node:14.0 base image — many os-package CVEs surface. We assert ONE
+  # canonical, persistent CVE here as a smoke check; the rest are
+  # categorized as allowed-extras in RESULTS.md.
+  - osv_id: CVE-2022-0778
+    aliases: [GHSA-x4qr-2fvf-3mr5]
+    base_image: node:14.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 5
+
+malicious_pkg:
+  - package: event-stream
+    ecosystem: npm
+    note: historical-not-published — see .github/dependabot.yml exclusion
+
+semgrep_findings:
+  - rule_id: javascript.express.security.injection.tainted-sql-string
+    file: routes/api.js
+    line: 19
+
+dast_findings:
+  # Captured against the deploy.sh-booted fixture. Each entry is one
+  # alert ZAP / Nuclei surfaces post-baseline. Iterated in M1.8.
+  - alert: SQL Injection
+    url_pattern: /api/users

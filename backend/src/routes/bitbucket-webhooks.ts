@@ -605,13 +605,10 @@ async function handleBitbucketPullRequestEvent(payload: any, action: string): Pr
         }
 
         if (prCheckCode?.trim() && (directAddedPkgs.length > 0 || directBumpedPkgs.length > 0)) {
-          let projectAssetTier: string | null = null;
+          let projectImportance: number = 1.0;
           try {
-            const { data: projRow } = await supabase.from('projects').select('asset_tier_id').eq('id', projectId).single();
-            if (projRow?.asset_tier_id) {
-              const { data: tierRow } = await supabase.from('organization_asset_tiers').select('name').eq('id', projRow.asset_tier_id).single();
-              if (tierRow?.name) projectAssetTier = tierRow.name;
-            }
+            const { data: projRow } = await supabase.from('projects').select('importance').eq('id', projectId).single();
+            if (typeof projRow?.importance === 'number') projectImportance = projRow.importance;
           } catch {}
 
           const added = await Promise.all(
@@ -636,7 +633,7 @@ async function handleBitbucketPullRequestEvent(payload: any, action: string): Pr
           );
 
           const prContext: Record<string, unknown> = {
-            project: { name: projectName, id: projectId, asset_tier: projectAssetTier ?? undefined },
+            project: { name: projectName, id: projectId, importance: projectImportance },
             ecosystem: 'npm',
             changed_files: changedFiles,
             added, updated, removed: [],

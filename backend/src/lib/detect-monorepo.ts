@@ -1,9 +1,9 @@
-import { MANIFEST_FILES, MANIFEST_EXTENSIONS, IGNORED_DIRS } from './ecosystems';
+import { MANIFEST_FILES, MANIFEST_EXTENSIONS, IGNORED_DIRS, ECOSYSTEM_DEFAULTS, detectFrameworkForEcosystem } from './ecosystems';
 
 /** Minimal provider interface for monorepo detection (avoids coupling to ee git-provider). */
 export interface MonorepoGitProvider {
   getFileContent(repo: string, filePath: string, ref: string): Promise<string>;
-  getTreeRecursive(repo: string, ref: string): Promise<Array<{ path: string; type: string }>>;
+  getTreeRecursive(repo: string, ref: string): Promise<{ entries: Array<{ path: string; type: string }>; truncated: boolean }>;
   getRootContents(repo: string, ref: string): Promise<Array<{ path: string; type: string }>>;
 }
 
@@ -20,6 +20,137 @@ export interface DetectMonorepoResult {
   isMonorepo: boolean;
   confidence?: MonorepoConfidence;
   potentialProjects: PotentialProject[];
+  /** True when the provider returned a truncated tree (provider-side entry/size cap
+   * or our pagination/depth cap). Detection is incomplete; show a warning. */
+  treeTruncated?: boolean;
+}
+
+/** True if any path segment matches an ignored directory name. Segment match (not substring)
+ * so `not_node_modules/Dockerfile` and `vendor-extras/foo` aren't dropped. */
+function isPathIgnored(path: string): boolean {
+  const segments = path.split('/');
+  return IGNORED_DIRS.some((d) => segments.includes(d));
+}
+
+/** Suffixes that mean the file is a template/doc/backup, not a buildable Dockerfile. */
+const DOCKERFILE_TEMPLATE_SUFFIXES = new Set([
+  'j2', 'template', 'tpl', 'tmpl', 'in', 'example', 'sample',
+  'md', 'txt', 'rst', 'bak', 'orig', 'swp', 'old', 'disabled',
+]);
+
+/** True if the file is a deployable Dockerfile/Containerfile/compose file.
+ * Single source of truth shared by `findDockerizedPaths` (full scan), `peekRepoRoot`
+ * (cheap root peek), and the `/list-dir` per-layer probe. Accepts `Dockerfile.<env>`
+ * variants (Dockerfile.prod, etc.) and the Compose Spec v2 default filenames. */
+export function isDockerFile(fileName: string): boolean {
+  if (fileName === 'Dockerfile' || fileName === 'Containerfile') return true;
+  const lower = fileName.toLowerCase();
+  // Dockerfile.<env> — allow environment-style suffixes, reject template/doc suffixes.
+  if (lower.startsWith('dockerfile.')) {
+    const suffix = lower.slice('dockerfile.'.length);
+    if (!suffix || suffix.includes('.')) return false;
+    return !DOCKERFILE_TEMPLATE_SUFFIXES.has(suffix);
+  }
+  // docker-compose.yml / docker-compose.<env>.yml (legacy).
+  if (lower === 'docker-compose.yml' || lower === 'docker-compose.yaml') return true;
+  if (/^docker-compose\.[^.]+\.ya?ml$/.test(lower)) return true;
+  // compose.yaml / compose.yml / compose.<env>.yml (Compose Specification v2 default).
+  if (lower === 'compose.yml' || lower === 'compose.yaml') return true;
+  if (/^compose\.[^.]+\.ya?ml$/.test(lower)) return true;
+  return false;
+}
+
+export interface RepoPeek {
+  framework: string;
+  ecosystem: string;
+  hasRootManifest: boolean;
+  /** Root contains a Dockerfile / Containerfile / compose file. */
+  rootDockerized: boolean;
+}
+
+/**
+ * Cheap root-only peek for the create-project picker. At most one root-contents call
+ * plus one manifest file read — typically ~200–500ms vs the full scan's 5–10s on big
+ * repos. The full `detectMonorepo` + `findDockerizedPaths` walk is deferred to when the
+ * user actually opens the path picker.
+ */
+export async function peekRepoRoot(
+  provider: MonorepoGitProvider,
+  repoFullName: string,
+  defaultBranch: string,
+): Promise<RepoPeek> {
+  const rootFiles = await provider.getRootContents(repoFullName, defaultBranch);
+  const rootBlobNames = new Set<string>();
+  for (const f of rootFiles) {
+    if (f.type !== 'blob') continue;
+    rootBlobNames.add(f.path.split('/').pop() || f.path);
+  }
+
+  let framework = 'unknown';
+  let ecosystem = 'unknown';
+  let hasRootManifest = false;
+
+  // Exact-name manifest match in priority order (MANIFEST_FILES insertion order).
+  for (const [fileName, eco] of Object.entries(MANIFEST_FILES)) {
+    if (!rootBlobNames.has(fileName)) continue;
+    hasRootManifest = true;
+    ecosystem = eco;
+    try {
+      const content = await provider.getFileContent(repoFullName, fileName, defaultBranch);
+      framework = detectFrameworkForEcosystem(eco, content);
+    } catch {
+      framework = ECOSYSTEM_DEFAULTS[eco] || 'unknown';
+    }
+    break;
+  }
+
+  // Extension-based manifest fallback (.csproj etc. — name varies, content rules don't apply).
+  if (!hasRootManifest) {
+    for (const name of rootBlobNames) {
+      const dotIdx = name.lastIndexOf('.');
+      if (dotIdx === -1) continue;
+      const eco = MANIFEST_EXTENSIONS[name.slice(dotIdx)];
+      if (!eco) continue;
+      hasRootManifest = true;
+      ecosystem = eco;
+      framework = ECOSYSTEM_DEFAULTS[eco] || 'unknown';
+      break;
+    }
+  }
+
+  let rootDockerized = false;
+  for (const name of rootBlobNames) {
+    if (isDockerFile(name)) { rootDockerized = true; break; }
+  }
+
+  return { framework, ecosystem, hasRootManifest, rootDockerized };
+}
+
+/**
+ * Walk the repo tree and return the set of directory paths that contain a Dockerfile,
+ * Containerfile, or docker-compose / compose.yaml file at their root. Used to flag rows
+ * that will have container-scan coverage so the picker can show a Docker badge next to them.
+ */
+export async function findDockerizedPaths(
+  provider: MonorepoGitProvider,
+  repoFullName: string,
+  defaultBranch: string,
+): Promise<{ paths: string[]; truncated: boolean }> {
+  try {
+    const { entries, truncated } = await provider.getTreeRecursive(repoFullName, defaultBranch);
+    const dirs = new Set<string>();
+    for (const node of entries) {
+      if (node.type !== 'blob') continue;
+      if (isPathIgnored(node.path)) continue;
+      const fileName = node.path.split('/').pop() || '';
+      if (!isDockerFile(fileName)) continue;
+      const dirPath = node.path === fileName ? '' : node.path.slice(0, -(fileName.length + 1));
+      dirs.add(dirPath);
+    }
+    return { paths: [...dirs], truncated };
+  } catch {
+    return { paths: [], truncated: false };
+  }
 }
 
 /** Match directory path against a glob like 'packages/*' or 'apps/*'. */
@@ -46,7 +177,7 @@ function getPackageJsonDirsFromTree(tree: Array<{ path: string; type: string }>)
   const dirs: Array<{ dirPath: string; filePath: string }> = [];
   for (const node of tree) {
     if (node.type !== 'blob' || !node.path.endsWith('package.json')) continue;
-    if (node.path.includes('node_modules')) continue;
+    if (isPathIgnored(node.path)) continue;
     const dirPath = node.path === 'package.json' ? '' : node.path.slice(0, -'package.json'.length).replace(/\/$/, '');
     dirs.push({ dirPath, filePath: node.path });
   }
@@ -62,7 +193,7 @@ function getManifestDirsFromTree(
 
   for (const node of tree) {
     if (node.type !== 'blob') continue;
-    if (IGNORED_DIRS.some((d) => node.path.includes(d + '/'))) continue;
+    if (isPathIgnored(node.path)) continue;
 
     const fileName = node.path.split('/').pop() || '';
     const ext = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : '';
@@ -138,7 +269,7 @@ export async function detectMonorepo(
       const yamlContent = await provider.getFileContent(repoFullName, 'pnpm-workspace.yaml', defaultBranch);
       const globs = parsePnpmWorkspaceYaml(yamlContent);
       if (globs.length > 0) {
-        const tree = await provider.getTreeRecursive(repoFullName, defaultBranch);
+        const { entries: tree, truncated } = await provider.getTreeRecursive(repoFullName, defaultBranch);
         const allDirs = getPackageJsonDirsFromTree(tree);
         const matched = allDirs.filter(({ dirPath }) => globs.some((g) => matchGlob(dirPath, g)));
         const potentialProjects: PotentialProject[] = [];
@@ -156,6 +287,7 @@ export async function detectMonorepo(
           isMonorepo: potentialProjects.length > 1,
           confidence: 'high',
           potentialProjects: potentialProjects.length > 0 ? potentialProjects : (await fallbackTreeScan(provider, repoFullName, defaultBranch)).potentialProjects,
+          treeTruncated: truncated,
         };
       }
     } catch {
@@ -170,7 +302,7 @@ export async function detectMonorepo(
       const pkg = JSON.parse(pkgContent) as { workspaces?: string[] | { packages?: string[] }; name?: string };
       const globs = getWorkspaceGlobs(pkg);
       if (globs.length > 0) {
-        const tree = await provider.getTreeRecursive(repoFullName, defaultBranch);
+        const { entries: tree, truncated } = await provider.getTreeRecursive(repoFullName, defaultBranch);
         const allDirs = getPackageJsonDirsFromTree(tree);
         const matched = allDirs.filter(({ dirPath }) => globs.some((g) => matchGlob(dirPath, g)));
         const potentialProjects: PotentialProject[] = [];
@@ -188,6 +320,7 @@ export async function detectMonorepo(
           isMonorepo: potentialProjects.length > 1,
           confidence: 'high',
           potentialProjects: potentialProjects.length > 0 ? potentialProjects : (await fallbackTreeScan(provider, repoFullName, defaultBranch)).potentialProjects,
+          treeTruncated: truncated,
         };
       }
     } catch {
@@ -204,7 +337,7 @@ async function fallbackTreeScan(
   repoFullName: string,
   defaultBranch: string
 ): Promise<DetectMonorepoResult> {
-  const tree = await provider.getTreeRecursive(repoFullName, defaultBranch);
+  const { entries: tree, truncated } = await provider.getTreeRecursive(repoFullName, defaultBranch);
   const allDirs = getManifestDirsFromTree(tree);
   const potentialProjects: PotentialProject[] = [];
   for (const { dirPath, filePath, ecosystem } of allDirs) {
@@ -223,5 +356,6 @@ async function fallbackTreeScan(
     isMonorepo: potentialProjects.length > 1,
     confidence: potentialProjects.length > 1 ? 'medium' : undefined,
     potentialProjects,
+    treeTruncated: truncated,
   };
 }

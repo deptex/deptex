@@ -17,10 +17,10 @@ import {
   getPullRequest,
   closePullRequest,
 } from '../lib/github';
-import { detectMonorepo } from '../lib/detect-monorepo';
+import { detectMonorepo, findDockerizedPaths, peekRepoRoot, RepoPeek, isDockerFile } from '../lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
 import { queueExtractionJob, cancelExtractionJob } from '../lib/extraction-jobs';
-import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
+import { MANIFEST_FILES, MANIFEST_EXTENSIONS, IGNORED_DIRS, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
 import { createBumpPrForProject } from '../lib/create-bump-pr';
 import { createRemovePrForProject } from '../lib/create-remove-pr';
 import { isVersionAffected, isVersionFixed } from '../lib/semver-affected';
@@ -271,18 +271,53 @@ async function detectRepoFramework(
 }
 
 const REPO_FRAMEWORK_CACHE_TTL = 24 * 60 * 60; // 24 hours — framework almost never changes
+// Shorter than the framework TTL because peek also returns structural flags
+// (hasRootManifest, rootDockerized, looksLikeMonorepo) that flip the moment
+// someone adds a Dockerfile or pnpm-workspace.yaml.
+const REPO_PEEK_CACHE_TTL = 10 * 60; // 10 minutes
 
 async function detectRepoFrameworkCached(
   provider: GitProvider,
   repoFullName: string,
   defaultBranch: string
 ): Promise<{ framework: string; ecosystem: string }> {
-  const cacheKey = `repo-framework:${repoFullName}:${defaultBranch}`;
+  const cacheKey = `repo-framework:${provider.provider}:${repoFullName}:${defaultBranch}`;
   const cached = await getCached<{ framework: string; ecosystem: string }>(cacheKey);
   if (cached) return cached;
   const result = await detectRepoFramework(provider, repoFullName, defaultBranch);
   await setCached(cacheKey, result, REPO_FRAMEWORK_CACHE_TTL);
   return result;
+}
+
+/**
+ * Validate package_json_path against path traversal. Allowed: empty string,
+ * or POSIX-relative subdirectory paths like `packages/api`. Rejected: leading
+ * `/`, segments equal to `..`, NUL bytes, backslashes.
+ */
+function isValidPackageJsonPath(input: unknown): input is string {
+  if (typeof input !== 'string') return false;
+  if (input === '') return true;
+  if (input.includes('\0')) return false;
+  if (input.startsWith('/')) return false;
+  if (input.includes('\\')) return false;
+  if (input.split('/').some((seg) => seg === '..')) return false;
+  if (input.length > 512) return false;
+  return true;
+}
+
+/**
+ * Re-resolve a repo's canonical metadata server-side from the integration.
+ * Prevents a caller from spoofing default_branch, repo_id, or provider to
+ * point at a different branch/repo than what they think they're connecting.
+ * Returns null if the integration doesn't have access to that repo.
+ */
+async function resolveRepoFromIntegration(
+  provider: GitProvider,
+  repoFullName: string
+): Promise<{ id: number; full_name: string; default_branch: string; private: boolean } | null> {
+  const repos = await provider.listRepositories();
+  const match = repos.find((r) => r.full_name === repoFullName);
+  return match ?? null;
 }
 
 async function getOrgIntegrations(orgId: string): Promise<OrgIntegration[]> {
@@ -756,16 +791,12 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fetch status and asset tier display names/colors for list (org overview cards)
+    // Fetch status display names/colors for list (org overview cards)
     const statusById: Record<string, { name: string; color: string | null; is_passing: boolean | null }> = {};
-    const tierById: Record<string, { name: string; color: string | null }> = {};
     // Direct dependency counts per project (for org overview cards: "X direct deps")
     let directDepsByProject: Record<string, number> = {};
-    const [[statusRes, tierRes], directDepsResult] = await Promise.all([
-      Promise.all([
-        supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
-        supabase.from('organization_asset_tiers').select('id, name, color').eq('organization_id', id),
-      ]),
+    const [statusRes, directDepsResult] = await Promise.all([
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
       projectIds.length > 0
         ? supabase
             .from('project_dependencies')
@@ -776,11 +807,9 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         : Promise.resolve({ data: [] }),
     ]);
     const statusRows = (statusRes as any)?.data ?? [];
-    const tierRows = (tierRes as any)?.data ?? [];
     (statusRows || []).forEach((s: any) => {
       statusById[s.id] = { name: s.name, color: s.color ?? null, is_passing: s.is_passing };
     });
-    (tierRows || []).forEach((t: any) => { tierById[t.id] = { name: t.name, color: t.color ?? null }; });
     (directDepsResult.data || []).forEach((row: any) => {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
     });
@@ -858,7 +887,6 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
 
       const repoStatus = repoStatusByProject[project.id] ?? null;
       const statusInfo = project.status_id ? statusById[project.status_id] : null;
-      const tierInfo = project.asset_tier_id ? tierById[project.asset_tier_id] : null;
       return {
         id: project.id,
         organization_id: project.organization_id,
@@ -885,9 +913,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         status_id: project.status_id ?? null,
         status_name: statusInfo?.name ?? null,
         status_color: statusInfo?.color ?? null,
-        asset_tier_id: project.asset_tier_id ?? null,
-        asset_tier_name: tierInfo?.name ?? null,
-        asset_tier_color: tierInfo?.color ?? null,
+        importance: typeof project.importance === 'number' ? project.importance : 1.0,
         compliance_score_pct: compliancePctByProject[project.id] ?? null,
         policy_evaluated_at: project.policy_evaluated_at ?? null,
         status_violations: project.status_violations ?? [],
@@ -914,6 +940,12 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
     }
 
+    const rl = await checkRateLimit(`repo-scan:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many scan requests. Try again in a minute.' });
+    }
+
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -931,9 +963,10 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
     }
 
     const provider = createProvider(integ);
-    const [result, frameworkResult] = await Promise.all([
+    const [result, frameworkResult, docker] = await Promise.all([
       detectMonorepo(provider, repo_full_name, default_branch),
       detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+      findDockerizedPaths(provider, repo_full_name, default_branch),
     ]);
 
     const withLinkStatus = await Promise.all(
@@ -974,10 +1007,248 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       potentialProjects: withLinkStatusAndNames,
       framework: frameworkResult.framework,
       ecosystem: frameworkResult.ecosystem,
+      dockerizedPaths: docker.paths,
+      // True if either the monorepo tree walk or the docker scan returned a
+      // truncated tree. Frontend should warn the user that detection may miss
+      // packages / Dockerfiles deeper than what the provider returned.
+      treeTruncated: !!(result.treeTruncated || docker.truncated),
     });
   } catch (error: any) {
     console.error('Error scanning repository (org-level):', error);
-    res.status(500).json({ error: error.message || 'Failed to scan repository' });
+    const msg = String(error?.message ?? '');
+    // Providers throw 404 when the default branch is missing or the repo has no
+    // commits (GitLab: "404 Tree Not Found"; GitHub/Bitbucket: similar). Treat
+    // it like the no-manifest case so the UI shows one actionable message.
+    if (/404/.test(msg) && /tree|contents|not\s*found/i.test(msg)) {
+      return res.json({ isMonorepo: false, potentialProjects: [] });
+    }
+    res.status(500).json({ error: 'Failed to scan repository' });
+  }
+});
+
+// GET /api/organizations/:id/repositories/scan-quick - Cheap root-only peek for the create-project picker.
+// Returns framework/ecosystem from the root manifest plus monorepo / dockerized hints. The full
+// recursive-tree walk (detectMonorepo + findDockerizedPaths) is deferred to /scan, which the
+// frontend only calls when the user opens the path picker.
+router.get('/:id/repositories/scan-quick', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { repo_full_name, default_branch, integration_id } = req.query as { repo_full_name?: string; default_branch?: string; integration_id?: string };
+
+    if (!repo_full_name || !default_branch || !integration_id) {
+      return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
+    }
+
+    // Share the scan rate-limit bucket — both endpoints are per-repo lookups against the same provider.
+    const rl = await checkRateLimit(`repo-scan:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many scan requests. Try again in a minute.' });
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const integ = await getIntegrationById(id, integration_id);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
+    }
+
+    // Scope the cache key by org_id + integration_id so two orgs with separate integrations
+    // pointing at the same full_name can't share a peek entry — and so a re-installed
+    // integration (new integration_id) busts the cache for free.
+    const cacheKey = `repo-peek:${id}:${integ.id}:${repo_full_name}:${default_branch}`;
+    let peek = await getCached<RepoPeek>(cacheKey);
+    if (!peek) {
+      const provider = createProvider(integ);
+      peek = await peekRepoRoot(provider, repo_full_name, default_branch);
+      await setCached(cacheKey, peek, REPO_PEEK_CACHE_TTL);
+    }
+    res.json(peek);
+  } catch (error: any) {
+    console.error('Error peeking repository:', error);
+    const msg = String(error?.message ?? '');
+    if (/404/.test(msg) && /tree|contents|not\s*found/i.test(msg)) {
+      return res.json({ framework: 'unknown', ecosystem: 'unknown', hasRootManifest: false, looksLikeMonorepo: false, rootDockerized: false });
+    }
+    res.status(500).json({ error: 'Failed to inspect repository' });
+  }
+});
+
+// GET /api/organizations/:id/repositories/list-dir - List immediate folder + manifest contents for a path inside a repo
+router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { repo_full_name, default_branch, integration_id, path } = req.query as {
+      repo_full_name?: string;
+      default_branch?: string;
+      integration_id?: string;
+      path?: string;
+    };
+
+    if (!repo_full_name || !default_branch || !integration_id) {
+      return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
+    }
+    const dirPath = typeof path === 'string' ? path : '';
+    if (!isValidPackageJsonPath(dirPath)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    const rl = await checkRateLimit(`repo-list-dir:${userId}`, 60, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many directory listing requests. Try again in a minute.' });
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const integ = await getIntegrationById(id, integration_id);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
+    }
+
+    const provider = createProvider(integ);
+    const rawEntries = await provider.listDirectory(repo_full_name, default_branch, dirPath);
+
+    // Drop noisy directories (node_modules, dist, .git, etc.) — they're never the target of a scan.
+    type Entry = {
+      name: string;
+      path: string;
+      type: 'tree' | 'file' | 'submodule';
+      ecosystem?: string;
+      /** True if this folder contains a Dockerfile / Containerfile / compose file at its root.
+       * Populated for folder entries via the per-child probe pass below. */
+      hasDocker?: boolean;
+      isLinked?: boolean;
+      linkedByProjectName?: string;
+    };
+
+    const filtered: Entry[] = [];
+    for (const e of rawEntries) {
+      const name = e.path.split('/').pop() || e.path;
+      if (e.type === 'tree' && IGNORED_DIRS.includes(name)) continue;
+      // Hide dotfiles and dotfolders to keep the picker focused on real code.
+      if (name.startsWith('.')) continue;
+
+      if (e.type === 'tree') {
+        filtered.push({ name, path: e.path, type: 'tree' });
+      } else if (e.type === 'submodule') {
+        filtered.push({ name, path: e.path, type: 'submodule' });
+      } else {
+        // Only surface manifest files; everything else is noise in this picker.
+        const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+        const ecosystem = MANIFEST_FILES[name] || MANIFEST_EXTENSIONS[ext];
+        if (!ecosystem) continue;
+        filtered.push({ name, path: e.path, type: 'file', ecosystem });
+      }
+    }
+
+    // Per-child probe: for each subfolder in this listing, peek at its immediate contents in
+    // parallel to detect a top-level manifest + Dockerfile. This lets the picker paint
+    // framework/docker badges per layer without needing a full recursive scan upfront.
+    // Capped at 25 parallel probes so a wide directory doesn't fan out unbounded.
+    const PROBE_CAP = 25;
+    const folderTargets = filtered.filter((e) => e.type === 'tree').slice(0, PROBE_CAP);
+    const probes = await Promise.allSettled(
+      folderTargets.map(async (folder) => {
+        const children = await provider.listDirectory(repo_full_name, default_branch, folder.path);
+        let ecosystem: string | undefined;
+        let hasDocker = false;
+        for (const [fname, eco] of Object.entries(MANIFEST_FILES)) {
+          if (children.some((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname)) {
+            ecosystem = eco;
+            break;
+          }
+        }
+        if (!ecosystem) {
+          for (const c of children) {
+            if (c.type !== 'blob') continue;
+            const childName = c.path.split('/').pop() || '';
+            const dot = childName.lastIndexOf('.');
+            if (dot === -1) continue;
+            const eco = MANIFEST_EXTENSIONS[childName.slice(dot)];
+            if (eco) { ecosystem = eco; break; }
+          }
+        }
+        for (const c of children) {
+          if (c.type !== 'blob') continue;
+          const childName = c.path.split('/').pop() || '';
+          if (isDockerFile(childName)) { hasDocker = true; break; }
+        }
+        return { path: folder.path, ecosystem, hasDocker };
+      })
+    );
+    for (let i = 0; i < probes.length; i++) {
+      const r = probes[i];
+      if (r.status !== 'fulfilled') continue;
+      const target = folderTargets[i];
+      if (r.value.ecosystem) target.ecosystem = r.value.ecosystem;
+      if (r.value.hasDocker) target.hasDocker = true;
+    }
+
+    // Fold isLinked status for every dir + manifest in this listing in a single
+    // batch query so the picker can show the lock badge without per-row fetches.
+    const candidatePaths = filtered.map((e) => e.path);
+    // Include the directory itself (the user may want to scan the directory)
+    if (dirPath) candidatePaths.push(dirPath);
+
+    if (candidatePaths.length > 0) {
+      const { data: existing } = await supabase
+        .from('project_repositories')
+        .select('package_json_path, project_id, projects(name)')
+        .eq('repo_full_name', repo_full_name)
+        .in('package_json_path', candidatePaths);
+
+      if (existing) {
+        const linkMap = new Map<string, string | undefined>();
+        for (const row of existing as Array<{ package_json_path: string; projects: { name?: string } | null }>) {
+          linkMap.set(row.package_json_path, row.projects?.name);
+        }
+        for (const e of filtered) {
+          if (linkMap.has(e.path)) {
+            e.isLinked = true;
+            e.linkedByProjectName = linkMap.get(e.path);
+          }
+        }
+      }
+    }
+
+    // Folders first, then manifests; both alphabetical.
+    filtered.sort((a, b) => {
+      if (a.type !== b.type) {
+        if (a.type === 'tree' || a.type === 'submodule') return -1;
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    res.json({ path: dirPath, entries: filtered });
+  } catch (error: any) {
+    console.error('Error listing repository directory:', error);
+    const msg = String(error?.message ?? '');
+    if (/404/.test(msg) || /not\s*found/i.test(msg)) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+    res.status(500).json({ error: 'Failed to list directory' });
   }
 });
 
@@ -987,6 +1258,12 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
     const { integration_id } = req.query as { integration_id?: string };
+
+    const rl = await checkRateLimit(`repos:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many repository list requests. Try again in a minute.' });
+    }
 
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
@@ -1012,7 +1289,12 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'No source code integrations connected for this organization' });
     }
 
-    const allRepos: Array<{
+    // Fan out across providers in parallel so one slow / rate-limited
+    // provider doesn't stretch the user's wait. allSettled gives each
+    // provider an isolated success/failure result so we can surface a
+    // partial response: "GitLab loaded; GitHub is rate-limited" instead
+    // of silently dropping the failing provider with a 200 empty list.
+    type RepoListEntry = {
       id: number;
       full_name: string;
       default_branch: string;
@@ -1022,13 +1304,28 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
       provider: string;
       integration_id: string;
       display_name: string;
-    }> = [];
+    };
+    type FailedProvider = {
+      integration_id: string;
+      provider: string;
+      display_name: string;
+      reason: 'rate_limited' | 'auth_expired' | 'workspace_missing' | 'unavailable';
+    };
+    const allRepos: RepoListEntry[] = [];
+    const failedProviders: FailedProvider[] = [];
 
-    for (const integ of integrations) {
-      try {
-        const provider = createProvider(integ);
-        const repos = await provider.listRepositories();
-        for (const repo of repos) {
+    const results = await Promise.allSettled(
+      integrations.map(async (integ) => ({
+        integ,
+        repos: await createProvider(integ).listRepositories(),
+      })),
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const integ = integrations[i];
+      const result = results[i];
+      if (result.status === 'fulfilled') {
+        for (const repo of result.value.repos) {
           allRepos.push({
             id: repo.id,
             full_name: repo.full_name,
@@ -1041,15 +1338,27 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
             display_name: (integ as any).display_name || integ.provider,
           });
         }
-      } catch (err: any) {
-        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err.message);
+      } else {
+        const err: any = result.reason;
+        console.warn(`Failed to list repos from ${integ.provider} integration ${integ.id}:`, err?.message ?? err);
+        let reason: FailedProvider['reason'] = 'unavailable';
+        const msg = String(err?.message ?? '');
+        if (err?.constructor?.name === 'RateLimitedError' || /rate.?limit/i.test(msg)) reason = 'rate_limited';
+        else if (err?.constructor?.name === 'AuthExpiredError' || /401|token (expired|refresh failed)/i.test(msg)) reason = 'auth_expired';
+        else if (/workspace slug/i.test(msg)) reason = 'workspace_missing';
+        failedProviders.push({
+          integration_id: integ.id,
+          provider: integ.provider,
+          display_name: (integ as any).display_name || integ.provider,
+          reason,
+        });
       }
     }
 
-    res.json({ repositories: allRepos });
+    res.json({ repositories: allRepos, failedProviders });
   } catch (error: any) {
     console.error('Error fetching organization repositories:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch repositories' });
+    res.status(500).json({ error: 'Failed to fetch repositories' });
   }
 });
 
@@ -1058,13 +1367,21 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { name, team_ids, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, framework: frameworkRaw } = req.body;
+    const { name, team_ids, importance: importanceRaw, framework: frameworkRaw, repo: repoRaw } = req.body;
 
-    if (!name || typeof name !== 'string') {
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ error: 'Project name is required' });
     }
+    if (name.trim().length > 200) {
+      return res.status(400).json({ error: 'Project name must be 200 characters or fewer' });
+    }
 
-    // Check if user is admin or owner
+    const rl = await checkRateLimit(`create-project:${userId}`, 10, 300);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 300));
+      return res.status(429).json({ error: 'Too many project creation requests. Try again in a few minutes.' });
+    }
+
     const { data: membership, error: membershipError } = await supabase
       .from('organization_members')
       .select('role')
@@ -1076,7 +1393,11 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Check if user is admin, owner, or has manage_teams_and_projects permission
+    // Authorize by permission key, not by role name. `owner` is the only role
+    // guaranteed by name; everything else looks up the org_role permissions
+    // bundle. A previous legacy check accepted membership.role === 'admin',
+    // which would inadvertently grant access to any custom role named
+    // "admin" with zero permissions set.
     const { data: orgRole } = await supabase
       .from('organization_roles')
       .select('permissions')
@@ -1086,28 +1407,12 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
 
     const canCreateProjects =
       membership.role === 'owner' ||
-      membership.role === 'admin' ||
       orgRole?.permissions?.manage_teams_and_projects === true;
 
     if (!canCreateProjects) {
       return res.status(403).json({ error: 'You do not have permission to create projects' });
     }
 
-    // Plan limit check: projects
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'projects');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `You've reached the ${planCheck.limit} project limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
-          resource: 'projects', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open if plan-limits module unavailable */ }
-
-    // Validate team_ids if provided
     const teamIdsArray = Array.isArray(team_ids) ? team_ids.filter((tid: any) => tid && typeof tid === 'string') : [];
     if (teamIdsArray.length > 0) {
       const { data: teams, error: teamsError } = await supabase
@@ -1121,27 +1426,71 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    const assetTier =
-      typeof assetTierRaw === 'string' && VALID_ASSET_TIERS.includes(assetTierRaw)
-        ? assetTierRaw
-        : 'EXTERNAL';
-
-    let insertAssetTierId: string | null = null;
-    if (assetTierIdRaw !== undefined && assetTierIdRaw !== null && assetTierIdRaw !== '') {
-      const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
-      if (tierId) {
-        const { data: tier, error: tierError } = await supabase
-          .from('organization_asset_tiers')
-          .select('id')
-          .eq('id', tierId)
-          .eq('organization_id', id)
-          .single();
-        if (tierError || !tier) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
-        }
-        insertAssetTierId = tier.id;
+    let insertImportance = 1.0;
+    if (importanceRaw !== undefined && importanceRaw !== null) {
+      const parsed = typeof importanceRaw === 'number' ? importanceRaw : Number(importanceRaw);
+      if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2.0) {
+        return res.status(400).json({ error: 'importance must be a number in [0.5, 2.0]' });
       }
+      insertImportance = parsed;
+    }
+
+    // Server-side re-resolve every repo field from the integration. Trusting
+    // the client lets a member with manage_teams_and_projects connect any
+    // repo the integration has access to (not necessarily one the org admin
+    // intended to expose), use an attacker-controlled default_branch, or
+    // traverse out of the repo via package_json_path.
+    type ResolvedRepo = {
+      integration_id: string;
+      provider: 'github' | 'gitlab' | 'bitbucket';
+      installation_id: string;
+      repo_id: number;
+      repo_full_name: string;
+      default_branch: string;
+      package_json_path: string;
+      ecosystem: string;
+      framework: string | null;
+    };
+    let resolvedRepo: ResolvedRepo | null = null;
+    if (repoRaw && typeof repoRaw === 'object') {
+      const reqIntegrationId = typeof repoRaw.integration_id === 'string' ? repoRaw.integration_id : '';
+      const reqRepoFullName = typeof repoRaw.repo_full_name === 'string' ? repoRaw.repo_full_name : '';
+      const reqPackageJsonPath = typeof repoRaw.package_json_path === 'string' ? repoRaw.package_json_path : '';
+      const reqEcosystem = typeof repoRaw.ecosystem === 'string' ? repoRaw.ecosystem : '';
+
+      if (!reqIntegrationId || !reqRepoFullName) {
+        return res.status(400).json({ error: 'repo.integration_id and repo.repo_full_name are required' });
+      }
+      if (!isValidPackageJsonPath(reqPackageJsonPath)) {
+        return res.status(400).json({ error: 'Invalid package_json_path' });
+      }
+      const integ = await getIntegrationById(id, reqIntegrationId);
+      if (!integ) {
+        return res.status(400).json({ error: 'Integration not found or not connected' });
+      }
+      let canonical: { id: number; default_branch: string } | null = null;
+      try {
+        const provider = createProvider(integ);
+        const match = await resolveRepoFromIntegration(provider, reqRepoFullName);
+        if (!match) {
+          return res.status(403).json({ error: 'This integration does not have access to that repository' });
+        }
+        canonical = { id: match.id, default_branch: match.default_branch };
+      } catch (err: any) {
+        console.error('Error resolving repo from integration:', err);
+        return res.status(502).json({ error: 'Could not reach the source-code provider' });
+      }
+      resolvedRepo = {
+        integration_id: integ.id,
+        provider: integ.provider,
+        installation_id: integ.installation_id || integ.id,
+        repo_id: canonical.id,
+        repo_full_name: reqRepoFullName,
+        default_branch: canonical.default_branch,
+        package_json_path: reqPackageJsonPath,
+        ecosystem: reqEcosystem || 'npm',
+        framework: typeof repoRaw.framework === 'string' ? repoRaw.framework : null,
+      };
     }
 
     const { data: defaultOrgStatus } = await supabase
@@ -1157,13 +1506,12 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       organization_id: id,
       name: name.trim(),
       health_score: 0,
-      asset_tier: insertAssetTierId ? 'EXTERNAL' : assetTier,
+      importance: insertImportance,
     };
     if (defaultOrgStatus?.id) insertPayload.status_id = defaultOrgStatus.id;
-    if (insertAssetTierId) insertPayload.asset_tier_id = insertAssetTierId;
-    if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
+    if (resolvedRepo?.framework) insertPayload.framework = resolvedRepo.framework;
+    else if (frameworkRaw && typeof frameworkRaw === 'string') insertPayload.framework = frameworkRaw;
 
-    // Create project
     const { data: project, error: projectError } = await supabase
       .from('projects')
       .insert(insertPayload)
@@ -1174,16 +1522,26 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       if (projectError.code === '23505' || projectError.message?.includes('duplicate key')) {
         return res.status(400).json({ error: 'A project with this name already exists' });
       }
-      throw projectError;
+      console.error('Error inserting project row:', projectError);
+      return res.status(500).json({ error: 'Failed to create project' });
     }
 
-    // Create project-team associations
-    // First team in the array is the owner, rest are contributors
+    // Best-effort transactional rollback on downstream failure. FK CASCADE on
+    // project_teams.project_id and project_repositories.project_id means a
+    // single DELETE on projects cleans up everything we inserted.
+    const rollbackProject = async () => {
+      try {
+        await supabase.from('projects').delete().eq('id', project.id);
+      } catch (e) {
+        console.error('Failed to roll back project after downstream failure:', e);
+      }
+    };
+
     if (teamIdsArray.length > 0) {
       const projectTeamInserts = teamIdsArray.map((teamId: string, index: number) => ({
         project_id: project.id,
         team_id: teamId,
-        is_owner: index === 0, // First team is the owner
+        is_owner: index === 0,
       }));
 
       const { error: projectTeamsError } = await supabase
@@ -1191,13 +1549,122 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
         .insert(projectTeamInserts);
 
       if (projectTeamsError) {
-        // Rollback project creation
-        await supabase.from('projects').delete().eq('id', project.id);
-        throw projectTeamsError;
+        console.error('Error inserting project_teams:', projectTeamsError);
+        await rollbackProject();
+        return res.status(500).json({ error: 'Failed to create project' });
       }
     }
 
-    // Get team names for response
+    let repoInfo: { repo_full_name: string; default_branch: string; status: string } | null = null;
+    if (resolvedRepo) {
+      const { error: repoInsertError } = await supabase
+        .from('project_repositories')
+        .insert({
+          project_id: project.id,
+          installation_id: resolvedRepo.installation_id,
+          repo_id: resolvedRepo.repo_id,
+          repo_full_name: resolvedRepo.repo_full_name,
+          default_branch: resolvedRepo.default_branch,
+          package_json_path: resolvedRepo.package_json_path,
+          ecosystem: resolvedRepo.ecosystem,
+          provider: resolvedRepo.provider,
+          integration_id: resolvedRepo.integration_id,
+          status: 'initializing',
+          extraction_step: 'queued',
+          sync_frequency: 'daily',
+        });
+
+      if (repoInsertError) {
+        if (repoInsertError.code === '23505' || repoInsertError.message?.includes('duplicate key')) {
+          await rollbackProject();
+          return res.status(409).json({
+            error: 'This repository is already linked to another project in this organization. Each package in a repo can only be tracked by one project.',
+          });
+        }
+        console.error('Error inserting project_repositories:', repoInsertError);
+        await rollbackProject();
+        return res.status(500).json({ error: 'Failed to create project' });
+      }
+
+      const queueResult = await queueExtractionJob(project.id, id, {
+        repo_full_name: resolvedRepo.repo_full_name,
+        installation_id: resolvedRepo.installation_id,
+        default_branch: resolvedRepo.default_branch,
+        package_json_path: resolvedRepo.package_json_path,
+        ecosystem: resolvedRepo.ecosystem,
+        provider: resolvedRepo.provider,
+        integration_id: resolvedRepo.integration_id,
+      }, { trigger_type: 'initial', started_by_user_id: userId });
+
+      if (!queueResult.success) {
+        console.error('Failed to queue extraction after project create:', queueResult.error);
+        await rollbackProject();
+        return res.status(502).json({ error: 'Failed to queue extraction job' });
+      }
+
+      repoInfo = {
+        repo_full_name: resolvedRepo.repo_full_name,
+        default_branch: resolvedRepo.default_branch,
+        status: 'initializing',
+      };
+
+      if (resolvedRepo.provider === 'gitlab' || resolvedRepo.provider === 'bitbucket') {
+        const integ = await getIntegrationById(id, resolvedRepo.integration_id);
+        const token = integ?.access_token;
+        if (token) {
+          const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
+          const secret = generateWebhookSecret();
+          try {
+            if (resolvedRepo.provider === 'gitlab') {
+              const baseUrl = (integ.metadata as any)?.base_url || (integ.metadata as any)?.gitlab_url || 'https://gitlab.com';
+              const { id: hookId } = await registerGitLabWebhook(
+                baseUrl,
+                token,
+                Number(resolvedRepo.repo_id),
+                `${backendUrl}/api/integrations/webhooks/gitlab`,
+                secret
+              );
+              await supabase
+                .from('project_repositories')
+                .update({
+                  webhook_id: String(hookId),
+                  webhook_secret: secret,
+                  webhook_status: 'active',
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('project_id', project.id);
+            } else {
+              const [workspace, repoSlug] = resolvedRepo.repo_full_name.split('/');
+              if (workspace && repoSlug) {
+                const { uuid } = await registerBitbucketWebhook(
+                  token,
+                  workspace,
+                  repoSlug,
+                  `${backendUrl}/api/integrations/webhooks/bitbucket`,
+                  secret
+                );
+                await supabase
+                  .from('project_repositories')
+                  .update({
+                    webhook_id: uuid,
+                    webhook_secret: secret,
+                    webhook_status: 'active',
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('project_id', project.id);
+              }
+            }
+          } catch (webhookErr: any) {
+            console.warn('Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+            await supabase
+              .from('project_repositories')
+              .update({ webhook_status: 'failed', updated_at: new Date().toISOString() })
+              .eq('project_id', project.id);
+          }
+        }
+      }
+    }
+
     const teamNames: string[] = [];
     if (teamIdsArray.length > 0) {
       const { data: teams } = await supabase
@@ -1226,21 +1693,26 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       status_id: project.status_id ?? null,
       status_name: defaultOrgStatus?.name ?? null,
       status_color: defaultOrgStatus?.color ?? null,
+      repo: repoInfo,
+      importance: typeof project.importance === 'number' ? project.importance : insertImportance,
     };
 
-    // Create activity log
-    await createActivity({
-      organization_id: id,
-      user_id: userId,
-      activity_type: 'project_created',
-      description: `created project "${name.trim()}"`,
-      metadata: {
-        project_name: name.trim(),
-        project_id: project.id,
-        team_ids: teamIdsArray,
-        team_names: teamNames,
-      },
-    });
+    try {
+      await createActivity({
+        organization_id: id,
+        user_id: userId,
+        activity_type: 'project_created',
+        description: `created project "${name.trim()}"`,
+        metadata: {
+          project_name: name.trim(),
+          project_id: project.id,
+          team_ids: teamIdsArray,
+          team_names: teamNames,
+        },
+      });
+    } catch (e) {
+      console.warn('Failed to record project_created activity:', e);
+    }
 
     try {
       await emitEvent({ type: 'project_created', organizationId: id, projectId: project.id, payload: { projectName: name.trim(), teamIds: teamIdsArray }, source: 'system', priority: 'normal' });
@@ -1249,7 +1721,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
     res.status(201).json(formattedProject);
   } catch (error: any) {
     console.error('Error creating project:', error);
-    res.status(500).json({ error: error.message || 'Failed to create project' });
+    res.status(500).json({ error: 'Failed to create project' });
   }
 });
 
@@ -1258,7 +1730,7 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { name, team_ids, auto_bump: autoBump, asset_tier: assetTierRaw, asset_tier_id: assetTierIdRaw, notifications_paused_until } = req.body;
+    const { name, team_ids, auto_bump: autoBump, importance: importanceRaw, notifications_paused_until } = req.body;
 
     // Check if user has access to this project
     const accessCheck = await checkProjectAccess(userId, id, projectId);
@@ -1270,16 +1742,16 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     // When updating only auto_bump, also allow users with project-level edit_settings.
     const isOrgOwner = accessCheck.orgMembership?.role === 'owner';
     const hasOrgPermission = accessCheck.orgRole?.permissions?.manage_teams_and_projects === true;
-    const onlyAutoBump = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
-    const onlyAssetTier = name === undefined && team_ids === undefined && autoBump === undefined && (assetTierRaw !== undefined || assetTierIdRaw !== undefined) && notifications_paused_until === undefined;
-    const onlyNotificationsPause = name === undefined && team_ids === undefined && assetTierRaw === undefined && assetTierIdRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
-    const onlyNonStructuralUpdate = onlyAutoBump || onlyAssetTier || onlyNotificationsPause;
+    const onlyAutoBump = name === undefined && team_ids === undefined && importanceRaw === undefined && autoBump !== undefined && notifications_paused_until === undefined;
+    const onlyImportance = name === undefined && team_ids === undefined && autoBump === undefined && importanceRaw !== undefined && notifications_paused_until === undefined;
+    const onlyNotificationsPause = name === undefined && team_ids === undefined && importanceRaw === undefined && autoBump === undefined && notifications_paused_until !== undefined;
+    const onlyNonStructuralUpdate = onlyAutoBump || onlyImportance || onlyNotificationsPause;
 
     if (!isOrgOwner && !hasOrgPermission) {
       if (!onlyNonStructuralUpdate) {
         return res.status(403).json({ error: 'Only org owners or users with manage_teams_and_projects permission can update projects' });
       }
-      // Check project-level edit_settings for auto_bump- or asset_tier-only update
+      // Check project-level edit_settings for auto_bump- or importance-only update
       const { data: projectTeams } = await supabase
         .from('project_teams')
         .select('team_id, is_owner')
@@ -1342,34 +1814,12 @@ router.put('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       updateData.auto_bump = autoBump;
     }
 
-    const VALID_ASSET_TIERS = ['CROWN_JEWELS', 'EXTERNAL', 'INTERNAL', 'NON_PRODUCTION'];
-    if (assetTierIdRaw !== undefined) {
-      if (assetTierIdRaw === null || assetTierIdRaw === '') {
-        updateData.asset_tier_id = null;
-        updateData.asset_tier = assetTierRaw ?? 'EXTERNAL';
-      } else {
-        const tierId = typeof assetTierIdRaw === 'string' ? assetTierIdRaw.trim() : null;
-        if (!tierId) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid UUID' });
-        }
-        const { data: tier, error: tierError } = await supabase
-          .from('organization_asset_tiers')
-          .select('id')
-          .eq('id', tierId)
-          .eq('organization_id', id)
-          .single();
-        if (tierError || !tier) {
-          return res.status(400).json({ error: 'asset_tier_id must be a valid asset tier for this organization' });
-        }
-        updateData.asset_tier_id = tier.id;
-        updateData.asset_tier = 'EXTERNAL';
+    if (importanceRaw !== undefined) {
+      const parsed = typeof importanceRaw === 'number' ? importanceRaw : Number(importanceRaw);
+      if (!Number.isFinite(parsed) || parsed < 0.5 || parsed > 2.0) {
+        return res.status(400).json({ error: 'importance must be a number in [0.5, 2.0]' });
       }
-    } else if (assetTierRaw !== undefined) {
-      if (typeof assetTierRaw !== 'string' || !VALID_ASSET_TIERS.includes(assetTierRaw)) {
-        return res.status(400).json({ error: 'asset_tier must be one of: CROWN_JEWELS, EXTERNAL, INTERNAL, NON_PRODUCTION' });
-      }
-      updateData.asset_tier = assetTierRaw;
-      updateData.asset_tier_id = null;
+      updateData.importance = parsed;
     }
 
     if (notifications_paused_until !== undefined) {
@@ -1765,8 +2215,7 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
       auto_bump: project.auto_bump !== false,
       role: userRole,
       permissions: userPermissions,
-      asset_tier: project.asset_tier ?? null,
-      asset_tier_id: project.asset_tier_id ?? null,
+      importance: typeof project.importance === 'number' ? project.importance : 1.0,
       status_id: project.status_id ?? null,
       status_name: projectStatusName,
       /** Matches organization_statuses.is_passing — used by Aegis embed cards */
@@ -4095,9 +4544,10 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
     }
 
     const provider = createProvider(integ);
-    const [result, frameworkResult] = await Promise.all([
+    const [result, frameworkResult, docker] = await Promise.all([
       detectMonorepo(provider, repo_full_name, default_branch),
       detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+      findDockerizedPaths(provider, repo_full_name, default_branch),
     ]);
 
     const withLinkStatus = await Promise.all(
@@ -4138,6 +4588,8 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
       potentialProjects: withLinkStatusAndNames,
       framework: frameworkResult.framework,
       ecosystem: frameworkResult.ecosystem,
+      dockerizedPaths: docker.paths,
+      treeTruncated: !!(result.treeTruncated || docker.truncated),
     });
   } catch (error: any) {
     console.error('Error scanning repository:', error);
@@ -4145,21 +4597,33 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
   }
 });
 
-// POST /api/organizations/:id/projects/:projectId/repositories/connect - Connect a repo (supports all providers)
+// POST /api/organizations/:id/projects/:projectId/repositories/connect
+// Re-connect or change the repo wired to an existing project. The main
+// create-project flow now connects + queues inline via POST /:id/projects;
+// this endpoint is for the "change repo" / "reconnect" case on an existing
+// project where the project row already exists.
 router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthRequest, res) => {
   const { id, projectId } = req.params;
-  const package_json_path = typeof req.body?.package_json_path === 'string' ? req.body.package_json_path : '';
-  console.log(`[EXTRACT] POST connect received: org=${id} project=${projectId} repo=${(req.body && req.body.repo_full_name) || '?'} path=${package_json_path || '(root)'}`);
   try {
     const userId = req.user!.id;
-    const { repo_id, repo_full_name, default_branch, framework, ecosystem, provider: reqProvider, integration_id: reqIntegrationId } = req.body;
+    const { repo_full_name, ecosystem, integration_id: reqIntegrationId } = req.body ?? {};
+    const package_json_path = typeof req.body?.package_json_path === 'string' ? req.body.package_json_path : '';
 
-    if (!repo_id || !repo_full_name || !default_branch) {
-      return res.status(400).json({ error: 'repo_id, repo_full_name, and default_branch are required' });
+    if (typeof repo_full_name !== 'string' || !repo_full_name) {
+      return res.status(400).json({ error: 'repo_full_name is required' });
+    }
+    if (typeof reqIntegrationId !== 'string' || !reqIntegrationId) {
+      return res.status(400).json({ error: 'integration_id is required' });
+    }
+    if (!isValidPackageJsonPath(package_json_path)) {
+      return res.status(400).json({ error: 'Invalid package_json_path' });
     }
 
-    const resolvedEcosystem = ecosystem || 'npm';
-    const resolvedProvider = reqProvider || 'github';
+    const rl = await checkRateLimit(`connect-repo:${userId}`, 10, 300);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 300));
+      return res.status(429).json({ error: 'Too many connect-repository requests. Try again in a few minutes.' });
+    }
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
@@ -4172,44 +4636,39 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       return res.status(403).json({ error: 'You do not have permission to connect repositories' });
     }
 
-    let installationId: string;
-    let integrationId: string | null = reqIntegrationId || null;
-
-    if (reqIntegrationId) {
-      const integ = await getIntegrationById(id, reqIntegrationId);
-      if (!integ) {
-        return res.status(400).json({ error: 'Integration not found or not connected' });
-      }
-      installationId = integ.installation_id || reqIntegrationId;
-    } else {
-      const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .select('github_installation_id')
-        .eq('id', id)
-        .single();
-      if (orgError || !org?.github_installation_id) {
-        return res.status(400).json({ error: 'No source code integration connected for this organization' });
-      }
-      installationId = org.github_installation_id;
+    const integ = await getIntegrationById(id, reqIntegrationId);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
     }
 
-    const { data: existingLink } = await supabase
-      .from('project_repositories')
-      .select('project_id')
-      .eq('repo_full_name', repo_full_name)
-      .eq('package_json_path', package_json_path)
-      .maybeSingle();
-
-    if (existingLink && existingLink.project_id !== projectId) {
-      return res.status(409).json({
-        error: 'This repository and package path are already linked to another project. Each package in a repo can only be tracked by one project.',
-      });
+    // Re-resolve the canonical repo metadata server-side from the integration.
+    // Trusting the client lets a member spoof repo_id/default_branch/provider
+    // and connect repos the integration shouldn't expose.
+    let canonical: { id: number; default_branch: string } | null = null;
+    try {
+      const provider = createProvider(integ);
+      const match = await resolveRepoFromIntegration(provider, repo_full_name);
+      if (!match) {
+        return res.status(403).json({ error: 'This integration does not have access to that repository' });
+      }
+      canonical = { id: match.id, default_branch: match.default_branch };
+    } catch (err: any) {
+      console.error('Error resolving repo from integration:', err);
+      return res.status(502).json({ error: 'Could not reach the source-code provider' });
     }
 
+    const resolvedEcosystem = typeof ecosystem === 'string' && ecosystem ? ecosystem : 'npm';
+    const resolvedProvider = integ.provider;
+    const installationId = integ.installation_id || integ.id;
+
+    // The partial UNIQUE on scan_jobs(project_id, type) WHERE status IN
+    // ('queued','processing') makes this a hard guard; the pre-check stays as
+    // a friendlier error than the 23505 the INSERT would otherwise return.
     const { data: activeJob } = await supabase
       .from('scan_jobs')
       .select('id')
       .eq('project_id', projectId)
+      .eq('type', 'extraction')
       .in('status', ['queued', 'processing'])
       .maybeSingle();
 
@@ -4223,13 +4682,13 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
         {
           project_id: projectId,
           installation_id: installationId,
-          repo_id: repo_id,
+          repo_id: canonical.id,
           repo_full_name: repo_full_name,
-          default_branch: default_branch,
+          default_branch: canonical.default_branch,
           package_json_path: package_json_path,
           ecosystem: resolvedEcosystem,
           provider: resolvedProvider,
-          integration_id: integrationId,
+          integration_id: integ.id,
           status: 'initializing',
           extraction_step: 'queued',
           extraction_error: null,
@@ -4242,19 +4701,23 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
       .single();
 
     if (repoError || !repoRecord) {
-      throw repoError;
+      if (repoError?.code === '23505' || repoError?.message?.includes('duplicate key')) {
+        return res.status(409).json({
+          error: 'This repository is already linked to another project in this organization. Each package in a repo can only be tracked by one project.',
+        });
+      }
+      console.error('Error upserting project_repositories:', repoError);
+      return res.status(500).json({ error: 'Failed to connect repository' });
     }
-
-    console.log(`[EXTRACT] Connect: queuing extraction job for project ${projectId}, repo ${repo_full_name} path=${package_json_path || '(root)'} ecosystem=${resolvedEcosystem} provider=${resolvedProvider}`);
 
     const queueResult = await queueExtractionJob(projectId, id, {
       repo_full_name: repo_full_name,
       installation_id: installationId,
-      default_branch: default_branch,
+      default_branch: canonical.default_branch,
       package_json_path: package_json_path,
       ecosystem: resolvedEcosystem,
       provider: resolvedProvider,
-      integration_id: integrationId ?? undefined,
+      integration_id: integ.id,
     }, { trigger_type: 'initial', started_by_user_id: userId });
 
     if (!queueResult.success) {
@@ -4266,36 +4729,21 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
           updated_at: new Date().toISOString(),
         })
         .eq('project_id', projectId);
-      return res.status(502).json({
-        error: queueResult.error ?? 'Failed to queue extraction job. Set UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN, then run depscanner.',
-      });
+      return res.status(502).json({ error: 'Failed to queue extraction job' });
     }
 
-    if (framework) {
-      await supabase
-        .from('projects')
-        .update({ framework, updated_at: new Date().toISOString() })
-        .eq('id', projectId)
-        .eq('organization_id', id);
-    }
-
-    // Register per-repo webhook for GitLab/Bitbucket so push/PR events are received
-    if (
-      (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') &&
-      integrationId
-    ) {
-      const integ = await getIntegrationById(id, integrationId);
-      const token = integ?.access_token;
+    if (resolvedProvider === 'gitlab' || resolvedProvider === 'bitbucket') {
+      const token = integ.access_token;
       if (token) {
         const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '');
         const secret = generateWebhookSecret();
         try {
           if (resolvedProvider === 'gitlab') {
-            const baseUrl = (integ.metadata as any)?.base_url || 'https://gitlab.com';
+            const baseUrl = (integ.metadata as any)?.base_url || (integ.metadata as any)?.gitlab_url || 'https://gitlab.com';
             const { id: hookId } = await registerGitLabWebhook(
               baseUrl,
               token,
-              Number(repo_id),
+              canonical.id,
               `${backendUrl}/api/integrations/webhooks/gitlab`,
               secret
             );
@@ -4308,8 +4756,8 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
                 updated_at: new Date().toISOString(),
               })
               .eq('project_id', projectId);
-          } else if (resolvedProvider === 'bitbucket') {
-            const [workspace, repoSlug] = String(repo_full_name).split('/');
+          } else {
+            const [workspace, repoSlug] = repo_full_name.split('/');
             if (workspace && repoSlug) {
               const { uuid } = await registerBitbucketWebhook(
                 token,
@@ -4330,7 +4778,11 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
             }
           }
         } catch (webhookErr: any) {
-          console.warn('[EXTRACT] Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+          console.warn('Webhook registration failed (repo still connected):', webhookErr?.message || webhookErr);
+          await supabase
+            .from('project_repositories')
+            .update({ webhook_status: 'failed', updated_at: new Date().toISOString() })
+            .eq('project_id', projectId);
         }
       }
     }
@@ -4344,7 +4796,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
     });
   } catch (error: any) {
     console.error('Error connecting repository:', error);
-    res.status(500).json({ error: error.message || 'Failed to connect repository' });
+    res.status(500).json({ error: 'Failed to connect repository' });
   }
 });
 
@@ -8515,7 +8967,7 @@ router.post('/:id/projects/:projectId/preflight-check', async (req: AuthRequest,
     res.json({
       allowed: result.allowed,
       reasons: result.reasons,
-      tierName: result.tierName,
+      importance: result.importance,
       ecosystem: ecosystem || 'npm',
       license: result.license ?? undefined,
       dependencyScore: result.dependencyScore ?? undefined,
@@ -9479,21 +9931,13 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       affectedDeps = deps ?? [];
     }
 
-    // Project and tier for depscore breakdown (asset_tier, custom tier multiplier)
+    // Project importance for depscore breakdown
     const { data: project } = await supabase
       .from('projects')
-      .select('asset_tier, asset_tier_id')
+      .select('importance')
       .eq('id', projectId)
       .single();
-    let projectTierMultiplier: number | null = null;
-    if (project?.asset_tier_id) {
-      const { data: tierRow } = await supabase
-        .from('organization_asset_tiers')
-        .select('environmental_multiplier')
-        .eq('id', project.asset_tier_id)
-        .single();
-      projectTierMultiplier = tierRow?.environmental_multiplier ?? null;
-    }
+    const projectImportance: number = typeof project?.importance === 'number' ? project.importance : 1.0;
 
     // Package reputation scores for affected dependencies (for depscore breakdown)
     const depIdsForScore = [...new Set((affectedDeps as any[]).map((d: any) => d.dependency_id).filter(Boolean))];
@@ -9604,8 +10048,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       version_candidates: versionCandidates,
       timeline_events: events ?? [],
       reachable_flows: reachableFlows,
-      project_asset_tier: project?.asset_tier ?? null,
-      project_tier_multiplier: projectTierMultiplier,
+      project_importance: projectImportance,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);
@@ -10670,7 +11113,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       maliciousResult,
       latestJobMaliciousStatus,
     ] = await Promise.all([
-      supabase.from('projects').select('health_score, status_id, asset_tier_id').eq('id', projectId).single().then(r => r.data),
+      supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
       supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
       supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).then(r => r.data ?? []),
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
@@ -10682,17 +11125,13 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
     ]);
 
-    // Status & tier lookups
+    // Status lookup
     let status: any = null;
     if (projectRow?.status_id) {
       const { data: s } = await supabase.from('organization_statuses').select('id, name, color, is_passing').eq('id', projectRow.status_id).single();
       status = s;
     }
-    let assetTier: any = null;
-    if (projectRow?.asset_tier_id) {
-      const { data: t } = await supabase.from('organization_asset_tiers').select('id, name, color').eq('id', projectRow.asset_tier_id).single();
-      assetTier = t;
-    }
+    const importance: number = typeof (projectRow as any)?.importance === 'number' ? (projectRow as any).importance : 1.0;
 
     // Compliance
     const compliant = depsRows.filter((d: any) => d.policy_result?.allowed === true).length;
@@ -10808,7 +11247,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     const result = {
       health_score: projectRow?.health_score ?? 0,
       status,
-      asset_tier: assetTier,
+      importance,
       compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
       vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },

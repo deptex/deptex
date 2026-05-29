@@ -1,11 +1,10 @@
 /**
- * Seed default statuses, asset tiers, and policy code for a new organization.
+ * Seed default statuses and policy code for a new organization.
  */
 
 import { supabase } from '../lib/supabase';
 import {
   DEFAULT_STATUSES,
-  DEFAULT_ASSET_TIERS,
   DEFAULT_PACKAGE_POLICY_CODE,
   DEFAULT_PROJECT_STATUS_CODE,
   DEFAULT_PR_CHECK_CODE,
@@ -20,16 +19,6 @@ export async function seedOrganizationPolicyDefaults(organizationId: string): Pr
 
   if (statusError) {
     console.error('Failed to seed statuses:', statusError);
-  }
-
-  const { error: tierError } = await supabase
-    .from('organization_asset_tiers')
-    .insert(
-      DEFAULT_ASSET_TIERS.map((t) => ({ ...t, organization_id: organizationId }))
-    );
-
-  if (tierError) {
-    console.error('Failed to seed asset tiers:', tierError);
   }
 
   const { error: pkgPolicyError } = await supabase

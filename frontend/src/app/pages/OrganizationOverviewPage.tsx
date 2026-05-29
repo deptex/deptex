@@ -727,8 +727,7 @@ export default function OrganizationOverviewPage() {
         statusName: null,
         statusColor: null,
         statusId: null,
-        assetTierName: null,
-        assetTierColor: null,
+        importance: null,
         isExtracting: true,
         isInitialExtracting: true,
         healthScore: null,
@@ -879,8 +878,7 @@ export default function OrganizationOverviewPage() {
               statusName: p.status_name ?? null,
               statusColor: p.status_color ?? null,
               statusId: p.status_id ?? null,
-              assetTierName: p.asset_tier_name ?? null,
-              assetTierColor: p.asset_tier_color ?? null,
+              importance: typeof p.importance === 'number' ? p.importance : null,
               isExtracting,
               isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
@@ -973,7 +971,7 @@ export default function OrganizationOverviewPage() {
             byTeam.get(bucket)!.push({
               projectId: p.id, projectName: p.name, framework: p.framework ?? null,
               statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
-              assetTierName: p.asset_tier_name ?? null, assetTierColor: p.asset_tier_color ?? null,
+              importance: typeof p.importance === 'number' ? p.importance : null,
               isExtracting, isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
               healthScore: typeof p.health_score === 'number' ? p.health_score : null,
@@ -2683,7 +2681,7 @@ export default function OrganizationOverviewPage() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer gap-2"
-                onClick={() => window.dispatchEvent(new CustomEvent('organization:openCreateProject'))}
+                onClick={() => navigate(`/organizations/${orgId}/new-project`, { state: { teams: Object.values(teamsById) } })}
               >
                 <FolderPlus className="h-4 w-4" />
                 Create project
@@ -3058,11 +3056,12 @@ export default function OrganizationOverviewPage() {
                       </div>
                       {(teamSidebarPermissions?.manage_projects || teamSidebarHasOrgManagePermission) && (
                       <Button
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent('organization:openCreateProject', {
-                            detail: { lockedTeam: teamSidebarTeamData ?? undefined },
-                          }));
-                        }}
+                        onClick={() => navigate(`/organizations/${orgId}/new-project`, {
+                          state: {
+                            lockedTeam: teamSidebarTeamData ?? null,
+                            teams: Object.values(teamsById),
+                          },
+                        })}
                         className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                       >
                         <Plus className="h-4 w-4 mr-2" />

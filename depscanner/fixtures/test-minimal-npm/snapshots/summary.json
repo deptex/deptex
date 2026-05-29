@@ -23,9 +23,7 @@
     "deps_removed": 0,
     "sla_computed": 0,
     "vulns_reopened": 0,
-    "rereview_enabled": true,
     "vulns_critical_new": 0,
-    "vulns_carried_forward": 0,
-    "vulns_re_review_fired": 0
+    "vulns_carried_forward": 0
   }
 }

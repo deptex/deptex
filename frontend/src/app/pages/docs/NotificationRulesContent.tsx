@@ -145,16 +145,15 @@ return (context.batch.totalVulnerabilities || 0) > 0;`}
           </div>
 
           <div>
-            <h3 className="text-sm font-semibold text-foreground mb-3">Crown Jewels — any vulnerability</h3>
+            <h3 className="text-sm font-semibold text-foreground mb-3">High-importance projects — any vulnerability</h3>
             <DocsCodeBlock
               title="Trigger"
               value={`if (context.event.type !== 'vulnerability_discovered') return false;
 if (!context.project) return false;
-return context.project.tier === 'Crown Jewels'
-    || context.project.asset_tier === 'CROWN_JEWELS';`}
+return (context.project.importance ?? 1.0) >= 1.5;`}
             />
             <p className="text-foreground-secondary text-xs mt-2">
-              Tier may appear as <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">tier</code> or <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">asset_tier</code> depending on event payload; check both if needed.
+              <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">context.project.importance</code> is a number in <code className="rounded bg-background-subtle px-1 py-0.5 font-mono">[0.5, 2.0]</code>; raise the threshold to narrow the alert scope.
             </p>
           </div>
 

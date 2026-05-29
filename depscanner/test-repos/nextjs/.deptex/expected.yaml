@@ -1,0 +1,76 @@
+# Expected findings for the nextjs dogfood fixture.
+#
+# Authority: see docs/runbooks/depscanner-dogfood.md for the schema +
+# match semantics (subset, alias-aware, bucket-tolerant). The harness
+# (`npm run dogfood:check -- --fixture nextjs --project-id <uuid>`) reads
+# this file as the sole source of truth.
+#
+# These values are HYPOTHESIS-GRADE until the M2 walkthrough — Henry's
+# pass iterates expected vs. actual until the harness reports PASS.
+# Drift (alias rotation, OSV publisher changes) is handled per the
+# runbook's decision tree.
+
+reachable_vulns:
+  # next@13.4.0 — framework is imported and the page renders user-tainted
+  # HTML via dangerouslySetInnerHTML. CVE-2024-34350 (HTTP request smuggling)
+  # is a representative Next.js advisory that affects the pinned version
+  # range; we assert one canonical CVE here. OSV publishes 8+ advisories
+  # for this version — additional finds are tolerated as extras.
+  - osv_id: CVE-2024-34350
+    aliases: [GHSA-77r5-gw3j-2mpf]
+    file: app/page.tsx
+    line: 1
+    reachability_bucket: reachable
+
+unreachable_vulns:
+  # dompurify@2.0.10 — declared in package.json but never imported by any
+  # source file in this fixture. The tree-sitter usage extractor should
+  # find zero usages → classifier marks unreachable.
+  - osv_id: CVE-2020-26870
+    aliases: [GHSA-63q7-h895-m982]
+    reachability_bucket: unreachable
+
+iac_findings:
+  - rule_id: CKV_DOCKER_8
+    file: Dockerfile
+  - rule_id: CKV_DOCKER_2
+    file: Dockerfile
+  - rule_id: CKV_K8S_16
+    file: k8s.yaml
+  - rule_id: CKV_K8S_20
+    file: k8s.yaml
+  - rule_id: CKV_K8S_22
+    file: k8s.yaml
+  - rule_id: CKV_K8S_8
+    file: k8s.yaml
+
+container_cves:
+  # node:14.0 base image — many os-package CVEs surface. Same canonical
+  # assertion as express; extras categorized in RESULTS.md.
+  - osv_id: CVE-2022-0778
+    aliases: [GHSA-x4qr-2fvf-3mr5]
+    base_image: node:14.0
+
+secrets:
+  - rule_id: aws-secret-key
+    file: .env.example
+    line: 5
+
+malicious_pkg:
+  - package: event-stream
+    ecosystem: npm
+    note: historical-not-published — see .github/dependabot.yml exclusion
+
+semgrep_findings:
+  # Server-action result rendered via dangerouslySetInnerHTML. Rule id
+  # is hypothesis-grade; iterated against actual scanner output in M2.3.
+  - rule_id: typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml
+    file: app/page.tsx
+    line: 16
+
+dast_findings:
+  # Captured against the deploy.sh-booted fixture on port 4002.
+  # Reflected XSS via ?msg= query param flowing through the server
+  # action into dangerouslySetInnerHTML.
+  - alert: Cross Site Scripting (Reflected)
+    url_pattern: /?msg=
