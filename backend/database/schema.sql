@@ -2554,21 +2554,33 @@ END;
 $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.claim_scan_job(p_machine_id text, p_supported_types text[])
+CREATE OR REPLACE FUNCTION public.claim_scan_job(p_machine_id text, p_supported_types text[], p_max_per_org integer DEFAULT 5)
  RETURNS SETOF scan_jobs
  LANGUAGE sql
 AS $function$
   UPDATE scan_jobs
-  SET status      = 'processing',
-      started_at  = NOW(),
+  SET status       = 'processing',
+      started_at   = NOW(),
       heartbeat_at = NOW(),
-      machine_id  = p_machine_id,
-      attempts    = attempts + 1
+      machine_id   = p_machine_id,
+      attempts     = attempts + 1
   WHERE id = (
-    SELECT id FROM scan_jobs
-    WHERE status = 'queued'
-      AND type = ANY(p_supported_types)
-    ORDER BY created_at
+    SELECT q.id
+    FROM scan_jobs q
+    WHERE q.status = 'queued'
+      AND q.type = ANY(p_supported_types)
+      AND (
+        SELECT COUNT(*) FROM scan_jobs p
+        WHERE p.status = 'processing'
+          AND p.type = ANY(p_supported_types)
+          AND p.organization_id = q.organization_id
+      ) < p_max_per_org
+    ORDER BY (
+      SELECT COUNT(*) FROM scan_jobs p
+      WHERE p.status = 'processing'
+        AND p.type = ANY(p_supported_types)
+        AND p.organization_id = q.organization_id
+    ) ASC, q.created_at ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED
   )
@@ -6841,6 +6853,7 @@ CREATE INDEX idx_rule_changes_rule ON public.notification_rule_changes USING btr
 CREATE INDEX idx_sal_action ON public.security_audit_logs USING btree (organization_id, action);
 CREATE INDEX idx_sal_actor ON public.security_audit_logs USING btree (actor_id);
 CREATE INDEX idx_sal_org_created ON public.security_audit_logs USING btree (organization_id, created_at DESC);
+CREATE INDEX idx_scan_jobs_inflight_by_org ON public.scan_jobs USING btree (organization_id, type) WHERE (status = 'processing'::text);
 CREATE INDEX idx_scan_jobs_org ON public.scan_jobs USING btree (organization_id);
 CREATE INDEX idx_scan_jobs_project ON public.scan_jobs USING btree (project_id);
 CREATE INDEX idx_scan_jobs_queued ON public.scan_jobs USING btree (type, created_at) WHERE (status = 'queued'::text);

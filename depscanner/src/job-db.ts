@@ -52,6 +52,10 @@ export async function claimJob(
   const { data, error } = await supabase.rpc('claim_scan_job', {
     p_machine_id: machineId,
     p_supported_types: supportedTypes,
+    // Per-org in-flight cap so one tenant can't monopolize the fleet. Defaults
+    // to 5 (matches the dispatcher's FLY_MAX_PER_ORG); the RPC also defaults it,
+    // so an older worker that omits this still resolves.
+    p_max_per_org: Number(process.env.FLY_MAX_PER_ORG ?? 5),
   });
 
   // A claim RPC error (e.g. Supabase outage) is NOT "no job available" —
