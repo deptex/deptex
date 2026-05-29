@@ -235,10 +235,14 @@ export async function startFlyMachine(config: FlyMachineConfig): Promise<string 
       const machines = allMachines.filter((m) => machineMatchesScanType(m, config.scanType));
       const stopped = machines.filter((m) => m.state === 'stopped');
 
-      // Resolve the image from an existing machine so burst machines use the
-      // same deployed image instead of guessing `:latest` (which may not exist).
+      // Resolve the image from ANY existing machine on the app — extraction and
+      // dast share one Fly app and one deployed release, so the digest is
+      // identical across kinds. Scanning only the kind-filtered list would let a
+      // dast burst (usually 0 dast machines on an extraction-flooded app) fall
+      // back to `:latest`, which may not exist. Kind filtering stays for the
+      // burst COUNT + stopped-pool reuse below, not image resolution.
       let resolvedImage: string | null = null;
-      for (const m of machines) {
+      for (const m of allMachines) {
         resolvedImage = getImageFromMachine(m);
         if (resolvedImage) break;
       }

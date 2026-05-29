@@ -114,19 +114,11 @@ router.post('/extraction-jobs', async (_req, res) => {
     // never wedges on a single broken code path.
     let machinesStarted = 0;
     let zombiesReaped = 0;
-    try {
-      const { dispatchFleet, reapZombieMachines } = require('../lib/fleet-dispatcher');
-      const tick = await dispatchFleet('extraction');
-      machinesStarted = tick?.started ?? 0;
-      // Stop hung/zombie machines (started, no job, no heartbeat) to cap cost.
-      try {
-        const reap = await reapZombieMachines('extraction');
-        zombiesReaped = reap?.stopped ?? 0;
-      } catch (re: any) {
-        console.warn('[RECOVERY] reapZombieMachines failed:', re?.message ?? re);
-      }
-    } catch (e: any) {
-      console.error('[RECOVERY] dispatchFleet failed; attempting direct fallback:', e?.message ?? e);
+
+    // Direct fallback: if the dispatcher can't provision and there's queued
+    // extraction work with nothing processing, start one machine directly so the
+    // queue never wedges on a single broken path. Returns machines started.
+    const directProvisionFallback = async (): Promise<number> => {
       try {
         const { data: queued } = await supabase
           .from('scan_jobs')
@@ -143,11 +135,37 @@ router.post('/extraction-jobs', async (_req, res) => {
         if (queued?.length && !processing?.length) {
           const { createDepscannerBurst } = require('../lib/fly-machines');
           await createDepscannerBurst();
-          machinesStarted = 1;
+          return 1;
         }
       } catch (e2: any) {
-        console.error('[RECOVERY] direct fallback also failed:', e2?.message ?? e2);
+        console.error('[RECOVERY] direct fallback failed:', e2?.message ?? e2);
       }
+      return 0;
+    };
+
+    try {
+      const { dispatchFleet, reapZombieMachines } = require('../lib/fleet-dispatcher');
+      const tick = await dispatchFleet('extraction');
+      machinesStarted = tick?.started ?? 0;
+      // The dispatcher FAILS CLOSED — on a Redis outage / snapshot failure / lock
+      // contention it returns {error, started:0} WITHOUT throwing. Don't let that
+      // silently wedge the queue: when it provisioned nothing because of an error,
+      // run the direct fallback ourselves. (The catch below only covers an
+      // import-time / synchronous throw, which is the rare case.)
+      if (tick?.error && (tick?.started ?? 0) === 0) {
+        console.warn(`[RECOVERY] dispatcher returned '${tick.error}' — trying direct fallback`);
+        machinesStarted += await directProvisionFallback();
+      }
+      // Stop hung/zombie machines (started, no job, no heartbeat) to cap cost.
+      try {
+        const reap = await reapZombieMachines('extraction');
+        zombiesReaped = reap?.stopped ?? 0;
+      } catch (re: any) {
+        console.warn('[RECOVERY] reapZombieMachines failed:', re?.message ?? re);
+      }
+    } catch (e: any) {
+      console.error('[RECOVERY] dispatchFleet threw; attempting direct fallback:', e?.message ?? e);
+      machinesStarted += await directProvisionFallback();
     }
 
     // Reap orphaned extractions (rows tagged with run_ids from failed/cancelled

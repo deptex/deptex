@@ -49,13 +49,17 @@ export async function claimJob(
   machineId: string,
   supportedTypes: string[] = getSupportedJobTypes(),
 ): Promise<ExtractionJobRow | null> {
+  // Per-org in-flight cap so one tenant can't monopolize the fleet. Parse
+  // defensively: a Fly secret that is empty ('') or non-numeric ('abc') must
+  // NOT become 0 or NaN→null — either would make the RPC's `(count) < cap`
+  // condition never true and silently halt ALL claiming. Mirror the dispatcher's
+  // parseInt(... || '5') + finite/positive guard.
+  const parsedCap = parseInt(process.env.FLY_MAX_PER_ORG || '5', 10);
+  const maxPerOrg = Number.isFinite(parsedCap) && parsedCap > 0 ? parsedCap : 5;
   const { data, error } = await supabase.rpc('claim_scan_job', {
     p_machine_id: machineId,
     p_supported_types: supportedTypes,
-    // Per-org in-flight cap so one tenant can't monopolize the fleet. Defaults
-    // to 5 (matches the dispatcher's FLY_MAX_PER_ORG); the RPC also defaults it,
-    // so an older worker that omits this still resolves.
-    p_max_per_org: Number(process.env.FLY_MAX_PER_ORG ?? 5),
+    p_max_per_org: maxPerOrg,
   });
 
   // A claim RPC error (e.g. Supabase outage) is NOT "no job available" —
