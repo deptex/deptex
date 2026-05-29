@@ -186,7 +186,7 @@ function CalendarDayButton({
         'group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-1 group-data-[focused=true]/day:ring-ring',
         'data-[range-start=true]:rounded-md data-[range-start=true]:bg-white data-[range-start=true]:text-black data-[range-start=true]:hover:bg-white',
         'data-[range-end=true]:rounded-md data-[range-end=true]:bg-white data-[range-end=true]:text-black data-[range-end=true]:hover:bg-white',
-        'data-[range-middle=true]:bg-transparent data-[range-middle=true]:text-foreground',
+        'data-[range-middle=true]:rounded-none data-[range-middle=true]:bg-background-subtle data-[range-middle=true]:text-foreground',
         'data-[selected-single=true]:bg-white data-[selected-single=true]:text-black data-[selected-single=true]:hover:bg-white',
         '[&>span]:text-xs [&>span]:opacity-70',
         defaultClassNames.day,
