@@ -106,34 +106,47 @@ router.post('/extraction-jobs', async (_req, res) => {
       }
     }
 
-    // Start machines for orphaned queued jobs
+    // Provisioning is owned by the fleet dispatcher (single-flight, hard-capped
+    // at FLY_MAX_FLEET). Trigger one tick in-process so requeued jobs get a
+    // machine immediately; the every-minute cron is the standing safety net.
+    // Redundant fallback: if the dispatcher is wedged and extraction work is
+    // queued with nothing running, directly start one machine so the queue
+    // never wedges on a single broken code path.
     let machinesStarted = 0;
-    const { data: orphanedJobs } = await supabase
-      .from('scan_jobs')
-      .select('id')
-      .eq('type', 'extraction')
-      .eq('status', 'queued')
-      .order('created_at', { ascending: true })
-      .limit(5);
-
-    if (orphanedJobs?.length) {
-      let startExtractionMachine: (() => Promise<string | null>) | null = null;
+    let zombiesReaped = 0;
+    try {
+      const { dispatchFleet, reapZombieMachines } = require('../lib/fleet-dispatcher');
+      const tick = await dispatchFleet('extraction');
+      machinesStarted = tick?.started ?? 0;
+      // Stop hung/zombie machines (started, no job, no heartbeat) to cap cost.
       try {
-        const flyMachines = require('../lib/fly-machines');
-        startExtractionMachine = flyMachines.startExtractionMachine;
-      } catch {
-        // fly-machines not available (CE mode or not configured)
+        const reap = await reapZombieMachines('extraction');
+        zombiesReaped = reap?.stopped ?? 0;
+      } catch (re: any) {
+        console.warn('[RECOVERY] reapZombieMachines failed:', re?.message ?? re);
       }
-
-      if (startExtractionMachine) {
-        for (const _job of orphanedJobs) {
-          try {
-            await startExtractionMachine();
-            machinesStarted++;
-          } catch {
-            // logged inside startExtractionMachine
-          }
+    } catch (e: any) {
+      console.error('[RECOVERY] dispatchFleet failed; attempting direct fallback:', e?.message ?? e);
+      try {
+        const { data: queued } = await supabase
+          .from('scan_jobs')
+          .select('id')
+          .eq('type', 'extraction')
+          .eq('status', 'queued')
+          .limit(1);
+        const { data: processing } = await supabase
+          .from('scan_jobs')
+          .select('id')
+          .eq('type', 'extraction')
+          .eq('status', 'processing')
+          .limit(1);
+        if (queued?.length && !processing?.length) {
+          const { createDepscannerBurst } = require('../lib/fly-machines');
+          await createDepscannerBurst();
+          machinesStarted = 1;
         }
+      } catch (e2: any) {
+        console.error('[RECOVERY] direct fallback also failed:', e2?.message ?? e2);
       }
     }
 
@@ -182,14 +195,14 @@ router.post('/extraction-jobs', async (_req, res) => {
     }
 
     console.log(
-      `[RECOVERY] Requeued ${requeuedCount} stuck jobs, failed ${failedCount} exhausted jobs, started ${machinesStarted} machines for ${orphanedJobs?.length ?? 0} orphaned jobs, reaped ${orphanReap?.runs_reaped ?? 0} orphan runs (${bucketFilesRemoved} bucket files)`
+      `[RECOVERY] Requeued ${requeuedCount} stuck jobs, failed ${failedCount} exhausted jobs, dispatcher started ${machinesStarted} machines, reaped ${zombiesReaped} zombie machines, reaped ${orphanReap?.runs_reaped ?? 0} orphan runs (${bucketFilesRemoved} bucket files)`
     );
 
     res.json({
       requeued: requeuedCount,
       failed: failedCount,
-      orphaned_jobs_found: orphanedJobs?.length ?? 0,
       machines_started: machinesStarted,
+      zombies_reaped: zombiesReaped,
       orphan_runs_reaped: orphanReap?.runs_reaped ?? 0,
       orphan_bucket_files_removed: bucketFilesRemoved,
     });

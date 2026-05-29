@@ -20,6 +20,14 @@ jest.mock('../../lib/supabase', () => ({
 
 jest.mock('../../lib/fly-machines', () => ({
   startExtractionMachine: jest.fn().mockResolvedValue('fly-id'),
+  createDepscannerBurst: jest.fn().mockResolvedValue('fly-id'),
+  stopFlyMachine: jest.fn().mockResolvedValue(undefined),
+  DAST_CONFIG: { app: 'deptex-depscanner' },
+}));
+
+jest.mock('../../lib/fleet-dispatcher', () => ({
+  dispatchFleet: jest.fn().mockResolvedValue({ started: 0 }),
+  reapZombieMachines: jest.fn().mockResolvedValue({ stopped: 0 }),
 }));
 
 process.env.INTERNAL_API_KEY = 'test-internal-key';
@@ -70,8 +78,8 @@ describe('POST /api/internal/recovery/extraction-jobs', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('requeued');
     expect(res.body).toHaveProperty('failed');
-    expect(res.body).toHaveProperty('orphaned_jobs_found');
     expect(res.body).toHaveProperty('machines_started');
+    expect(res.body).toHaveProperty('zombies_reaped');
   });
 
   it('accepts Bearer token as key', async () => {
@@ -98,11 +106,10 @@ describe('POST /api/internal/recovery/extraction-jobs', () => {
     expect(res.body.failed).toBe(1);
   });
 
-  it('starts machines for orphaned queued jobs', async () => {
-    chain.limit.mockResolvedValueOnce({
-      data: [{ id: 'orphan-1' }, { id: 'orphan-2' }],
-      error: null,
-    });
+  it('runs a dispatcher tick + zombie reap, reporting their counts', async () => {
+    const { dispatchFleet, reapZombieMachines } = require('../../lib/fleet-dispatcher');
+    dispatchFleet.mockResolvedValueOnce({ started: 2 });
+    reapZombieMachines.mockResolvedValueOnce({ stopped: 1 });
 
     const res = await request(app)
       .post('/api/internal/recovery/extraction-jobs')
@@ -110,7 +117,8 @@ describe('POST /api/internal/recovery/extraction-jobs', () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(res.body.orphaned_jobs_found).toBe(2);
-    expect(res.body.machines_started).toBeGreaterThanOrEqual(0);
+    expect(dispatchFleet).toHaveBeenCalledWith('extraction');
+    expect(res.body.machines_started).toBe(2);
+    expect(res.body.zombies_reaped).toBe(1);
   });
 });

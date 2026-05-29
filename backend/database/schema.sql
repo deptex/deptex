@@ -480,13 +480,14 @@ CREATE TABLE IF NOT EXISTS public.organization_billing (
   auto_recharge_in_progress_started_at timestamp with time zone,
   auto_recharge_last_attempt_at timestamp with time zone,
   low_balance_alert_threshold_cents integer NOT NULL DEFAULT 500,
-  billing_email_override text,
   stripe_customer_id text,
   stripe_default_payment_method_id text,
   low_balance_alert_sent_at timestamp with time zone,
   zero_balance_alert_sent_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now()
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  billing_email_recipients text[] NOT NULL DEFAULT '{}'::text[],
+  auto_recharge_cap_alert_sent_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.organization_deprecations (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -4081,6 +4082,39 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.fleet_scan_snapshot(p_type text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT jsonb_build_object(
+    'running_machine_ids', COALESCE((
+      SELECT jsonb_agg(DISTINCT machine_id)
+      FROM scan_jobs
+      WHERE status = 'processing'
+        AND type = p_type
+        AND machine_id IS NOT NULL
+    ), '[]'::jsonb),
+    'per_org', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'organization_id', t.organization_id,
+        'queued', t.queued,
+        'inflight', t.inflight
+      ))
+      FROM (
+        SELECT organization_id,
+          COUNT(*) FILTER (WHERE status = 'queued')     AS queued,
+          COUNT(*) FILTER (WHERE status = 'processing') AS inflight
+        FROM scan_jobs
+        WHERE type = p_type
+          AND status IN ('queued', 'processing')
+        GROUP BY organization_id
+      ) t
+    ), '[]'::jsonb)
+  );
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.framework_spec_osv_matches_cve(spec jsonb, cve text)
  RETURNS boolean
  LANGUAGE sql
@@ -6809,6 +6843,7 @@ CREATE INDEX idx_sal_actor ON public.security_audit_logs USING btree (actor_id);
 CREATE INDEX idx_sal_org_created ON public.security_audit_logs USING btree (organization_id, created_at DESC);
 CREATE INDEX idx_scan_jobs_org ON public.scan_jobs USING btree (organization_id);
 CREATE INDEX idx_scan_jobs_project ON public.scan_jobs USING btree (project_id);
+CREATE INDEX idx_scan_jobs_queued ON public.scan_jobs USING btree (type, created_at) WHERE (status = 'queued'::text);
 CREATE INDEX idx_scan_jobs_status_created ON public.scan_jobs USING btree (status, created_at);
 CREATE INDEX idx_scan_jobs_type_status_created ON public.scan_jobs USING btree (type, status, created_at);
 CREATE INDEX idx_scim_mappings_org ON public.scim_user_mappings USING btree (organization_id);

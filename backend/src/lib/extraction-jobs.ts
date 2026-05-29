@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { supabase } from './supabase';
-import { startExtractionMachine, stopFlyMachine, DEPSCANNER_CONFIG } from './fly-machines';
+import { stopFlyMachine, DEPSCANNER_CONFIG } from './fly-machines';
+import { nudgeDispatcher } from './fleet-dispatcher';
 
 // Extraction job queue — Supabase-based job persistence.
 // Jobs stored in the scan_jobs table (type='extraction'); survives machine crashes.
@@ -131,42 +132,12 @@ export async function queueExtractionJob(
       // Fire-and-forget: log write failure must not block extraction
     }
 
-    // Start a Fly machine (best-effort — job is safe in Supabase if this fails)
-    try {
-      const machineId = await startExtractionMachine();
-      if (!machineId) {
-        console.warn(`[EXTRACT] Failed to start Fly machine (job stays queued for recovery)`);
-        // Write machine failure to extraction_logs so frontend can display it
-        try {
-          await supabase.from('extraction_logs').insert({
-            project_id: projectId,
-            run_id: runId,
-            step: 'cloning',
-            level: 'warning',
-            message: 'Failed to start worker machine — job queued for automatic retry',
-            duration_ms: null,
-            metadata: null,
-          });
-        } catch {
-          // Fire-and-forget
-        }
-      }
-    } catch (e: any) {
-      console.warn(`[EXTRACT] Failed to start Fly machine (job stays queued for recovery): ${e.message}`);
-      try {
-        await supabase.from('extraction_logs').insert({
-          project_id: projectId,
-          run_id: runId,
-          step: 'cloning',
-          level: 'error',
-          message: `Failed to start extraction machine: ${e.message}`,
-          duration_ms: null,
-          metadata: null,
-        });
-      } catch {
-        // Fire-and-forget
-      }
-    }
+    // Nudge the fleet dispatcher in-process, off the request hot path. The job
+    // is already durable in scan_jobs; the dispatcher provisions a machine on
+    // its next tick (single-flight, hard-capped at FLY_MAX_FLEET). If this nudge
+    // is dropped, the every-minute safety-net cron drains the queue. Creating a
+    // project therefore never blocks on the Fly API.
+    nudgeDispatcher('extraction');
 
     return { success: true, run_id: runId };
   } catch (error: any) {

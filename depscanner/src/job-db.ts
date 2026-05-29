@@ -31,6 +31,16 @@ export function getSupportedJobTypes(): string[] {
   if (process.env.DAST_CREDENTIAL_KEY) {
     types.push('dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run');
   }
+  // The fleet provisioner stamps each machine with SCAN_TYPE at create time.
+  // When set, the machine only claims jobs of that kind — so an extraction-
+  // shaped (64GB) machine never claims a small dast job, and a dast-shaped
+  // (16GB) machine never claims a 64GB extraction job (which would OOM). Both
+  // kinds share the single `deptex-depscanner` Fly app, so this intersection is
+  // what keeps them from poaching each other's work. Untagged machines (legacy
+  // / local dev) keep the previous behaviour of claiming anything they support.
+  const scanType = process.env.SCAN_TYPE?.trim();
+  if (scanType === 'extraction') return ['extraction'];
+  if (scanType === 'dast') return types.filter((t) => t.startsWith('dast'));
   return types;
 }
 

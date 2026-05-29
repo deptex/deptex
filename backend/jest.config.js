@@ -15,6 +15,10 @@ module.exports = {
     '^.*backend/src/lib/supabase$': supabaseMockPath,
     // Sibling-of-lib imports — `lib/aegis/foo.ts` imports `'../supabase'`.
     '^\\.\\./supabase$': supabaseMockPath,
+    // Same-dir imports — a file IN `lib/` imports its sibling `'./supabase'`
+    // (e.g. fleet-dispatcher, extraction-jobs). Without this the real client
+    // loads in tests and throws "Missing Supabase environment variables".
+    '^\\./supabase$': supabaseMockPath,
     '^supertest$': require.resolve('supertest'),
   },
   transform: {
