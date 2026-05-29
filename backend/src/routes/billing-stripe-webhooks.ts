@@ -244,7 +244,7 @@ export async function handlePaymentIntentFailed(pi: any): Promise<void> {
   if (!orgId) return;
 
   if (purpose === 'auto_recharge_topup') {
-    await supabase
+    const { error: updErr } = await supabase
       .from('organization_billing')
       .update({
         auto_recharge_enabled: false,
@@ -252,6 +252,10 @@ export async function handlePaymentIntentFailed(pi: any): Promise<void> {
         auto_recharge_in_progress_started_at: null,
       })
       .eq('organization_id', orgId);
+    if (updErr) {
+      console.error('[billing-webhook] failed to disable auto_recharge after PI failure — releasing for retry', { org_id: orgId, err: updErr });
+      throw new Error(`disable auto_recharge after PI failure failed for ${orgId}: ${updErr.message}`);
+    }
 
     const reason: string = pi.last_payment_error?.message || pi.last_payment_error?.code || 'unknown';
     await sendAutoRechargeFailed(orgId, reason).catch((err) =>
@@ -364,10 +368,11 @@ export async function handleCustomerDeleted(customer: any): Promise<void> {
     })
     .eq('stripe_customer_id', customer.id);
   if (error) {
-    console.error('[billing-webhook] customer.deleted cleanup failed', {
+    console.error('[billing-webhook] customer.deleted cleanup failed — releasing for retry', {
       customer_id: customer.id,
       err: error,
     });
+    throw new Error(`customer.deleted cleanup failed for ${customer.id}: ${error.message}`);
   }
 }
 
