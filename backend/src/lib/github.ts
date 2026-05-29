@@ -252,7 +252,18 @@ export async function getRepositoryRootContents(
   repoFullName: string,
   ref?: string
 ): Promise<Array<{ name: string; path: string; type: string }>> {
-  const url = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/contents`);
+  return getRepositoryDirectoryContents(installationToken, repoFullName, '', ref);
+}
+
+/** Single-level directory listing for a given path. Empty path lists the root. */
+export async function getRepositoryDirectoryContents(
+  installationToken: string,
+  repoFullName: string,
+  path: string,
+  ref?: string
+): Promise<Array<{ name: string; path: string; type: string }>> {
+  const suffix = path ? `/${path.split('/').map(encodeURIComponent).join('/')}` : '';
+  const url = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/contents${suffix}`);
   if (ref) {
     url.searchParams.set('ref', ref);
   }

@@ -17,7 +17,7 @@ import {
   getPullRequest,
   closePullRequest,
 } from '../lib/github';
-import { detectMonorepo } from '../lib/detect-monorepo';
+import { detectMonorepo, findDockerizedPaths, peekRepoRoot, RepoPeek, isDockerFile } from '../lib/detect-monorepo';
 import { createProvider, GitHubProvider, type GitProvider, type OrgIntegration } from '../lib/git-provider';
 import { queueExtractionJob, cancelExtractionJob } from '../lib/extraction-jobs';
 import { MANIFEST_FILES, detectFrameworkForEcosystem, ECOSYSTEM_DEFAULTS } from '../lib/ecosystems';
@@ -271,6 +271,10 @@ async function detectRepoFramework(
 }
 
 const REPO_FRAMEWORK_CACHE_TTL = 24 * 60 * 60; // 24 hours — framework almost never changes
+// Shorter than the framework TTL because peek also returns structural flags
+// (hasRootManifest, rootDockerized, looksLikeMonorepo) that flip the moment
+// someone adds a Dockerfile or pnpm-workspace.yaml.
+const REPO_PEEK_CACHE_TTL = 10 * 60; // 10 minutes
 
 async function detectRepoFrameworkCached(
   provider: GitProvider,
@@ -959,9 +963,10 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
     }
 
     const provider = createProvider(integ);
-    const [result, frameworkResult] = await Promise.all([
+    const [result, frameworkResult, docker] = await Promise.all([
       detectMonorepo(provider, repo_full_name, default_branch),
       detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+      findDockerizedPaths(provider, repo_full_name, default_branch),
     ]);
 
     const withLinkStatus = await Promise.all(
@@ -1002,6 +1007,11 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       potentialProjects: withLinkStatusAndNames,
       framework: frameworkResult.framework,
       ecosystem: frameworkResult.ecosystem,
+      dockerizedPaths: docker.paths,
+      // True if either the monorepo tree walk or the docker scan returned a
+      // truncated tree. Frontend should warn the user that detection may miss
+      // packages / Dockerfiles deeper than what the provider returned.
+      treeTruncated: !!(result.treeTruncated || docker.truncated),
     });
   } catch (error: any) {
     console.error('Error scanning repository (org-level):', error);
@@ -1013,6 +1023,234 @@ router.get('/:id/repositories/scan', async (req: AuthRequest, res) => {
       return res.json({ isMonorepo: false, potentialProjects: [] });
     }
     res.status(500).json({ error: 'Failed to scan repository' });
+  }
+});
+
+// GET /api/organizations/:id/repositories/scan-quick - Cheap root-only peek for the create-project picker.
+// Returns framework/ecosystem from the root manifest plus monorepo / dockerized hints. The full
+// recursive-tree walk (detectMonorepo + findDockerizedPaths) is deferred to /scan, which the
+// frontend only calls when the user opens the path picker.
+router.get('/:id/repositories/scan-quick', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { repo_full_name, default_branch, integration_id } = req.query as { repo_full_name?: string; default_branch?: string; integration_id?: string };
+
+    if (!repo_full_name || !default_branch || !integration_id) {
+      return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
+    }
+
+    // Share the scan rate-limit bucket — both endpoints are per-repo lookups against the same provider.
+    const rl = await checkRateLimit(`repo-scan:${userId}`, 30, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many scan requests. Try again in a minute.' });
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const integ = await getIntegrationById(id, integration_id);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
+    }
+
+    // Scope the cache key by org_id + integration_id so two orgs with separate integrations
+    // pointing at the same full_name can't share a peek entry — and so a re-installed
+    // integration (new integration_id) busts the cache for free.
+    const cacheKey = `repo-peek:${id}:${integ.id}:${repo_full_name}:${default_branch}`;
+    let peek = await getCached<RepoPeek>(cacheKey);
+    if (!peek) {
+      const provider = createProvider(integ);
+      peek = await peekRepoRoot(provider, repo_full_name, default_branch);
+      await setCached(cacheKey, peek, REPO_PEEK_CACHE_TTL);
+    }
+    res.json(peek);
+  } catch (error: any) {
+    console.error('Error peeking repository:', error);
+    const msg = String(error?.message ?? '');
+    if (/404/.test(msg) && /tree|contents|not\s*found/i.test(msg)) {
+      return res.json({ framework: 'unknown', ecosystem: 'unknown', hasRootManifest: false, looksLikeMonorepo: false, rootDockerized: false });
+    }
+    res.status(500).json({ error: 'Failed to inspect repository' });
+  }
+});
+
+// GET /api/organizations/:id/repositories/list-dir - List immediate folder + manifest contents for a path inside a repo
+router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { repo_full_name, default_branch, integration_id, path } = req.query as {
+      repo_full_name?: string;
+      default_branch?: string;
+      integration_id?: string;
+      path?: string;
+    };
+
+    if (!repo_full_name || !default_branch || !integration_id) {
+      return res.status(400).json({ error: 'repo_full_name, default_branch, and integration_id query params are required' });
+    }
+    const dirPath = typeof path === 'string' ? path : '';
+    if (!isValidPackageJsonPath(dirPath)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    const rl = await checkRateLimit(`repo-list-dir:${userId}`, 60, 60);
+    if (!rl.allowed) {
+      res.set('Retry-After', String(rl.retryAfterSeconds ?? 60));
+      return res.status(429).json({ error: 'Too many directory listing requests. Try again in a minute.' });
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .single();
+
+    if (membershipError || !membership) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
+
+    const integ = await getIntegrationById(id, integration_id);
+    if (!integ) {
+      return res.status(400).json({ error: 'Integration not found or not connected' });
+    }
+
+    const provider = createProvider(integ);
+    const rawEntries = await provider.listDirectory(repo_full_name, default_branch, dirPath);
+
+    // Drop noisy directories (node_modules, dist, .git, etc.) — they're never the target of a scan.
+    const { IGNORED_DIRS, MANIFEST_FILES, MANIFEST_EXTENSIONS } = await import('../lib/ecosystems');
+
+    type Entry = {
+      name: string;
+      path: string;
+      type: 'tree' | 'file' | 'submodule';
+      ecosystem?: string;
+      /** True if this folder contains a Dockerfile / Containerfile / compose file at its root.
+       * Populated for folder entries via the per-child probe pass below. */
+      hasDocker?: boolean;
+      isLinked?: boolean;
+      linkedByProjectName?: string;
+    };
+
+    const filtered: Entry[] = [];
+    for (const e of rawEntries) {
+      const name = e.path.split('/').pop() || e.path;
+      if (e.type === 'tree' && IGNORED_DIRS.includes(name)) continue;
+      // Hide dotfiles and dotfolders to keep the picker focused on real code.
+      if (name.startsWith('.')) continue;
+
+      if (e.type === 'tree') {
+        filtered.push({ name, path: e.path, type: 'tree' });
+      } else if (e.type === 'submodule') {
+        filtered.push({ name, path: e.path, type: 'submodule' });
+      } else {
+        // Only surface manifest files; everything else is noise in this picker.
+        const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+        const ecosystem = MANIFEST_FILES[name] || MANIFEST_EXTENSIONS[ext];
+        if (!ecosystem) continue;
+        filtered.push({ name, path: e.path, type: 'file', ecosystem });
+      }
+    }
+
+    // Per-child probe: for each subfolder in this listing, peek at its immediate contents in
+    // parallel to detect a top-level manifest + Dockerfile. This lets the picker paint
+    // framework/docker badges per layer without needing a full recursive scan upfront.
+    // Capped at 25 parallel probes so a wide directory doesn't fan out unbounded.
+    const PROBE_CAP = 25;
+    const folderTargets = filtered.filter((e) => e.type === 'tree').slice(0, PROBE_CAP);
+    const probes = await Promise.allSettled(
+      folderTargets.map(async (folder) => {
+        const children = await provider.listDirectory(repo_full_name, default_branch, folder.path);
+        let ecosystem: string | undefined;
+        let hasDocker = false;
+        for (const [fname, eco] of Object.entries(MANIFEST_FILES)) {
+          if (children.some((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname)) {
+            ecosystem = eco;
+            break;
+          }
+        }
+        if (!ecosystem) {
+          for (const c of children) {
+            if (c.type !== 'blob') continue;
+            const childName = c.path.split('/').pop() || '';
+            const dot = childName.lastIndexOf('.');
+            if (dot === -1) continue;
+            const eco = MANIFEST_EXTENSIONS[childName.slice(dot)];
+            if (eco) { ecosystem = eco; break; }
+          }
+        }
+        for (const c of children) {
+          if (c.type !== 'blob') continue;
+          const childName = c.path.split('/').pop() || '';
+          if (isDockerFile(childName)) { hasDocker = true; break; }
+        }
+        return { path: folder.path, ecosystem, hasDocker };
+      })
+    );
+    for (let i = 0; i < probes.length; i++) {
+      const r = probes[i];
+      if (r.status !== 'fulfilled') continue;
+      const target = folderTargets[i];
+      if (r.value.ecosystem) target.ecosystem = r.value.ecosystem;
+      if (r.value.hasDocker) target.hasDocker = true;
+    }
+
+    // Fold isLinked status for every dir + manifest in this listing in a single
+    // batch query so the picker can show the lock badge without per-row fetches.
+    const candidatePaths = filtered.map((e) => e.path);
+    // Include the directory itself (the user may want to scan the directory)
+    if (dirPath) candidatePaths.push(dirPath);
+
+    if (candidatePaths.length > 0) {
+      const { data: existing } = await supabase
+        .from('project_repositories')
+        .select('package_json_path, project_id, projects(name)')
+        .eq('repo_full_name', repo_full_name)
+        .in('package_json_path', candidatePaths);
+
+      if (existing) {
+        const linkMap = new Map<string, string | undefined>();
+        for (const row of existing as Array<{ package_json_path: string; projects: { name?: string } | null }>) {
+          linkMap.set(row.package_json_path, row.projects?.name);
+        }
+        for (const e of filtered) {
+          if (linkMap.has(e.path)) {
+            e.isLinked = true;
+            e.linkedByProjectName = linkMap.get(e.path);
+          }
+        }
+      }
+    }
+
+    // Folders first, then manifests; both alphabetical.
+    filtered.sort((a, b) => {
+      if (a.type !== b.type) {
+        if (a.type === 'tree' || a.type === 'submodule') return -1;
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    res.json({ path: dirPath, entries: filtered });
+  } catch (error: any) {
+    console.error('Error listing repository directory:', error);
+    const msg = String(error?.message ?? '');
+    if (/404/.test(msg) || /not\s*found/i.test(msg)) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+    res.status(500).json({ error: 'Failed to list directory' });
   }
 });
 
@@ -4321,9 +4559,10 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
     }
 
     const provider = createProvider(integ);
-    const [result, frameworkResult] = await Promise.all([
+    const [result, frameworkResult, docker] = await Promise.all([
       detectMonorepo(provider, repo_full_name, default_branch),
       detectRepoFrameworkCached(provider, repo_full_name, default_branch),
+      findDockerizedPaths(provider, repo_full_name, default_branch),
     ]);
 
     const withLinkStatus = await Promise.all(
@@ -4364,6 +4603,8 @@ router.get('/:id/projects/:projectId/repositories/scan', async (req: AuthRequest
       potentialProjects: withLinkStatusAndNames,
       framework: frameworkResult.framework,
       ecosystem: frameworkResult.ecosystem,
+      dockerizedPaths: docker.paths,
+      treeTruncated: !!(result.treeTruncated || docker.truncated),
     });
   } catch (error: any) {
     console.error('Error scanning repository:', error);

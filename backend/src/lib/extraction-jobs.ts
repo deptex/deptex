@@ -69,7 +69,11 @@ export async function queueExtractionJob(
       return { success: false, error: 'Extraction already in progress for this project' };
     }
 
-    // Plan limit check: syncs
+    // Plan limit check: syncs. The increment is conditional ("was_allowed")
+    // so a denied attempt does NOT charge the counter. But once we pass this
+    // gate we've committed a sync usage; if anything below fails (scan_jobs
+    // insert, etc.) we MUST refund or the org silently loses quota.
+    let syncCounterIncremented = false;
     try {
       const { getOrgPlan, getResolvedLimits } = require('./plan-limits');
       const plan = await getOrgPlan(organizationId);
@@ -81,12 +85,24 @@ export async function queueExtractionJob(
         p_sync_limit: syncLimit,
       });
 
-      if (rpcResult && rpcResult.length > 0 && !rpcResult[0].was_allowed) {
-        return { success: false, error: 'Monthly sync limit reached. Upgrade your plan for more syncs.' };
+      if (rpcResult && rpcResult.length > 0) {
+        if (!rpcResult[0].was_allowed) {
+          return { success: false, error: 'Monthly sync limit reached. Upgrade your plan for more syncs.' };
+        }
+        syncCounterIncremented = true;
       }
     } catch (e: any) {
       console.warn('[EXTRACT] Plan limit check failed (allowing):', e.message);
     }
+
+    const refundSyncIfNeeded = async () => {
+      if (!syncCounterIncremented) return;
+      try {
+        await supabase.rpc('refund_sync_usage', { p_org_id: organizationId });
+      } catch (refundErr: any) {
+        console.error('[EXTRACT] refund_sync_usage failed:', refundErr?.message ?? refundErr);
+      }
+    };
 
     const payload: Record<string, unknown> = {
       repo_full_name: repoRecord.repo_full_name,
@@ -128,6 +144,7 @@ export async function queueExtractionJob(
 
     if (insertError) {
       console.error('[EXTRACT] Failed to insert extraction job:', insertError);
+      await refundSyncIfNeeded();
       return { success: false, error: insertError.message };
     }
 

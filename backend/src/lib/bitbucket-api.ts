@@ -163,13 +163,17 @@ export class BitbucketProvider implements GitProvider {
     return res.text();
   }
 
-  async getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]> {
+  async getTreeRecursive(repo: string, ref: string): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
     const [workspace, repoSlug] = repo.split('/');
     const entries: TreeEntry[] = [];
-    let url: string | undefined = `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/?pagelen=100&max_depth=10`;
+    const MAX_DEPTH = 25;
+    const PAGE_CAP = 100;
+    let url: string | undefined = `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/?pagelen=100&max_depth=${MAX_DEPTH}`;
     let pageCount = 0;
+    let maxDepthSeen = 0;
+    let truncated = false;
 
-    while (url && pageCount < 50) {
+    while (url && pageCount < PAGE_CAP) {
       const res = await this.bbFetch(url);
       const data = (await res.json()) as {
         values: Array<{ path: string; type: string }>;
@@ -183,18 +187,31 @@ export class BitbucketProvider implements GitProvider {
         if (entry.type === 'commit_directory') type = 'tree';
         else if (entry.type === 'commit_submodule') type = 'submodule';
         entries.push({ path: entry.path, type });
+        const depth = entry.path.split('/').length;
+        if (depth > maxDepthSeen) maxDepthSeen = depth;
       }
 
       url = data.next;
       pageCount++;
     }
-    return entries;
+    // If we hit the page cap or any tree entry sits at exactly MAX_DEPTH, the
+    // server may have truncated deeper subtrees. Both cases mean detection is
+    // incomplete and the user should be told.
+    if (pageCount >= PAGE_CAP || maxDepthSeen >= MAX_DEPTH) {
+      truncated = true;
+    }
+    return { entries, truncated };
   }
 
   async getRootContents(repo: string, ref: string): Promise<TreeEntry[]> {
+    return this.listDirectory(repo, ref, '');
+  }
+
+  async listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]> {
     const [workspace, repoSlug] = repo.split('/');
+    const pathSuffix = path ? `${path.split('/').map(encodeURIComponent).join('/')}/` : '';
     const res = await this.bbFetch(
-      `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/?pagelen=100`
+      `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repoSlug)}/src/${encodeURIComponent(ref)}/${pathSuffix}?pagelen=100`
     );
     const data = (await res.json()) as {
       values: Array<{ path: string; type: string }>;

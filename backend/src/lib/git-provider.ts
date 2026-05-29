@@ -2,8 +2,8 @@ import {
   createInstallationToken,
   listInstallationRepositories,
   getRepositoryFileContent as ghGetFileContent,
-  getRepositoryTreeRecursive as ghGetTreeRecursive,
-  getRepositoryRootContents as ghGetRootContents,
+  getRepositoryTreeRecursiveWithFlag as ghGetTreeRecursiveWithFlag,
+  getRepositoryDirectoryContents as ghGetDirContents,
 } from './github';
 
 export interface RepoInfo {
@@ -19,12 +19,23 @@ export interface TreeEntry {
   type: string;
 }
 
+/** Result of a recursive tree walk. `truncated` means the provider didn't return
+ * the full tree — either hit a provider-side entry/size cap (GitHub ~100k entries)
+ * or our own pagination/depth cap (Bitbucket max_depth, page cap). Downstream
+ * consumers should surface this so users know detection may be incomplete. */
+export interface RecursiveTreeResult {
+  entries: TreeEntry[];
+  truncated: boolean;
+}
+
 export interface GitProvider {
   readonly provider: 'github' | 'gitlab' | 'bitbucket';
   listRepositories(): Promise<RepoInfo[]>;
   getFileContent(repo: string, filePath: string, ref: string): Promise<string>;
-  getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]>;
+  getTreeRecursive(repo: string, ref: string): Promise<RecursiveTreeResult>;
   getRootContents(repo: string, ref: string): Promise<TreeEntry[]>;
+  /** Single-level directory listing. Empty path lists the repository root. */
+  listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]>;
   getCloneUrl(repo: string): string;
   getCloneToken(): Promise<string>;
 }
@@ -54,14 +65,19 @@ export class GitHubProvider implements GitProvider {
     return ghGetFileContent(token, repo, filePath, ref);
   }
 
-  async getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]> {
+  async getTreeRecursive(repo: string, ref: string): Promise<RecursiveTreeResult> {
     const token = await this.getToken();
-    return ghGetTreeRecursive(token, repo, ref);
+    const result = await ghGetTreeRecursiveWithFlag(token, repo, ref);
+    return { entries: result.entries, truncated: result.truncated };
   }
 
   async getRootContents(repo: string, ref: string): Promise<TreeEntry[]> {
+    return this.listDirectory(repo, ref, '');
+  }
+
+  async listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]> {
     const token = await this.getToken();
-    const items = await ghGetRootContents(token, repo, ref);
+    const items = await ghGetDirContents(token, repo, path, ref);
     return items.map((i) => ({ path: i.path, type: i.type === 'dir' ? 'tree' : 'blob' }));
   }
 

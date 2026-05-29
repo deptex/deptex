@@ -149,11 +149,13 @@ export class GitLabProvider implements GitProvider {
     return res.text();
   }
 
-  async getTreeRecursive(repo: string, ref: string): Promise<TreeEntry[]> {
+  async getTreeRecursive(repo: string, ref: string): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
     const projectId = encodeURIComponent(repo);
     const entries: TreeEntry[] = [];
     let page = 1;
     const perPage = 100;
+    const PAGE_CAP = 50;
+    let truncated = false;
     while (true) {
       const res = await this.gitlabFetch(
         `/projects/${projectId}/repository/tree?ref=${encodeURIComponent(ref)}&recursive=true&per_page=${perPage}&page=${page}`
@@ -174,15 +176,23 @@ export class GitLabProvider implements GitProvider {
       }
       if (data.length < perPage) break;
       page++;
-      if (page > 50) break;
+      if (page > PAGE_CAP) {
+        truncated = true;
+        break;
+      }
     }
-    return entries;
+    return { entries, truncated };
   }
 
   async getRootContents(repo: string, ref: string): Promise<TreeEntry[]> {
+    return this.listDirectory(repo, ref, '');
+  }
+
+  async listDirectory(repo: string, ref: string, path: string): Promise<TreeEntry[]> {
     const projectId = encodeURIComponent(repo);
+    const pathParam = path ? `&path=${encodeURIComponent(path)}` : '';
     const res = await this.gitlabFetch(
-      `/projects/${projectId}/repository/tree?ref=${encodeURIComponent(ref)}&per_page=100`
+      `/projects/${projectId}/repository/tree?ref=${encodeURIComponent(ref)}&per_page=100${pathParam}`
     );
     const data = (await res.json()) as Array<{ path: string; type: string; name: string }>;
     return data.map((entry) => ({
