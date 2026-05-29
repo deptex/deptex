@@ -12,7 +12,10 @@
     "type-check": "tsc --noEmit",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:baseline": "tsx scripts/migrate.ts baseline",
-    "migrate:status": "tsx scripts/migrate.ts status"
+    "migrate:status": "tsx scripts/migrate.ts status",
+    "reconcile:billing": "tsx scripts/reconcile-billing.ts",
+    "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts",
+    "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts"
   },
   "keywords": [
     "dependency-tracking",
@@ -51,6 +54,7 @@
     "nodemailer": "^7.0.11",
     "openai": "^4.20.0",
     "pacote": "^21.3.1",
+    "resend": "^6.12.4",
     "safe-regex2": "^5.1.1",
     "semver": "^7.7.4",
     "simple-git": "^3.22.0",

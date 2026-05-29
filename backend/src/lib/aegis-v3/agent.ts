@@ -6,7 +6,8 @@ import { buildAegisSystemPrompt, type SystemPromptContext } from './system-promp
 import { ALL_AEGIS_TOOLS, buildToolSet } from './tools';
 import { saveAssistantMessage, saveToolExecution, logChatUsage } from './persistence';
 import { stepsToMessageParts } from './parts';
-import { recordActualCost } from '../ai/cost-cap';
+import { recordMeterEvent } from '../billing/ledger';
+import { chargedCentsForAi } from '../ai/pricing';
 import { newTurnState, type AegisOperatingMode, type AegisToolContext } from './tool-types';
 
 export interface CreateAegisAgentOptions {
@@ -170,14 +171,34 @@ export async function createAegisAgent(opts: CreateAegisAgentOptions): Promise<T
         durationMs: Date.now() - startedAt,
       });
 
-      // Keep the cost-cap counter accurate by reconciling actual usage against
-      // the input-only estimate booked at pre-flight. Errors are swallowed so
-      // a Redis blip can't kill the chat reply.
+      // Charge the org's prepaid balance once per turn. Errors are
+      // swallowed so a billing-DB blip can't kill the chat reply — the
+      // worker still wrote the assistant message; reconcile catches drift.
       try {
         const providerInfo = await getProviderInfoForOrg(opts.orgId, opts.modelId);
-        await recordActualCost(opts.orgId, providerInfo.model, inputTokens, outputTokens, 0);
+        const { cogCents, chargedCents } = chargedCentsForAi(providerInfo.model, inputTokens, outputTokens);
+        if (chargedCents > 0) {
+          await recordMeterEvent({
+            organizationId: opts.orgId,
+            eventType: 'ai_tokens',
+            provider: providerInfo.provider as 'openai' | 'anthropic' | 'google' | 'deepinfra',
+            feature: 'aegis.chat',
+            quantity: inputTokens,
+            outputQuantity: outputTokens > 0 ? outputTokens : undefined,
+            unit: 'mixed_tokens',
+            cogCents,
+            chargedCents,
+            modelId: providerInfo.model,
+            attribution: {
+              userId: opts.userId,
+              resourceType: 'aegis_chat',
+              resourceId: opts.threadId,
+            },
+            idempotencyKey: `aegis:${opts.threadId}:${startedAt}:tokens`,
+          });
+        }
       } catch (err) {
-        console.warn('[aegis-v3] recordActualCost failed', err);
+        console.warn('[aegis-v3] recordMeterEvent failed', err);
       }
 
       // Title generation lives in the route (kicked off in parallel with the

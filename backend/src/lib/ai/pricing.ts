@@ -34,3 +34,21 @@ export function estimateInputTokens(messages: Array<{ content: string | null }>)
   const totalChars = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   return Math.ceil(totalChars / 4);
 }
+
+const AI_MARKUP_FACTOR = 2;
+
+export interface AiCost {
+  cogCents: number;
+  chargedCents: number;
+}
+
+export function chargedCentsForAi(model: string, inputTokens: number, outputTokens: number): AiCost {
+  const pricing = getTokenPricing(model);
+  const cogDollars = inputTokens * pricing.input + outputTokens * pricing.output;
+  const cogCents = cogDollars * 100;
+  const rawChargedCents = cogCents * AI_MARKUP_FACTOR;
+  // Postgres deduct_balance RPC requires an integer cents value, and floors a 1-cent minimum
+  // on any chargeable event so sub-1-cent turns still deduct (rather than silently throwing).
+  const chargedCents = rawChargedCents > 0 ? Math.max(1, Math.round(rawChargedCents)) : 0;
+  return { cogCents, chargedCents };
+}

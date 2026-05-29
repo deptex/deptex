@@ -1,112 +1,206 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-// ─── Types ───
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
-export type PlanTier = 'free' | 'pro' | 'team' | 'enterprise';
-
-export type GatableFeature =
-  | 'aegis_chat' | 'ai_fixes' | 'background_monitoring'
-  | 'sso' | 'mfa_enforcement' | 'ip_allowlist' | 'legal_docs' | 'aegis_management' | 'audit_logs'
-  | 'custom_sla' | 'security_slas' | 'sync_frequency';
-
-export type LimitableResource =
-  | 'projects' | 'members' | 'syncs' | 'teams'
-  | 'notification_rules' | 'integrations' | 'automations';
-
-interface TierLimits {
-  projects: number;
-  members: number;
-  syncs: number;
-  teams: number;
-  notification_rules: number;
-  integrations: number;
-  automations: number;
-  api_rpm: number;
+export interface BillingPaymentMethod {
+  brand: string;
+  last4: string;
+  expiresMonth: number;
+  expiresYear: number;
 }
 
-interface TierFeatures {
-  aegis_chat: boolean;
-  ai_fixes: boolean;
-  background_monitoring: boolean;
-  sso: boolean;
-  mfa_enforcement: boolean;
-  ip_allowlist: boolean;
-  legal_docs: boolean;
-  aegis_management: boolean;
-  audit_logs: boolean;
-  custom_sla: boolean;
-  security_slas: boolean;
-  sync_frequency: boolean;
+export interface BillingState {
+  balanceCents: number;
+  autoRecharge: {
+    enabled: boolean;
+    thresholdCents: number | null;
+    amountCents: number | null;
+    monthlyCapCents: number | null;
+    spentLast30DaysCents: number;
+  };
+  lowBalanceAlertThresholdCents: number;
+  paymentMethod: BillingPaymentMethod | null;
 }
 
-interface UsageData {
-  projects: number;
-  members: number;
-  syncs: number;
-  teams: number;
-  notification_rules: number;
-  integrations: number;
-  automations: number;
-}
-
-export interface PlanData {
-  tier: PlanTier;
-  status: string;
-  limits: TierLimits;
-  usage: UsageData;
-  features: TierFeatures;
-  syncs_reset_at: string;
-  current_period_end: string | null;
-  billing_cycle: string;
-  cancel_at_period_end: boolean;
-  cancel_at: string | null;
-  payment_method_brand: string | null;
-  payment_method_last4: string | null;
-  billing_email: string | null;
-}
-
-interface PlanGateResult {
-  allowed: boolean;
-  requiredTier: PlanTier;
-  currentTier: PlanTier;
-  upgradeUrl: string;
-}
-
-interface PlanLimitResult {
-  allowed: boolean;
-  current: number;
-  limit: number;
-  percentage: number;
-  isUnlimited: boolean;
-}
-
-interface PlanContextValue {
-  plan: PlanData | null;
+interface BillingContextValue {
+  billing: BillingState | null;
   loading: boolean;
   error: string | null;
-  refetch: () => void;
-  isFeatureAllowed: (feature: GatableFeature) => boolean;
-  getPlanGate: (feature: GatableFeature) => PlanGateResult;
-  getPlanLimit: (resource: LimitableResource) => PlanLimitResult;
-  highestUsagePercent: number;
+  refetch: () => Promise<void>;
+  showTopUpModal: boolean;
+  openTopUp: (reason?: 'low_balance' | 'zero_balance' | 'insufficient_credit' | 'manual') => void;
+  closeTopUp: () => void;
+  topUpReason: 'low_balance' | 'zero_balance' | 'insufficient_credit' | 'manual' | null;
 }
 
-// ─── Feature -> minimum tier mapping ───
+const BillingContext = createContext<BillingContextValue | null>(null);
 
-const FEATURE_REQUIRED_TIER: Record<GatableFeature, PlanTier> = {
-  aegis_chat: 'pro',
-  ai_fixes: 'pro',
-  background_monitoring: 'pro',
-  sync_frequency: 'pro',
-  sso: 'team',
-  mfa_enforcement: 'team',
-  ip_allowlist: 'team',
-  legal_docs: 'team',
-  aegis_management: 'pro',
-  audit_logs: 'team',
-  custom_sla: 'enterprise',
-  security_slas: 'team',
+export interface BillingProviderProps {
+  organizationId: string | null;
+  children: React.ReactNode;
+}
+
+export function BillingProvider({ organizationId, children }: BillingProviderProps) {
+  const [billing, setBilling] = useState<BillingState | null>(null);
+  // Start true so the skeleton shows on hard refresh — before useEffect fires the fetch
+  // there's at least one render where billing is null, and a loading=false default would
+  // flash the "Billing isn't initialized" branch.
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showTopUpModal, setShowTopUpModal] = useState(false);
+  const [topUpReason, setTopUpReason] = useState<BillingContextValue['topUpReason']>(null);
+
+  const fetchBilling = useCallback(async () => {
+    if (!organizationId) {
+      setBilling(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      if (!token) throw new Error('Not authenticated');
+
+      const res = await fetch(`${API_BASE_URL}/api/organizations/${organizationId}/billing`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 404) {
+        setBilling(null);
+        return;
+      }
+      if (!res.ok) throw new Error(`Failed to load billing (${res.status})`);
+      const data = (await res.json()) as BillingState;
+      setBilling(data);
+    } catch (err) {
+      console.error('[billing] fetch failed', err);
+      setError(err instanceof Error ? err.message : 'Failed to load billing');
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    void fetchBilling();
+  }, [fetchBilling]);
+
+  // Refetch when the tab regains focus or visibility (e.g. user comes back
+  // after a top-up, or after auto-recharge ran in the background).
+  useEffect(() => {
+    if (!organizationId) return;
+    const onFocus = () => void fetchBilling();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void fetchBilling();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [organizationId, fetchBilling]);
+
+  // Realtime subscription on organization_billing — any UPDATE to balance,
+  // auto-recharge state, or PM triggers an immediate refetch. Catches the
+  // server-side auto-recharge case where the user never leaves the page.
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      await (supabase.realtime as unknown as { setAuth: (t: string | null) => Promise<void> }).setAuth(
+        session?.access_token ?? null,
+      );
+      if (cancelled) return;
+      channel = supabase
+        .channel(`billing-org-${organizationId}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'organization_billing', filter: `organization_id=eq.${organizationId}` },
+          () => {
+            void fetchBilling();
+          },
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [organizationId, fetchBilling]);
+
+  const openTopUp = useCallback(
+    (reason: BillingContextValue['topUpReason'] = 'manual') => {
+      setTopUpReason(reason);
+      setShowTopUpModal(true);
+    },
+    [],
+  );
+
+  const closeTopUp = useCallback(() => {
+    setShowTopUpModal(false);
+    setTopUpReason(null);
+  }, []);
+
+  const value = useMemo<BillingContextValue>(
+    () => ({
+      billing,
+      loading,
+      error,
+      refetch: fetchBilling,
+      showTopUpModal,
+      openTopUp,
+      closeTopUp,
+      topUpReason,
+    }),
+    [billing, loading, error, fetchBilling, showTopUpModal, openTopUp, closeTopUp, topUpReason],
+  );
+
+  return <BillingContext.Provider value={value}>{children}</BillingContext.Provider>;
+}
+
+export function useBilling(): BillingContextValue {
+  const ctx = useContext(BillingContext);
+  if (!ctx) {
+    throw new Error('useBilling must be used inside a BillingProvider');
+  }
+  return ctx;
+}
+
+// Backwards-compat shims for the 4-tier API surface — every feature is
+// now allowed (prepaid model gives everyone everything). These exist ONLY
+// to keep stale call sites compiling until they're deleted. New code
+// should use useBilling() directly.
+
+export type PlanTier = 'free' | 'pro' | 'team' | 'enterprise';
+export type GatableFeature = string;
+export type LimitableResource = string;
+
+interface PermissiveGate {
+  allowed: true;
+  upgradeUrl: string;
+  requiredTier: PlanTier;
+}
+
+interface PermissiveLimit {
+  allowed: true;
+  limit: number;
+  current: number;
+}
+
+const PERMISSIVE_GATE: PermissiveGate = {
+  allowed: true,
+  upgradeUrl: '#',
+  requiredTier: 'free',
+};
+
+const PERMISSIVE_LIMIT: PermissiveLimit = {
+  allowed: true,
+  limit: Number.POSITIVE_INFINITY,
+  current: 0,
 };
 
 export const TIER_DISPLAY: Record<PlanTier, string> = {
@@ -116,131 +210,41 @@ export const TIER_DISPLAY: Record<PlanTier, string> = {
   enterprise: 'Enterprise',
 };
 
-// ─── Context ───
+export interface PlanData {
+  tier: PlanTier;
+}
 
-const PlanContext = createContext<PlanContextValue | null>(null);
+export const PlanProvider = BillingProvider;
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+interface PlanShim {
+  plan: PlanData | null;
+  loading: boolean;
+  error: string | null;
+  refetch: () => Promise<void>;
+  isFeatureAllowed: (_: GatableFeature) => boolean;
+  getPlanGate: (_: GatableFeature) => PermissiveGate;
+  getPlanLimit: (_: LimitableResource) => PermissiveLimit;
+  highestUsagePercent: () => number;
+}
 
-export function PlanProvider({ organizationId, children }: { organizationId: string; children: React.ReactNode }) {
-  const [plan, setPlan] = useState<PlanData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchPlan = useCallback(async () => {
-    if (!organizationId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setLoading(false);
-        return;
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(`${API_BASE_URL}/api/organizations/${organizationId}/billing/plan`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error((errBody as { error?: string }).error || `Failed to fetch plan (${res.status})`);
-      }
-      const data = await res.json();
-      setPlan(data);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load plan');
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    fetchPlan();
-  }, [fetchPlan]);
-
-  const isFeatureAllowed = useCallback((feature: GatableFeature): boolean => {
-    if (!plan) return true;
-    return plan.features[feature] === true;
-  }, [plan]);
-
-  const getPlanGate = useCallback((feature: GatableFeature): PlanGateResult => {
-    const tier = plan?.tier || 'free';
-    const allowed = plan?.features[feature] === true;
-    return {
-      allowed: allowed ?? false,
-      requiredTier: FEATURE_REQUIRED_TIER[feature],
-      currentTier: tier,
-      upgradeUrl: `/organizations/${organizationId}/settings/plan`,
-    };
-  }, [plan, organizationId]);
-
-  const getPlanLimit = useCallback((resource: LimitableResource): PlanLimitResult => {
-    if (!plan) return { allowed: true, current: 0, limit: -1, percentage: 0, isUnlimited: true };
-    const limit = plan.limits[resource];
-    const current = plan.usage[resource];
-    const isUnlimited = limit === -1;
-    const percentage = isUnlimited ? 0 : limit > 0 ? Math.round((current / limit) * 100) : 0;
-    return { allowed: isUnlimited || current < limit, current, limit, percentage, isUnlimited };
-  }, [plan]);
-
-  const highestUsagePercent = useMemo(() => {
-    if (!plan) return 0;
-    const resources: LimitableResource[] = ['projects', 'members', 'syncs', 'teams'];
-    let max = 0;
-    for (const r of resources) {
-      const limit = plan.limits[r];
-      if (limit === -1) continue;
-      const pct = limit > 0 ? Math.round((plan.usage[r] / limit) * 100) : 0;
-      if (pct > max) max = pct;
-    }
-    return max;
-  }, [plan]);
-
-  const value = useMemo(() => ({
-    plan,
+export function usePlan(): PlanShim {
+  const { loading, error, refetch } = useBilling();
+  return {
+    plan: { tier: 'free' as const },
     loading,
     error,
-    refetch: fetchPlan,
-    isFeatureAllowed,
-    getPlanGate,
-    getPlanLimit,
-    highestUsagePercent,
-  }), [plan, loading, error, fetchPlan, isFeatureAllowed, getPlanGate, getPlanLimit, highestUsagePercent]);
-
-  return <PlanContext.Provider value={value}>{children}</PlanContext.Provider>;
+    refetch,
+    isFeatureAllowed: () => true,
+    getPlanGate: () => PERMISSIVE_GATE,
+    getPlanLimit: () => PERMISSIVE_LIMIT,
+    highestUsagePercent: () => 0,
+  };
 }
 
-export function usePlan() {
-  const ctx = useContext(PlanContext);
-  if (!ctx) {
-    return {
-      plan: null,
-      loading: false,
-      error: null,
-      refetch: () => {},
-      isFeatureAllowed: () => true,
-      getPlanGate: (feature: GatableFeature) => ({ allowed: true, requiredTier: 'free' as PlanTier, currentTier: 'free' as PlanTier, upgradeUrl: '' }),
-      getPlanLimit: () => ({ allowed: true, current: 0, limit: -1, percentage: 0, isUnlimited: true }),
-      highestUsagePercent: 0,
-    };
-  }
-  return ctx;
+export function usePlanGate(_: GatableFeature): PermissiveGate {
+  return PERMISSIVE_GATE;
 }
 
-export function usePlanGate(feature: GatableFeature) {
-  const { getPlanGate } = usePlan();
-  return getPlanGate(feature);
-}
-
-export function usePlanLimit(resource: LimitableResource) {
-  const { getPlanLimit } = usePlan();
-  return getPlanLimit(resource);
+export function usePlanLimit(_: LimitableResource): PermissiveLimit {
+  return PERMISSIVE_LIMIT;
 }

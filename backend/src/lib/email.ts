@@ -1,49 +1,57 @@
 import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-// Initialize email transporter
-// For production, you'll want to use a service like SendGrid, Resend, AWS SES, etc.
-// This is a basic SMTP setup - you can configure it with your email service
+// Email backend selection: Resend if RESEND_API_KEY is set (production path —
+// sends from noreply@deptex.dev with proper DKIM/SPF/DMARC), otherwise fall
+// back to Gmail SMTP (legacy / dev). This lets prod swap by setting one env
+// var without touching code.
+
 let transporter: nodemailer.Transporter | null = null;
+let resendClient: Resend | null = null;
 
-function initEmailTransporter() {
+function defaultFrom(): string {
+  return process.env.EMAIL_FROM || 'Deptex <noreply@deptex.dev>';
+}
+
+function initResend(): Resend | null {
+  if (resendClient) return resendClient;
+  const key = process.env.RESEND_API_KEY?.trim();
+  if (!key) return null;
+  resendClient = new Resend(key);
+  console.log('Email backend: Resend');
+  return resendClient;
+}
+
+function initGmailTransporter() {
   if (transporter) return transporter;
 
-  // Check if email is configured
   const emailUser = process.env.EMAIL_USER;
   const emailPassword = process.env.EMAIL_PASSWORD;
-  const emailFrom = process.env.EMAIL_FROM || emailUser || 'noreply@deptex.app';
 
   if (!emailUser || !emailPassword) {
     console.warn('Email not configured. Missing:', {
-      user: !emailUser,
-      password: !emailPassword,
+      RESEND_API_KEY: !process.env.RESEND_API_KEY,
+      EMAIL_USER: !emailUser,
+      EMAIL_PASSWORD: !emailPassword,
     });
-    console.warn('Invitation emails will not be sent.');
+    console.warn('Outbound emails will not be sent.');
     return null;
   }
 
-  // Use Gmail service (simpler and more reliable)
   transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
       user: emailUser,
-      pass: emailPassword.trim(), // Trim any whitespace just in case
+      pass: emailPassword.trim(),
     },
   });
 
-  // Test the connection asynchronously (don't block initialization)
   transporter.verify().then(() => {
-    console.log('✅ Email transporter verified successfully - Gmail connection works!');
+    console.log('Email backend: Gmail SMTP (legacy)');
   }).catch((verifyError: any) => {
-    console.error('❌ Email transporter verification failed:', verifyError.message);
-    console.error('This means the credentials are incorrect or Gmail is blocking the connection.');
-    console.error('Please check:');
-    console.error('1. Is 2-Step Verification enabled on the Gmail account?');
-    console.error('2. Was the App Password generated for the correct account?');
-    console.error('3. Did you copy the App Password correctly (16 characters, no spaces)?');
+    console.error('Gmail SMTP verification failed:', verifyError.message);
   });
 
-  console.log('Email transporter initialized with Gmail service');
   return transporter;
 }
 
@@ -58,23 +66,44 @@ export async function sendEmail(options: {
   html?: string;
   from?: string;
 }): Promise<{ sent: boolean; messageId?: string; error?: string }> {
-  const transporter = initEmailTransporter();
-  if (!transporter) {
-    return { sent: false, error: 'Email not configured' };
+  const from = options.from || defaultFrom();
+  const toList = Array.isArray(options.to) ? options.to : [options.to];
+
+  const resend = initResend();
+  if (resend) {
+    try {
+      const result = await resend.emails.send({
+        from,
+        to: toList,
+        subject: options.subject,
+        text: options.text,
+        html: options.html,
+      });
+      if (result.error) {
+        console.error('sendEmail (resend) error:', result.error);
+        return { sent: false, error: result.error.message };
+      }
+      return { sent: true, messageId: result.data?.id };
+    } catch (error: any) {
+      console.error('sendEmail (resend) threw:', error?.message);
+      return { sent: false, error: error?.message };
+    }
   }
-  const to = Array.isArray(options.to) ? options.to.join(', ') : options.to;
-  const from = options.from || process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@deptex.app';
+
+  const t = initGmailTransporter();
+  if (!t) return { sent: false, error: 'Email not configured' };
+
   try {
-    const result = await transporter.sendMail({
+    const result = await t.sendMail({
       from,
-      to,
+      to: toList.join(', '),
       subject: options.subject,
       text: options.text,
       html: options.html,
     });
     return { sent: true, messageId: result.messageId };
   } catch (error: any) {
-    console.error('sendEmail error:', error?.message);
+    console.error('sendEmail (gmail) error:', error?.message);
     return { sent: false, error: error?.message };
   }
 }
@@ -87,14 +116,6 @@ export async function sendInvitationEmail(
   role: string,
   teamName?: string
 ) {
-  const emailTransporter = initEmailTransporter();
-  
-  if (!emailTransporter) {
-    console.log('Email not configured. Skipping email send.');
-    console.log('Invite link:', inviteLink);
-    return;
-  }
-
   const html = `
     <!DOCTYPE html>
     <html>
@@ -142,26 +163,18 @@ ${inviteLink}
 This invitation will expire in 7 days.
   `;
 
-  try {
-    console.log(`Attempting to send invitation email to ${email}...`);
-    const result = await emailTransporter.sendMail({
-      from: process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@deptex.app',
-      to: email,
-      subject: `Invitation to join ${organizationName} on Deptex`,
-      html,
-      text,
-    });
-    console.log(`✅ Invitation email sent successfully to ${email}`);
-    console.log('Email result:', result.messageId);
-  } catch (error: any) {
-    console.error('❌ Error sending invitation email:', error);
-    console.error('Error details:', {
-      message: error.message,
-      code: error.code,
-      command: error.command,
-      response: error.response,
-    });
-    throw error;
+  const result = await sendEmail({
+    to: email,
+    subject: `Invitation to join ${organizationName} on Deptex`,
+    html,
+    text,
+  });
+
+  if (!result.sent) {
+    console.error('Failed to send invitation email:', result.error);
+    console.log('Invite link:', inviteLink);
+    throw new Error(result.error ?? 'Email send failed');
   }
+  console.log(`Invitation email sent to ${email} (id=${result.messageId})`);
 }
 

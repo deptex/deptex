@@ -9,6 +9,7 @@
  */
 
 import express from 'express';
+import { isValidInternalKey } from '../middleware/internal-key';
 
 const router = express.Router();
 
@@ -16,8 +17,11 @@ const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY?.trim();
 const BACKEND_URL = (process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 async function verifyInternalAuth(req: express.Request): Promise<boolean> {
-  if (INTERNAL_API_KEY && req.headers['x-internal-api-key'] === INTERNAL_API_KEY) return true;
-  if (INTERNAL_API_KEY && (req.headers.authorization === `Bearer ${INTERNAL_API_KEY}`)) return true;
+  const headerKey = req.headers['x-internal-api-key'] as string | undefined;
+  const authz = req.headers.authorization;
+  const bearerKey = authz && authz.startsWith('Bearer ') ? authz.slice(7) : undefined;
+  if (isValidInternalKey(headerKey)) return true;
+  if (isValidInternalKey(bearerKey)) return true;
   try {
     const signature = req.headers['upstash-signature'] as string;
     if (!signature || !process.env.QSTASH_CURRENT_SIGNING_KEY) return false;

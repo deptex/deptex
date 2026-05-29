@@ -9,6 +9,7 @@ module.exports = {
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   testPathIgnorePatterns: ['/node_modules/', 'src/test/aegis-analysis.test.ts', '/depscanner/node_modules/', '/fix-worker/node_modules/', 'depscanner/src/taint-engine/spec.ts'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  globalTeardown: '<rootDir>/jest.globalTeardown.js',
   moduleNameMapper: {
     '^(\\.\\./)+lib/supabase$': supabaseMockPath,
     '^(\\.\\./)+backend/src/lib/supabase$': supabaseMockPath,
