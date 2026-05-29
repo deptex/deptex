@@ -1413,19 +1413,6 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You do not have permission to create projects' });
     }
 
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'projects');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: `You've reached the ${planCheck.limit} project limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
-          code: 'plan_limit',
-          resource: 'projects', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open if plan-limits module unavailable */ }
-
     const teamIdsArray = Array.isArray(team_ids) ? team_ids.filter((tid: any) => tid && typeof tid === 'string') : [];
     if (teamIdsArray.length > 0) {
       const { data: teams, error: teamsError } = await supabase
