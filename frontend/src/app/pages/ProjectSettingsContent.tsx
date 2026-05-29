@@ -2030,8 +2030,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                                 onChange={setSelectedTeamId}
                                 teams={teams}
                                 placeholder="Select a team"
-                                showNoTeamOption={false}
-                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
+                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground transition-colors"
                               />
                             </div>
                           )}

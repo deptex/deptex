@@ -173,6 +173,16 @@ export interface RepoWithProvider {
   display_name?: string;
 }
 
+/** Cheap root-only repo inspection. Returned by `getOrganizationRepositoryPeek`.
+ * Backend source of truth: `backend/src/lib/detect-monorepo.ts` RepoPeek. */
+export interface RepoPeek {
+  framework: string;
+  ecosystem: string;
+  hasRootManifest: boolean;
+  looksLikeMonorepo: boolean;
+  rootDockerized: boolean;
+}
+
 export interface OrganizationInvitation {
   id: string;
   organization_id: string;
@@ -722,8 +732,8 @@ export const api = {
       /**
        * When present, the backend performs project insert + repo connect +
        * extraction queue inline and rolls the project back on failure. Use
-       * this for the create-from-sidebar flow where a project is always
-       * paired with a repo.
+       * this for the create-with-repo flow where a project is always paired
+       * with a repository on creation.
        */
       repo?: {
         repo_full_name: string;
@@ -1641,6 +1651,23 @@ export const api = {
     }
   >(),
 
+  /** Cheap root-only peek used when the user picks a repo in the create-project picker.
+   * One root-contents call + at most one manifest read on the backend. The heavier
+   * `getOrganizationRepositoryScan` is only triggered when the user opens the path picker. */
+  async getOrganizationRepositoryPeek(
+    organizationId: string,
+    repoFullName: string,
+    defaultBranch: string,
+    integrationId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<RepoPeek> {
+    const params = new URLSearchParams({ repo_full_name: repoFullName, default_branch: defaultBranch, integration_id: integrationId });
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/scan-quick?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  },
+
   async getOrganizationRepositoryScan(
     organizationId: string,
     repoFullName: string,
@@ -1660,6 +1687,11 @@ export const api = {
     }>;
     framework?: string;
     ecosystem?: string;
+    dockerizedPaths?: string[];
+    /** True if the provider returned a truncated tree (GitHub ~100k entry cap,
+     * Bitbucket max-depth cap, etc.). Detection may have missed deep
+     * packages / Dockerfiles. Surface a warning to the user. */
+    treeTruncated?: boolean;
   }> {
     const key = `${organizationId}:${repoFullName}:${defaultBranch}:${integrationId}`;
     const cached = this._organizationRepositoryScanCache.get(key);
@@ -1673,6 +1705,38 @@ export const api = {
     );
     this._organizationRepositoryScanCache.set(key, { data, fetchedAt: Date.now() });
     return data;
+  },
+
+  async listRepositoryDirectory(
+    organizationId: string,
+    repoFullName: string,
+    defaultBranch: string,
+    integrationId: string,
+    path: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
+    path: string;
+    entries: Array<{
+      name: string;
+      path: string;
+      type: 'tree' | 'file' | 'submodule';
+      ecosystem?: string;
+      /** True if the folder contains a Dockerfile / Containerfile / compose file at its root. */
+      hasDocker?: boolean;
+      isLinked?: boolean;
+      linkedByProjectName?: string;
+    }>;
+  }> {
+    const params = new URLSearchParams({
+      repo_full_name: repoFullName,
+      default_branch: defaultBranch,
+      integration_id: integrationId,
+      path,
+    });
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/repositories/list-dir?${params}`,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
   },
 
   async getProjectRepositories(

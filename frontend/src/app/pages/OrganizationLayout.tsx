@@ -2,9 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Outlet, useNavigate } from 'react-router-dom';
 import OrgSidebar from '../../components/OrgSidebar';
 import { SidebarInset, SidebarProvider } from '../../components/ui/sidebar';
-import { CreateProjectSidebar } from '../../components/CreateProjectSidebar';
 import { InviteMemberDialog } from '../../components/InviteMemberDialog';
-import { api, Organization, RolePermissions, Team, Project } from '../../lib/api';
+import { api, Organization, RolePermissions } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
@@ -40,10 +39,6 @@ export default function OrganizationLayout() {
   }, [id]);
 
   const [dbPermissions, setDbPermissions] = useState<RolePermissions | null>(null);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [showCreateProjectSidebar, setShowCreateProjectSidebar] = useState(false);
-  const [createProjectLockedTeam, setCreateProjectLockedTeam] = useState<Team | null>(null);
   const [showInviteMemberDialog, setShowInviteMemberDialog] = useState(false);
 
   // Prefer DB permissions, fall back to cache, then to org payload.
@@ -84,65 +79,12 @@ export default function OrganizationLayout() {
     loadDbPermissions();
   }, [organization?.id, organization?.role, organization?.permissions]);
 
-  // Load teams (used by CreateProjectSidebar + InviteMemberDialog)
-  const refetchTeams = useMemo(() => {
-    if (!id) return async () => {};
-    return async () => {
-      try {
-        const data = await api.getTeams(id);
-        setTeams(data);
-      } catch {
-        setTeams([]);
-      }
-    };
-  }, [id]);
-
+  // OrgSidebar uses this to notify the rest of the app that teams may have
+  // changed (e.g. after creating one) so listeners can refetch on their own.
+  // We don't keep a local teams cache here — consumers self-fetch.
   const refetchTeamsAndNotify = useCallback(async () => {
-    await refetchTeams();
     window.dispatchEvent(new CustomEvent('organization:teamsUpdated'));
-  }, [refetchTeams]);
-
-  useEffect(() => {
-    if (!id) {
-      setTeams([]);
-      return;
-    }
-    let cancelled = false;
-    api.getTeams(id)
-      .then((data) => { if (!cancelled) setTeams(data); })
-      .catch(() => { if (!cancelled) setTeams([]); });
-    return () => { cancelled = true; };
-  }, [id]);
-
-  // Load projects (used by CreateProjectSidebar event payloads)
-  const refetchProjects = useMemo(() => {
-    if (!id) return async () => {};
-    return async () => {
-      try {
-        const data = await api.getProjects(id);
-        setProjects(data);
-      } catch {
-        setProjects([]);
-      }
-    };
-  }, [id]);
-
-  const refetchProjectsAndNotify = useCallback(async () => {
-    await refetchProjects();
-    window.dispatchEvent(new CustomEvent('organization:projectsUpdated'));
-  }, [refetchProjects]);
-
-  useEffect(() => {
-    if (!id) {
-      setProjects([]);
-      return;
-    }
-    let cancelled = false;
-    api.getProjects(id)
-      .then((data) => { if (!cancelled) setProjects(data); })
-      .catch(() => { if (!cancelled) setProjects([]); });
-    return () => { cancelled = true; };
-  }, [id]);
+  }, []);
 
   // InviteMemberDialog self-fetches members/invitations/roles when it opens.
   // We used to prefetch them here on every org page mount to make the dialog feel
@@ -172,17 +114,6 @@ export default function OrganizationLayout() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // Listen for overview-page "Create project" so Plus dropdown can open the sidebar
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      setCreateProjectLockedTeam(detail?.lockedTeam ?? null);
-      setShowCreateProjectSidebar(true);
-    };
-    window.addEventListener('organization:openCreateProject', handler);
-    return () => window.removeEventListener('organization:openCreateProject', handler);
-  }, []);
 
   // Listen for overview-page "Invite member"
   useEffect(() => {
@@ -251,28 +182,6 @@ export default function OrganizationLayout() {
           </SidebarInset>
         </SidebarProvider>
       </PlanProvider>
-
-      {showCreateProjectSidebar && (
-        <CreateProjectSidebar
-          open={showCreateProjectSidebar}
-          onClose={() => { setShowCreateProjectSidebar(false); setCreateProjectLockedTeam(null); }}
-          organizationId={id}
-          teams={teams}
-          lockedTeam={createProjectLockedTeam}
-          onProjectsReload={refetchProjectsAndNotify}
-          onProjectCreated={(project, framework) => {
-            window.dispatchEvent(new CustomEvent('organization:projectCreated', {
-              detail: {
-                id: project.id,
-                name: project.name,
-                owner_team_id: project.owner_team_id ?? null,
-                team_ids: project.team_ids ?? [],
-                framework: framework ?? project.framework ?? null,
-              },
-            }));
-          }}
-        />
-      )}
 
       {organization && (
         <InviteMemberDialog

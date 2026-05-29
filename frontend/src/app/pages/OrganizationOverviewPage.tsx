@@ -2681,7 +2681,7 @@ export default function OrganizationOverviewPage() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="cursor-pointer gap-2"
-                onClick={() => window.dispatchEvent(new CustomEvent('organization:openCreateProject'))}
+                onClick={() => navigate(`/organizations/${orgId}/new-project`, { state: { teams: Object.values(teamsById) } })}
               >
                 <FolderPlus className="h-4 w-4" />
                 Create project
@@ -3056,11 +3056,12 @@ export default function OrganizationOverviewPage() {
                       </div>
                       {(teamSidebarPermissions?.manage_projects || teamSidebarHasOrgManagePermission) && (
                       <Button
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent('organization:openCreateProject', {
-                            detail: { lockedTeam: teamSidebarTeamData ?? undefined },
-                          }));
-                        }}
+                        onClick={() => navigate(`/organizations/${orgId}/new-project`, {
+                          state: {
+                            lockedTeam: teamSidebarTeamData ?? null,
+                            teams: Object.values(teamsById),
+                          },
+                        })}
                         className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
                       >
                         <Plus className="h-4 w-4 mr-2" />

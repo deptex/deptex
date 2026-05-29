@@ -1,10 +1,10 @@
-import { Check, ChevronDown, Lock } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, Lock, Search } from 'lucide-react';
 import { Team } from '../lib/api';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { cn } from '../lib/utils';
@@ -17,8 +17,6 @@ interface ProjectTeamSelectProps {
   variant?: 'default' | 'modal';
   locked?: boolean;
   placeholder?: string;
-  /** When false, hides the "No team (optional)" option. Default true. */
-  showNoTeamOption?: boolean;
 }
 
 export function ProjectTeamSelect({
@@ -29,29 +27,39 @@ export function ProjectTeamSelect({
   variant = 'default',
   locked = false,
   placeholder = 'Select a team...',
-  showNoTeamOption = true,
 }: ProjectTeamSelectProps) {
+  const [search, setSearch] = useState('');
   const selectedTeam = teams.find(team => team.id === value);
 
-  const handleSelect = (next: string | null) => {
+  const handleToggle = (id: string) => {
     if (locked) return;
-    onChange(next);
+    onChange(value === id ? null : id);
   };
 
+  const q = search.trim().toLowerCase();
+  const filteredTeams = q
+    ? teams.filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) ||
+          (t.description ?? '').toLowerCase().includes(q),
+      )
+    : teams;
+
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(open) => { if (!open) setSearch(''); }}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           disabled={locked}
+          style={{ WebkitTapHighlightColor: 'transparent' }}
           className={cn(
             'w-full min-h-[42px] px-3 py-2.5 rounded-lg text-sm text-left',
             'border border-border bg-background-card',
-            'focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary',
-            'flex items-center justify-between gap-2 transition-all',
+            'focus:outline-none focus:ring-2 focus:ring-ring focus:border-input',
+            'flex items-center justify-between gap-2 transition-colors',
             variant === 'modal' && 'bg-background-card hover:border-foreground-secondary/30',
             !variant && 'hover:border-foreground-secondary/30',
-            'data-[state=open]:ring-2 data-[state=open]:ring-primary/50 data-[state=open]:border-primary',
+            'data-[state=open]:ring-2 data-[state=open]:ring-ring data-[state=open]:border-input',
             locked && 'cursor-not-allowed opacity-80',
             className
           )}
@@ -72,7 +80,7 @@ export function ProjectTeamSelect({
       <DropdownMenuContent
         align="start"
         sideOffset={6}
-        className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-h-[min(16rem,60vh)] overflow-auto rounded-lg border border-border bg-background-card p-1 shadow-xl"
+        className="min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-lg border border-border bg-background-card p-0 shadow-xl"
       >
         {teams.length === 0 ? (
           <div className="px-3 py-4 text-sm text-foreground-secondary text-center">
@@ -80,56 +88,47 @@ export function ProjectTeamSelect({
           </div>
         ) : (
           <>
-            {showNoTeamOption && (
-              <>
-                <DropdownMenuItem
-                  onSelect={() => handleSelect(null)}
-                  className="rounded-md px-3 py-2.5 text-sm cursor-pointer focus:bg-table-hover flex items-center justify-between gap-2"
-                >
-                  <span className="text-foreground-secondary">No team (optional)</span>
-                  <div
-                    className={cn(
-                      'h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors',
-                      value === null ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
-                    )}
-                    aria-hidden
+            <div className="p-2 border-b border-border">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground-secondary pointer-events-none" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  placeholder="Search teams..."
+                  autoFocus
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                  className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
+                />
+              </div>
+            </div>
+            <div className="max-h-[min(16rem,60vh)] overflow-auto p-1">
+              {filteredTeams.length === 0 ? (
+                <div className="px-3 py-4 text-sm text-foreground-secondary text-center">
+                  No matching teams
+                </div>
+              ) : (
+                filteredTeams.map((team) => (
+                  <DropdownMenuItem
+                    key={team.id}
+                    onSelect={() => handleToggle(team.id)}
+                    className="rounded-md px-3 py-2.5 text-sm cursor-pointer focus:bg-table-hover flex items-center gap-2"
                   >
-                    {value === null && <Check className="h-2.5 w-2.5" />}
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator className="my-1" />
-              </>
-            )}
-            {teams.map((team) => {
-              const isSelected = value === team.id;
-              return (
-                <DropdownMenuItem
-                  key={team.id}
-                  onSelect={() => handleSelect(team.id)}
-                  className="rounded-md px-3 py-2.5 text-sm cursor-pointer focus:bg-table-hover flex items-center justify-between gap-2"
-                >
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <span className="font-medium text-foreground">
-                      {team.name}
-                    </span>
-                    {team.description && (
-                      <span className="text-xs text-foreground-secondary line-clamp-1">
-                        {team.description}
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <span className="font-medium text-foreground">
+                        {team.name}
                       </span>
-                    )}
-                  </div>
-                  <div
-                    className={cn(
-                      'h-4 w-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors',
-                      isSelected ? 'border-foreground bg-foreground text-background' : 'border-foreground-secondary/50 bg-transparent'
-                    )}
-                    aria-hidden
-                  >
-                    {isSelected && <Check className="h-2.5 w-2.5" />}
-                  </div>
-                </DropdownMenuItem>
-              );
-            })}
+                      {team.description && (
+                        <span className="text-xs text-foreground-secondary line-clamp-1">
+                          {team.description}
+                        </span>
+                      )}
+                    </div>
+                  </DropdownMenuItem>
+                ))
+              )}
+            </div>
           </>
         )}
       </DropdownMenuContent>
