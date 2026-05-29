@@ -332,8 +332,8 @@ export async function handlePaymentMethodDetached(pm: any): Promise<void> {
     .eq('stripe_default_payment_method_id', pm.id)
     .maybeSingle();
   if (lookupErr) {
-    console.error('[billing-webhook] PM detach lookup failed', { pm_id: pm.id, err: lookupErr });
-    return;
+    console.error('[billing-webhook] PM detach lookup failed — releasing for retry', { pm_id: pm.id, err: lookupErr });
+    throw new Error(`PM detach lookup failed for pm ${pm.id}: ${lookupErr.message}`);
   }
   if (!billing) return;
 
