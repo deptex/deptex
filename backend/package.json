@@ -14,6 +14,7 @@
     "migrate:baseline": "tsx scripts/migrate.ts baseline",
     "migrate:status": "tsx scripts/migrate.ts status",
     "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts",
+    "e2e:fleet:drain": "tsx scripts/e2e-fleet-drain.ts",
     "fleet:probe": "tsx scripts/fleet-probe.ts"
   },
   "keywords": [
