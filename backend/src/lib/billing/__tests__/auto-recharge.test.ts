@@ -11,6 +11,7 @@ jest.mock('../stripe-billing', () => ({
 jest.mock('../alerts', () => ({
   resolveBillingRecipients: jest.fn().mockResolvedValue(['owner@example.com']),
   sendAutoRechargeFailed: jest.fn().mockResolvedValue({ sent: true }),
+  sendAutoRechargeCapReached: jest.fn().mockResolvedValue({ sent: true }),
 }));
 
 import { maybeAutoRecharge } from '../auto-recharge';
@@ -95,8 +96,8 @@ describe('maybeAutoRecharge', () => {
     expect(createTopUpInvoice).not.toHaveBeenCalled();
   });
 
-  it('clears stuck flag when in_progress > 30 minutes old', async () => {
-    const oldTs = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+  it('clears stuck flag when in_progress > 60 minutes old', async () => {
+    const oldTs = new Date(Date.now() - 61 * 60 * 1000).toISOString();
     setTableResponse('organization_billing', 'single', {
       data: billingRow({
         auto_recharge_in_progress: true,
