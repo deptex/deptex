@@ -42,6 +42,24 @@ router.get('/ping', (req: AuthRequest, res) => {
 });
 
 /**
+ * GET /api/admin/fleet-metrics?type=extraction
+ * Live fleet-dispatcher metrics for the admin panel: queue depth, running /
+ * starting / inflight machine counts vs MAX_FLEET, hourly spend vs cap, and
+ * queue-wait percentiles + throughput over the last hour.
+ */
+router.get('/fleet-metrics', async (req: AuthRequest, res) => {
+  try {
+    const type = typeof req.query.type === 'string' ? req.query.type : 'extraction';
+    const { getFleetMetrics } = require('../lib/fleet-dispatcher');
+    const metrics = await getFleetMetrics(type);
+    res.json(metrics);
+  } catch (e: any) {
+    console.error('[admin/fleet-metrics] error:', e?.message ?? e);
+    res.status(500).json({ error: 'Failed to load fleet metrics' });
+  }
+});
+
+/**
  * GET /api/admin/extraction-failures
  * Paginated list of Phase 19 extraction_step_errors rows, with project names joined.
  *

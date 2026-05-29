@@ -6111,6 +6111,26 @@ export async function apiAdminPing(): Promise<{ ok: boolean; email: string }> {
   return fetchWithAuth('/api/admin/ping');
 }
 
+export interface FleetMetrics {
+  type: string;
+  queued: number;
+  running: number;
+  starting: number;
+  flyActive: number;
+  inflight: number;
+  maxFleet: number;
+  spendThisHourUsd: number;
+  spendCapUsd: number | null;
+  spendBlocked: boolean;
+  p50QueueSeconds: number | null;
+  p95QueueSeconds: number | null;
+  throughputPerHour: number;
+}
+
+export async function apiAdminFleetMetrics(type = 'extraction'): Promise<FleetMetrics> {
+  return fetchWithAuth(`/api/admin/fleet-metrics?type=${encodeURIComponent(type)}`);
+}
+
 export async function apiAdminListExtractionFailures(params: {
   page?: number;
   per_page?: number;
