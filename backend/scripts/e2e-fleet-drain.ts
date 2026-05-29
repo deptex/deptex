@@ -48,7 +48,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   if (!process.env.FLY_API_TOKEN) throw new Error('FLY_API_TOKEN not set');
-  if (!process.env.FLY_DEPSCANNER_IMAGE) throw new Error('FLY_DEPSCANNER_IMAGE not set (the pinned digest)');
+  // FLY_DEPSCANNER_IMAGE is optional now — the dispatcher auto-resolves the image
+  // from the live deployment when it's unset (see resolveDepscannerImage).
 
   const app = DEPSCANNER_CONFIG.app;
   console.log(`[drain] app=${app}`);

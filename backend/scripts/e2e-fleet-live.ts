@@ -21,7 +21,7 @@ import {
   listMachines,
   stopFlyMachine,
   machineScanType,
-  getDepscannerImage,
+  resolveDepscannerImage,
 } from '../src/lib/fly-machines';
 
 const FLY_API_BASE = 'https://api.machines.dev/v1';
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   if (!process.env.FLY_API_TOKEN) throw new Error('FLY_API_TOKEN not set');
 
   const app = DEPSCANNER_CONFIG.app;
-  console.log(`[e2e] app=${app} image=${getDepscannerImage()}`);
+  console.log(`[e2e] app=${app} image=${await resolveDepscannerImage()}`);
 
   console.log('[e2e] creating one pinned-image extraction burst machine...');
   const id = await createDepscannerBurst();

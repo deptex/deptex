@@ -8,17 +8,6 @@ import path from 'path';
 // Load .env file from the backend root directory (one level up from src/)
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-// Fail loud when Fly is configured but the depscanner image pin is missing: the
-// fleet dispatcher requires FLY_DEPSCANNER_IMAGE (a release digest) so a cold
-// start from zero machines never gambles on `:latest`. A missing pin is a
-// deploy bug — surface it at boot rather than silently failing every scan.
-if (process.env.FLY_API_TOKEN && !process.env.FLY_DEPSCANNER_IMAGE?.trim()) {
-  console.error(
-    '[BOOT] FLY_API_TOKEN is set but FLY_DEPSCANNER_IMAGE is not — extraction provisioning ' +
-      'will fail until the pinned depscanner release image digest is set in the env.',
-  );
-}
-
 import express from 'express';
 import cors from 'cors';
 import userProfileRouter from './routes/userProfile';

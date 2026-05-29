@@ -89,6 +89,7 @@ jest.mock('../fly-machines', () => {
     machineMatchesScanType: () => true,
     listMachines: async () => mockListMachinesReturn,
     startMachine: async () => undefined,
+    resolveDepscannerImage: async () => 'registry.fly.io/deptex-depscanner@sha256:test',
     createDepscannerBurst: async () => {
       if (mockThrowRateLimit) throw new MockFlyRateLimitError('429');
       const id = `burst-${mockBurstCount}`;
