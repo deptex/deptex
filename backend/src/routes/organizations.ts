@@ -116,7 +116,7 @@ router.get('/', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
 
-    // Get organizations with user's role in a single query using join (plan comes from organization_plans)
+    // Get organizations with user's role in a single query using join
     const { data: memberships, error: membershipError } = await supabase
       .from('organization_members')
       .select(`
@@ -141,16 +141,6 @@ router.get('/', async (req: AuthRequest, res) => {
     }
 
     const organizationIds = memberships.map(m => m.organization_id);
-
-    // Plan tier from organization_plans (single source of truth)
-    const { data: planRows } = await supabase
-      .from('organization_plans')
-      .select('organization_id, plan_tier')
-      .in('organization_id', organizationIds);
-    const planByOrgId = new Map<string, string>();
-    (planRows || []).forEach((row: { organization_id: string; plan_tier: string }) => {
-      planByOrgId.set(row.organization_id, row.plan_tier ?? 'free');
-    });
 
     // Get member counts for all organizations in parallel using count queries
     const memberCountPromises = organizationIds.map(async (orgId) => {
@@ -199,7 +189,7 @@ router.get('/', async (req: AuthRequest, res) => {
 
         return {
           ...org,
-          plan: planByOrgId.get(m.organization_id) ?? 'free',
+          plan: 'free', // tiers retired with the prepaid billing model
           role: m.role || 'member',
           role_display_name: roleData?.displayName || null,
           role_color: roleData?.color || null,
@@ -245,7 +235,7 @@ router.post('/', async (req: AuthRequest, res) => {
       ?? idData?.avatar_url
       ?? null;
 
-    // Create organization (plan tier lives in organization_plans only)
+    // Create organization
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
       .insert({ name: name.trim(), avatar_url: creatorAvatarUrl })
@@ -256,7 +246,7 @@ router.post('/', async (req: AuthRequest, res) => {
       throw orgError;
     }
 
-    // The plan row, owner membership, default roles, and the seed data
+    // The owner membership, default roles, and the seed data
     // (statuses, asset tiers, policy code) all only need organization.id and
     // are mutually independent — insert them in one parallel batch instead of
     // ~8 sequential round trips.
@@ -284,8 +274,6 @@ router.post('/', async (req: AuthRequest, res) => {
     };
 
     const seedResults = await Promise.all([
-      supabase.from('organization_plans')
-        .insert({ organization_id: organization.id, plan_tier: 'free' }),
       supabase.from('organization_members')
         .insert({ organization_id: organization.id, user_id: userId, role: 'owner' }),
       supabase.from('organization_roles').insert([
@@ -364,14 +352,12 @@ router.get('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Org details, plan tier, and the caller's role are independent reads.
+    // Org details and the caller's role are independent reads.
     const [
       { data: organization, error: orgError },
-      { data: planRow },
       { data: roleData },
     ] = await Promise.all([
       supabase.from('organizations').select('*').eq('id', id).single(),
-      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
       supabase
         .from('organization_roles')
         .select('display_name, color, display_order, permissions')
@@ -386,7 +372,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
 
     res.json({
       ...organization,
-      plan: planRow?.plan_tier ?? 'free',
+      plan: 'free', // tiers retired with the prepaid billing model
       role: membership.role,
       role_display_name: roleData?.display_name || null,
       role_color: roleData?.color || null,
@@ -688,20 +674,6 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
     if (existingInvitation) {
       return res.status(400).json({ error: 'Already invited this person' });
     }
-
-    // Plan limit check: members
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'members');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} members.`,
-          resource: 'members', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
 
     // Validate team_ids if provided and get team names
     const teamNames: string[] = [];
@@ -1672,16 +1644,14 @@ router.put('/:id', async (req: AuthRequest, res) => {
       normalizedName = name.trim();
     }
 
-    // Membership (the owner gate), the plan tier (needed for the response),
-    // and the current name (for the activity log) are independent reads —
-    // run them as one parallel batch instead of three sequential trips.
+    // Membership (the owner gate) and the current name (for the activity log)
+    // are independent reads — run them as one parallel batch instead of two
+    // sequential trips.
     const [
       { data: membership, error: membershipError },
-      { data: planRow },
       { data: currentOrg },
     ] = await Promise.all([
       supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
-      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
       supabase.from('organizations').select('name').eq('id', id).single(),
     ]);
 
@@ -1708,7 +1678,7 @@ router.put('/:id', async (req: AuthRequest, res) => {
       throw updateError;
     }
 
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+    res.json({ ...organization, plan: 'free' });
 
     // Activity logging is non-critical — fire it after the response so it
     // never adds a round trip to the caller's save.
@@ -1773,13 +1743,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
 
     if (updateError) throw updateError;
 
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+    res.json({ ...organization, plan: 'free' });
   } catch (error: any) {
     console.error('Error patching organization:', error);
     res.status(500).json({ error: error.message || 'Failed to update organization' });
@@ -4000,20 +3964,6 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
     if (!triggerType || !validTriggers.includes(triggerType)) {
       return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
     }
-
-    // Plan limit check: notification rules
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'notification_rules');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} notification rules.`,
-          resource: 'notification_rules', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
 
     const dests = Array.isArray(destinations) ? destinations : [];
     const insertData: Record<string, unknown> = {
@@ -6774,182 +6724,6 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     res.status(500).json({ error: error.message || 'Failed to fetch organization stats' });
   }
 });
-
-// ═══════════════════════════════════════════════════════════════════════
-// PHASE 13: BILLING ENDPOINTS
-// ═══════════════════════════════════════════════════════════════════════
-
-// GET /:id/billing/plan -- plan details (any member)
-router.get('/:id/billing/plan', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-
-    const { getUsageSummary } = require('../lib/plan-limits');
-    const summary = await getUsageSummary(orgId);
-
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('billing_cycle, cancel_at_period_end, cancel_at, payment_method_brand, payment_method_last4, billing_email, subscription_status')
-      .eq('organization_id', orgId)
-      .single();
-
-    res.json({
-      ...summary,
-      billing_cycle: planRow?.billing_cycle || 'monthly',
-      cancel_at_period_end: planRow?.cancel_at_period_end || false,
-      cancel_at: planRow?.cancel_at || null,
-      payment_method_brand: planRow?.payment_method_brand || null,
-      payment_method_last4: planRow?.payment_method_last4 || null,
-      billing_email: planRow?.billing_email || null,
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch plan' });
-  }
-});
-
-// GET /:id/billing/usage -- usage vs limits (manage_billing)
-router.get('/:id/billing/usage', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { getUsageSummary } = require('../lib/plan-limits');
-    const summary = await getUsageSummary(orgId);
-    res.json(summary);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch usage' });
-  }
-});
-
-// POST /:id/billing/checkout -- create Stripe Checkout session (manage_billing)
-router.post('/:id/billing/checkout', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { priceId, billingEmail } = req.body;
-    if (!priceId) return res.status(400).json({ error: 'priceId is required' });
-
-    // If downgrading, check usage fits target tier
-    const { checkDowngradeAllowed } = require('../lib/plan-limits');
-    const { tierFromPriceId: _tierCheck } = require('../lib/stripe');
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const successUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=success`;
-    const cancelUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=cancelled`;
-
-    const { createCheckoutSession } = require('../lib/stripe');
-    const url = await createCheckoutSession(orgId, priceId, successUrl, cancelUrl, billingEmail);
-
-    if (!url) return res.status(500).json({ error: 'Failed to create checkout session' });
-    res.json({ url });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create checkout session' });
-  }
-});
-
-// POST /:id/billing/portal -- create Stripe Customer Portal session (manage_billing)
-router.post('/:id/billing/portal', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const returnUrl = `${frontendUrl}/organizations/${orgId}/settings/plan`;
-
-    const { createPortalSession } = require('../lib/stripe');
-    const url = await createPortalSession(orgId, returnUrl);
-    res.json({ url });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create portal session' });
-  }
-});
-
-// GET /:id/billing/invoices -- paginated invoice list (manage_billing)
-router.get('/:id/billing/invoices', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
-    const startingAfter = req.query.starting_after as string | undefined;
-
-    const { getInvoices } = require('../lib/stripe');
-    const result = await getInvoices(orgId, limit, startingAfter);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch invoices' });
-  }
-});
-
-// POST /:id/billing/check-downgrade -- check if downgrade is possible (manage_billing)
-router.post('/:id/billing/check-downgrade', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { targetTier } = req.body;
-    if (!targetTier) return res.status(400).json({ error: 'targetTier is required' });
-
-    const { checkDowngradeAllowed } = require('../lib/plan-limits');
-    const result = await checkDowngradeAllowed(orgId, targetTier);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to check downgrade' });
-  }
-});
-
-async function checkBillingPermission(orgId: string, userId: string): Promise<boolean> {
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', orgId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
-
-  const { data: role } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', orgId)
-    .eq('name', membership.role)
-    .single();
-
-  return role?.permissions?.manage_billing === true;
-}
 
 async function checkSecurityPermission(orgId: string, userId: string): Promise<boolean> {
   const { data: membership } = await supabase

@@ -193,11 +193,11 @@ describe('POST /api/aegis/v3/stream', () => {
       monthlyCostCap: 0.0001, // cents-low cap so the pre-flight blocks
     });
 
-    // Force the cost-cap module to report blocked. We mock checkMonthlyCostCap
-    // by intercepting the import via jest.doMock can't be late-applied here, so
-    // instead rely on checkMonthlyCostCap returning allowed: true on no-Redis
-    // and skip this assertion path. (Real cost-cap behavior is covered in
-    // cost-cap.test.ts; this test just confirms the route wires it up.)
+    // Force the cost-cap module to report blocked. We mock the monthly-cost
+    // check by intercepting the import, but jest.doMock can't be late-applied
+    // here, so instead rely on the cost guard returning allowed: true on
+    // no-Redis and skip this assertion path. (Real cost-cap behavior is covered
+    // in cost-cap.test.ts; this test just confirms the route wires it up.)
     mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('should not stream'));
 
     const res = await request(makeApp())

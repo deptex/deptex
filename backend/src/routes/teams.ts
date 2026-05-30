@@ -312,20 +312,6 @@ router.post('/:id/teams', async (req: AuthRequest, res) => {
       }
     }
 
-    // Plan limit check: teams
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'teams');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `You've reached the ${planCheck.limit} team limit on your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan.`,
-          resource: 'teams', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
-
     // Create team
     const { data: team, error: teamError } = await supabase
       .from('teams')

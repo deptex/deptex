@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, Shield, Loader2, PauseCircle, PlayCircle, Info, Trash2 } from 'lucide-react';
 import { api, type SlaPolicy } from '../../lib/api';
-import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
@@ -68,7 +67,6 @@ function rowsFromPolicies(policies: SlaPolicy[]): SlaRow[] {
 export default function SLAConfigurationSection({ organizationId }: SLAConfigurationSectionProps) {
   const { toast } = useToast();
   const navigate = useNavigate();
-  const gate = usePlan()?.getPlanGate('security_slas');
   const [policies, setPolicies] = useState<SlaPolicy[]>([]);
   const [slaPausedAt, setSlaPausedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -200,36 +198,6 @@ export default function SLAConfigurationSection({ organizationId }: SLAConfigura
       setDisabling(false);
     }
   };
-
-  // Plan gate: show upgrade card when Security SLAs require Team+ (same pattern as Audit Logs)
-  if (gate && !gate.allowed) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">Security SLAs</h2>
-        </div>
-        <div className="rounded-lg border border-border bg-background-card p-6">
-          <div className="flex gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-              <Info className="h-4 w-4 text-foreground-secondary" />
-            </div>
-            <div className="flex-1 space-y-2">
-              <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock Security SLAs</h3>
-              <p className="text-sm text-foreground-secondary">
-                Set per-severity remediation deadlines (e.g. critical 48h, high 7d) and track compliance across all projects. Available on the Team plan and above.
-              </p>
-              <Button
-                onClick={() => navigate(gate.upgradeUrl || (organizationId ? `/organizations/${organizationId}/settings/plan` : '#'))}
-                className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-              >
-                Upgrade to {gate.requiredTier === 'free' ? 'Team' : TIER_DISPLAY[gate.requiredTier]}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (loading) {
     return (

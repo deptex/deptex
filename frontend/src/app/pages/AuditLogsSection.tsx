@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
+import { useParams, useOutletContext } from 'react-router-dom';
 import { Calendar, Clock, ChevronDown, ChevronRight, ChevronLeft, Filter, Search, Users, Loader2, Info } from 'lucide-react';
 import { api, Activity, Organization, Team } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -16,7 +16,6 @@ import {
 } from '../../components/ui/dropdown-menu';
 import { Button } from '../../components/ui/button';
 import { useAuth } from '../../contexts/AuthContext';
-import { usePlan, TIER_DISPLAY } from '../../contexts/PlanContext';
 import { RolePermissions } from '../../lib/api';
 
 interface OrganizationContextType {
@@ -118,8 +117,6 @@ const ITEMS_PER_PAGE = 30;
 
 export default function AuditLogsSection() {
     const { id } = useParams<{ id: string }>();
-    const navigate = useNavigate();
-    const gate = usePlan().getPlanGate('audit_logs');
     const { user } = useAuth();
     const { organization } = useOutletContext<OrganizationContextType>();
 
@@ -452,36 +449,16 @@ export default function AuditLogsSection() {
                 <h2 className="text-2xl font-bold text-foreground">Audit Logs</h2>
             </div>
 
-            {/* Original audit logs UI — commented out (free plan restriction)
-            <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1">
-                    <DropdownMenu>...</DropdownMenu>
-                    {datePreset !== 'all_time' && (...)}
-                </div>
-                <div className="flex items-center gap-3">
-                    <DropdownMenu>... Team Filter ...</DropdownMenu>
-                    <DropdownMenu>... Events Filter ...</DropdownMenu>
-                </div>
-            </div>
-            {loading ? (skeleton) : activities.length === 0 ? (empty) : (activity list + infinite scroll)}
-            */}
-
             <div className="rounded-lg border border-border bg-background-card p-6">
                 <div className="flex gap-3">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
                         <Info className="h-4 w-4 text-foreground-secondary" />
                     </div>
                     <div className="flex-1 space-y-2">
-                        <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock audit logs</h3>
+                        <h3 className="text-sm font-semibold text-foreground">Audit logs coming soon</h3>
                         <p className="text-sm text-foreground-secondary">
-                            View complete audit history of organization changes, member actions, and security events.
+                            A complete audit history of organization changes, member actions, and security events will appear here.
                         </p>
-                        <Button
-                            onClick={() => navigate(gate.upgradeUrl || (id ? `/organizations/${id}/settings/plan` : '#'))}
-                            className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-                        >
-                            Upgrade to {gate.requiredTier === 'free' ? 'Team' : TIER_DISPLAY[gate.requiredTier]}
-                        </Button>
                     </div>
                 </div>
             </div>
