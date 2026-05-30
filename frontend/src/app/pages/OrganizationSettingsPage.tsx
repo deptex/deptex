@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useOutletContext, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
-import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, billingApi, type StripeInvoice, type Team } from '../../lib/api';
-import { usePlan, usePlanGate, TIER_DISPLAY } from '../../contexts/PlanContext';
+import { api, Organization, OrganizationMember, OrganizationRole, RolePermissions, CiCdConnection, type Team } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/ui/button';
 import { Toaster } from '../../components/ui/toaster';
@@ -47,91 +46,6 @@ interface OrganizationContextType {
   organization: Organization | null;
   reloadOrganization: (patch?: Partial<Organization>) => Promise<void>;
 }
-
-interface PlanFeature {
-  name: string;
-  description?: string;
-}
-
-interface PlanTier {
-  id: string;
-  name: string;
-  description: string;
-  price: {
-    monthly: string;
-    annual: string;
-    perUnit?: string;
-  };
-  features: PlanFeature[];
-  popular?: boolean;
-}
-
-const planTiers: PlanTier[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    description: 'Perfect for students, indie devs, and small projects',
-    price: { monthly: 'Free', annual: 'Free' },
-    features: [
-      { name: 'Up to 3 projects' },
-      { name: 'Up to 5 members' },
-      { name: '10 syncs/month' },
-      { name: 'Deep reachability analysis' },
-      { name: 'Vulnerability scanning' },
-      { name: 'Policy-as-code' },
-      { name: 'Platform AI summaries' },
-      { name: 'All integrations' },
-    ],
-  },
-  {
-    id: 'pro',
-    name: 'Pro',
-    description: 'For growing teams that need full automation and AI',
-    price: { monthly: '$25', annual: '$250/yr' },
-    popular: true,
-    features: [
-      { name: 'Up to 15 projects' },
-      { name: 'Up to 20 members' },
-      { name: '100 syncs/month' },
-      { name: 'Aegis AI Security Copilot' },
-      { name: 'AI-powered fixes & sprints' },
-      { name: 'Background monitoring' },
-      { name: 'Configurable sync frequency' },
-      { name: 'All integrations' },
-    ],
-  },
-  {
-    id: 'team',
-    name: 'Team',
-    description: 'For organizations with compliance and security needs',
-    price: { monthly: '$300', annual: '$3,000/yr' },
-    features: [
-      { name: 'Up to 50 projects' },
-      { name: 'Unlimited members' },
-      { name: '1,000 syncs/month' },
-      { name: 'Everything in Pro' },
-      { name: 'SSO (SAML)' },
-      { name: 'MFA enforcement' },
-      { name: 'Audit logs' },
-      { name: 'Aegis management console' },
-    ],
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    description: 'Custom solutions for large organizations',
-    price: { monthly: 'Contact us', annual: 'Contact us' },
-    features: [
-      { name: 'Everything in Team' },
-      { name: 'Unlimited projects & syncs' },
-      { name: 'Custom SLA' },
-      { name: 'BYO cloud / self-hosted' },
-      { name: 'Private Slack + CSM' },
-      { name: 'Custom integrations' },
-      { name: 'Dedicated support' },
-    ],
-  },
-];
 
 // In-memory cache for stale-while-revalidate (keyed by org id)
 const orgMembersCache: Record<string, OrganizationMember[]> = {};
@@ -759,8 +673,6 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
 function SSOSection({ organizationId, embedded }: { organizationId: string; embedded?: boolean }) {
-  const navigate = useNavigate();
-  const gate = usePlan().getPlanGate('sso');
   const [ssoLoading, setSsoLoading] = useState(true);
   const [ssoConfig, setSsoConfig] = useState<{ configured: boolean; provider_type?: string; domain?: string; verified?: boolean; enforce?: boolean; fallback?: boolean } | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
@@ -783,10 +695,6 @@ function SSOSection({ organizationId, embedded }: { organizationId: string; embe
   }, [organizationId]);
 
   useEffect(() => {
-    if (!gate.allowed) {
-      setSsoLoading(false);
-      return;
-    }
     let cancelled = false;
     (async () => {
       try {
@@ -809,7 +717,7 @@ function SSOSection({ organizationId, embedded }: { organizationId: string; embe
       }
     })();
     return () => { cancelled = true; };
-  }, [organizationId, gate.allowed]);
+  }, [organizationId]);
 
   const handleVerifyDomain = async () => {
     setVerifyLoading(true);
@@ -902,37 +810,6 @@ function SSOSection({ organizationId, embedded }: { organizationId: string; embe
     }
   };
 
-  if (!gate.allowed) {
-    return (
-      <div className={embedded ? 'space-y-4' : 'space-y-6'}>
-        {!embedded && (
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Single Sign-On</h2>
-          </div>
-        )}
-        <div className="rounded-lg border border-border bg-background-card p-6">
-          <div className="flex gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-              <Info className="h-4 w-4 text-foreground-secondary" />
-            </div>
-            <div className="flex-1 space-y-2">
-              <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock SSO</h3>
-              <p className="text-sm text-foreground-secondary">
-                Allow members to sign in with your identity provider (Okta, Azure AD, Google Workspace, etc.) via SAML 2.0.
-              </p>
-              <Button
-                onClick={() => navigate(gate.upgradeUrl)}
-                className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-              >
-                Upgrade to {TIER_DISPLAY[gate.requiredTier]}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (ssoLoading) return <div className="flex items-center gap-2 text-foreground-secondary"><Loader2 className="h-4 w-4 animate-spin" /> Loading...</div>;
   return (
     <div className={embedded ? 'space-y-4' : 'space-y-6'}>
@@ -992,38 +869,6 @@ function SSOSection({ organizationId, embedded }: { organizationId: string; embe
             </div>
           </div>
         )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MFASectionOrUpgrade({ organizationId }: { organizationId: string }) {
-  const gate = usePlanGate('mfa_enforcement');
-  const navigate = useNavigate();
-  if (gate.allowed) return <MFASection organizationId={organizationId} />;
-  return (
-    <div className="space-y-6 pt-8">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">Multi-Factor Authentication</h2>
-      </div>
-      <div className="rounded-lg border border-border bg-background-card p-6">
-        <div className="flex gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-            <Info className="h-4 w-4 text-foreground-secondary" />
-          </div>
-          <div className="flex-1 space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock MFA enforcement</h3>
-            <p className="text-sm text-foreground-secondary">
-              Require multi-factor authentication for all organization members and manage exemptions. Available on the Team plan and above.
-            </p>
-            <Button
-              onClick={() => navigate(`/organizations/${organizationId}/settings/plan`)}
-              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-            >
-              Upgrade to {TIER_DISPLAY[gate.requiredTier]}
-            </Button>
-          </div>
         </div>
       </div>
     </div>
@@ -1178,38 +1023,6 @@ function MFASection({ organizationId }: { organizationId: string }) {
             )}
           </tbody>
         </table>
-      </div>
-    </div>
-  );
-}
-
-function IPAllowlistSectionOrUpgrade({ organizationId }: { organizationId: string }) {
-  const gate = usePlanGate('ip_allowlist');
-  const navigate = useNavigate();
-  if (gate.allowed) return <IPAllowlistSection organizationId={organizationId} />;
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">IP Allowlist</h2>
-      </div>
-      <div className="rounded-lg border border-border bg-background-card p-6">
-        <div className="flex gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background-subtle">
-            <Info className="h-4 w-4 text-foreground-secondary" />
-          </div>
-          <div className="flex-1 space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Upgrade to unlock IP Allowlist</h3>
-            <p className="text-sm text-foreground-secondary">
-              Restrict organization API access to specific IP ranges. Available on the Team plan and above.
-            </p>
-            <Button
-              onClick={() => navigate(gate.upgradeUrl)}
-              className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm px-4"
-            >
-              Upgrade to {TIER_DISPLAY[gate.requiredTier]}
-            </Button>
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -3365,12 +3178,12 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'mfa' && id && (
-                <MFASectionOrUpgrade organizationId={id} />
+                <MFASection organizationId={id} />
               )}
 
               {activeSection === 'ip_allowlist' && id && (
                 <div className="h-full pt-8">
-                  <IPAllowlistSectionOrUpgrade organizationId={id} />
+                  <IPAllowlistSection organizationId={id} />
                 </div>
               )}
 

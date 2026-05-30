@@ -110,8 +110,8 @@ export async function getCostCapState(organizationId: string): Promise<CostCapSt
 /**
  * Atomic check-and-increment. Increments the Redis bucket by
  * `projectedAdditionalUsd`; if the new total exceeds the cap, decrements
- * back and throws. Mirrors `checkMonthlyCostCap` in ai/cost-cap.ts but
- * works in USD floats (INCRBYFLOAT) so per-call estimates can stay
+ * back and throws. Works like the monthly AI cost guard but in USD
+ * floats (INCRBYFLOAT) so per-call estimates can stay
  * fractional cents without rounding.
  *
  * Returns the post-increment state on success — callers can use

@@ -57,24 +57,6 @@ vi.mock('../../../hooks/use-toast', () => ({
   useToast: () => ({ toast: mockToast, toasts: [] }),
 }));
 
-vi.mock('../../../contexts/PlanContext', () => ({
-  usePlan: () => ({
-    getPlanGate: () => ({
-      allowed: true,
-      requiredTier: 'pro',
-      currentTier: 'pro',
-      upgradeUrl: '/organizations/org-1/settings/plan',
-    }),
-  }),
-  usePlanGate: () => ({
-    allowed: true,
-    requiredTier: 'pro',
-    currentTier: 'pro',
-    upgradeUrl: '/organizations/org-1/settings/plan',
-  }),
-  TIER_DISPLAY: { pro: 'Pro', team: 'Team', enterprise: 'Enterprise', free: 'Free' },
-}));
-
 vi.mock('../../../lib/supabase', () => ({
   supabase: {
     auth: {

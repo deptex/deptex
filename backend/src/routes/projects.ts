@@ -5048,21 +5048,6 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
     }
 
-    if (sync_frequency === 'on_commit') {
-      try {
-        const { getOrgPlan, PLAN_FEATURES } = require('../lib/plan-limits');
-        const plan = await getOrgPlan(id);
-        const features = PLAN_FEATURES[plan.plan_tier] ?? PLAN_FEATURES.free;
-        if (!features.sync_frequency) {
-          return res.status(403).json({
-            error: 'On every commit is available on Pro plan or higher. Upgrade to enable sync on every commit.',
-          });
-        }
-      } catch (_) {
-        /* fail open if plan-limits unavailable */
-      }
-    }
-
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (typeof pull_request_comments_enabled === 'boolean') {
       updates.pull_request_comments_enabled = pull_request_comments_enabled;

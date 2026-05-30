@@ -32,24 +32,6 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('../../../contexts/PlanContext', () => ({
-  usePlan: () => ({
-    getPlanGate: () => ({
-      allowed: true,
-      requiredTier: 'pro',
-      currentTier: 'pro',
-      upgradeUrl: '/organizations/org-1/settings/plan',
-    }),
-  }),
-  usePlanGate: () => ({
-    allowed: true,
-    requiredTier: 'pro',
-    currentTier: 'pro',
-    upgradeUrl: '/organizations/org-1/settings/plan',
-  }),
-  TIER_DISPLAY: { pro: 'Pro', team: 'Team', enterprise: 'Enterprise', free: 'Free' },
-}));
-
 vi.mock('../../../lib/api', () => ({
   api: {
     getOrganizationRoles: vi.fn().mockResolvedValue([
