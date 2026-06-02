@@ -116,13 +116,7 @@ function FleetPanel() {
     <section>
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold text-foreground">Extraction fleet</h2>
-        {m.spendBlocked ? (
-          <Badge variant="destructive">spend cap reached</Badge>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-xs text-foreground-secondary">
-            <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" /> live
-          </span>
-        )}
+        {m.spendBlocked ? <Badge variant="destructive">spend cap reached</Badge> : null}
       </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 lg:gap-0 lg:divide-x lg:divide-border">
         <Stat label="Queue depth" value={String(m.queued)} />
