@@ -6065,6 +6065,22 @@ export async function apiAdminListExtractionFailures(params: {
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
 }
 
+export interface ExtractionTrendPoint {
+  date: string;
+  errors: number;
+  warns: number;
+}
+
+export interface ExtractionTrend {
+  series: ExtractionTrendPoint[];
+  truncated: boolean;
+}
+
+/** Daily extraction-failure counts (errors vs warns) over the last 365 days. */
+export async function apiAdminExtractionTrend(): Promise<ExtractionTrend> {
+  return fetchWithAuth('/api/admin/extraction-trend');
+}
+
 export interface AdminBillingActivity {
   id: string;
   kind: string;

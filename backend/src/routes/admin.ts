@@ -452,4 +452,36 @@ router.get('/billing', async (_req: AuthRequest, res) => {
   }
 });
 
+/**
+ * GET /api/admin/extraction-trend
+ * Daily extraction-failure counts (errors vs warns) over the last 365 days for the
+ * Extraction tab chart. Bounded to the window so the fetch stays cheap; returns a
+ * `truncated` flag if the row cap is hit.
+ */
+router.get('/extraction-trend', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const since365 = new Date(now - 365 * DAY_MS).toISOString();
+    const { rows, truncated } = await paginateAll(() =>
+      supabase.from('extraction_step_errors').select('created_at, severity').gte('created_at', since365),
+    );
+
+    const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const map = new Map<string, { errors: number; warns: number }>();
+    for (let i = 364; i >= 0; i--) map.set(utcDay(now - i * DAY_MS), { errors: 0, warns: 0 });
+    for (const r of rows) {
+      if (!r.created_at) continue;
+      const bucket = map.get(new Date(r.created_at).toISOString().slice(0, 10));
+      if (!bucket) continue;
+      if (r.severity === 'error') bucket.errors += 1;
+      else bucket.warns += 1;
+    }
+    const series = Array.from(map, ([date, v]) => ({ date, errors: v.errors, warns: v.warns }));
+    res.json({ series, truncated });
+  } catch (error: any) {
+    console.error('[admin/extraction-trend] unexpected error:', error);
+    res.status(500).json({ error: error?.message || 'Unexpected error' });
+  }
+});
+
 export default router;
