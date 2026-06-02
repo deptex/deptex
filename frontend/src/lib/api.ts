@@ -6093,6 +6093,14 @@ export interface AdminFinancials {
   truncated: boolean;
 }
 
+export interface AdminGrowthPoint {
+  date: string;
+  orgs: number;
+  projects: number;
+  users: number;
+}
+
+/** Platform scale — Overview tab. */
 export interface AdminOverview {
   totals: {
     organizations: number;
@@ -6100,12 +6108,20 @@ export interface AdminOverview {
     users: number;
     scans30d: number;
   };
+  growthSeries: AdminGrowthPoint[];
+}
+
+/** Financial snapshot — Billing tab. */
+export interface AdminBilling {
   financials: AdminFinancials;
   revenueSeries: AdminRevenuePoint[];
   recentActivity: AdminBillingActivity[];
 }
 
-/** Platform-wide health snapshot for the admin console Overview tab. */
 export async function apiAdminOverview(): Promise<AdminOverview> {
   return fetchWithAuth('/api/admin/overview');
+}
+
+export async function apiAdminBilling(): Promise<AdminBilling> {
+  return fetchWithAuth('/api/admin/billing');
 }

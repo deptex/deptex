@@ -41,6 +41,7 @@ import OrganizationFlowsPage from "./pages/OrganizationFlowsPage";
 import FlowEditorPage from "./pages/FlowEditorPage";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminOverviewPage from "./pages/admin/AdminOverviewPage";
+import AdminBillingPage from "./pages/admin/AdminBillingPage";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
 
 // Forward the legacy /settings entry point to the user's account page within
@@ -120,6 +121,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <AdminOverviewPage /> },
+      { path: "billing", element: <AdminBillingPage /> },
       { path: "extraction-failures", element: <ExtractionFailuresPage /> },
     ],
   },

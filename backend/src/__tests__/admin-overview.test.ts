@@ -66,6 +66,31 @@ describe('admin overview — GET /api/admin/overview', () => {
         scans30d: expect.any(Number),
       }),
     );
+    expect(Array.isArray(res.body.growthSeries)).toBe(true);
+  });
+});
+
+describe('admin billing — GET /api/admin/billing', () => {
+  beforeEach(() => {
+    clearTableRegistry();
+    mockAuthUser = { id: USER_ID, email: 'admin@deptex.dev' };
+    process.env.ADMIN_EMAIL = 'admin@deptex.dev';
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_ADMIN_EMAIL === undefined) delete process.env.ADMIN_EMAIL;
+    else process.env.ADMIN_EMAIL = ORIGINAL_ADMIN_EMAIL;
+  });
+
+  it('403s a non-allowlisted user', async () => {
+    mockAuthUser = { id: USER_ID, email: 'intruder@evil.com' };
+    const res = await request(app).get('/api/admin/billing');
+    expect(res.status).toBe(403);
+  });
+
+  it('returns the billing contract for an allowlisted admin', async () => {
+    const res = await request(app).get('/api/admin/billing');
+    expect(res.status).toBe(200);
     expect(res.body.financials).toEqual(
       expect.objectContaining({
         depositsCents: expect.any(Number),

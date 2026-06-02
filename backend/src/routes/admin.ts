@@ -175,53 +175,136 @@ async function paginateAll(
 const n = (v: any) => Number(v ?? 0);
 
 /**
+ * Cumulative count per day over the last 365 days for the Overview growth chart.
+ * Each day's value is how many items existed on or before that point in time.
+ */
+function cumulativeGrowth(
+  now: number,
+  series: { orgs: number[]; projects: number[]; users: number[] },
+): Array<{ date: string; orgs: number; projects: number; users: number }> {
+  const so = series.orgs.slice().sort((a, b) => a - b);
+  const sp = series.projects.slice().sort((a, b) => a - b);
+  const su = series.users.slice().sort((a, b) => a - b);
+  const countLE = (arr: number[], ms: number) => {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid] <= ms) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const out: Array<{ date: string; orgs: number; projects: number; users: number }> = [];
+  for (let i = 364; i >= 0; i--) {
+    const ms = now - i * DAY_MS;
+    out.push({
+      date: new Date(ms).toISOString().slice(0, 10),
+      orgs: countLE(so, ms),
+      projects: countLE(sp, ms),
+      users: countLE(su, ms),
+    });
+  }
+  return out;
+}
+
+/**
  * GET /api/admin/overview
- * Platform-wide health + financial snapshot for the Deptex-staff admin console.
- *
- * Counts run DB-side (head:true). The financial rollups page through the ledger
- * (billing_transactions) and reduce in-process — fine at current scale; move to a
- * SQL function if the usage table grows large (a `truncated` flag is returned when
- * the row cap is hit so the numbers are never silently undercounted).
- *
- * Money model (phase37 sign convention — usage_deduction is negative, the rest
- * positive):
- *   - Deposits     = (topup + auto_recharge_topup) − refunds   → real cash collected
- *   - Gross margin = Σ over usage of (charged − cost_cents_cog) → markup we earned
- *   - Free credit  = signup_grant; "burned" = the prorated COGS of usage covered
- *                    by grants, assuming FREE CREDIT IS SPENT FIRST (an estimate —
- *                    the ledger keeps a single balance, so pool attribution can't
- *                    be exact). `estimated: true` flags this.
- *   - Real balance = current balance MINUS unspent free credit (so it reflects
- *                    paid customer cash, not our promo).
- * The activity feed shows real money events only (signup_grant excluded).
+ * Platform scale for the Deptex-staff admin console: current counts plus a
+ * 365-day cumulative growth series (orgs / projects / distinct users). No billing
+ * aggregation here — that lives on /api/admin/billing so this tab stays cheap.
  */
 router.get('/overview', async (_req: AuthRequest, res) => {
   try {
     const now = Date.now();
     const since30d = new Date(now - 30 * DAY_MS).toISOString();
-    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment'];
 
-    const [orgCount, projectCount, memberRows, scanCount, activityRows] = await Promise.all([
-      supabase.from('organizations').select('*', { count: 'exact', head: true }),
-      supabase.from('projects').select('*', { count: 'exact', head: true }),
-      supabase.from('organization_members').select('user_id'),
-      supabase
-        .from('scan_jobs')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', since30d),
-      supabase
-        .from('billing_transactions')
-        .select('id, organization_id, kind, amount_cents, description, created_at')
-        .in('kind', ACTIVITY_KINDS)
-        .order('created_at', { ascending: false })
-        .limit(20),
-    ]);
+    const [orgCount, projectCount, memberRows, scanCount, orgDates, projectDates, memberDates] =
+      await Promise.all([
+        supabase.from('organizations').select('*', { count: 'exact', head: true }),
+        supabase.from('projects').select('*', { count: 'exact', head: true }),
+        supabase.from('organization_members').select('user_id'),
+        supabase.from('scan_jobs').select('*', { count: 'exact', head: true }).gte('created_at', since30d),
+        paginateAll(() => supabase.from('organizations').select('created_at'), 'created_at'),
+        paginateAll(() => supabase.from('projects').select('created_at'), 'created_at'),
+        paginateAll(() => supabase.from('organization_members').select('user_id, created_at'), 'created_at'),
+      ]);
 
-    const countError =
-      orgCount.error || projectCount.error || memberRows.error || scanCount.error || activityRows.error;
+    const countError = orgCount.error || projectCount.error || memberRows.error || scanCount.error;
     if (countError) {
       console.error('[admin/overview] query error:', countError);
       res.status(500).json({ error: countError.message || 'Failed to load overview' });
+      return;
+    }
+
+    const distinctUsers = new Set(
+      (memberRows.data ?? []).map((r: any) => r.user_id).filter(Boolean),
+    ).size;
+
+    // First-seen timestamp per user, so growth counts distinct users not memberships.
+    const userFirst = new Map<string, number>();
+    for (const r of memberDates.rows) {
+      if (!r.user_id || !r.created_at) continue;
+      const t = new Date(r.created_at).getTime();
+      const prev = userFirst.get(r.user_id);
+      if (prev === undefined || t < prev) userFirst.set(r.user_id, t);
+    }
+    const toTimes = (rows: any[]) =>
+      rows
+        .map((r) => (r.created_at ? new Date(r.created_at).getTime() : NaN))
+        .filter((t) => !Number.isNaN(t));
+
+    const growthSeries = cumulativeGrowth(now, {
+      orgs: toTimes(orgDates.rows),
+      projects: toTimes(projectDates.rows),
+      users: Array.from(userFirst.values()),
+    });
+
+    res.json({
+      totals: {
+        organizations: orgCount.count ?? 0,
+        projects: projectCount.count ?? 0,
+        users: distinctUsers,
+        scans30d: scanCount.count ?? 0,
+      },
+      growthSeries,
+    });
+  } catch (error: any) {
+    console.error('[admin/overview] unexpected error:', error);
+    res.status(500).json({ error: error?.message || 'Unexpected error' });
+  }
+});
+
+/**
+ * GET /api/admin/billing
+ * Financial snapshot for the Deptex-staff admin console. Pages through the ledger
+ * (billing_transactions) and reduces in-process — fine at current scale; move to a
+ * SQL function if the usage table grows large (a `truncated` flag is returned when
+ * the row cap is hit so the numbers are never silently undercounted).
+ *
+ * Money model (phase37 sign convention — usage_deduction is negative, the rest positive):
+ *   - Deposits     = (topup + auto_recharge_topup) − refunds   → real cash collected
+ *   - Gross margin = Σ over usage of (charged − cost_cents_cog) → markup we earned
+ *   - Free credit  = signup_grant; "burned" = the prorated COGS of usage covered
+ *                    by grants, assuming FREE CREDIT IS SPENT FIRST (an estimate —
+ *                    the ledger keeps a single balance). `estimated: true` flags this.
+ *   - Real balance = current balance MINUS unspent free credit (paid cash, not promo).
+ * The activity feed shows real money events only (signup_grant excluded).
+ */
+router.get('/billing', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment'];
+
+    const activityRows = await supabase
+      .from('billing_transactions')
+      .select('id, organization_id, kind, amount_cents, description, created_at')
+      .in('kind', ACTIVITY_KINDS)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (activityRows.error) {
+      console.error('[admin/billing] activity query error:', activityRows.error);
+      res.status(500).json({ error: activityRows.error.message || 'Failed to load billing' });
       return;
     }
 
@@ -253,11 +336,6 @@ router.get('/overview', async (_req: AuthRequest, res) => {
 
     const truncated =
       balance.truncated || grants.truncated || deposits.truncated || refunds.truncated || usage.truncated;
-
-    // Platform totals.
-    const distinctUsers = new Set(
-      (memberRows.data ?? []).map((r: any) => r.user_id).filter(Boolean),
-    ).size;
 
     // Per-org rollups for the free-credit split.
     const balanceByOrg = new Map<string, number>();
@@ -338,7 +416,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
         .select('id, name')
         .in('id', orgIds);
       if (orgErr) {
-        console.error('[admin/overview] org name lookup error:', orgErr);
+        console.error('[admin/billing] org name lookup error:', orgErr);
       } else {
         for (const o of orgs ?? []) {
           if (o?.id) nameById[o.id] = o.name ?? '';
@@ -347,12 +425,6 @@ router.get('/overview', async (_req: AuthRequest, res) => {
     }
 
     res.json({
-      totals: {
-        organizations: orgCount.count ?? 0,
-        projects: projectCount.count ?? 0,
-        users: distinctUsers,
-        scans30d: scanCount.count ?? 0,
-      },
       financials: {
         depositsCents,
         deposits30dCents: deposits30d,
@@ -375,7 +447,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
       })),
     });
   } catch (error: any) {
-    console.error('[admin/overview] unexpected error:', error);
+    console.error('[admin/billing] unexpected error:', error);
     res.status(500).json({ error: error?.message || 'Unexpected error' });
   }
 });

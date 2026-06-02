@@ -3,6 +3,7 @@ import AdminGate from '../../../components/AdminGate';
 
 const TABS: { to: string; label: string; end: boolean }[] = [
   { to: '/admin', label: 'Overview', end: true },
+  { to: '/admin/billing', label: 'Billing', end: false },
   { to: '/admin/extraction-failures', label: 'Extraction', end: false },
 ];
 
