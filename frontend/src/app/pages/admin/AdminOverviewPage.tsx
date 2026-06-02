@@ -291,7 +291,7 @@ export default function AdminOverviewPage() {
           </div>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-background-card">
-            <div className="grid grid-cols-[7rem_1.4fr_8rem_auto] gap-4 border-b border-border bg-background-card-header px-5 py-2.5 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
+            <div className="grid grid-cols-[12rem_minmax(0,1fr)_9rem_8rem] gap-4 border-b border-border bg-background-card-header px-5 py-2.5 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
               <span>When</span>
               <span>Organization</span>
               <span>Type</span>
@@ -301,7 +301,7 @@ export default function AdminOverviewPage() {
               {recentActivity.map((a) => (
                 <div
                   key={a.id}
-                  className="grid grid-cols-[7rem_1.4fr_8rem_auto] items-center gap-4 px-5 py-3 transition-colors hover:bg-table-hover"
+                  className="grid grid-cols-[12rem_minmax(0,1fr)_9rem_8rem] items-center gap-4 px-5 py-3 transition-colors hover:bg-table-hover"
                 >
                   <span className="whitespace-nowrap text-sm text-foreground-secondary">
                     {formatDate(a.created_at)}
@@ -313,9 +313,9 @@ export default function AdminOverviewPage() {
                       </span>
                     )}
                   </span>
-                  <span>
+                  <div className="flex">
                     <Badge variant="secondary">{KIND_LABEL[a.kind] ?? a.kind}</Badge>
-                  </span>
+                  </div>
                   <span
                     className={`text-right font-mono text-sm tabular-nums ${
                       a.amount_cents < 0 ? 'text-foreground-secondary' : 'text-emerald-500'
