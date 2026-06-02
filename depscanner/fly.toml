@@ -15,11 +15,13 @@ primary_region = 'ewr'
 
 [build]
 
-# VDB extract is ~30GB; we keep it between runs. Need headroom for cache/atom (~5–10GB). Do not clear /data, only /data/cache.
+# dep-scan VDB6 extract is ~47GB (33GB data + 14GB index); we keep it between runs. Need working
+# headroom for cache/atom + dep-scan's SQLite journal during a scan, so the volume is 100GB
+# (a 50GB volume fills to 100% and dep-scan dies with apsw.FullError). Do not clear /data, only /data/cache.
 [mounts]
 source = "depscan_vdb"
 destination = "/data"
-initial_size = "50gb"
+initial_size = "100gb"
 
 [env]
   NODE_ENV = 'production'

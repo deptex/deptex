@@ -12,6 +12,7 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
+import { markDegraded } from '../with-timeout';
 import type { SupportedEcosystem } from '../tree-sitter-extractor';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -38,6 +39,9 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
     log,
     onError: async ({ err }) => {
       await log.warn('malicious_scan', `Malicious-package scan failed: ${(err as Error)?.message ?? err}`);
+      // Whole step threw — runStage already wrote the step_error row (severity
+      // warn), so flag degraded without a duplicate detail row.
+      await markDegraded(ctx, { step: 'malicious_scan', code: 'malicious_failed' });
     },
     fn: async () => {
       const { data: pdRows, error: pdErr } = await supabase
@@ -165,14 +169,32 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
         }
       }
 
-      // Persist scan_status onto scan_jobs for the soft-fail UI banner.
+      // Persist scan_status onto scan_jobs for the malicious-specific
+      // "Partial coverage" banner.
       if (job.jobId) {
         try {
           await supabase
             .from('scan_jobs')
             .update({ malicious_scan_status: result.status })
             .eq('id', job.jobId);
-        } catch { /* column landed in malicious_packages_scan_status.sql */ }
+        } catch (e) {
+          // The status write failing is itself a degradation — the malicious
+          // banner won't render, so surface it via the generic degraded flag.
+          await markDegraded(ctx, {
+            step: 'malicious_scan',
+            code: 'malicious_failed',
+            detail: `malicious_scan_status write failed: ${(e as Error)?.message ?? e}`,
+          });
+        }
+      }
+
+      // Flag the run degraded only when the scan genuinely FAILED (a crash,
+      // e.g. GuardDog missing). 'partial' is a routine outcome (an ecosystem
+      // GuardDog only partly supports) and keeps its own dedicated "Partial
+      // coverage" banner — it does NOT raise the pipeline-wide "Scan incomplete"
+      // badge, which would otherwise desensitize users to real failures.
+      if (result.status === 'failed') {
+        await markDegraded(ctx, { step: 'malicious_scan', code: 'malicious_failed' });
       }
     },
   });

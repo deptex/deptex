@@ -12,6 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { runStage } from '../pipeline-stage-runner';
+import { markDegraded } from '../with-timeout';
 import { calculateSecretDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -21,6 +22,16 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
 
   if (!binaryAvailable('trufflehog')) {
     await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+    // The worker image bundles trufflehog, so a missing binary means a misbuilt
+    // image silently running secret-scanning OFF fleet-wide — a degraded scan.
+    // CLI/local dev legitimately lacks it, so skip the flag there.
+    if (process.env.DEPTEX_CLI_MODE !== '1') {
+      await markDegraded(ctx, {
+        step: 'trufflehog',
+        code: 'binary_missing_trufflehog',
+        detail: INSTALL_HINTS.trufflehog,
+      });
+    }
     return;
   }
 

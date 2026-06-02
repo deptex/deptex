@@ -298,6 +298,8 @@ export interface OverviewProjectItem {
   /** Project status for badge (e.g. Compliant, Non-Compliant). */
   statusName?: string | null;
   statusColor?: string | null;
+  /** Last scan finalized degraded — drives the ⚠️ "Scan incomplete" card marker. */
+  scanDegraded?: boolean;
   /** Status id for filtering (organization_statuses.id). */
   statusId?: string | null;
   /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
@@ -647,6 +649,7 @@ export function useOrganizationOverviewGraphLayout(
                   : {
                       statusBadge: proj.statusName ?? undefined,
                       statusBadgeColor: proj.statusColor ?? undefined,
+                      scanDegraded: proj.scanDegraded ?? undefined,
                       dependenciesCount: proj.dependenciesCount ?? undefined,
                       importance: proj.importance ?? undefined,
                       ...(proj.isExtracting ? { isExtracting: true } : {}),
@@ -699,6 +702,7 @@ export function useOrganizationOverviewGraphLayout(
               : {
                   statusBadge: proj.statusName ?? undefined,
                   statusBadgeColor: proj.statusColor ?? undefined,
+                  scanDegraded: proj.scanDegraded ?? undefined,
                   importance: proj.importance ?? undefined,
                   ...(proj.isExtracting ? { isExtracting: true } : {}),
                 }),

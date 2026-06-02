@@ -124,8 +124,13 @@ async function resolveDependencies(
     });
     await log.success('resolve', 'Dependencies installed successfully', Date.now() - resolveStart);
   } catch (err: any) {
-    const stderr = err.stderr ? stripAnsi(err.stderr).slice(-1000) : err.message?.slice(0, 1000);
-    throw new Error(`${ecosystem} dependency resolution failed: ${stderr}`);
+    // The resolve commands redirect stderr→stdout (`2>&1`), so npm/pip/composer/etc.
+    // write their real failure (e.g. npm ETARGET) to err.stdout, NOT err.stderr — which
+    // left logs showing a useless "Command failed: …" with no reason. Prefer stdout,
+    // then stderr, then message, so the actual error reaches extraction logs.
+    const raw = err.stdout || err.stderr || err.message || '';
+    const detail = stripAnsi(String(raw)).trim().slice(-1500);
+    throw new Error(`${ecosystem} dependency resolution failed: ${detail}`);
   }
 }
 

@@ -235,6 +235,71 @@ export function parseSbom(sbom: CycloneDxSbom): {
   return { dependencies, relationships, rawComponentCount, droppedVersionlessCount, directSetTrusted };
 }
 
+/**
+ * True when an npm version spec is an EXACT pin (a clean semver, optionally
+ * `v`-prefixed) rather than a range / tag / URL. Used by the manifest-parse
+ * fallback: a range like `^4.18.2` cannot be injected as a `version`, because
+ * deps_sync keys dependency identity on the literal `(name, version)` and
+ * dep-scan attaches PDVs by resolved-version PURL — a range string would churn
+ * dependency_versions every run and never match a CVE. So only exact pins are
+ * recovered; ranges are skipped (the run is still flagged degraded by the
+ * caller).
+ */
+export function isExactNpmVersion(spec: string): boolean {
+  const v = spec.trim().replace(/^v/, '');
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(v);
+}
+
+/**
+ * Best-effort recovery of npm DIRECT dependencies straight from package.json,
+ * for when cdxgen returns an empty SBOM (e.g. one unresolvable dependency broke
+ * `npm install`, zeroing the whole tree). Emits `ParsedSbomDep` rows with
+ * EXACT-pin versions only (see isExactNpmVersion) and `is_direct: true`. No
+ * transitive closure and no edge graph — the caller sets sbomGraphWired=false
+ * so reachability floors at `module`. A genuinely better-than-nothing result:
+ * the named direct deps become visible to vuln + malicious scans. Throws are
+ * caught by the caller; a malformed manifest yields an empty array.
+ */
+export function recoverNpmManifestDeps(workspaceRoot: string): ParsedSbomDep[] {
+  const pkgPath = path.join(workspaceRoot, 'package.json');
+  if (!fs.existsSync(pkgPath)) return [];
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  } catch {
+    return [];
+  }
+  const out: ParsedSbomDep[] = [];
+  const seen = new Set<string>();
+  const add = (
+    block: Record<string, string> | undefined,
+    source: 'dependencies' | 'devDependencies',
+    devScoped: boolean,
+  ): void => {
+    if (!block || typeof block !== 'object') return;
+    for (const [name, spec] of Object.entries(block)) {
+      if (typeof spec !== 'string' || !isExactNpmVersion(spec)) continue;
+      const version = spec.trim().replace(/^v/, '');
+      const key = `${name}@${version}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name,
+        version,
+        namespace: null,
+        license: null,
+        is_direct: true,
+        source,
+        devScoped,
+        bomRef: `manifest:npm/${key}`,
+      });
+    }
+  };
+  add(pkg.dependencies, 'dependencies', false);
+  add(pkg.devDependencies, 'devDependencies', true);
+  return out;
+}
+
 function extractLicense(licenses: unknown): string | null {
   if (!licenses) return null;
   if (typeof licenses === 'string') return licenses;

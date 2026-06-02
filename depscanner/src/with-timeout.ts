@@ -1,4 +1,5 @@
 import type { Storage } from './storage';
+import type { PipelineContext } from './pipeline-types';
 import { spawn } from 'child_process';
 
 /**
@@ -314,6 +315,103 @@ export function runScannerSubprocess(
       reject(err);
     });
   });
+}
+
+// ===========================================================================
+// Degraded run state
+// ===========================================================================
+
+/**
+ * Stable codes for the security-critical soft-failures that flip a run
+ * "degraded". The code keys both the user-facing reason (DEGRADED_REASONS) and
+ * the extraction_step_errors row, so badge copy + admin diagnostics + tests
+ * stay in sync from one source.
+ */
+export type DegradedCode =
+  | 'depscan_failed'
+  | 'sbom_empty_with_components'
+  | 'sbom_empty_no_manifest'
+  | 'malicious_failed'
+  | 'binary_missing_semgrep'
+  | 'binary_missing_trufflehog'
+  | 'iac_failed';
+
+/** Single source of truth for the "Scan incomplete" reason copy. */
+export const DEGRADED_REASONS: Record<DegradedCode, string> = {
+  depscan_failed:
+    'Vulnerability scanner did not complete — some CVEs may be missing.',
+  sbom_empty_with_components:
+    'Dependencies could not be fully resolved — vulnerability and malicious-package results are incomplete.',
+  sbom_empty_no_manifest:
+    'No dependencies could be resolved from the manifest — results are incomplete.',
+  malicious_failed:
+    'Malicious-package scan did not complete — some packages were not checked.',
+  binary_missing_semgrep:
+    'Static analysis did not run — code was not scanned for issues.',
+  binary_missing_trufflehog:
+    'Secret scanning did not run — the repo was not scanned for exposed secrets.',
+  iac_failed: 'Infrastructure / container scan did not complete.',
+};
+
+type DegradedCtx = Pick<
+  PipelineContext,
+  'degraded' | 'degradedSteps' | 'supabase' | 'job' | 'projectId'
+>;
+
+async function persistScanJobsDegraded(ctx: DegradedCtx): Promise<void> {
+  const jobId = ctx.job?.jobId;
+  if (!jobId) return; // CLI / local mode — no scan_jobs row to write
+  try {
+    await ctx.supabase
+      .from('scan_jobs')
+      .update({ scan_degraded: ctx.degraded, scan_degraded_steps: ctx.degradedSteps })
+      .eq('id', jobId);
+  } catch (e) {
+    // Best-effort. finalize re-writes project_repositories and the pipeline
+    // outer catch flushes again, so a transient miss here is recovered.
+    console.error('[EXTRACT] Failed to persist scan_degraded to scan_jobs:', (e as Error).message);
+  }
+}
+
+/**
+ * Flag the run degraded for a security-critical step that produced no/partial
+ * signal. Sets ctx.degraded, dedup-appends the reason, and WRITES THROUGH to
+ * scan_jobs immediately so the flag survives a later hard-fail/cancel that never
+ * reaches finalize. Pass `detail` at swallow-inside-body sites (dep-scan exit,
+ * sbom empty, malicious status-write fail, binary-missing) so the technical
+ * cause is persisted to extraction_step_errors; omit it where runStage already
+ * wrote a row (the whole-step-threw onError path).
+ */
+export async function markDegraded(
+  ctx: DegradedCtx,
+  opts: { step: string; code: DegradedCode; detail?: string },
+): Promise<void> {
+  const reason = DEGRADED_REASONS[opts.code];
+  ctx.degraded = true;
+  if (!ctx.degradedSteps.some((d) => d.step === opts.step && d.reason === reason)) {
+    ctx.degradedSteps.push({ step: opts.step, reason });
+  }
+  await persistScanJobsDegraded(ctx);
+  if (opts.detail && ctx.job?.jobId) {
+    await logStepError(ctx.supabase, {
+      jobId: ctx.job.jobId,
+      projectId: ctx.projectId,
+      step: opts.step,
+      code: opts.code,
+      message: opts.detail,
+      severity: 'warn',
+    });
+  }
+}
+
+/**
+ * Re-flush accumulated degraded state to scan_jobs from the pipeline outer
+ * catch — belt-and-suspenders if a mid-run write-through failed transiently
+ * before a later step hard-failed.
+ */
+export async function flushDegradedToScanJobs(ctx: DegradedCtx): Promise<void> {
+  if (!ctx.degraded) return;
+  await persistScanJobsDegraded(ctx);
 }
 
 /**

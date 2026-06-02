@@ -12,6 +12,7 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
+import { markDegraded } from '../with-timeout';
 import { runIaCAndContainerScans, type ScannerSummary } from '../scanners/orchestrator';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -29,8 +30,10 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
     log,
     onError: async ({ err }) => {
       // Top-level orchestrator failure (shouldn't happen — orchestrator
-      // catches per-scanner failures internally — but defensive).
+      // catches per-scanner failures internally — but defensive). runStage
+      // already wrote the step_error row, so flag degraded without a duplicate.
       await log.warn('iac_scan', `IaC + container scan failed: ${(err as Error)?.message ?? err}`);
+      await markDegraded(ctx, { step: 'iac_container_scan', code: 'iac_failed' });
     },
     fn: async () => {
       // Resolve the org's GitHub App installation id once (used by ghcr.io
@@ -67,5 +70,18 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
     },
   });
   if (scannerSummaryResult !== undefined) scannerSummary = scannerSummaryResult;
+
+  // A scanner that was supposed to run (infra detected, not disabled by env /
+  // killswitch) but failed → the IaC/container picture is incomplete. Keyed off
+  // the structured failedScanners list, NOT warning-string matching, so a
+  // deliberately-disabled scanner never false-positives the badge.
+  if (scannerSummary && scannerSummary.failedScanners.length > 0) {
+    await markDegraded(ctx, {
+      step: 'iac_container_scan',
+      code: 'iac_failed',
+      detail: `IaC/container scanner(s) failed: ${scannerSummary.failedScanners.join(', ')}`,
+    });
+  }
+
   return scannerSummary;
 }

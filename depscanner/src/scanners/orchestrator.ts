@@ -122,6 +122,14 @@ export interface ScannerSummary {
   containerFindingsWritten: number;
   skippedImages: SkippedImage[];
   warnings: string[];
+  /**
+   * Scanners that were SUPPOSED to run (infra detected, not disabled by env /
+   * killswitch) but FAILED. Distinct from `warnings`, which also carries benign
+   * `*_disabled_by_env` / `*_killswitch` entries. The pipeline reads this to
+   * flag the run degraded — string-matching `warnings` would false-positive on
+   * a deliberately-disabled scanner.
+   */
+  failedScanners: string[];
 }
 
 export interface ScannerStepContext {
@@ -1208,6 +1216,7 @@ export async function runIaCAndContainerScans(
     containerFindingsWritten: 0,
     skippedImages: [],
     warnings: [],
+    failedScanners: [],
   };
 
   if (!isAllowedOrg(ctx.organizationId)) {
@@ -1271,6 +1280,7 @@ export async function runIaCAndContainerScans(
             summary.warnings.push(...result.warnings);
           } catch (err: any) {
             summary.warnings.push(`checkov_failed:${err?.message ?? 'unknown'}`);
+            summary.failedScanners.push('checkov');
             await logStepError(ctx.supabase as any, {
               jobId: ctx.jobId ?? 'unknown',
               projectId: ctx.projectId,
@@ -1307,6 +1317,7 @@ export async function runIaCAndContainerScans(
             summary.warnings.push(...result.warnings);
           } catch (err: any) {
             summary.warnings.push(`trivy_config_failed:${err?.message ?? 'unknown'}`);
+            summary.failedScanners.push('trivy_config');
             await logStepError(ctx.supabase as any, {
               jobId: ctx.jobId ?? 'unknown',
               projectId: ctx.projectId,
@@ -1338,6 +1349,7 @@ export async function runIaCAndContainerScans(
       );
     } catch (err: any) {
       summary.warnings.push(`iac_storage_failed:${err?.message ?? 'unknown'}`);
+      summary.failedScanners.push('iac_storage');
       await logStepError(ctx.supabase as any, {
         jobId: ctx.jobId ?? 'unknown',
         projectId: ctx.projectId,
@@ -1437,6 +1449,7 @@ export async function runIaCAndContainerScans(
       }
     } catch (err: any) {
       summary.warnings.push(`container_failed:${err?.message ?? 'unknown'}`);
+      summary.failedScanners.push('container');
       await logStepError(ctx.supabase as any, {
         jobId: ctx.jobId ?? 'unknown',
         projectId: ctx.projectId,

@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
-import { logStepError, classifyError } from '../with-timeout';
+import { logStepError, classifyError, markDegraded } from '../with-timeout';
 import { calculateSemgrepDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -23,6 +23,16 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
 
   if (!binaryAvailable('semgrep')) {
     await log.warn('semgrep', INSTALL_HINTS.semgrep);
+    // The worker image bundles semgrep, so a missing binary means a misbuilt
+    // image silently running SAST OFF fleet-wide — that's a degraded scan, not
+    // a clean one. CLI/local dev legitimately lacks it, so skip the flag there.
+    if (process.env.DEPTEX_CLI_MODE !== '1') {
+      await markDegraded(ctx, {
+        step: 'semgrep',
+        code: 'binary_missing_semgrep',
+        detail: INSTALL_HINTS.semgrep,
+      });
+    }
     return;
   }
 

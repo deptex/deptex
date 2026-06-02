@@ -752,11 +752,11 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     }
 
     // Fetch repository statuses for all projects in one query
-    const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null; last_extracted_at: string | null }> = {};
+    const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null; last_extracted_at: string | null; scan_degraded: boolean }> = {};
     if (projectIds.length > 0) {
       const { data: repoStatuses } = await supabase
         .from('project_repositories')
-        .select('project_id, status, extraction_step, extraction_error, last_extracted_at')
+        .select('project_id, status, extraction_step, extraction_error, last_extracted_at, scan_degraded')
         .in('project_id', projectIds);
       if (repoStatuses) {
         for (const rs of repoStatuses) {
@@ -765,6 +765,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
             extraction_step: (rs as any).extraction_step ?? null,
             extraction_error: (rs as any).extraction_error ?? null,
             last_extracted_at: (rs as any).last_extracted_at ?? null,
+            scan_degraded: (rs as any).scan_degraded ?? false,
           };
         }
       }
@@ -908,6 +909,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
         extraction_step: repoStatus?.extraction_step ?? null,
         extraction_error: repoStatus?.extraction_error ?? null,
         last_extracted_at: repoStatus?.last_extracted_at ?? null,
+        scan_degraded: repoStatus?.scan_degraded ?? false,
         role,
         permissions,
         status_id: project.status_id ?? null,
@@ -11119,7 +11121,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
-      supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
+      supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch, scan_degraded, scan_degraded_steps').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('scan_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
       supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
       supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
@@ -11266,6 +11268,11 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
         last_error: lastFailedJob?.error ?? null,
         branch: repoRow?.default_branch ?? 'main',
       },
+      // Degraded run state — read from project_repositories (finalize's
+      // authoritative current-state row), NOT the latest scan_jobs row, which
+      // can be a DAST/queued job that masks a degraded extraction.
+      scan_degraded: (repoRow as any)?.scan_degraded ?? false,
+      scan_degraded_steps: ((repoRow as any)?.scan_degraded_steps ?? []) as Array<{ step: string; reason: string }>,
       action_items: actionItems,
       graph_deps: graphDeps,
       sla: {

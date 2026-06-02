@@ -878,6 +878,7 @@ export default function OrganizationOverviewPage() {
               statusName: p.status_name ?? null,
               statusColor: p.status_color ?? null,
               statusId: p.status_id ?? null,
+              scanDegraded: (p as Project).scan_degraded ?? false,
               importance: typeof p.importance === 'number' ? p.importance : null,
               isExtracting,
               isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
@@ -971,6 +972,7 @@ export default function OrganizationOverviewPage() {
             byTeam.get(bucket)!.push({
               projectId: p.id, projectName: p.name, framework: p.framework ?? null,
               statusName: p.status_name ?? null, statusColor: p.status_color ?? null, statusId: p.status_id ?? null,
+              scanDegraded: p.scan_degraded ?? false,
               importance: typeof p.importance === 'number' ? p.importance : null,
               isExtracting, isInitialExtracting: isInitialExtraction(repoStatus || '', extractionStep, lastExtractedAt),
               isInitialExtractionFailed: repoStatus === 'error' && !lastExtractedAt,
@@ -4168,6 +4170,42 @@ export default function OrganizationOverviewPage() {
               >
 {projectSidebarTab === 'vulnerabilities' && (
                   <div className="space-y-4">
+                    {!selectedProjectEffectiveIsInitialExtracting && !selectedProjectExtractionFailed && projectStats?.scan_degraded && (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-200">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold flex items-center gap-1.5">
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                              Scan incomplete
+                            </p>
+                            <p className="mt-1 text-amber-200/90">
+                              Some scanners didn't complete this run, so results may be partial:
+                            </p>
+                            <ul className="mt-1 list-disc pl-4 space-y-0.5 text-amber-200/80">
+                              {(projectStats.scan_degraded_steps ?? []).map((s, i) => (
+                                <li key={i}>{s.reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-100 hover:bg-amber-500/20 transition-colors"
+                            onClick={async () => {
+                              if (!orgId || !selectedProjectId) return;
+                              try {
+                                await api.triggerProjectSync(orgId, selectedProjectId);
+                                toast({ title: 'Re-scan started', description: 'The project is being scanned again.' });
+                              } catch (err: any) {
+                                toast({ title: 'Re-scan failed', description: err?.message || 'Could not start a re-scan', variant: 'destructive' });
+                              }
+                            }}
+                          >
+                            <RotateCw className="h-3 w-3" />
+                            Re-scan
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {projectStats?.malicious_packages?.scan_status === 'partial' && (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                         <span className="font-semibold">Partial coverage:</span> the malicious-package scan

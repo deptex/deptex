@@ -15,11 +15,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
-import { logStepError, classifyError } from '../with-timeout';
+import { logStepError, classifyError, markDegraded } from '../with-timeout';
 import {
   parseSbom,
   getBomRefToNameVersion,
   patchDevDependencies,
+  recoverNpmManifestDeps,
   type ParsedSbomDep,
   type ParsedSbomRelationship,
 } from '../sbom';
@@ -76,6 +77,29 @@ export interface SbomOutput {
   dependencies: ParsedSbomDep[];
   relationships: ParsedSbomRelationship[];
   bomRefMap: ReturnType<typeof getBomRefToNameVersion>;
+}
+
+/**
+ * Whether the ecosystem's manifest file exists on disk. Used to gate the
+ * degraded-on-empty-SBOM flag: an empty SBOM with a manifest present means a
+ * resolver/cdxgen failure (degraded), whereas no manifest means there was
+ * genuinely nothing to scan (not degraded). Mirrors the manifest names the
+ * resolve step keys on.
+ */
+function hasKnownManifest(workspaceRoot: string, ecosystem: string): boolean {
+  const manifests: Record<string, string[]> = {
+    npm: ['package.json'],
+    maven: ['pom.xml'],
+    golang: ['go.mod'],
+    gomod: ['go.mod'],
+    pypi: ['requirements.txt', 'pyproject.toml', 'setup.py'],
+    cargo: ['Cargo.toml'],
+    gem: ['Gemfile'],
+    composer: ['composer.json'],
+  };
+  const names = manifests[ecosystem];
+  if (!names) return false;
+  return names.some((n) => fs.existsSync(path.join(workspaceRoot, n)));
 }
 
 export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
@@ -320,16 +344,58 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     //      or genuinely zero-dep project (e.g. a small CLI tool, a library).
     //   2. SBOM had components but they all had no version (rawComponentCount > 0,
     //      all dropped above) — upstream resolver failed (e.g. bundler not in
-    //      image, npm install broke on workspace refs).
-    // Both are recoverable: semgrep + trufflehog + framework-entry-point
-    // detection still produce value on a zero-dep scan. Warn and continue.
+    //      image, npm install broke on a single unresolvable / unpublished dep).
+    //
+    // Before giving up, attempt a best-effort manifest parse so one bad
+    // dependency doesn't zero the ENTIRE SBOM (npm only for now). cdxgen's edge
+    // graph is absent for recovered deps, so mark the graph unwired: the
+    // reachability classifier floors at `module` (never guesses `unreachable`).
+    let recovered = 0;
+    if (jobEcosystem === 'npm') {
+      try {
+        for (const dep of recoverNpmManifestDeps(workspaceRoot)) {
+          dependencies.push(dep);
+          recovered++;
+        }
+        if (recovered > 0) {
+          ctx.graphTrusted = true;
+          ctx.sbomGraphWired = false;
+          await log.info(
+            'sbom',
+            `Recovered ${recovered} direct dependency(ies) from package.json after the SBOM came back empty`,
+          );
+        }
+      } catch (e: any) {
+        await log.warn('sbom', `Manifest-parse fallback failed (non-fatal): ${e?.message ?? e}`);
+      }
+    }
+
+    // Flag the run degraded — a security-critical step produced no/partial
+    // dependency signal. rawComponentCount>0 means the resolver failed
+    // (components present but versionless); ==0 with a known manifest on disk
+    // means cdxgen + resolve produced nothing despite there being deps to find.
+    // A genuinely manifest-less / zero-dep repo (nothing to scan) is NOT flagged.
+    const manifestPresent = hasKnownManifest(workspaceRoot, jobEcosystem);
+    if (rawComponentCount > 0 || manifestPresent) {
+      await markDegraded(ctx, {
+        step: 'sbom',
+        code: rawComponentCount > 0 ? 'sbom_empty_with_components' : 'sbom_empty_no_manifest',
+        detail:
+          rawComponentCount > 0
+            ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version — the package manager likely failed to resolve a dependency`
+            : 'cdxgen produced an empty SBOM despite a manifest being present',
+      });
+    }
+
     const reason =
       rawComponentCount > 0
         ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version`
         : 'SBOM is empty';
     await log.warn(
       'sbom',
-      `No dependencies parsed (${reason}) — continuing without dependency analysis; SAST and secret scans will still run`,
+      recovered > 0
+        ? `cdxgen returned no usable dependencies (${reason}) — recovered ${recovered} direct dep(s) from the manifest; results are partial`
+        : `No dependencies parsed (${reason}) — continuing without dependency analysis; SAST and secret scans will still run`,
     );
   }
 
