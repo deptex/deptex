@@ -120,37 +120,11 @@ function DepositsChart({ data }: { data: AdminRevenuePoint[] }) {
 
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
-    <div className="sm:px-6 sm:first:pl-0">
+    <div className="lg:px-6 lg:first:pl-0">
       <div className="text-3xl font-bold leading-none tabular-nums text-foreground">{value}</div>
       <div className="mt-2 text-xs font-medium uppercase tracking-wider text-foreground-secondary">
         {label}
       </div>
-    </div>
-  );
-}
-
-function Money({
-  label,
-  hint,
-  value,
-  negative = false,
-}: {
-  label: string;
-  hint: string;
-  value: string;
-  negative?: boolean;
-}) {
-  return (
-    <div className="lg:px-6 lg:first:pl-0">
-      <div
-        className={`text-2xl font-bold leading-none tabular-nums ${
-          negative ? 'text-destructive' : 'text-foreground'
-        }`}
-      >
-        {value}
-      </div>
-      <div className="mt-2 text-sm text-foreground">{label}</div>
-      <div className="mt-0.5 text-xs text-foreground-muted">{hint}</div>
     </div>
   );
 }
@@ -230,29 +204,17 @@ export default function AdminOverviewPage() {
   return (
     <Page>
       {/* Platform scale — bare numbers, not one-card-each */}
-      <section className="grid grid-cols-2 gap-6 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-border">
+      <section className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-6 lg:gap-0 lg:divide-x lg:divide-border">
         <Kpi label="Organizations" value={num(totals.organizations)} />
         <Kpi label="Projects" value={num(totals.projects)} />
         <Kpi label="Users" value={num(totals.users)} />
         <Kpi label="Scans · 30d" value={num(totals.scans30d)} />
+        <Kpi label="Deposits" value={usd(f.depositsCents)} />
+        <Kpi label="Free credit burned" value={usd(f.freeCreditBurnedCents)} />
       </section>
 
       {/* Financials — made vs lost */}
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-foreground">Financials</h2>
-
-        <div className="grid grid-cols-2 gap-6 lg:grid-cols-4 lg:gap-0 lg:divide-x lg:divide-border">
-          <Money label="Deposits" hint="net cash collected" value={usd(f.depositsCents)} />
-          <Money
-            label="Gross margin"
-            hint="charged − our cost"
-            value={usd(f.grossMarginCents)}
-            negative={f.grossMarginCents < 0}
-          />
-          <Money label="Free credit burned" hint="cost of the free tier" value={usd(f.freeCreditBurnedCents)} />
-          <Money label="Real balance held" hint="paid, excl. free credit" value={usd(f.realBalanceHeldCents)} />
-        </div>
-
+      <section className="space-y-3">
         <div className="rounded-lg border border-border bg-background-card">
           <div className="flex items-start justify-between px-5 pt-5 pb-2">
             <div>
@@ -279,10 +241,9 @@ export default function AdminOverviewPage() {
           </div>
         </div>
 
-        {(f.estimated || f.truncated) && (
+        {f.truncated && (
           <p className="text-xs text-foreground-muted">
-            Free-credit figures assume free credit is spent first (estimate).
-            {f.truncated ? ' Some totals are a floor — ledger row cap reached.' : ''}
+            Some totals are a floor — ledger row cap reached.
           </p>
         )}
       </section>
