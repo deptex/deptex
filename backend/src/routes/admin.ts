@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
+import { fail } from '../lib/responders';
 
 const router = express.Router();
 
@@ -56,8 +57,7 @@ router.get('/fleet-metrics', async (req: AuthRequest, res) => {
     const metrics = await getFleetMetrics(type);
     res.json(metrics);
   } catch (e: any) {
-    console.error('[admin/fleet-metrics] error:', e?.message ?? e);
-    res.status(500).json({ error: 'Failed to load fleet metrics' });
+    fail(res, e, 'Failed to load fleet metrics');
   }
 });
 
@@ -106,8 +106,7 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
 
     const { data, error, count } = await query;
     if (error) {
-      console.error('[admin/extraction-failures] query error:', error);
-      res.status(500).json({ error: error.message || 'Failed to list extraction failures' });
+      fail(res, error, 'Failed to list extraction failures');
       return;
     }
 
@@ -141,8 +140,7 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
       per_page: perPage,
     });
   } catch (error: any) {
-    console.error('[admin/extraction-failures] unexpected error:', error);
-    res.status(500).json({ error: error?.message || 'Unexpected error' });
+    fail(res, error, 'Failed to list extraction failures');
   }
 });
 
@@ -232,8 +230,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
 
     const countError = orgCount.error || projectCount.error || memberRows.error || scanCount.error;
     if (countError) {
-      console.error('[admin/overview] query error:', countError);
-      res.status(500).json({ error: countError.message || 'Failed to load overview' });
+      fail(res, countError, 'Failed to load overview');
       return;
     }
 
@@ -270,8 +267,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
       growthSeries,
     });
   } catch (error: any) {
-    console.error('[admin/overview] unexpected error:', error);
-    res.status(500).json({ error: error?.message || 'Unexpected error' });
+    fail(res, error, 'Failed to load overview');
   }
 });
 
@@ -303,8 +299,7 @@ router.get('/billing', async (_req: AuthRequest, res) => {
       .order('created_at', { ascending: false })
       .limit(20);
     if (activityRows.error) {
-      console.error('[admin/billing] activity query error:', activityRows.error);
-      res.status(500).json({ error: activityRows.error.message || 'Failed to load billing' });
+      fail(res, activityRows.error, 'Failed to load billing');
       return;
     }
 
@@ -447,8 +442,7 @@ router.get('/billing', async (_req: AuthRequest, res) => {
       })),
     });
   } catch (error: any) {
-    console.error('[admin/billing] unexpected error:', error);
-    res.status(500).json({ error: error?.message || 'Unexpected error' });
+    fail(res, error, 'Failed to load billing');
   }
 });
 
@@ -479,8 +473,7 @@ router.get('/extraction-trend', async (_req: AuthRequest, res) => {
     const series = Array.from(map, ([date, v]) => ({ date, errors: v.errors, warns: v.warns }));
     res.json({ series, truncated });
   } catch (error: any) {
-    console.error('[admin/extraction-trend] unexpected error:', error);
-    res.status(500).json({ error: error?.message || 'Unexpected error' });
+    fail(res, error, 'Failed to load extraction trend');
   }
 });
 

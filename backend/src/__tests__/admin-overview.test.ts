@@ -107,3 +107,40 @@ describe('admin billing — GET /api/admin/billing', () => {
     expect(Array.isArray(res.body.recentActivity)).toBe(true);
   });
 });
+
+// The requireAdmin gate is applied router-wide, but pin it on EVERY endpoint so a
+// future route added before the .use() — or an ungated sibling — can't slip through.
+const ADMIN_ENDPOINTS = [
+  '/api/admin/ping',
+  '/api/admin/fleet-metrics',
+  '/api/admin/extraction-failures',
+  '/api/admin/extraction-trend',
+  '/api/admin/overview',
+  '/api/admin/billing',
+];
+
+describe('admin gate — every /api/admin endpoint is fail-closed', () => {
+  beforeEach(() => {
+    clearTableRegistry();
+    mockAuthUser = { id: USER_ID, email: 'admin@deptex.dev' };
+    process.env.ADMIN_EMAIL = 'admin@deptex.dev';
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_ADMIN_EMAIL === undefined) delete process.env.ADMIN_EMAIL;
+    else process.env.ADMIN_EMAIL = ORIGINAL_ADMIN_EMAIL;
+  });
+
+  it.each(ADMIN_ENDPOINTS)('403s a non-allowlisted user on %s', async (path) => {
+    process.env.ADMIN_EMAIL = 'admin@deptex.dev';
+    mockAuthUser = { id: USER_ID, email: 'intruder@evil.com' };
+    const res = await request(app).get(path);
+    expect(res.status).toBe(403);
+  });
+
+  it.each(ADMIN_ENDPOINTS)('403s when ADMIN_EMAIL is unset on %s', async (path) => {
+    delete process.env.ADMIN_EMAIL;
+    const res = await request(app).get(path);
+    expect(res.status).toBe(403);
+  });
+});
