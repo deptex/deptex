@@ -377,13 +377,19 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
     // A genuinely manifest-less / zero-dep repo (nothing to scan) is NOT flagged.
     const manifestPresent = hasKnownManifest(workspaceRoot, jobEcosystem);
     if (rawComponentCount > 0 || manifestPresent) {
+      // When the manifest fallback recovered SOME deps, the run is partial (not
+      // empty) — use the "partially resolved" reason so the banner doesn't claim
+      // "no dependencies" while showing the recovered ones.
+      const partial = rawComponentCount > 0 || recovered > 0;
       await markDegraded(ctx, {
         step: 'sbom',
-        code: rawComponentCount > 0 ? 'sbom_empty_with_components' : 'sbom_empty_no_manifest',
+        code: partial ? 'sbom_empty_with_components' : 'sbom_empty_no_manifest',
         detail:
-          rawComponentCount > 0
-            ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version — the package manager likely failed to resolve a dependency`
-            : 'cdxgen produced an empty SBOM despite a manifest being present',
+          recovered > 0
+            ? `cdxgen produced an empty SBOM; recovered ${recovered} direct dep(s) from the manifest but no transitive closure — results are partial`
+            : rawComponentCount > 0
+              ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version — the package manager likely failed to resolve a dependency`
+              : 'cdxgen produced an empty SBOM despite a manifest being present',
       });
     }
 
