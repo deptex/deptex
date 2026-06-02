@@ -6064,3 +6064,35 @@ export async function apiAdminListExtractionFailures(params: {
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
 }
+
+export interface AdminBillingActivity {
+  id: string;
+  kind: string;
+  amount_cents: number;
+  description: string | null;
+  organization_id: string;
+  organization_name: string | null;
+  created_at: string;
+}
+
+export interface AdminOverview {
+  totals: {
+    organizations: number;
+    projects: number;
+    users: number;
+    scans30d: number;
+  };
+  billing: {
+    totalBalanceCents: number;
+    revenue30dCents: number;
+    autoRechargeOn: number;
+    zeroBalanceOrgs: number;
+    failedPayments7d: number;
+  };
+  recentActivity: AdminBillingActivity[];
+}
+
+/** Platform-wide health snapshot for the admin console Overview tab. */
+export async function apiAdminOverview(): Promise<AdminOverview> {
+  return fetchWithAuth('/api/admin/overview');
+}

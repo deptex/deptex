@@ -144,4 +144,149 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * GET /api/admin/overview
+ * Platform-wide health snapshot for the Deptex-staff admin console. Read-only
+ * counts + billing rollups aggregated from existing tables (no dedicated events
+ * table). Counts run DB-side (head:true); the two sums fetch a single column and
+ * reduce in-process — trivial at current org/transaction scale. If org or
+ * transaction volume grows large, move the sums into a SQL RPC.
+ *
+ * Sign convention (phase37): usage_deduction rows are negative; topup /
+ * auto_recharge_topup / signup_grant are positive. Revenue counts only real
+ * money in (topup + auto_recharge_topup), excluding the signup_grant free credit.
+ *
+ * Note: billing_stripe_webhook_events has no organization_id, so failed-payment
+ * counts are an aggregate metric only — not attributable per-org in the feed.
+ * The activity feed sources from billing_transactions (which carries org_id).
+ */
+router.get('/overview', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const since30d = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const FAILED_PAYMENT_EVENTS = ['payment_intent.payment_failed', 'invoice.payment_failed'];
+    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment', 'signup_grant'];
+
+    const [
+      orgCount,
+      projectCount,
+      memberRows,
+      scanCount,
+      balanceRows,
+      revenueRows,
+      autoRechargeCount,
+      zeroBalanceCount,
+      failedPaymentCount,
+      activityRows,
+    ] = await Promise.all([
+      supabase.from('organizations').select('*', { count: 'exact', head: true }),
+      supabase.from('projects').select('*', { count: 'exact', head: true }),
+      supabase.from('organization_members').select('user_id'),
+      supabase.from('scan_jobs').select('*', { count: 'exact', head: true }).gte('created_at', since30d),
+      supabase.from('organization_billing').select('balance_cents'),
+      supabase
+        .from('billing_transactions')
+        .select('amount_cents')
+        .in('kind', ['topup', 'auto_recharge_topup'])
+        .gte('created_at', since30d),
+      supabase
+        .from('organization_billing')
+        .select('*', { count: 'exact', head: true })
+        .eq('auto_recharge_enabled', true),
+      supabase
+        .from('organization_billing')
+        .select('*', { count: 'exact', head: true })
+        .eq('balance_cents', 0),
+      supabase
+        .from('billing_stripe_webhook_events')
+        .select('*', { count: 'exact', head: true })
+        .in('event_type', FAILED_PAYMENT_EVENTS)
+        .gte('processed_at', since7d),
+      supabase
+        .from('billing_transactions')
+        .select('id, organization_id, kind, amount_cents, description, created_at')
+        .in('kind', ACTIVITY_KINDS)
+        .order('created_at', { ascending: false })
+        .limit(20),
+    ]);
+
+    // Surface the first hard error rather than returning a half-populated payload.
+    const firstError =
+      orgCount.error ||
+      projectCount.error ||
+      memberRows.error ||
+      scanCount.error ||
+      balanceRows.error ||
+      revenueRows.error ||
+      autoRechargeCount.error ||
+      zeroBalanceCount.error ||
+      failedPaymentCount.error ||
+      activityRows.error;
+    if (firstError) {
+      console.error('[admin/overview] query error:', firstError);
+      res.status(500).json({ error: firstError.message || 'Failed to load overview' });
+      return;
+    }
+
+    const distinctUsers = new Set(
+      (memberRows.data ?? []).map((r: any) => r.user_id).filter(Boolean),
+    ).size;
+    const totalBalanceCents = (balanceRows.data ?? []).reduce(
+      (s: number, r: any) => s + (r.balance_cents ?? 0),
+      0,
+    );
+    const revenue30dCents = (revenueRows.data ?? []).reduce(
+      (s: number, r: any) => s + (r.amount_cents ?? 0),
+      0,
+    );
+
+    // Join org names onto the activity rows (non-fatal if the lookup fails).
+    const activity = activityRows.data ?? [];
+    const orgIds = Array.from(new Set(activity.map((r: any) => r.organization_id).filter(Boolean)));
+    const nameById: Record<string, string> = {};
+    if (orgIds.length > 0) {
+      const { data: orgs, error: orgErr } = await supabase
+        .from('organizations')
+        .select('id, name')
+        .in('id', orgIds);
+      if (orgErr) {
+        console.error('[admin/overview] org name lookup error:', orgErr);
+      } else {
+        for (const o of orgs ?? []) {
+          if (o?.id) nameById[o.id] = o.name ?? '';
+        }
+      }
+    }
+
+    res.json({
+      totals: {
+        organizations: orgCount.count ?? 0,
+        projects: projectCount.count ?? 0,
+        users: distinctUsers,
+        scans30d: scanCount.count ?? 0,
+      },
+      billing: {
+        totalBalanceCents,
+        revenue30dCents,
+        autoRechargeOn: autoRechargeCount.count ?? 0,
+        zeroBalanceOrgs: zeroBalanceCount.count ?? 0,
+        failedPayments7d: failedPaymentCount.count ?? 0,
+      },
+      recentActivity: activity.map((r: any) => ({
+        id: r.id,
+        kind: r.kind,
+        amount_cents: r.amount_cents,
+        description: r.description ?? null,
+        organization_id: r.organization_id,
+        organization_name: nameById[r.organization_id] ?? null,
+        created_at: r.created_at,
+      })),
+    });
+  } catch (error: any) {
+    console.error('[admin/overview] unexpected error:', error);
+    res.status(500).json({ error: error?.message || 'Unexpected error' });
+  }
+});
+
 export default router;
