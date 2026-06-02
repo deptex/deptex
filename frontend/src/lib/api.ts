@@ -6080,6 +6080,19 @@ export interface AdminRevenuePoint {
   cents: number;
 }
 
+export interface AdminFinancials {
+  depositsCents: number;
+  deposits30dCents: number;
+  grossMarginCents: number;
+  freeCreditBurnedCents: number;
+  realBalanceHeldCents: number;
+  freeCreditOutstandingCents: number;
+  /** Free-credit figures assume free credit is spent first — an estimate. */
+  estimated: boolean;
+  /** True if the ledger row cap was hit, so totals are a floor not exact. */
+  truncated: boolean;
+}
+
 export interface AdminOverview {
   totals: {
     organizations: number;
@@ -6087,13 +6100,7 @@ export interface AdminOverview {
     users: number;
     scans30d: number;
   };
-  billing: {
-    totalBalanceCents: number;
-    revenue30dCents: number;
-    autoRechargeOn: number;
-    zeroBalanceOrgs: number;
-    failedPayments7d: number;
-  };
+  financials: AdminFinancials;
   revenueSeries: AdminRevenuePoint[];
   recentActivity: AdminBillingActivity[];
 }

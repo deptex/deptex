@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase';
 
 const router = express.Router();
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Local admin gate. Reads ADMIN_EMAIL from env (comma-separated list).
  * Fails closed: if ADMIN_EMAIL is empty/unset, all requests 403.
@@ -145,64 +147,68 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
 });
 
 /**
+ * Page through a select() 1000 rows at a time (PostgREST's hard cap), ordered by
+ * `orderCol` for stable paging. Capped at MAX_ROWS so a pathological table can't
+ * hang the admin page; returns { rows, truncated } where truncated=true means the
+ * cap was hit and the aggregate is a floor, not exact. `build` must return a fresh
+ * query each call. Throws on the first DB error.
+ */
+async function paginateAll(
+  build: () => any,
+  orderCol = 'id',
+): Promise<{ rows: any[]; truncated: boolean }> {
+  const PAGE = 1000;
+  const MAX_ROWS = 100_000;
+  const rows: any[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data, error } = await build()
+      .order(orderCol, { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < PAGE) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+}
+
+const n = (v: any) => Number(v ?? 0);
+
+/**
  * GET /api/admin/overview
- * Platform-wide health snapshot for the Deptex-staff admin console. Read-only
- * counts + billing rollups aggregated from existing tables (no dedicated events
- * table). Counts run DB-side (head:true); the two sums fetch a single column and
- * reduce in-process — trivial at current org/transaction scale. If org or
- * transaction volume grows large, move the sums into a SQL RPC.
+ * Platform-wide health + financial snapshot for the Deptex-staff admin console.
  *
- * Sign convention (phase37): usage_deduction rows are negative; topup /
- * auto_recharge_topup / signup_grant are positive. Revenue counts only real
- * money in (topup + auto_recharge_topup), excluding the signup_grant free credit.
+ * Counts run DB-side (head:true). The financial rollups page through the ledger
+ * (billing_transactions) and reduce in-process — fine at current scale; move to a
+ * SQL function if the usage table grows large (a `truncated` flag is returned when
+ * the row cap is hit so the numbers are never silently undercounted).
  *
- * Note: billing_stripe_webhook_events has no organization_id, so failed-payment
- * counts are an aggregate metric only — not attributable per-org in the feed.
- * The activity feed sources from billing_transactions (which carries org_id).
+ * Money model (phase37 sign convention — usage_deduction is negative, the rest
+ * positive):
+ *   - Deposits     = (topup + auto_recharge_topup) − refunds   → real cash collected
+ *   - Gross margin = Σ over usage of (charged − cost_cents_cog) → markup we earned
+ *   - Free credit  = signup_grant; "burned" = the prorated COGS of usage covered
+ *                    by grants, assuming FREE CREDIT IS SPENT FIRST (an estimate —
+ *                    the ledger keeps a single balance, so pool attribution can't
+ *                    be exact). `estimated: true` flags this.
+ *   - Real balance = current balance MINUS unspent free credit (so it reflects
+ *                    paid customer cash, not our promo).
+ * The activity feed shows real money events only (signup_grant excluded).
  */
 router.get('/overview', async (_req: AuthRequest, res) => {
   try {
     const now = Date.now();
-    const since30d = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const FAILED_PAYMENT_EVENTS = ['payment_intent.payment_failed', 'invoice.payment_failed'];
-    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment', 'signup_grant'];
+    const since30d = new Date(now - 30 * DAY_MS).toISOString();
+    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment'];
 
-    const [
-      orgCount,
-      projectCount,
-      memberRows,
-      scanCount,
-      balanceRows,
-      revenueRows,
-      autoRechargeCount,
-      zeroBalanceCount,
-      failedPaymentCount,
-      activityRows,
-    ] = await Promise.all([
+    const [orgCount, projectCount, memberRows, scanCount, activityRows] = await Promise.all([
       supabase.from('organizations').select('*', { count: 'exact', head: true }),
       supabase.from('projects').select('*', { count: 'exact', head: true }),
       supabase.from('organization_members').select('user_id'),
-      supabase.from('scan_jobs').select('*', { count: 'exact', head: true }).gte('created_at', since30d),
-      supabase.from('organization_billing').select('balance_cents'),
       supabase
-        .from('billing_transactions')
-        .select('amount_cents, created_at')
-        .in('kind', ['topup', 'auto_recharge_topup'])
+        .from('scan_jobs')
+        .select('*', { count: 'exact', head: true })
         .gte('created_at', since30d),
-      supabase
-        .from('organization_billing')
-        .select('*', { count: 'exact', head: true })
-        .eq('auto_recharge_enabled', true),
-      supabase
-        .from('organization_billing')
-        .select('*', { count: 'exact', head: true })
-        .eq('balance_cents', 0),
-      supabase
-        .from('billing_stripe_webhook_events')
-        .select('*', { count: 'exact', head: true })
-        .in('event_type', FAILED_PAYMENT_EVENTS)
-        .gte('processed_at', since7d),
       supabase
         .from('billing_transactions')
         .select('id, organization_id, kind, amount_cents, description, created_at')
@@ -211,47 +217,115 @@ router.get('/overview', async (_req: AuthRequest, res) => {
         .limit(20),
     ]);
 
-    // Surface the first hard error rather than returning a half-populated payload.
-    const firstError =
-      orgCount.error ||
-      projectCount.error ||
-      memberRows.error ||
-      scanCount.error ||
-      balanceRows.error ||
-      revenueRows.error ||
-      autoRechargeCount.error ||
-      zeroBalanceCount.error ||
-      failedPaymentCount.error ||
-      activityRows.error;
-    if (firstError) {
-      console.error('[admin/overview] query error:', firstError);
-      res.status(500).json({ error: firstError.message || 'Failed to load overview' });
+    const countError =
+      orgCount.error || projectCount.error || memberRows.error || scanCount.error || activityRows.error;
+    if (countError) {
+      console.error('[admin/overview] query error:', countError);
+      res.status(500).json({ error: countError.message || 'Failed to load overview' });
       return;
     }
 
+    // Ledger aggregation (paged).
+    const [balance, grants, deposits, refunds, usage] = await Promise.all([
+      paginateAll(
+        () => supabase.from('organization_billing').select('organization_id, balance_cents'),
+        'organization_id',
+      ),
+      paginateAll(() =>
+        supabase.from('billing_transactions').select('organization_id, amount_cents').eq('kind', 'signup_grant'),
+      ),
+      paginateAll(() =>
+        supabase
+          .from('billing_transactions')
+          .select('amount_cents, created_at')
+          .in('kind', ['topup', 'auto_recharge_topup']),
+      ),
+      paginateAll(() =>
+        supabase.from('billing_transactions').select('amount_cents').eq('kind', 'refund'),
+      ),
+      paginateAll(() =>
+        supabase
+          .from('billing_transactions')
+          .select('organization_id, amount_cents, cost_cents_cog')
+          .eq('kind', 'usage_deduction'),
+      ),
+    ]);
+
+    const truncated =
+      balance.truncated || grants.truncated || deposits.truncated || refunds.truncated || usage.truncated;
+
+    // Platform totals.
     const distinctUsers = new Set(
       (memberRows.data ?? []).map((r: any) => r.user_id).filter(Boolean),
     ).size;
-    const totalBalanceCents = (balanceRows.data ?? []).reduce(
-      (s: number, r: any) => s + (r.balance_cents ?? 0),
-      0,
-    );
-    const revenue30dCents = (revenueRows.data ?? []).reduce(
-      (s: number, r: any) => s + (r.amount_cents ?? 0),
-      0,
-    );
 
-    // Zero-filled daily revenue series for the chart (last 30 UTC days, oldest first).
-    const DAY_MS = 24 * 60 * 60 * 1000;
+    // Per-org rollups for the free-credit split.
+    const balanceByOrg = new Map<string, number>();
+    for (const r of balance.rows) {
+      balanceByOrg.set(r.organization_id, (balanceByOrg.get(r.organization_id) ?? 0) + n(r.balance_cents));
+    }
+    const grantByOrg = new Map<string, number>();
+    for (const r of grants.rows) {
+      grantByOrg.set(r.organization_id, (grantByOrg.get(r.organization_id) ?? 0) + n(r.amount_cents));
+    }
+    const chargedByOrg = new Map<string, number>();
+    const cogsByOrg = new Map<string, number>();
+    let chargedTotal = 0;
+    let cogsTotal = 0;
+    for (const r of usage.rows) {
+      const charged = -n(r.amount_cents); // usage amounts are negative
+      const cogs = n(r.cost_cents_cog);
+      chargedByOrg.set(r.organization_id, (chargedByOrg.get(r.organization_id) ?? 0) + charged);
+      cogsByOrg.set(r.organization_id, (cogsByOrg.get(r.organization_id) ?? 0) + cogs);
+      chargedTotal += charged;
+      cogsTotal += cogs;
+    }
+
+    // Deposits (net cash in) + 30-day series.
+    const depositsGross = deposits.rows.reduce((s: number, r: any) => s + n(r.amount_cents), 0);
+    const refundsAbs = refunds.rows.reduce((s: number, r: any) => s + Math.abs(n(r.amount_cents)), 0);
+    const depositsCents = Math.round(depositsGross - refundsAbs);
+
     const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
     const seriesMap = new Map<string, number>();
     for (let i = 29; i >= 0; i--) seriesMap.set(utcDay(now - i * DAY_MS), 0);
-    for (const r of revenueRows.data ?? []) {
+    let deposits30d = 0;
+    for (const r of deposits.rows) {
       if (!r.created_at) continue;
       const key = new Date(r.created_at).toISOString().slice(0, 10);
-      if (seriesMap.has(key)) seriesMap.set(key, (seriesMap.get(key) ?? 0) + (r.amount_cents ?? 0));
+      if (seriesMap.has(key)) {
+        seriesMap.set(key, (seriesMap.get(key) ?? 0) + n(r.amount_cents));
+        deposits30d += n(r.amount_cents);
+      }
     }
     const revenueSeries = Array.from(seriesMap, ([date, cents]) => ({ date, cents }));
+
+    // Gross margin across all usage: what we charged minus what it cost us.
+    const grossMarginCents = Math.round(chargedTotal - cogsTotal);
+
+    // Free-credit split (free-credit-spent-first estimate).
+    let freeCreditBurnedCents = 0;
+    let freeCreditOutstandingCents = 0;
+    let realBalanceHeldCents = 0;
+    const allOrgs = new Set<string>([
+      ...balanceByOrg.keys(),
+      ...grantByOrg.keys(),
+      ...chargedByOrg.keys(),
+    ]);
+    for (const org of allOrgs) {
+      const granted = grantByOrg.get(org) ?? 0;
+      const charged = chargedByOrg.get(org) ?? 0;
+      const cogs = cogsByOrg.get(org) ?? 0;
+      const bal = balanceByOrg.get(org) ?? 0;
+      const freeUsed = Math.min(granted, charged);
+      freeCreditBurnedCents += charged > 0 ? cogs * (freeUsed / charged) : 0;
+      const freeRemaining = Math.max(0, Math.min(bal, granted - charged));
+      freeCreditOutstandingCents += freeRemaining;
+      realBalanceHeldCents += bal - freeRemaining;
+    }
+    freeCreditBurnedCents = Math.round(freeCreditBurnedCents);
+    realBalanceHeldCents = Math.round(realBalanceHeldCents);
+    freeCreditOutstandingCents = Math.round(freeCreditOutstandingCents);
 
     // Join org names onto the activity rows (non-fatal if the lookup fails).
     const activity = activityRows.data ?? [];
@@ -278,12 +352,15 @@ router.get('/overview', async (_req: AuthRequest, res) => {
         users: distinctUsers,
         scans30d: scanCount.count ?? 0,
       },
-      billing: {
-        totalBalanceCents,
-        revenue30dCents,
-        autoRechargeOn: autoRechargeCount.count ?? 0,
-        zeroBalanceOrgs: zeroBalanceCount.count ?? 0,
-        failedPayments7d: failedPaymentCount.count ?? 0,
+      financials: {
+        depositsCents,
+        deposits30dCents: deposits30d,
+        grossMarginCents,
+        freeCreditBurnedCents,
+        realBalanceHeldCents,
+        freeCreditOutstandingCents,
+        estimated: true,
+        truncated,
       },
       revenueSeries,
       recentActivity: activity.map((r: any) => ({

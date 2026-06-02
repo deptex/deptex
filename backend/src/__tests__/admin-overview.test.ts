@@ -66,15 +66,19 @@ describe('admin overview — GET /api/admin/overview', () => {
         scans30d: expect.any(Number),
       }),
     );
-    expect(res.body.billing).toEqual(
+    expect(res.body.financials).toEqual(
       expect.objectContaining({
-        totalBalanceCents: expect.any(Number),
-        revenue30dCents: expect.any(Number),
-        autoRechargeOn: expect.any(Number),
-        zeroBalanceOrgs: expect.any(Number),
-        failedPayments7d: expect.any(Number),
+        depositsCents: expect.any(Number),
+        deposits30dCents: expect.any(Number),
+        grossMarginCents: expect.any(Number),
+        freeCreditBurnedCents: expect.any(Number),
+        realBalanceHeldCents: expect.any(Number),
+        freeCreditOutstandingCents: expect.any(Number),
+        estimated: expect.any(Boolean),
+        truncated: expect.any(Boolean),
       }),
     );
+    expect(Array.isArray(res.body.revenueSeries)).toBe(true);
     expect(Array.isArray(res.body.recentActivity)).toBe(true);
   });
 });

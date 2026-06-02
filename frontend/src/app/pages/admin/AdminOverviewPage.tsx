@@ -8,12 +8,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { AlertTriangle, Ban, RefreshCw, Wallet } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge';
 import { useToast } from '../../../hooks/use-toast';
 import { apiAdminOverview, type AdminOverview, type AdminRevenuePoint } from '../../../lib/api';
 
-const GREEN = '#10b981'; // emerald-500 — the brand accent; recharts needs a literal
+const GREEN = '#10b981'; // emerald-500 — brand accent; recharts needs a literal
 
 function usd(cents: number): string {
   return (cents / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
@@ -54,10 +53,9 @@ const KIND_LABEL: Record<string, string> = {
   auto_recharge_topup: 'Auto-recharge',
   refund: 'Refund',
   adjustment: 'Adjustment',
-  signup_grant: 'Signup credit',
 };
 
-// ── Revenue chart ──────────────────────────────────────────────────────────
+// ── Deposits chart ───────────────────────────────────────────────────────────
 
 function RevenueTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -74,7 +72,7 @@ function RevenueTooltip({ active, payload }: { active?: boolean; payload?: any[]
   );
 }
 
-function RevenueChart({ data }: { data: AdminRevenuePoint[] }) {
+function DepositsChart({ data }: { data: AdminRevenuePoint[] }) {
   const chartData = data.map((d) => ({ label: dayLabel(d.date), dollars: d.cents / 100 }));
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -131,41 +129,34 @@ function Kpi({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SideStat({
-  icon,
+function Money({
   label,
   hint,
   value,
-  tone = 'default',
+  negative = false,
 }: {
-  icon: ReactNode;
   label: string;
   hint: string;
   value: string;
-  tone?: 'default' | 'warn';
+  negative?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 px-5 py-4">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground-secondary">
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm text-foreground">{label}</div>
-        <div className="text-xs text-foreground-muted">{hint}</div>
-      </div>
+    <div className="lg:px-6 lg:first:pl-0">
       <div
-        className={`font-mono text-base font-semibold tabular-nums ${
-          tone === 'warn' ? 'text-warning' : 'text-foreground'
+        className={`text-2xl font-bold leading-none tabular-nums ${
+          negative ? 'text-destructive' : 'text-foreground'
         }`}
       >
         {value}
       </div>
+      <div className="mt-2 text-sm text-foreground">{label}</div>
+      <div className="mt-0.5 text-xs text-foreground-muted">{hint}</div>
     </div>
   );
 }
 
 function Page({ children }: { children: ReactNode }) {
-  return <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 space-y-8">{children}</div>;
+  return <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 space-y-10">{children}</div>;
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -210,10 +201,15 @@ export default function AdminOverviewPage() {
             </div>
           ))}
         </div>
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="h-80 animate-pulse rounded-lg border border-border bg-background-card lg:col-span-2" />
-          <div className="h-80 animate-pulse rounded-lg border border-border bg-background-card" />
+        <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i}>
+              <div className="h-7 w-24 animate-pulse rounded bg-muted" />
+              <div className="mt-3 h-3 w-20 animate-pulse rounded bg-muted/50" />
+            </div>
+          ))}
         </div>
+        <div className="h-80 animate-pulse rounded-lg border border-border bg-background-card" />
       </Page>
     );
   }
@@ -228,12 +224,12 @@ export default function AdminOverviewPage() {
     );
   }
 
-  const { totals, billing, revenueSeries, recentActivity } = data;
-  const hasRevenue = revenueSeries.some((d) => d.cents > 0);
+  const { totals, financials: f, revenueSeries, recentActivity } = data;
+  const hasDeposits = revenueSeries.some((d) => d.cents > 0);
 
   return (
     <Page>
-      {/* Platform totals — bare numbers, not one-card-each */}
+      {/* Platform scale — bare numbers, not one-card-each */}
       <section className="grid grid-cols-2 gap-6 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-border">
         <Kpi label="Organizations" value={num(totals.organizations)} />
         <Kpi label="Projects" value={num(totals.projects)} />
@@ -241,62 +237,54 @@ export default function AdminOverviewPage() {
         <Kpi label="Scans · 30d" value={num(totals.scans30d)} />
       </section>
 
-      {/* Revenue chart + billing metrics */}
-      <section className="grid gap-6 lg:grid-cols-3">
-        <div className="rounded-lg border border-border bg-background-card lg:col-span-2">
-          <div className="flex items-start justify-between border-b border-border px-5 py-4">
+      {/* Financials — made vs lost */}
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-foreground">Financials</h2>
+
+        <div className="grid grid-cols-2 gap-6 lg:grid-cols-4 lg:gap-0 lg:divide-x lg:divide-border">
+          <Money label="Deposits" hint="net cash collected" value={usd(f.depositsCents)} />
+          <Money
+            label="Gross margin"
+            hint="charged − our cost"
+            value={usd(f.grossMarginCents)}
+            negative={f.grossMarginCents < 0}
+          />
+          <Money label="Free credit burned" hint="cost of the free tier" value={usd(f.freeCreditBurnedCents)} />
+          <Money label="Real balance held" hint="paid, excl. free credit" value={usd(f.realBalanceHeldCents)} />
+        </div>
+
+        <div className="rounded-lg border border-border bg-background-card">
+          <div className="flex items-start justify-between px-5 pt-5 pb-2">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">Revenue</h2>
+              <h3 className="text-sm font-semibold text-foreground">Deposits</h3>
               <p className="mt-0.5 text-xs text-foreground-secondary">
                 Top-ups + auto-recharge · last 30 days
               </p>
             </div>
             <div className="text-right">
               <div className="text-2xl font-bold leading-none tabular-nums text-foreground">
-                {usd(billing.revenue30dCents)}
+                {usd(f.deposits30dCents)}
               </div>
-              <div className="mt-1 text-xs text-foreground-secondary">total</div>
+              <div className="mt-1 text-xs text-foreground-secondary">last 30 days</div>
             </div>
           </div>
-          <div className="h-64 px-2 py-4">
-            {hasRevenue ? (
-              <RevenueChart data={revenueSeries} />
+          <div className="h-72 px-2 pb-5 pt-1">
+            {hasDeposits ? (
+              <DepositsChart data={revenueSeries} />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-foreground-secondary">
-                No revenue in the last 30 days
+                No deposits in the last 30 days
               </div>
             )}
           </div>
         </div>
 
-        <div className="divide-y divide-border rounded-lg border border-border bg-background-card">
-          <SideStat
-            icon={<Wallet className="h-4 w-4" />}
-            label="Balance held"
-            hint="across all orgs"
-            value={usd(billing.totalBalanceCents)}
-          />
-          <SideStat
-            icon={<RefreshCw className="h-4 w-4" />}
-            label="Auto-recharge on"
-            hint="organizations"
-            value={num(billing.autoRechargeOn)}
-          />
-          <SideStat
-            icon={<AlertTriangle className="h-4 w-4" />}
-            label="Failed payments"
-            hint="last 7 days"
-            value={num(billing.failedPayments7d)}
-            tone={billing.failedPayments7d > 0 ? 'warn' : 'default'}
-          />
-          <SideStat
-            icon={<Ban className="h-4 w-4" />}
-            label="Orgs at $0"
-            hint="empty balance"
-            value={num(billing.zeroBalanceOrgs)}
-            tone={billing.zeroBalanceOrgs > 0 ? 'warn' : 'default'}
-          />
-        </div>
+        {(f.estimated || f.truncated) && (
+          <p className="text-xs text-foreground-muted">
+            Free-credit figures assume free credit is spent first (estimate).
+            {f.truncated ? ' Some totals are a floor — ledger row cap reached.' : ''}
+          </p>
+        )}
       </section>
 
       {/* Recent activity — a real table on the page, not buried in a card */}
