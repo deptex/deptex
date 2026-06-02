@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
-import { logStepError, classifyError, markDegraded } from '../with-timeout';
+import { logStepError, classifyError } from '../with-timeout';
 import { calculateSemgrepDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -22,18 +22,26 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('semgrep')) {
-    await log.warn('semgrep', INSTALL_HINTS.semgrep);
+    // CLI/local dev legitimately lacks semgrep — skip quietly there.
+    if (process.env.DEPTEX_CLI_MODE === '1') {
+      await log.warn('semgrep', INSTALL_HINTS.semgrep);
+      return;
+    }
     // The worker image bundles semgrep, so a missing binary means a misbuilt
-    // image silently running SAST OFF fleet-wide — that's a degraded scan, not
-    // a clean one. CLI/local dev legitimately lacks it, so skip the flag there.
-    if (process.env.DEPTEX_CLI_MODE !== '1') {
-      await markDegraded(ctx, {
+    // image that would silently ship SAST-off scans fleet-wide. Fail loudly.
+    const msg = `Static analysis could not run: ${INSTALL_HINTS.semgrep}`;
+    await log.error('semgrep', msg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
         step: 'semgrep',
         code: 'binary_missing_semgrep',
-        detail: INSTALL_HINTS.semgrep,
+        message: INSTALL_HINTS.semgrep,
+        severity: 'error',
       });
     }
-    return;
+    throw new Error(msg);
   }
 
   await log.info('semgrep', 'Running static code analysis...');
@@ -41,18 +49,19 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   await runStage({
     name: 'semgrep',
     timeoutMs: 20 * 60_000,
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
       const e = err as { status?: number; message?: string };
-      if (e?.status === 137) {
-        await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
-      } else {
-        await log.warn('semgrep', 'Static analysis failed');
-      }
+      const msg = e?.status === 137
+        ? 'Static analysis ran out of memory'
+        : `Static analysis failed: ${e?.message ?? 'unknown error'}`;
+      await log.error('semgrep', msg);
+      // severity: 'error' → rethrow; pipeline outer catch sets error state.
+      return { rethrow: true, throwAs: new Error(msg) };
     },
     fn: async () => {
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');

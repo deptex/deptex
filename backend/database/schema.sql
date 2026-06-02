@@ -1467,9 +1467,7 @@ CREATE TABLE IF NOT EXISTS public.project_repositories (
   last_webhook_event text,
   webhook_status text DEFAULT 'unknown'::text,
   last_extracted_at timestamp with time zone,
-  organization_id uuid,
-  scan_degraded boolean NOT NULL DEFAULT false,
-  scan_degraded_steps jsonb NOT NULL DEFAULT '[]'::jsonb
+  organization_id uuid
 );
 CREATE TABLE IF NOT EXISTS public.project_roles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1688,9 +1686,7 @@ CREATE TABLE IF NOT EXISTS public.scan_jobs (
   target_id uuid,
   credential_id uuid,
   credential_payload_hash text,
-  error_payload jsonb,
-  scan_degraded boolean NOT NULL DEFAULT false,
-  scan_degraded_steps jsonb NOT NULL DEFAULT '[]'::jsonb
+  error_payload jsonb
 );
 CREATE TABLE IF NOT EXISTS public.scim_user_mappings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

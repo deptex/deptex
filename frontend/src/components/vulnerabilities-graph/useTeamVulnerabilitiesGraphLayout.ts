@@ -33,8 +33,6 @@ export interface ProjectWithGraphData {
   /** Org-overview-style card: status badge. */
   statusName?: string | null;
   statusColor?: string | null;
-  /** Last scan finalized degraded — drives the ⚠️ "Scan incomplete" card marker. */
-  scanDegraded?: boolean;
   /** Org-overview-style card: per-project importance multiplier in [0.5, 2.0]. */
   importance?: number | null;
   /** Org-overview-style card: dependency count in bottom bar. */
@@ -124,7 +122,6 @@ export function useTeamVulnerabilitiesGraphLayout(
           neutralStyle: true,
           statusBadge: proj.statusName ?? undefined,
           statusBadgeColor: proj.statusColor ?? undefined,
-          scanDegraded: proj.scanDegraded ?? undefined,
           importance: proj.importance ?? undefined,
           riskGrade: 'A+',
           dependenciesCount: proj.dependenciesCount ?? undefined,

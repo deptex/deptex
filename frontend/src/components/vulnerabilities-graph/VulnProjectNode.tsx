@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Folder, Loader2, AlertTriangle } from 'lucide-react';
+import { Folder, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { FrameworkIcon } from '../framework-icon';
 import { OverviewTeamSatelliteChip, TeamIcon } from '../TeamIcon';
@@ -38,8 +38,6 @@ export interface VulnProjectNodeData {
   statusBadge?: string | null;
   /** Hex color for status badge (e.g. from organization_statuses.color). */
   statusBadgeColor?: string | null;
-  /** Project nodes (org overview): last scan finalized degraded — show ⚠️ "Scan incomplete". */
-  scanDegraded?: boolean;
   /** Team nodes: risk grade shown on the right (e.g. A+). */
   riskGrade?: string | null;
   /** Team nodes (org overview): number of projects for bottom bar. */
@@ -157,7 +155,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, scanDegraded, riskGrade, projectsCount, membersCount, dependenciesCount, importance, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, importance, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -307,12 +305,6 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
                 style={{ color: effectiveStatusColor ?? undefined }}
               >
                 {statusBadge}
-              </span>
-            ) : null}
-            {!isInitialExtracting && !isInitialExtractionFailed && scanDegraded ? (
-              <span className="mt-0.5 inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-500">
-                <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
-                Scan incomplete
               </span>
             ) : null}
           </div>

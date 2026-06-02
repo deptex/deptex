@@ -1,4 +1,4 @@
-import { Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import type { Project } from '../lib/api';
 import { projectStatusLabel } from '../lib/projectStatusLabel';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
@@ -8,26 +8,6 @@ type Props = {
   project: Project;
   className?: string;
 };
-
-/**
- * The ⚠️ "Scan incomplete" chip. Shown next to a terminal status when the last
- * scan finalized but a security-critical step produced no/partial signal — so
- * the green result is not fully trustworthy. Never shown alongside an
- * in-progress or failed status (those already tell the whole story).
- */
-function ScanIncompleteChip() {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border bg-amber-500/10 text-amber-500 border-amber-500/20 shrink-0 cursor-help">
-          <AlertTriangle className="h-3 w-3" />
-          Scan incomplete
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>Some scanners didn't complete; results may be partial.</TooltipContent>
-    </Tooltip>
-  );
-}
 
 /**
  * Policy / org-status badge plus extraction and error states. Shared by Projects page and Org Compliance overview.
@@ -69,8 +49,7 @@ export function ProjectStatusBadge({ project, className }: Props) {
     );
   }
 
-  // Terminal states (custom status / compliance) — these can carry the degraded
-  // chip when the run finalized but a scanner produced no/partial signal.
+  // Terminal states (custom status / compliance).
   let primaryBadge: JSX.Element;
   if (project.status_name) {
     if (statusColor) {
@@ -122,11 +101,5 @@ export function ProjectStatusBadge({ project, className }: Props) {
     );
   }
 
-  if (!project.scan_degraded) return primaryBadge;
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      {primaryBadge}
-      <ScanIncompleteChip />
-    </span>
-  );
+  return primaryBadge;
 }

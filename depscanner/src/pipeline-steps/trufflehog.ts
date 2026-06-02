@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { runStage } from '../pipeline-stage-runner';
-import { markDegraded } from '../with-timeout';
+import { logStepError } from '../with-timeout';
 import { calculateSecretDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -21,18 +21,26 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('trufflehog')) {
-    await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+    // CLI/local dev legitimately lacks trufflehog — skip quietly there.
+    if (process.env.DEPTEX_CLI_MODE === '1') {
+      await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+      return;
+    }
     // The worker image bundles trufflehog, so a missing binary means a misbuilt
-    // image silently running secret-scanning OFF fleet-wide — a degraded scan.
-    // CLI/local dev legitimately lacks it, so skip the flag there.
-    if (process.env.DEPTEX_CLI_MODE !== '1') {
-      await markDegraded(ctx, {
+    // image that would silently ship secret-scanning-off scans. Fail loudly.
+    const msg = `Secret scanning could not run: ${INSTALL_HINTS.trufflehog}`;
+    await log.error('trufflehog', msg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
         step: 'trufflehog',
         code: 'binary_missing_trufflehog',
-        detail: INSTALL_HINTS.trufflehog,
+        message: INSTALL_HINTS.trufflehog,
+        severity: 'error',
       });
     }
-    return;
+    throw new Error(msg);
   }
 
   await log.info('trufflehog', 'Scanning for exposed secrets...');
@@ -40,13 +48,16 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   await runStage({
     name: 'trufflehog',
     timeoutMs: 10 * 60_000,
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
-      await log.warn('trufflehog', `Secret scanning failed: ${(err as Error).message ?? String(err)}`);
+      const msg = `Secret scanning failed: ${(err as Error).message ?? String(err)}`;
+      await log.error('trufflehog', msg);
+      // severity: 'error' → rethrow; pipeline outer catch sets error state.
+      return { rethrow: true, throwAs: new Error(msg) };
     },
     fn: async () => {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
@@ -85,12 +96,18 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
       const exitCode = thResult.status ?? -1;
 
       if (exitCode !== 0) {
-        await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}`);
         // TruffleHog stderr can echo fragments of detected secrets. Keep raw
         // stderr in the worker console only; extraction_logs is browser-streamed.
         if (stderr.trim()) {
           console.error('[trufflehog] stderr:\n' + stderr.trim());
         }
+        // No usable output on a non-zero exit = a real scanner failure. Throw so
+        // the run hard-fails (severity: 'error'). When stdout DID land, TruffleHog
+        // merely exited non-zero on a partial scan — use the partial results.
+        if (!stdout.trim()) {
+          throw new Error(`TruffleHog exited with code ${exitCode} and produced no output`);
+        }
+        await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}; using the partial output it produced`);
       }
 
       if (stdout.trim()) {

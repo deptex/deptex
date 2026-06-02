@@ -21,7 +21,6 @@ import type {
 } from './pipeline-types';
 import type { Storage } from './storage';
 import { getSupabase, setError, clearDepscanCacheOnly } from './pipeline-helpers';
-import { flushDegradedToScanJobs } from './with-timeout';
 import { doClone } from './pipeline-steps/clone';
 import { doResolve } from './pipeline-steps/resolve';
 import { doSbom } from './pipeline-steps/sbom';
@@ -79,8 +78,6 @@ export async function runPipeline(
     projectDepsCount: 0,
     newDepsToPopulate: [],
     astParsedSuccessfully: false,
-    degraded: false,
-    degradedSteps: [],
   };
 
   try {
@@ -197,13 +194,9 @@ export async function runPipeline(
 
     return { finalizeSummary };
   } catch (error: any) {
-    // Flush any degraded state accumulated before this hard-fail/cancel. The
-    // run record on scan_jobs keeps WHY a scanner produced no signal even
-    // though the job now goes to 'error' (the card will show 'Failed', not the
-    // degraded badge — project_repositories is set to error by setError below).
-    // markDegraded already write-throughs on each call; this is a safety net
-    // for a transient mid-run write miss.
-    await flushDegradedToScanJobs(ctx);
+    // Any step that throws (a failed scanner, unresolvable dependencies, a
+    // crashed binary) lands here → the project goes to 'error' state with the
+    // thrown message, surfaced on the card as 'Failed'.
     await setError(supabase, ctx.projectId, error.message);
     throw error;
   } finally {

@@ -236,68 +236,27 @@ export function parseSbom(sbom: CycloneDxSbom): {
 }
 
 /**
- * True when an npm version spec is an EXACT pin (a clean semver, optionally
- * `v`-prefixed) rather than a range / tag / URL. Used by the manifest-parse
- * fallback: a range like `^4.18.2` cannot be injected as a `version`, because
- * deps_sync keys dependency identity on the literal `(name, version)` and
- * dep-scan attaches PDVs by resolved-version PURL — a range string would churn
- * dependency_versions every run and never match a CVE. So only exact pins are
- * recovered; ranges are skipped (the run is still flagged degraded by the
- * caller).
+ * Whether an npm package.json declares at least one dependency (any of the four
+ * dependency blocks). Used by the SBOM step to decide whether an empty SBOM is a
+ * hard failure: npm is the one ecosystem where a single unresolvable/unpublished
+ * dependency aborts the whole `npm install` and — with no committed lockfile for
+ * cdxgen to read statically — zeroes the SBOM. If the manifest declared deps we
+ * couldn't resolve, that's a failed scan; if it declared none, it's a
+ * legitimately zero-dependency project and not an error.
  */
-export function isExactNpmVersion(spec: string): boolean {
-  const v = spec.trim().replace(/^v/, '');
-  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(v);
-}
-
-/**
- * Best-effort recovery of npm DIRECT dependencies straight from package.json,
- * for when cdxgen returns an empty SBOM (e.g. one unresolvable dependency broke
- * `npm install`, zeroing the whole tree). Emits `ParsedSbomDep` rows with
- * EXACT-pin versions only (see isExactNpmVersion) and `is_direct: true`. No
- * transitive closure and no edge graph — the caller sets sbomGraphWired=false
- * so reachability floors at `module`. A genuinely better-than-nothing result:
- * the named direct deps become visible to vuln + malicious scans. Throws are
- * caught by the caller; a malformed manifest yields an empty array.
- */
-export function recoverNpmManifestDeps(workspaceRoot: string): ParsedSbomDep[] {
-  const pkgPath = path.join(workspaceRoot, 'package.json');
-  if (!fs.existsSync(pkgPath)) return [];
-  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+export function npmManifestDeclaresDependencies(workspaceRoot: string): boolean {
   try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-  } catch {
-    return [];
-  }
-  const out: ParsedSbomDep[] = [];
-  const seen = new Set<string>();
-  const add = (
-    block: Record<string, string> | undefined,
-    source: 'dependencies' | 'devDependencies',
-    devScoped: boolean,
-  ): void => {
-    if (!block || typeof block !== 'object') return;
-    for (const [name, spec] of Object.entries(block)) {
-      if (typeof spec !== 'string' || !isExactNpmVersion(spec)) continue;
-      const version = spec.trim().replace(/^v/, '');
-      const key = `${name}@${version}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        name,
-        version,
-        namespace: null,
-        license: null,
-        is_direct: true,
-        source,
-        devScoped,
-        bomRef: `manifest:npm/${key}`,
-      });
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      const block = pkg[field];
+      if (block && typeof block === 'object' && Object.keys(block as object).length > 0) return true;
     }
-  };
-  add(pkg.dependencies, 'dependencies', false);
-  add(pkg.devDependencies, 'devDependencies', true);
-  return out;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function extractLicense(licenses: unknown): string | null {

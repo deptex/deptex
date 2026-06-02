@@ -42,8 +42,6 @@ export async function doFinalize(
     newDepsToPopulate,
     projectDepsCount,
     astParsedSuccessfully,
-    degraded,
-    degradedSteps,
   } = ctx;
 
   await updateStep(supabase, projectId, 'uploading');
@@ -121,25 +119,10 @@ export async function doFinalize(
       status,
       extraction_step: 'completed',
       extraction_error: null,
-      // Copy the degraded run state onto the row the project-list UI reads.
-      // Written on EVERY successful finalize, so a clean re-scan (degraded=false)
-      // overwrites a prior run's flag — the "Scan incomplete" badge self-clears.
-      scan_degraded: degraded,
-      scan_degraded_steps: degradedSteps,
       ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('project_id', projectId);
-
-  // Confirm the final degraded state on the scan_jobs run record too. markDegraded
-  // already write-throughs on each call; this is the authoritative final write
-  // (and the only scan_jobs degraded write on a clean run, where it stays false).
-  if (job.jobId) {
-    await supabase
-      .from('scan_jobs')
-      .update({ scan_degraded: degraded, scan_degraded_steps: degradedSteps })
-      .eq('id', job.jobId);
-  }
 
   // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
   const didUpdateJob = status === 'ready' && !!job.jobId;

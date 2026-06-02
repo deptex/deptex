@@ -12,7 +12,6 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
-import { markDegraded } from '../with-timeout';
 import type { SupportedEcosystem } from '../tree-sitter-extractor';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -32,16 +31,17 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
 
   await runStage({
     name: 'malicious_scan',
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
-      await log.warn('malicious_scan', `Malicious-package scan failed: ${(err as Error)?.message ?? err}`);
-      // Whole step threw — runStage already wrote the step_error row (severity
-      // warn), so flag degraded without a duplicate detail row.
-      await markDegraded(ctx, { step: 'malicious_scan', code: 'malicious_failed' });
+      const msg = `Malicious-package scan failed: ${(err as Error)?.message ?? err}`;
+      await log.error('malicious_scan', msg);
+      // severity: 'error' → runStage rethrows; the pipeline outer catch sets
+      // the project to error state with this message.
+      return { rethrow: true, throwAs: new Error(msg) };
     },
     fn: async () => {
       const { data: pdRows, error: pdErr } = await supabase
@@ -178,23 +178,19 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
             .update({ malicious_scan_status: result.status })
             .eq('id', job.jobId);
         } catch (e) {
-          // The status write failing is itself a degradation — the malicious
-          // banner won't render, so surface it via the generic degraded flag.
-          await markDegraded(ctx, {
-            step: 'malicious_scan',
-            code: 'malicious_failed',
-            detail: `malicious_scan_status write failed: ${(e as Error)?.message ?? e}`,
-          });
+          // Non-fatal: the status column only drives the malicious "Partial
+          // coverage" banner. A transient write miss shouldn't fail an
+          // otherwise-successful scan.
+          await log.warn('malicious_scan', `malicious_scan_status write failed (non-fatal): ${(e as Error)?.message ?? e}`);
         }
       }
 
-      // Flag the run degraded only when the scan genuinely FAILED (a crash,
-      // e.g. GuardDog missing). 'partial' is a routine outcome (an ecosystem
+      // Hard-fail only when the scan genuinely FAILED (a crash, e.g. GuardDog
+      // missing or erroring). 'partial' is a routine outcome (an ecosystem
       // GuardDog only partly supports) and keeps its own dedicated "Partial
-      // coverage" banner — it does NOT raise the pipeline-wide "Scan incomplete"
-      // badge, which would otherwise desensitize users to real failures.
+      // coverage" banner — it does NOT fail the scan.
       if (result.status === 'failed') {
-        await markDegraded(ctx, { step: 'malicious_scan', code: 'malicious_failed' });
+        throw new Error('Malicious-package scanner did not complete');
       }
     },
   });

@@ -3822,10 +3822,6 @@ export interface Project {
   extraction_step?: string | null;
   extraction_error?: string | null;
   last_extracted_at?: string | null;
-  /** True when the last scan finalized but a security-critical step produced
-   *  no/partial signal (dep-scan crashed, SBOM empty, scanner missing). Drives
-   *  the ⚠️ "Scan incomplete" badge. Self-clears on a clean re-scan. */
-  scan_degraded?: boolean;
   role?: string;
   /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
   importance: number;
@@ -5863,11 +5859,6 @@ export interface ProjectStats {
   };
   dependencies: { total: number; direct: number; transitive: number; outdated: number; healthy?: number; vulnerable?: number };
   sync: { status: string; extraction_step: string | null; last_synced: string | null; last_error: string | null; branch: string };
-  /** True when the last scan finalized degraded (a security-critical step
-   *  produced no/partial signal). Drives the "Scan incomplete" detail banner. */
-  scan_degraded?: boolean;
-  /** Per-step reasons behind `scan_degraded`, for the banner. */
-  scan_degraded_steps?: Array<{ step: string; reason: string }>;
   action_items: ActionItem[];
   graph_deps: GraphDep[];
 }

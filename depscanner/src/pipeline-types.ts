@@ -13,17 +13,6 @@ import type { ExtractionLogger } from './logger';
  */
 export type PipelineLogger = Pick<ExtractionLogger, 'info' | 'success' | 'warn' | 'error'>;
 
-/**
- * One security-critical step that produced no/partial signal this run. Recorded
- * by `markDegraded` and persisted to `scan_degraded_steps` on both
- * `project_repositories` (badge source) and `scan_jobs` (run record). `reason`
- * is the user-facing one-liner the "Scan incomplete" banner shows.
- */
-export interface DegradedStep {
-  step: string;
-  reason: string;
-}
-
 export interface ExtractionJob {
   projectId: string;
   organizationId: string;
@@ -130,18 +119,4 @@ export interface PipelineContext {
    * coverage.
    */
   astParsedSuccessfully: boolean;
-
-  // === Degraded run state ===
-  /**
-   * True once any security-critical step has failed soft (produced no/partial
-   * signal) this run — dep-scan crashed, SBOM empty, SAST/secret binary
-   * missing, malicious/IaC scan failed. Flipped only via `markDegraded`, which
-   * also write-throughs to scan_jobs so the flag survives a later hard-fail or
-   * cancel that never reaches finalize. finalize copies it onto
-   * project_repositories (the badge source) on the success path. Defaults false;
-   * a clean re-scan overwrites it back to false (the badge self-clears).
-   */
-  degraded: boolean;
-  /** The per-step reasons behind `degraded`, deduped by step+reason. */
-  degradedSteps: DegradedStep[];
 }

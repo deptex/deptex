@@ -29,7 +29,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync, spawn } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
-import { markDegraded } from '../with-timeout';
+import { logStepError } from '../with-timeout';
 import {
   calculateBaseDepscoreNoReachability,
   calculateDepscore,
@@ -336,19 +336,28 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     }
   }
 
-  // Degraded-run flag: dep-scan crashed (disk-full apsw.FullError, OOM-137,
-  // VDB-corruption, ENOENT) AND the OSV fallback rescued nothing → the CVE
-  // picture is incomplete, not clean. `depScanSucceeded` is true on a clean
-  // exit (even with a genuinely empty VDR) or a successful OSV fallback, so a
-  // legitimately vuln-free project is NOT flagged. Skipped in CLI/local mode,
-  // where dep-scan's binary is legitimately absent (mirrors the SAST/secret
-  // binary-missing guard).
+  // dep-scan crashed (disk-full apsw.FullError, OOM-137, VDB-corruption,
+  // ENOENT) AND the OSV fallback rescued nothing → the vulnerability scan did
+  // not run, so the CVE picture is unknown, not clean. Fail the scan loudly
+  // rather than silently reporting zero vulnerabilities. `depScanSucceeded` is
+  // true on a clean exit (even with a genuinely empty VDR) or a successful OSV
+  // fallback, so a legitimately vuln-free project still passes. Skipped in
+  // CLI/local mode, where dep-scan's binary is legitimately absent.
   if (!depScanSucceeded && process.env.DEPTEX_CLI_MODE !== '1') {
-    await markDegraded(ctx, {
-      step: 'vuln_scan',
-      code: 'depscan_failed',
-      detail: depScanFailureDetail ?? 'dep-scan produced no results',
-    });
+    const detail = depScanFailureDetail ?? 'dep-scan produced no results';
+    const userMsg = `Vulnerability scan failed — could not check your dependencies for known vulnerabilities: ${detail}`;
+    await log.error('vuln_scan', userMsg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
+        step: 'vuln_scan',
+        code: 'depscan_failed',
+        message: detail,
+        severity: 'error',
+      });
+    }
+    throw new Error(userMsg);
   }
 
   // === Process dep-scan results ===
