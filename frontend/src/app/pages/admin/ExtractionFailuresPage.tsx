@@ -42,7 +42,7 @@ function truncate(s: string, n: number): string {
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-lg border border-border bg-background p-3">
+    <div className="lg:px-4 lg:first:pl-0">
       <div className="text-xs text-foreground-secondary">{label}</div>
       <div className="text-xl font-semibold text-foreground tabular-nums">{value}</div>
       {sub ? <div className="text-xs text-foreground-secondary mt-0.5">{sub}</div> : null}
@@ -111,7 +111,7 @@ function FleetPanel() {
           )}
         </div>
       </div>
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 lg:gap-0 lg:divide-x lg:divide-border">
         <Stat label="Queue depth" value={String(m.queued)} />
         <Stat label="Running" value={String(m.running)} sub={`${m.starting} starting`} />
         <Stat label="Inflight / max" value={`${m.inflight} / ${m.maxFleet}`} sub={`${fleetPct}% of cap`} />
@@ -241,9 +241,7 @@ export default function ExtractionFailuresPage() {
     !!appliedStep || !!appliedCode || !!appliedProjectId || appliedSeverity !== 'all';
 
   return (
-    <div className="container mx-auto py-8 px-4 max-w-7xl">
-      <h1 className="text-2xl font-semibold mb-6">Extraction Failures</h1>
-
+    <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
       {/* Live fleet dispatcher metrics */}
       <FleetPanel />
 
@@ -326,16 +324,16 @@ export default function ExtractionFailuresPage() {
       <div className="rounded-lg border border-border bg-background-card overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-background-card-header">
-            <tr className="border-b border-border">
-              <th className="w-8 px-4 py-3" />
-              <th className="text-left font-medium px-4 py-3 text-foreground">Created</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Project</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Step</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Code</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Severity</th>
-              <th className="text-right font-medium px-4 py-3 text-foreground">Duration</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Message</th>
-              <th className="text-left font-medium px-4 py-3 text-foreground">Machine</th>
+            <tr className="border-b border-border text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
+              <th className="w-8 px-4 py-2.5" />
+              <th className="text-left px-4 py-2.5">Created</th>
+              <th className="text-left px-4 py-2.5">Project</th>
+              <th className="text-left px-4 py-2.5">Step</th>
+              <th className="text-left px-4 py-2.5">Code</th>
+              <th className="text-left px-4 py-2.5">Severity</th>
+              <th className="text-right px-4 py-2.5">Duration</th>
+              <th className="text-left px-4 py-2.5">Message</th>
+              <th className="text-left px-4 py-2.5">Machine</th>
             </tr>
           </thead>
           <tbody>

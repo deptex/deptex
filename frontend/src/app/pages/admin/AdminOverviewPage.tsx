@@ -154,11 +154,10 @@ export default function AdminOverviewPage() {
 
   return (
     <Page>
-      <section className="grid grid-cols-2 gap-6 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-border">
+      <section className="grid grid-cols-3 gap-6 sm:gap-0 sm:divide-x sm:divide-border">
         <Kpi label="Organizations" value={num(totals.organizations)} />
         <Kpi label="Projects" value={num(totals.projects)} />
         <Kpi label="Users" value={num(totals.users)} />
-        <Kpi label="Scans · 30d" value={num(totals.scans30d)} />
       </section>
 
       <section className="space-y-3">
