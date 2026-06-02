@@ -187,7 +187,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
       supabase.from('organization_billing').select('balance_cents'),
       supabase
         .from('billing_transactions')
-        .select('amount_cents')
+        .select('amount_cents, created_at')
         .in('kind', ['topup', 'auto_recharge_topup'])
         .gte('created_at', since30d),
       supabase
@@ -241,6 +241,18 @@ router.get('/overview', async (_req: AuthRequest, res) => {
       0,
     );
 
+    // Zero-filled daily revenue series for the chart (last 30 UTC days, oldest first).
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const seriesMap = new Map<string, number>();
+    for (let i = 29; i >= 0; i--) seriesMap.set(utcDay(now - i * DAY_MS), 0);
+    for (const r of revenueRows.data ?? []) {
+      if (!r.created_at) continue;
+      const key = new Date(r.created_at).toISOString().slice(0, 10);
+      if (seriesMap.has(key)) seriesMap.set(key, (seriesMap.get(key) ?? 0) + (r.amount_cents ?? 0));
+    }
+    const revenueSeries = Array.from(seriesMap, ([date, cents]) => ({ date, cents }));
+
     // Join org names onto the activity rows (non-fatal if the lookup fails).
     const activity = activityRows.data ?? [];
     const orgIds = Array.from(new Set(activity.map((r: any) => r.organization_id).filter(Boolean)));
@@ -273,6 +285,7 @@ router.get('/overview', async (_req: AuthRequest, res) => {
         zeroBalanceOrgs: zeroBalanceCount.count ?? 0,
         failedPayments7d: failedPaymentCount.count ?? 0,
       },
+      revenueSeries,
       recentActivity: activity.map((r: any) => ({
         id: r.id,
         kind: r.kind,

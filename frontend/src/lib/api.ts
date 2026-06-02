@@ -6075,6 +6075,11 @@ export interface AdminBillingActivity {
   created_at: string;
 }
 
+export interface AdminRevenuePoint {
+  date: string;
+  cents: number;
+}
+
 export interface AdminOverview {
   totals: {
     organizations: number;
@@ -6089,6 +6094,7 @@ export interface AdminOverview {
     zeroBalanceOrgs: number;
     failedPayments7d: number;
   };
+  revenueSeries: AdminRevenuePoint[];
   recentActivity: AdminBillingActivity[];
 }
 
