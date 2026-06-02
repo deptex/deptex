@@ -288,15 +288,16 @@ router.get('/overview', async (_req: AuthRequest, res) => {
 
     const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
     const seriesMap = new Map<string, number>();
-    for (let i = 29; i >= 0; i--) seriesMap.set(utcDay(now - i * DAY_MS), 0);
+    // 12-month daily window — the frontend slices it to 7d / 30d / 90d / 12m.
+    for (let i = 364; i >= 0; i--) seriesMap.set(utcDay(now - i * DAY_MS), 0);
+    const ms30 = now - 30 * DAY_MS;
     let deposits30d = 0;
     for (const r of deposits.rows) {
       if (!r.created_at) continue;
-      const key = new Date(r.created_at).toISOString().slice(0, 10);
-      if (seriesMap.has(key)) {
-        seriesMap.set(key, (seriesMap.get(key) ?? 0) + n(r.amount_cents));
-        deposits30d += n(r.amount_cents);
-      }
+      const ts = new Date(r.created_at);
+      const key = ts.toISOString().slice(0, 10);
+      if (seriesMap.has(key)) seriesMap.set(key, (seriesMap.get(key) ?? 0) + n(r.amount_cents));
+      if (ts.getTime() >= ms30) deposits30d += n(r.amount_cents);
     }
     const revenueSeries = Array.from(seriesMap, ([date, cents]) => ({ date, cents }));
 

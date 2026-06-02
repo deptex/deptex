@@ -14,6 +14,14 @@ import { apiAdminOverview, type AdminOverview, type AdminRevenuePoint } from '..
 
 const GREEN = '#10b981'; // emerald-500 — brand accent; recharts needs a literal
 
+const RANGES = [
+  { key: '7d', label: '7D', days: 7, totalLabel: 'last 7 days', emptyLabel: 'the last 7 days' },
+  { key: '30d', label: '30D', days: 30, totalLabel: 'last 30 days', emptyLabel: 'the last 30 days' },
+  { key: '90d', label: '90D', days: 90, totalLabel: 'last 90 days', emptyLabel: 'the last 90 days' },
+  { key: '12m', label: '12M', days: 365, totalLabel: 'last 12 months', emptyLabel: 'the last 12 months' },
+] as const;
+type RangeKey = (typeof RANGES)[number]['key'];
+
 function usd(cents: number): string {
   return (cents / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 }
@@ -139,6 +147,7 @@ export default function AdminOverviewPage() {
   const { toast } = useToast();
   const [data, setData] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState<RangeKey>('30d');
 
   useEffect(() => {
     let alive = true;
@@ -199,7 +208,10 @@ export default function AdminOverviewPage() {
   }
 
   const { totals, financials: f, revenueSeries, recentActivity } = data;
-  const hasDeposits = revenueSeries.some((d) => d.cents > 0);
+  const activeRange = RANGES.find((r) => r.key === range) ?? RANGES[1];
+  const rangeSeries = revenueSeries.slice(-activeRange.days);
+  const rangeTotalCents = rangeSeries.reduce((s, d) => s + d.cents, 0);
+  const rangeHasDeposits = rangeSeries.some((d) => d.cents > 0);
 
   return (
     <Page>
@@ -216,26 +228,42 @@ export default function AdminOverviewPage() {
       {/* Financials — made vs lost */}
       <section className="space-y-3">
         <div className="rounded-lg border border-border bg-background-card">
-          <div className="flex items-start justify-between px-5 pt-5 pb-2">
+          <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
             <div>
               <h3 className="text-sm font-semibold text-foreground">Deposits</h3>
-              <p className="mt-0.5 text-xs text-foreground-secondary">
-                Top-ups + auto-recharge · last 30 days
-              </p>
+              <p className="mt-0.5 text-xs text-foreground-secondary">Top-ups + auto-recharge</p>
             </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold leading-none tabular-nums text-foreground">
-                {usd(f.deposits30dCents)}
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex rounded-md border border-border bg-background p-0.5">
+                {RANGES.map((r) => (
+                  <button
+                    key={r.key}
+                    type="button"
+                    onClick={() => setRange(r.key)}
+                    className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                      range === r.key
+                        ? 'bg-background-card-hover text-foreground'
+                        : 'text-foreground-secondary hover:text-foreground'
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
               </div>
-              <div className="mt-1 text-xs text-foreground-secondary">last 30 days</div>
+              <div className="text-right">
+                <span className="text-2xl font-bold tabular-nums text-foreground">
+                  {usd(rangeTotalCents)}
+                </span>
+                <span className="ml-2 text-xs text-foreground-secondary">{activeRange.totalLabel}</span>
+              </div>
             </div>
           </div>
           <div className="h-72 px-2 pb-5 pt-1">
-            {hasDeposits ? (
-              <DepositsChart data={revenueSeries} />
+            {rangeHasDeposits ? (
+              <DepositsChart data={rangeSeries} />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-foreground-secondary">
-                No deposits in the last 30 days
+                No deposits in {activeRange.emptyLabel}
               </div>
             )}
           </div>
