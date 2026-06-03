@@ -51,11 +51,6 @@ secrets:
     file: .env.example
     line: 5
 
-malicious_pkg:
-  - package: event-stream
-    ecosystem: npm
-    note: historical-not-published — see .github/dependabot.yml exclusion
-
 semgrep_findings:
   - rule_id: javascript.express.security.injection.tainted-sql-string
     file: routes/api.js
