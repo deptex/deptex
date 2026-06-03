@@ -1,8 +1,11 @@
 import express from 'express';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { supabase } from '../lib/supabase';
+import { fail } from '../lib/responders';
 
 const router = express.Router();
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Local admin gate. Reads ADMIN_EMAIL from env (comma-separated list).
@@ -54,8 +57,7 @@ router.get('/fleet-metrics', async (req: AuthRequest, res) => {
     const metrics = await getFleetMetrics(type);
     res.json(metrics);
   } catch (e: any) {
-    console.error('[admin/fleet-metrics] error:', e?.message ?? e);
-    res.status(500).json({ error: 'Failed to load fleet metrics' });
+    fail(res, e, 'Failed to load fleet metrics');
   }
 });
 
@@ -104,8 +106,7 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
 
     const { data, error, count } = await query;
     if (error) {
-      console.error('[admin/extraction-failures] query error:', error);
-      res.status(500).json({ error: error.message || 'Failed to list extraction failures' });
+      fail(res, error, 'Failed to list extraction failures');
       return;
     }
 
@@ -139,8 +140,340 @@ router.get('/extraction-failures', async (req: AuthRequest, res) => {
       per_page: perPage,
     });
   } catch (error: any) {
-    console.error('[admin/extraction-failures] unexpected error:', error);
-    res.status(500).json({ error: error?.message || 'Unexpected error' });
+    fail(res, error, 'Failed to list extraction failures');
+  }
+});
+
+/**
+ * Page through a select() 1000 rows at a time (PostgREST's hard cap), ordered by
+ * `orderCol` for stable paging. Capped at MAX_ROWS so a pathological table can't
+ * hang the admin page; returns { rows, truncated } where truncated=true means the
+ * cap was hit and the aggregate is a floor, not exact. `build` must return a fresh
+ * query each call. Throws on the first DB error.
+ */
+async function paginateAll(
+  build: () => any,
+  orderCol = 'id',
+): Promise<{ rows: any[]; truncated: boolean }> {
+  const PAGE = 1000;
+  const MAX_ROWS = 100_000;
+  const rows: any[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data, error } = await build()
+      .order(orderCol, { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < PAGE) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+}
+
+const n = (v: any) => Number(v ?? 0);
+
+/**
+ * Cumulative count per day over the last 365 days for the Overview growth chart.
+ * Each day's value is how many items existed on or before that point in time.
+ */
+function cumulativeGrowth(
+  now: number,
+  series: { orgs: number[]; projects: number[]; users: number[] },
+): Array<{ date: string; orgs: number; projects: number; users: number }> {
+  const so = series.orgs.slice().sort((a, b) => a - b);
+  const sp = series.projects.slice().sort((a, b) => a - b);
+  const su = series.users.slice().sort((a, b) => a - b);
+  const countLE = (arr: number[], ms: number) => {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid] <= ms) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const out: Array<{ date: string; orgs: number; projects: number; users: number }> = [];
+  for (let i = 364; i >= 0; i--) {
+    const ms = now - i * DAY_MS;
+    out.push({
+      date: new Date(ms).toISOString().slice(0, 10),
+      orgs: countLE(so, ms),
+      projects: countLE(sp, ms),
+      users: countLE(su, ms),
+    });
+  }
+  return out;
+}
+
+/**
+ * GET /api/admin/overview
+ * Platform scale for the Deptex-staff admin console: current counts plus a
+ * 365-day cumulative growth series (orgs / projects / distinct users). No billing
+ * aggregation here — that lives on /api/admin/billing so this tab stays cheap.
+ */
+router.get('/overview', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const since30d = new Date(now - 30 * DAY_MS).toISOString();
+
+    const [orgCount, projectCount, memberRows, scanCount, orgDates, projectDates, memberDates] =
+      await Promise.all([
+        supabase.from('organizations').select('*', { count: 'exact', head: true }),
+        supabase.from('projects').select('*', { count: 'exact', head: true }),
+        supabase.from('organization_members').select('user_id'),
+        supabase.from('scan_jobs').select('*', { count: 'exact', head: true }).gte('created_at', since30d),
+        paginateAll(() => supabase.from('organizations').select('created_at'), 'created_at'),
+        paginateAll(() => supabase.from('projects').select('created_at'), 'created_at'),
+        paginateAll(() => supabase.from('organization_members').select('user_id, created_at'), 'created_at'),
+      ]);
+
+    const countError = orgCount.error || projectCount.error || memberRows.error || scanCount.error;
+    if (countError) {
+      fail(res, countError, 'Failed to load overview');
+      return;
+    }
+
+    const distinctUsers = new Set(
+      (memberRows.data ?? []).map((r: any) => r.user_id).filter(Boolean),
+    ).size;
+
+    // First-seen timestamp per user, so growth counts distinct users not memberships.
+    const userFirst = new Map<string, number>();
+    for (const r of memberDates.rows) {
+      if (!r.user_id || !r.created_at) continue;
+      const t = new Date(r.created_at).getTime();
+      const prev = userFirst.get(r.user_id);
+      if (prev === undefined || t < prev) userFirst.set(r.user_id, t);
+    }
+    const toTimes = (rows: any[]) =>
+      rows
+        .map((r) => (r.created_at ? new Date(r.created_at).getTime() : NaN))
+        .filter((t) => !Number.isNaN(t));
+
+    const growthSeries = cumulativeGrowth(now, {
+      orgs: toTimes(orgDates.rows),
+      projects: toTimes(projectDates.rows),
+      users: Array.from(userFirst.values()),
+    });
+
+    res.json({
+      totals: {
+        organizations: orgCount.count ?? 0,
+        projects: projectCount.count ?? 0,
+        users: distinctUsers,
+        scans30d: scanCount.count ?? 0,
+      },
+      growthSeries,
+    });
+  } catch (error: any) {
+    fail(res, error, 'Failed to load overview');
+  }
+});
+
+/**
+ * GET /api/admin/billing
+ * Financial snapshot for the Deptex-staff admin console. Pages through the ledger
+ * (billing_transactions) and reduces in-process — fine at current scale; move to a
+ * SQL function if the usage table grows large (a `truncated` flag is returned when
+ * the row cap is hit so the numbers are never silently undercounted).
+ *
+ * Money model (phase37 sign convention — usage_deduction is negative, the rest positive):
+ *   - Deposits     = (topup + auto_recharge_topup) − refunds   → real cash collected
+ *   - Gross margin = Σ over usage of (charged − cost_cents_cog) → markup we earned
+ *   - Free credit  = signup_grant; "burned" = the prorated COGS of usage covered
+ *                    by grants, assuming FREE CREDIT IS SPENT FIRST (an estimate —
+ *                    the ledger keeps a single balance). `estimated: true` flags this.
+ *   - Real balance = current balance MINUS unspent free credit (paid cash, not promo).
+ * The activity feed shows real money events only (signup_grant excluded).
+ */
+router.get('/billing', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const ACTIVITY_KINDS = ['topup', 'auto_recharge_topup', 'refund', 'adjustment'];
+
+    const activityRows = await supabase
+      .from('billing_transactions')
+      .select('id, organization_id, kind, amount_cents, description, created_at')
+      .in('kind', ACTIVITY_KINDS)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (activityRows.error) {
+      fail(res, activityRows.error, 'Failed to load billing');
+      return;
+    }
+
+    // Ledger aggregation (paged).
+    const [balance, grants, deposits, refunds, usage] = await Promise.all([
+      paginateAll(
+        () => supabase.from('organization_billing').select('organization_id, balance_cents'),
+        'organization_id',
+      ),
+      paginateAll(() =>
+        supabase.from('billing_transactions').select('organization_id, amount_cents').eq('kind', 'signup_grant'),
+      ),
+      paginateAll(() =>
+        supabase
+          .from('billing_transactions')
+          .select('amount_cents, created_at')
+          .in('kind', ['topup', 'auto_recharge_topup']),
+      ),
+      paginateAll(() =>
+        supabase.from('billing_transactions').select('amount_cents').eq('kind', 'refund'),
+      ),
+      paginateAll(() =>
+        supabase
+          .from('billing_transactions')
+          .select('organization_id, amount_cents, cost_cents_cog')
+          .eq('kind', 'usage_deduction'),
+      ),
+    ]);
+
+    const truncated =
+      balance.truncated || grants.truncated || deposits.truncated || refunds.truncated || usage.truncated;
+
+    // Per-org rollups for the free-credit split.
+    const balanceByOrg = new Map<string, number>();
+    for (const r of balance.rows) {
+      balanceByOrg.set(r.organization_id, (balanceByOrg.get(r.organization_id) ?? 0) + n(r.balance_cents));
+    }
+    const grantByOrg = new Map<string, number>();
+    for (const r of grants.rows) {
+      grantByOrg.set(r.organization_id, (grantByOrg.get(r.organization_id) ?? 0) + n(r.amount_cents));
+    }
+    const chargedByOrg = new Map<string, number>();
+    const cogsByOrg = new Map<string, number>();
+    let chargedTotal = 0;
+    let cogsTotal = 0;
+    for (const r of usage.rows) {
+      const charged = -n(r.amount_cents); // usage amounts are negative
+      const cogs = n(r.cost_cents_cog);
+      chargedByOrg.set(r.organization_id, (chargedByOrg.get(r.organization_id) ?? 0) + charged);
+      cogsByOrg.set(r.organization_id, (cogsByOrg.get(r.organization_id) ?? 0) + cogs);
+      chargedTotal += charged;
+      cogsTotal += cogs;
+    }
+
+    // Deposits (net cash in) + 30-day series.
+    const depositsGross = deposits.rows.reduce((s: number, r: any) => s + n(r.amount_cents), 0);
+    const refundsAbs = refunds.rows.reduce((s: number, r: any) => s + Math.abs(n(r.amount_cents)), 0);
+    const depositsCents = Math.round(depositsGross - refundsAbs);
+
+    const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const seriesMap = new Map<string, number>();
+    // 12-month daily window — the frontend slices it to 7d / 30d / 90d / 12m.
+    for (let i = 364; i >= 0; i--) seriesMap.set(utcDay(now - i * DAY_MS), 0);
+    const ms30 = now - 30 * DAY_MS;
+    let deposits30d = 0;
+    for (const r of deposits.rows) {
+      if (!r.created_at) continue;
+      const ts = new Date(r.created_at);
+      const key = ts.toISOString().slice(0, 10);
+      if (seriesMap.has(key)) seriesMap.set(key, (seriesMap.get(key) ?? 0) + n(r.amount_cents));
+      if (ts.getTime() >= ms30) deposits30d += n(r.amount_cents);
+    }
+    const revenueSeries = Array.from(seriesMap, ([date, cents]) => ({ date, cents }));
+
+    // Gross margin across all usage: what we charged minus what it cost us.
+    const grossMarginCents = Math.round(chargedTotal - cogsTotal);
+
+    // Free-credit split (free-credit-spent-first estimate).
+    let freeCreditBurnedCents = 0;
+    let freeCreditOutstandingCents = 0;
+    let realBalanceHeldCents = 0;
+    const allOrgs = new Set<string>([
+      ...balanceByOrg.keys(),
+      ...grantByOrg.keys(),
+      ...chargedByOrg.keys(),
+    ]);
+    for (const org of allOrgs) {
+      const granted = grantByOrg.get(org) ?? 0;
+      const charged = chargedByOrg.get(org) ?? 0;
+      const cogs = cogsByOrg.get(org) ?? 0;
+      const bal = balanceByOrg.get(org) ?? 0;
+      const freeUsed = Math.min(granted, charged);
+      freeCreditBurnedCents += charged > 0 ? cogs * (freeUsed / charged) : 0;
+      const freeRemaining = Math.max(0, Math.min(bal, granted - charged));
+      freeCreditOutstandingCents += freeRemaining;
+      realBalanceHeldCents += bal - freeRemaining;
+    }
+    freeCreditBurnedCents = Math.round(freeCreditBurnedCents);
+    realBalanceHeldCents = Math.round(realBalanceHeldCents);
+    freeCreditOutstandingCents = Math.round(freeCreditOutstandingCents);
+
+    // Join org names onto the activity rows (non-fatal if the lookup fails).
+    const activity = activityRows.data ?? [];
+    const orgIds = Array.from(new Set(activity.map((r: any) => r.organization_id).filter(Boolean)));
+    const nameById: Record<string, string> = {};
+    if (orgIds.length > 0) {
+      const { data: orgs, error: orgErr } = await supabase
+        .from('organizations')
+        .select('id, name')
+        .in('id', orgIds);
+      if (orgErr) {
+        console.error('[admin/billing] org name lookup error:', orgErr);
+      } else {
+        for (const o of orgs ?? []) {
+          if (o?.id) nameById[o.id] = o.name ?? '';
+        }
+      }
+    }
+
+    res.json({
+      financials: {
+        depositsCents,
+        deposits30dCents: deposits30d,
+        grossMarginCents,
+        freeCreditBurnedCents,
+        realBalanceHeldCents,
+        freeCreditOutstandingCents,
+        estimated: true,
+        truncated,
+      },
+      revenueSeries,
+      recentActivity: activity.map((r: any) => ({
+        id: r.id,
+        kind: r.kind,
+        amount_cents: r.amount_cents,
+        description: r.description ?? null,
+        organization_id: r.organization_id,
+        organization_name: nameById[r.organization_id] ?? null,
+        created_at: r.created_at,
+      })),
+    });
+  } catch (error: any) {
+    fail(res, error, 'Failed to load billing');
+  }
+});
+
+/**
+ * GET /api/admin/extraction-trend
+ * Daily extraction-failure counts (errors vs warns) over the last 365 days for the
+ * Extraction tab chart. Bounded to the window so the fetch stays cheap; returns a
+ * `truncated` flag if the row cap is hit.
+ */
+router.get('/extraction-trend', async (_req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const since365 = new Date(now - 365 * DAY_MS).toISOString();
+    const { rows, truncated } = await paginateAll(() =>
+      supabase.from('extraction_step_errors').select('created_at, severity').gte('created_at', since365),
+    );
+
+    const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const map = new Map<string, { errors: number; warns: number }>();
+    for (let i = 364; i >= 0; i--) map.set(utcDay(now - i * DAY_MS), { errors: 0, warns: 0 });
+    for (const r of rows) {
+      if (!r.created_at) continue;
+      const bucket = map.get(new Date(r.created_at).toISOString().slice(0, 10));
+      if (!bucket) continue;
+      if (r.severity === 'error') bucket.errors += 1;
+      else bucket.warns += 1;
+    }
+    const series = Array.from(map, ([date, v]) => ({ date, errors: v.errors, warns: v.warns }));
+    res.json({ series, truncated });
+  } catch (error: any) {
+    fail(res, error, 'Failed to load extraction trend');
   }
 });
 

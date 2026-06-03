@@ -6064,3 +6064,80 @@ export async function apiAdminListExtractionFailures(params: {
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
 }
+
+export interface ExtractionTrendPoint {
+  date: string;
+  errors: number;
+  warns: number;
+}
+
+export interface ExtractionTrend {
+  series: ExtractionTrendPoint[];
+  truncated: boolean;
+}
+
+/** Daily extraction-failure counts (errors vs warns) over the last 365 days. */
+export async function apiAdminExtractionTrend(): Promise<ExtractionTrend> {
+  return fetchWithAuth('/api/admin/extraction-trend');
+}
+
+export interface AdminBillingActivity {
+  id: string;
+  kind: string;
+  amount_cents: number;
+  description: string | null;
+  organization_id: string;
+  organization_name: string | null;
+  created_at: string;
+}
+
+export interface AdminRevenuePoint {
+  date: string;
+  cents: number;
+}
+
+export interface AdminFinancials {
+  depositsCents: number;
+  deposits30dCents: number;
+  grossMarginCents: number;
+  freeCreditBurnedCents: number;
+  realBalanceHeldCents: number;
+  freeCreditOutstandingCents: number;
+  /** Free-credit figures assume free credit is spent first — an estimate. */
+  estimated: boolean;
+  /** True if the ledger row cap was hit, so totals are a floor not exact. */
+  truncated: boolean;
+}
+
+export interface AdminGrowthPoint {
+  date: string;
+  orgs: number;
+  projects: number;
+  users: number;
+}
+
+/** Platform scale — Overview tab. */
+export interface AdminOverview {
+  totals: {
+    organizations: number;
+    projects: number;
+    users: number;
+    scans30d: number;
+  };
+  growthSeries: AdminGrowthPoint[];
+}
+
+/** Financial snapshot — Billing tab. */
+export interface AdminBilling {
+  financials: AdminFinancials;
+  revenueSeries: AdminRevenuePoint[];
+  recentActivity: AdminBillingActivity[];
+}
+
+export async function apiAdminOverview(): Promise<AdminOverview> {
+  return fetchWithAuth('/api/admin/overview');
+}
+
+export async function apiAdminBilling(): Promise<AdminBilling> {
+  return fetchWithAuth('/api/admin/billing');
+}
