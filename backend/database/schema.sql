@@ -5067,6 +5067,8 @@ DECLARE
   v_pdv_deleted INTEGER := 0;
   v_semgrep_deleted INTEGER := 0;
   v_secret_deleted INTEGER := 0;
+  v_iac_deleted INTEGER := 0;
+  v_container_deleted INTEGER := 0;
   v_flows_deleted INTEGER := 0;
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
@@ -5101,6 +5103,20 @@ BEGIN
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_secret_deleted = ROW_COUNT;
+
+  DELETE FROM project_iac_findings
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_iac_deleted = ROW_COUNT;
+
+  DELETE FROM project_container_findings
+  WHERE project_id = p_project_id
+    AND extraction_run_id IS NOT NULL
+    AND extraction_run_id <> v_active
+    AND (v_previous IS NULL OR extraction_run_id <> v_previous);
+  GET DIAGNOSTICS v_container_deleted = ROW_COUNT;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
@@ -5148,6 +5164,8 @@ BEGIN
     'pdv_deleted', v_pdv_deleted,
     'semgrep_deleted', v_semgrep_deleted,
     'secret_deleted', v_secret_deleted,
+    'iac_deleted', v_iac_deleted,
+    'container_deleted', v_container_deleted,
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
@@ -5170,6 +5188,8 @@ DECLARE
   v_pd_deleted INTEGER := 0;
   v_semgrep_deleted INTEGER := 0;
   v_secret_deleted INTEGER := 0;
+  v_iac_deleted INTEGER := 0;
+  v_container_deleted INTEGER := 0;
   v_flows_deleted INTEGER := 0;
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
@@ -5220,6 +5240,16 @@ BEGIN
     GET DIAGNOSTICS v_temp = ROW_COUNT;
     v_secret_deleted := v_secret_deleted + v_temp;
 
+    DELETE FROM project_iac_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_iac_deleted := v_iac_deleted + v_temp;
+
+    DELETE FROM project_container_findings
+    WHERE extraction_run_id = v_orphan.run_id;
+    GET DIAGNOSTICS v_temp = ROW_COUNT;
+    v_container_deleted := v_container_deleted + v_temp;
+
     DELETE FROM project_reachable_flows
     WHERE extraction_run_id = v_orphan.run_id;
     GET DIAGNOSTICS v_temp = ROW_COUNT;
@@ -5260,6 +5290,8 @@ BEGIN
     'pd_deleted', v_pd_deleted,
     'semgrep_deleted', v_semgrep_deleted,
     'secret_deleted', v_secret_deleted,
+    'iac_deleted', v_iac_deleted,
+    'container_deleted', v_container_deleted,
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'files_deleted', v_files_deleted,
@@ -6709,6 +6741,7 @@ CREATE INDEX idx_pbir_current_digest ON public.project_base_image_recommendation
 CREATE INDEX idx_pbir_project_active ON public.project_base_image_recommendations USING btree (project_id) WHERE (is_dismissed = false);
 CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
 CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
+CREATE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pcf_reachability ON public.project_container_findings USING btree (project_id, reachability_level) WHERE (reachability_level = 'module'::text);
@@ -6734,6 +6767,7 @@ CREATE INDEX idx_pep_framework ON public.project_entry_points USING btree (frame
 CREATE INDEX idx_pep_project ON public.project_entry_points USING btree (project_id);
 CREATE INDEX idx_pep_project_run ON public.project_entry_points USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pep_run ON public.project_entry_points USING btree (extraction_run_id);
+CREATE INDEX idx_piacf_fingerprint ON public.project_iac_findings USING btree (project_id, scanner, iac_fingerprint) WHERE (iac_fingerprint IS NOT NULL);
 CREATE INDEX idx_piacf_framework ON public.project_iac_findings USING btree (framework);
 CREATE INDEX idx_piacf_org_status_depscore ON public.project_iac_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_piacf_project_run ON public.project_iac_findings USING btree (project_id, extraction_run_id);
@@ -6905,10 +6939,8 @@ CREATE UNIQUE INDEX idx_billing_transactions_one_signup_grant_per_org ON public.
 CREATE UNIQUE INDEX idx_dependencies_ecosystem_name ON public.dependencies USING btree (ecosystem, name);
 CREATE UNIQUE INDEX idx_notif_events_dedup_unique ON public.notification_events USING btree (deduplication_key) WHERE (deduplication_key IS NOT NULL);
 CREATE UNIQUE INDEX idx_org_integrations_org_provider_installation ON public.organization_integrations USING btree (organization_id, provider, installation_id) WHERE (installation_id IS NOT NULL);
-CREATE UNIQUE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE UNIQUE INDEX idx_pcf_unique ON public.project_container_findings USING btree (project_id, image_digest, os_package_name, os_package_version, vulnerability_id, extraction_run_id);
 CREATE UNIQUE INDEX idx_pci_project_image ON public.project_configured_images USING btree (project_id, image_reference);
-CREATE UNIQUE INDEX idx_piacf_fingerprint ON public.project_iac_findings USING btree (project_id, scanner, iac_fingerprint) WHERE (iac_fingerprint IS NOT NULL);
 CREATE UNIQUE INDEX idx_piacf_unique ON public.project_iac_findings USING btree (project_id, rule_id, file_path, start_line_key, extraction_run_id);
 CREATE UNIQUE INDEX idx_project_commits_project_sha ON public.project_commits USING btree (project_id, sha);
 CREATE UNIQUE INDEX idx_project_prs_project_pr ON public.project_pull_requests USING btree (project_id, pr_number, provider);
