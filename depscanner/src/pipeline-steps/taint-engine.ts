@@ -343,6 +343,13 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       });
     } else {
       const { propagation, frameworksLoaded, flowsAfterFilter, aiFilter, detectorFlows } = engineResult;
+      // Fold the osv_ids the engine actually loaded — framework-model sinks
+      // (e.g. lodash `_.template` → CVE-2021-23337) as well as the CVE-targeted
+      // specs — into validOsvIds. Without this, a flow carrying a framework-model
+      // osv_id would trip the classifier's osv_id drift guard (which only knew
+      // about AI-generated CVE specs) and get demoted from `confirmed` to
+      // `data_flow` plus a spurious `osv_id_drift_rejected` security event.
+      for (const osv of engineResult.loadedOsvIds) validOsvIds.add(osv);
       // v3 precision — surface usedDependencies for the reachability
       // classifier even when zero specs matched / zero flows emitted: the
       // callgraph may still have crossed into dep code and we want to

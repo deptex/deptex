@@ -18,13 +18,31 @@ sources: []
 
 sinks:
   # ---------- Code injection via _.template ----------
+  # _.template compiles its argument (and the `imports` option) into an
+  # executable function. CVE-2021-23337 and CVE-2026-4800 are the same
+  # vulnerable surface, so we emit one sink row per CVE: a reachable flow
+  # into _.template promotes whichever of the two dep-scan detected on the
+  # project to `confirmed` (the osv_id is stamped onto the flow and matched
+  # against the project's PDVs in the reachability classifier).
   - pattern: _.template(*)
     vuln_class: code_injection
     argument_indices: [0, 1]
-    description: lodash _.template — both the template string and imports option are evaluated as code (CVE-2026-4800, CVE-2021-23337)
+    osv_id: CVE-2021-23337
+    description: lodash _.template — template string + imports option evaluated as code (CVE-2021-23337)
+  - pattern: _.template(*)
+    vuln_class: code_injection
+    argument_indices: [0, 1]
+    osv_id: CVE-2026-4800
+    description: lodash _.template — template string + imports option evaluated as code (CVE-2026-4800)
   - pattern: lodash.template(*)
     vuln_class: code_injection
     argument_indices: [0, 1]
-    description: lodash.template namespaced — same code-injection surface
+    osv_id: CVE-2021-23337
+    description: lodash.template namespaced — same code-injection surface (CVE-2021-23337)
+  - pattern: lodash.template(*)
+    vuln_class: code_injection
+    argument_indices: [0, 1]
+    osv_id: CVE-2026-4800
+    description: lodash.template namespaced — same code-injection surface (CVE-2026-4800)
 
 sanitizers: []

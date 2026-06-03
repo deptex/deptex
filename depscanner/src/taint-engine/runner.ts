@@ -219,6 +219,15 @@ export interface RunEngineResult {
    * classifier treats undefined as "no signal" and stays on v2 behavior.
    */
   usedDependencies?: Set<string>;
+  /**
+   * Union of every `osv_id` carried by a loaded spec sink — both the bundled
+   * framework-models/*.yaml (e.g. lodash `_.template` → CVE-2021-23337) and
+   * the CVE-targeted specs from organization_generated_rules. The pipeline
+   * folds this into `validOsvIds` so the reachability classifier's osv_id
+   * drift guard treats a framework-model CVE attribution as a legitimately
+   * loaded osv_id rather than rejecting it as data drift.
+   */
+  loadedOsvIds: Set<string>;
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -254,6 +263,16 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
   const specs = allSpecs.filter((s) => (s.language ?? 'js') === language);
   const frameworksLoaded = specs.map((s) => s.framework);
 
+  // Union of osv_ids across every loaded sink (framework-model + CVE-targeted).
+  // Surfaced so the pipeline can whitelist framework-model CVE attributions in
+  // the classifier's osv_id drift guard.
+  const loadedOsvIds = new Set<string>();
+  for (const s of specs) {
+    for (const sink of s.sinks) {
+      if (sink.osv_id) loadedOsvIds.add(sink.osv_id);
+    }
+  }
+
   if (specs.length === 0) {
     return {
       ran: false,
@@ -263,6 +282,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       flowsAfterFilter: null,
       aiFilter: null,
       detectorFlows: [],
+      loadedOsvIds,
     };
   }
 
@@ -386,6 +406,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     // For other languages this is undefined until their per-language
     // extractor lands (T3.2-Python / -Go / -Rust / -Java follow-ups).
     usedDependencies: lowercaseSet(propagation.callgraph.usedDependencies),
+    loadedOsvIds,
   };
 }
 
