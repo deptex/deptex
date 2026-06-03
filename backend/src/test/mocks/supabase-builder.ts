@@ -6,7 +6,7 @@ export type TableRegistry = Record<string, {
   maybeSingle?: { data: any; error: any };
 }>;
 
-export type RpcRegistry = Record<string, { data: any; error: any }>;
+export type RpcRegistry = Record<string, { data: any; error: any } | Array<{ data: any; error: any }>>;
 
 function consumeSingle(registry: TableRegistry, table: string): { data: any; error: any } | undefined {
   const entry = registry[table]?.single;
@@ -19,6 +19,23 @@ function consumeSingle(registry: TableRegistry, table: string): { data: any; err
     } else {
       // Exhausted — keep the last value so subsequent calls still return something
       registry[table].single = val;
+    }
+    return val;
+  }
+  // Plain replacement mode: return as-is (don't consume)
+  return entry as { data: any; error: any };
+}
+
+function consumeRpc(rpcRegistry: RpcRegistry, name: string): { data: any; error: any } | undefined {
+  const entry = rpcRegistry[name];
+  if (entry === undefined) return undefined;
+  if (Array.isArray(entry)) {
+    // Queue mode: consume first, keep last for subsequent calls (mirrors consumeSingle)
+    const val = entry[0];
+    if (entry.length > 1) {
+      rpcRegistry[name] = entry.slice(1);
+    } else {
+      rpcRegistry[name] = val;
     }
     return val;
   }
@@ -78,7 +95,7 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
       return queryBuilder;
     }),
     rpc: jest.fn().mockImplementation((name: string) => {
-      const r = rpcRegistry[name];
+      const r = consumeRpc(rpcRegistry, name);
       if (r !== undefined) return Promise.resolve(r);
       return Promise.resolve({ data: null, error: null });
     }),

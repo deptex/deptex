@@ -1,3 +1,4 @@
+import type { PostgrestError } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { isBillingEnforcementEnabled } from './enforcement';
 import { captureBillingError } from '../observability/capture';
@@ -61,6 +62,48 @@ async function existingEventForKey(orgId: string, idempotencyKey: string) {
   return data;
 }
 
+// Bounded retry for the deduct_balance RPC. A transient DB blip (pooler restart,
+// statement timeout, serialization failure) must not silently drop a money event:
+// the worker that emitted it is often fire-and-forget, so a lost charge means
+// unbilled usage + ledger drift. Retrying is SAFE because every meter event carries
+// an idempotency key and deduct_balance is idempotent on (org, idempotency_key) — a
+// retry of a charge that actually committed server-side surfaces as 23505 (handled
+// below as duplicate_idempotency_key), so it can never double-charge.
+const MAX_DEDUCT_ATTEMPTS = 3;
+const DEDUCT_RETRY_BASE_MS = 100;
+
+type DbErrorShape = { code?: string | null; message?: string | null };
+
+// SQLSTATE classes that indicate a transient, retryable condition. Deliberately a
+// strict allow-list: deterministic failures (bad argument, check violation, a RAISE
+// inside the function = P0001, and the 23505 idempotency dup which is handled
+// separately) are terminal and must NOT be retried — retrying them only delays the 500.
+const TRANSIENT_SQLSTATES = new Set<string>([
+  '08000', '08001', '08003', '08004', '08006', '08007', '08P01', // connection_exception
+  '53000', '53100', '53200', '53300', '53400',                   // insufficient_resources
+  '57014',                                                       // query_canceled (statement timeout)
+  '57P01', '57P02', '57P03',                                     // operator_intervention (shutdown / cannot connect now)
+  '40001', '40P01',                                              // serialization_failure / deadlock_detected
+]);
+
+function isTransientDbError(error: DbErrorShape | null): boolean {
+  if (!error) return false;
+  const code = error.code ?? '';
+  if (code && TRANSIENT_SQLSTATES.has(code)) return true;
+  // Network-layer failures from the fetch transport carry no SQLSTATE but a
+  // recognizable message (supabase-js wraps the underlying fetch rejection).
+  if (!code && error.message) {
+    return /fetch failed|network|socket hang up|timeout|terminating connection|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN/i.test(
+      error.message,
+    );
+  }
+  return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function recordMeterEvent(input: RecordMeterEventInput): Promise<RecordMeterEventResult> {
   if (!isBillingEnforcementEnabled()) {
     console.info('[billing.enforcement_off]', {
@@ -90,12 +133,36 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
   const metadata = buildDeductMetadata(input);
   const description = `${input.feature} (${input.eventType})`;
 
-  const { data, error } = await supabase.rpc('deduct_balance', {
-    p_organization_id: input.organizationId,
-    p_amount_cents: input.chargedCents,
-    p_description: description,
-    p_event_metadata: metadata,
-  });
+  let data: number | null = null;
+  let error: PostgrestError | null = null;
+  for (let attempt = 1; attempt <= MAX_DEDUCT_ATTEMPTS; attempt++) {
+    const res = await supabase.rpc('deduct_balance', {
+      p_organization_id: input.organizationId,
+      p_amount_cents: input.chargedCents,
+      p_description: description,
+      p_event_metadata: metadata,
+    });
+    data = res.data;
+    error = res.error;
+    // Success (data may be null = insufficient_credit) or the idempotency dup (23505,
+    // handled deterministically below) — neither should be retried.
+    if (!error || error.code === '23505') break;
+    if (isTransientDbError(error) && attempt < MAX_DEDUCT_ATTEMPTS) {
+      const delayMs =
+        DEDUCT_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.floor(Math.random() * DEDUCT_RETRY_BASE_MS);
+      console.warn('[billing.deduct] transient RPC error — retrying', {
+        orgId: input.organizationId,
+        idempotencyKey: input.idempotencyKey,
+        attempt,
+        maxAttempts: MAX_DEDUCT_ATTEMPTS,
+        code: error.code,
+      });
+      await sleep(delayMs);
+      continue;
+    }
+    // Terminal error, or transient but out of attempts — fall through to the handler below.
+    break;
+  }
 
   if (error) {
     if (error.code === '23505') {
