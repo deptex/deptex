@@ -30,6 +30,7 @@ import * as path from 'path';
 import { execSync, spawn } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import {
   calculateBaseDepscoreNoReachability,
   calculateDepscore,
@@ -357,7 +358,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         severity: 'error',
       });
     }
-    throw new Error(userMsg);
+    throw new ScanFailedError(userMsg);
   }
 
   // === Process dep-scan results ===

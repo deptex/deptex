@@ -99,7 +99,7 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
       const userMsg = classifyCdxgenError((err as Error).message ?? String(err));
       await log.error('sbom', userMsg, err);
       await setError(supabase, projectId, userMsg);
-      return { rethrow: true, throwAs: new Error(userMsg) };
+      return { rethrow: true, throwAs: new ScanFailedError(userMsg) };
     },
   })) as string;
 

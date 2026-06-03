@@ -12,6 +12,7 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
+import { ScanFailedError } from '../scan-errors';
 import type { SupportedEcosystem } from '../tree-sitter-extractor';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -41,7 +42,7 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
       await log.error('malicious_scan', msg);
       // severity: 'error' → runStage rethrows; the pipeline outer catch sets
       // the project to error state with this message.
-      return { rethrow: true, throwAs: new Error(msg) };
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const { data: pdRows, error: pdErr } = await supabase

@@ -15,6 +15,7 @@ import { cloneByProvider } from '../clone';
 import { updateJobPayloadCommit } from '../job-db';
 import { runStage } from '../pipeline-stage-runner';
 import { retry, updateStep, setError, classifyCloneError } from '../pipeline-helpers';
+import { ScanFailedError } from '../scan-errors';
 import type { PipelineContext } from '../pipeline-types';
 
 export async function doClone(ctx: PipelineContext): Promise<void> {
@@ -31,7 +32,7 @@ export async function doClone(ctx: PipelineContext): Promise<void> {
       const msg = `Local workspace not found: ${job.localWorkspacePath}`;
       await log.error('cloning', msg);
       await setError(supabase, projectId, msg);
-      throw new Error(msg);
+      throw new ScanFailedError(msg);
     }
     repoPath = job.localWorkspacePath;
     await log.info('cloning', `Scanning local workspace: ${job.localWorkspacePath}`);
@@ -54,7 +55,7 @@ export async function doClone(ctx: PipelineContext): Promise<void> {
         const userMsg = classifyCloneError((err as Error).message ?? String(err));
         await log.error('cloning', userMsg, err);
         await setError(supabase, projectId, userMsg);
-        return { rethrow: true, throwAs: new Error(userMsg) };
+        return { rethrow: true, throwAs: new ScanFailedError(userMsg) };
       },
     })) as string;
     await log.success('cloning', 'Repository cloned successfully', Date.now() - cloneStart);
@@ -84,7 +85,7 @@ export async function doClone(ctx: PipelineContext): Promise<void> {
     const msg = `No package manifest found at '${packageJsonPath || '(root)'}' — check your project's package path setting`;
     await log.error('cloning', msg);
     await setError(supabase, projectId, msg);
-    throw new Error(msg);
+    throw new ScanFailedError(msg);
   }
 
   ctx.workspaceRoot = workspaceRoot;

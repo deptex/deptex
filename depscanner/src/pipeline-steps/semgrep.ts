@@ -14,6 +14,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { calculateSemgrepDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -41,7 +42,7 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
         severity: 'error',
       });
     }
-    throw new Error(msg);
+    throw new ScanFailedError(msg);
   }
 
   await log.info('semgrep', 'Running static code analysis...');
@@ -61,7 +62,7 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
         : `Static analysis failed: ${e?.message ?? 'unknown error'}`;
       await log.error('semgrep', msg);
       // severity: 'error' → rethrow; pipeline outer catch sets error state.
-      return { rethrow: true, throwAs: new Error(msg) };
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');

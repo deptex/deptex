@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { calculateSecretDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -40,7 +41,7 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
         severity: 'error',
       });
     }
-    throw new Error(msg);
+    throw new ScanFailedError(msg);
   }
 
   await log.info('trufflehog', 'Scanning for exposed secrets...');
@@ -57,7 +58,7 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
       const msg = `Secret scanning failed: ${(err as Error).message ?? String(err)}`;
       await log.error('trufflehog', msg);
       // severity: 'error' → rethrow; pipeline outer catch sets error state.
-      return { rethrow: true, throwAs: new Error(msg) };
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');

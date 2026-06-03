@@ -13,6 +13,7 @@
 
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { runIaCAndContainerScans, type ScannerSummary } from '../scanners/orchestrator';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -34,7 +35,7 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
       // 'error' → rethrow; the pipeline outer catch sets the error state.
       const msg = `IaC + container scan failed: ${(err as Error)?.message ?? err}`;
       await log.error('iac_scan', msg);
-      return { rethrow: true, throwAs: new Error(msg) };
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       // Resolve the org's GitHub App installation id once (used by ghcr.io
@@ -89,7 +90,7 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
         severity: 'error',
       });
     }
-    throw new Error(detail);
+    throw new ScanFailedError(detail);
   }
 
   return scannerSummary;
