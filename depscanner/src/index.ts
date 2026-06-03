@@ -5,6 +5,7 @@ import { captureInfraError } from './observability/capture';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 import { runPipeline } from './pipeline';
+import { ScanFailedError } from './scan-errors';
 import { runDastPipeline } from './dast/pipeline';
 import { sweepStaleDastTmpDirs } from './dast/nuclei-runner';
 import { ExtractionLogger } from './logger';
@@ -141,11 +142,17 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   } catch (e: any) {
     const message = e.message || 'Unknown error';
     console.error(`${tag} Job failed: ${message}`);
-    Sentry.captureException(e, {
-      tags: { component: 'depscanner', job_type: job.type },
-      user: { id: job.organization_id },
-      contexts: { job: { id: job.id, type: job.type, project_id: job.project_id, attempts: job.attempts } },
-    });
+    // A ScanFailedError is an EXPECTED, handled scan outcome (e.g. an
+    // unresolvable manifest) — recorded on scan_jobs.error + the admin failures
+    // page + surfaced to the user. That's a project error, not a worker bug, so
+    // don't page Sentry on it. Unexpected errors (real crashes) still alert.
+    if (!(e instanceof ScanFailedError)) {
+      Sentry.captureException(e, {
+        tags: { component: 'depscanner', job_type: job.type },
+        user: { id: job.organization_id },
+        contexts: { job: { id: job.id, type: job.type, project_id: job.project_id, attempts: job.attempts } },
+      });
+    }
     if (job.type === 'extraction') {
       const logger = new ExtractionLogger(supabase, job.project_id, job.run_id);
       await logger.error('complete', `Extraction failed: ${message}`, e);

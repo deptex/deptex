@@ -16,6 +16,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import {
   parseSbom,
   getBomRefToNameVersion,
@@ -356,7 +357,9 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
           severity: 'error',
         });
       }
-      throw new Error(userMsg);
+      // ScanFailedError (not a plain Error): an unresolvable manifest is a
+      // recorded, user-facing project outcome — the job loop skips Sentry for it.
+      throw new ScanFailedError(userMsg);
     }
 
     // No manifest, or a manifest that genuinely declares zero dependencies — a
