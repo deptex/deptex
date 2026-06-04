@@ -38,7 +38,7 @@ container_cves:
     base_image: python:3.7.0
 
 secrets:
-  - rule_id: aws-secret-key
+  - rule_id: AWS
     file: .env.example
     line: 5
 

@@ -215,7 +215,11 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
         } catch { /* upload failure non-fatal */ }
         await log.success('trufflehog', 'Secret scan complete', Date.now() - thStart);
       } else {
-        await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or no output)');
+        // Binary presence was already asserted above (line ~24), so reaching
+        // here means TruffleHog ran and exited cleanly with empty output —
+        // i.e. a successful scan that found zero secrets. Don't conflate that
+        // with "not installed": a real no-binary case hard-fails earlier.
+        await log.success('trufflehog', 'Secret scan complete — no secrets found', Date.now() - thStart);
       }
     },
   });

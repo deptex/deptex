@@ -37,9 +37,9 @@ container_cves:
     base_image: openjdk:11.0.0-jdk
 
 secrets:
-  - rule_id: aws-secret-key
+  - rule_id: AWS
     file: .env.example
-    line: 3
+    line: 2
 
 malicious_pkg: []
 

@@ -47,7 +47,11 @@ container_cves:
     base_image: node:14.0
 
 secrets:
-  - rule_id: aws-secret-key
+  # The harness matches expected `rule_id` against the stored `detector_type`,
+  # which is TruffleHog's DetectorName — "AWS", not "aws-secret-key". The
+  # seeded key in .env.example is deliberately non-canonical (the AWS docs
+  # example AKIAIOSFODNN7EXAMPLE is skip-listed by TruffleHog and never fires).
+  - rule_id: AWS
     file: .env.example
     line: 5
 
