@@ -316,6 +316,8 @@ export default function OrganizationOverviewPage() {
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
   const [projectStatsLoading, setProjectStatsLoading] = useState(false);
   const [projectVulnerabilities, setProjectVulnerabilities] = useState<ProjectVulnerability[] | null>(null);
+  const [projectSecrets, setProjectSecrets] = useState<SecretFinding[]>([]);
+  const [projectSemgrep, setProjectSemgrep] = useState<SemgrepFinding[]>([]);
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
@@ -2510,6 +2512,8 @@ export default function OrganizationOverviewPage() {
     setProjectStatsLoading(true);
     setProjectStats(null);
     setProjectVulnerabilities(null);
+    setProjectSecrets([]);
+    setProjectSemgrep([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
     setProjectSidebarProjectLoading(true);
@@ -2520,19 +2524,25 @@ export default function OrganizationOverviewPage() {
       api.getProjectVulnerabilities(orgId, selectedProjectId),
       api.getProject(orgId, selectedProjectId),
       api.getOrganization(orgId),
+      api.getProjectSecretFindings(orgId, selectedProjectId, 1, 50),
+      api.getProjectSemgrepFindings(orgId, selectedProjectId, 1, 50),
     ])
-      .then(([stats, vulns, project, org]) => {
+      .then(([stats, vulns, project, org, secrets, semgrep]) => {
         if (!cancelled) {
           setProjectStats(stats);
           setProjectVulnerabilities(vulns ?? []);
           setProjectSidebarProject(project);
           setProjectSidebarOrganization(org);
+          setProjectSecrets(secrets?.data ?? []);
+          setProjectSemgrep(semgrep?.data ?? []);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setProjectStats(null);
           setProjectVulnerabilities(null);
+          setProjectSecrets([]);
+          setProjectSemgrep([]);
           setProjectSidebarProject(null);
           setProjectSidebarOrganization(null);
         }
@@ -2568,6 +2578,12 @@ export default function OrganizationOverviewPage() {
       return a.osv_id.localeCompare(b.osv_id);
     });
   }, [projectVulnerabilities]);
+
+  const projectSecurityRows = useMemo<SecurityTableRow[]>(() => [
+    ...dedupedProjectVulnerabilities.map((v) => ({ type: 'vulnerability' as const, data: v })),
+    ...projectSecrets.map((s) => ({ type: 'secret' as const, data: s })),
+    ...projectSemgrep.map((s) => ({ type: 'semgrep' as const, data: s })),
+  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep]);
 
   const toggleProjectVulnerabilityRow = useCallback(async (rowId: string, osvId: string) => {
     setExpandedProjectVulnRowId((prev) => (prev === rowId ? null : rowId));
@@ -4152,7 +4168,7 @@ export default function OrganizationOverviewPage() {
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
                       )}
                     >
-                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      {tab === 'vulnerabilities' ? 'Findings' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                       {projectSidebarTab === tab && (
                         <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground rounded-full" />
                       )}
@@ -4202,184 +4218,32 @@ export default function OrganizationOverviewPage() {
                       />
                     ) : (projectStatsLoading && !projectVulnerabilities) || selectedProjectRealtime.isLoading ? (
                       <OrgProjectVulnerabilitiesTableSkeleton rowCount={8} />
-                    ) : !dedupedProjectVulnerabilities.length ? (
+                    ) : !projectSecurityRows.length ? (
                       <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">
-                        No vulnerabilities found
+                        No findings
                       </div>
                     ) : (
-                      <div className="border border-border rounded-lg overflow-hidden">
-                        <table className={ORG_PROJECT_VULN_TABLE_CLASS}>
-                          <OrgProjectVulnerabilitiesTableColgroup />
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <span
-                                      className="inline-flex items-center gap-1 cursor-help outline-none rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                                      tabIndex={0}
-                                      aria-label="What is Depscore?"
-                                    >
-                                      Depscore
-                                      <CircleHelp className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-90" aria-hidden />
-                                    </span>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-sm text-left text-xs font-normal normal-case">
-                                    <p className="font-medium text-foreground mb-1.5">Deptex Depscore (0–100)</p>
-                                    <p className="text-muted-foreground mb-2">
-                                      A project-aware priority score—not raw severity alone. It combines CVSS, EPSS,
-                                      CISA KEV, this project&apos;s asset tier, how reachable the issue is from your
-                                      code, direct vs transitive use, environment (e.g. dev), and package reputation.
-                                    </p>
-                                    <p className="text-muted-foreground">
-                                      When EPD has run, the value is <span className="text-foreground">contextual</span>:
-                                      a base score (signals above, without double-counting reachability the same way)
-                                      multiplied by an execution-path factor from entry-point exposure and path depth.
-                                      Strong sanitization on the path can reduce that factor toward zero.
-                                    </p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase min-w-0">
-                                Dependency
-                              </th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
-                                Advisory
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {dedupedProjectVulnerabilities.map((v) => {
-                              const rawScore =
-                                v.contextual_depscore != null && Number.isFinite(Number(v.contextual_depscore))
-                                  ? Number(v.contextual_depscore)
-                                  : v.depscore != null && Number.isFinite(Number(v.depscore))
-                                    ? Number(v.depscore)
-                                    : null;
-                              const isExpanded = expandedProjectVulnRowId === v.id;
-                              const detail = projectVulnDetailByRowId[v.id];
-                              return (
-                                <Fragment key={v.id}>
-                                  <tr
-                                    className="hover:bg-background-subtle/50 cursor-pointer"
-                                    onClick={() => void toggleProjectVulnerabilityRow(v.id, v.osv_id)}
-                                    aria-expanded={isExpanded}
-                                  >
-                                    <td className="px-4 py-2.5 align-middle">
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <span
-                                            className={cn(
-                                              'inline-flex w-14 min-w-[3.25rem] justify-start text-xs font-semibold tabular-nums cursor-default',
-                                              rawScore == null ? 'text-muted-foreground' : (
-                                                rawScore >= 75
-                                                  ? 'text-destructive'
-                                                  : rawScore >= 40
-                                                    ? 'text-amber-600 dark:text-amber-400'
-                                                    : 'text-muted-foreground'
-                                              )
-                                            )}
-                                          >
-                                            {rawScore != null ? rawScore.toFixed(1) : '—'}
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="right" className="max-w-xs text-xs space-y-1">
-                                          <p className="font-medium capitalize">Severity: {v.severity}</p>
-                                          {v.contextual_depscore != null && (
-                                            <p>
-                                              Contextual (EPD): {Number(v.contextual_depscore).toFixed(1)}
-                                              {v.depscore != null && (
-                                                <span className="text-muted-foreground"> · Base: {Number(v.depscore).toFixed(1)}</span>
-                                              )}
-                                            </p>
-                                          )}
-                                          {v.contextual_depscore == null && v.depscore != null && (
-                                            <p>Depscore: {Number(v.depscore).toFixed(1)}</p>
-                                          )}
-                                          {rawScore == null && <p className="text-muted-foreground">Score not computed yet (re-run extraction after vuln sync).</p>}
-                                          {v.is_reachable === false && <p className="text-muted-foreground">Not flagged as reachable in this project.</p>}
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    </td>
-                                    <td className="px-4 py-2.5 text-foreground min-w-0 align-middle">
-                                      <div
-                                        className="truncate min-w-0"
-                                        title={`${v.dependency_name}@${v.dependency_version}`}
-                                      >
-                                        {v.dependency_name}
-                                        <span className="text-muted-foreground font-normal">
-                                          @{v.dependency_version}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-2.5 align-middle">
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        {v.cvss_score != null ? (
-                                          <span
-                                            className={cn(
-                                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border tabular-nums',
-                                              Number(v.cvss_score) >= 9
-                                                ? 'bg-destructive/12 text-destructive border-destructive/30'
-                                                : Number(v.cvss_score) >= 7
-                                                  ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                                                  : Number(v.cvss_score) >= 4
-                                                    ? 'bg-yellow-500/12 text-yellow-600 dark:text-yellow-400 border-yellow-500/30'
-                                                    : 'bg-muted/80 text-muted-foreground border-border'
-                                            )}
-                                          >
-                                            CVSS {Number(v.cvss_score).toFixed(1)}
-                                          </span>
-                                        ) : (
-                                          <span
-                                            className={cn(
-                                              'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border',
-                                              v.severity === 'critical'
-                                                ? 'bg-destructive/12 text-destructive border-destructive/30'
-                                                : v.severity === 'high'
-                                                  ? 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                                                  : v.severity === 'medium'
-                                                    ? 'bg-yellow-500/12 text-yellow-600 dark:text-yellow-400 border-yellow-500/30'
-                                                    : 'bg-muted/80 text-muted-foreground border-border'
-                                            )}
-                                          >
-                                            {String(v.severity || 'unknown').toUpperCase()}
-                                          </span>
-                                        )}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                  <tr>
-                                    <td colSpan={3} className="px-0 py-0">
-                                      <div
-                                        className="overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out"
-                                        style={{ maxHeight: isExpanded ? 1800 : 0, opacity: isExpanded ? 1 : 0 }}
-                                      >
-                                        <div className="px-4 py-4 bg-background-subtle/30 border-t border-border">
-                                          {detail?.loading ? (
-                                            <VulnOrgSidebarExpandedSkeleton />
-                                          ) : detail?.error ? (
-                                            <div className="text-sm text-destructive">{detail.error}</div>
-                                          ) : detail?.data ? (
-                                            <VulnerabilityOrgSidebarExpandedContent
-                                              detail={detail.data}
-                                              rowSummary={v.summary ?? null}
-                                              organizationId={orgId}
-                                              projectId={selectedProjectId ?? undefined}
-                                              canManage={Boolean(organization?.permissions?.manage_teams_and_projects)}
-                                            />
-                                          ) : (
-                                            <div className="text-sm text-muted-foreground">No details available.</div>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                </Fragment>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
+                      <VulnerabilityExpandableTable
+                        organizationId={orgId!}
+                        projectId={selectedProjectId ?? undefined}
+                        rows={projectSecurityRows}
+                        onStatusChange={() => {
+                          if (orgId && selectedProjectId) {
+                            void Promise.all([
+                              api.getProjectVulnerabilities(orgId, selectedProjectId),
+                              api.getProjectSecretFindings(orgId, selectedProjectId, 1, 50),
+                              api.getProjectSemgrepFindings(orgId, selectedProjectId, 1, 50),
+                            ])
+                              .then(([v, s, g]) => {
+                                setProjectVulnerabilities(v ?? []);
+                                setProjectSecrets(s?.data ?? []);
+                                setProjectSemgrep(g?.data ?? []);
+                              })
+                              .catch(() => {});
+                          }
+                        }}
+                        canManageFindings={Boolean(organization?.permissions?.manage_teams_and_projects)}
+                      />
                     )}
 
                     {orgId && selectedProjectId && (
