@@ -13,7 +13,7 @@ export async function storeEntryPoints(
   projectId: string,
   runId: string,
   files: readonly ExtractedFile[]
-): Promise<{ success: boolean; error?: string; count: number }> {
+): Promise<{ success: boolean; error?: string; count: number; framework?: string; frameworkWriteError?: string }> {
   try {
     const rows: Array<Record<string, unknown>> = [];
     for (const file of files) {
@@ -65,7 +65,40 @@ export async function storeEntryPoints(
         return { success: false, error: error.message, count: 0 };
       }
     }
-    return { success: true, count: finalRows.length };
+
+    // Write the dominant detected framework back to projects.framework so the
+    // project icon (org canvas + project header) reflects what extraction
+    // actually parsed. Creation-time detection only peeks the repo's root
+    // manifest, which misses the real framework whenever the app lives at a
+    // subpath / in a monorepo (e.g. a fixture at depscanner/test-repos/express
+    // → "unknown"). The entry-point detector parsed the code, so it's the
+    // authoritative signal. Best-effort: a failure here must never fail the
+    // scan — the entry points are already persisted.
+    const frameworkCounts = new Map<string, number>();
+    for (const row of finalRows) {
+      const fw = typeof row.framework === 'string' ? row.framework : '';
+      if (fw && fw !== 'unknown') frameworkCounts.set(fw, (frameworkCounts.get(fw) ?? 0) + 1);
+    }
+    let dominantFramework: string | null = null;
+    let bestCount = 0;
+    for (const [fw, n] of frameworkCounts) {
+      if (n > bestCount) {
+        bestCount = n;
+        dominantFramework = fw;
+      }
+    }
+    if (dominantFramework) {
+      const { error: fwError } = await supabase
+        .from('projects')
+        .update({ framework: dominantFramework })
+        .eq('id', projectId);
+      if (fwError) {
+        // Non-fatal: the entry-point rows landed; only the icon hint is stale.
+        return { success: true, count: finalRows.length, framework: dominantFramework, frameworkWriteError: fwError.message };
+      }
+    }
+
+    return { success: true, count: finalRows.length, framework: dominantFramework ?? undefined };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, error: message, count: 0 };
