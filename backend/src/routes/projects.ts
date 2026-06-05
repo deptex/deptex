@@ -10482,7 +10482,7 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
 
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, name, active_extraction_run_id')
+      .select('id, name, active_extraction_run_id, infra_types')
       .eq('organization_id', id);
 
     if (!projects || projects.length === 0) {
@@ -10508,7 +10508,7 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
     const { data: vulnRows } = activeRunIds.length > 0
       ? await supabase
           .from('project_dependency_vulnerabilities')
-          .select('project_id, severity, depscore, is_reachable, suppressed')
+          .select('project_id, severity, depscore, contextual_depscore, is_reachable, suppressed')
           .in('project_id', projectIds)
           .in('extraction_run_id', activeRunIds)
           .eq('suppressed', false)
@@ -10530,10 +10530,80 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
           .in('extraction_run_id', activeRunIds)
       : { data: [] as any[] };
 
+    // Ignored (suppressed) vulnerabilities per project — surfaced as an "ignored" count.
+    const { data: ignoredVulnRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('project_id')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+          .eq('suppressed', true)
+      : { data: [] as any[] };
+
+    // Primary linked repository per project (provider logo + repo name).
+    const { data: repoRows } = await supabase
+      .from('project_repositories')
+      .select('project_id, provider, repo_full_name, last_extracted_at')
+      .in('project_id', projectIds);
+
+    // Last completed scan per project — the freshest "last scan" signal.
+    // (project_repositories.last_extracted_at isn't bumped on re-scan, so it goes stale.)
+    const { data: scanJobRows } = await supabase
+      .from('scan_jobs')
+      .select('project_id, completed_at')
+      .in('project_id', projectIds)
+      .eq('status', 'completed')
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false });
+
+    const lastScanByProject = new Map<string, string>();
+    for (const j of scanJobRows ?? []) {
+      if (j.completed_at && !lastScanByProject.has(j.project_id)) {
+        lastScanByProject.set(j.project_id, j.completed_at);
+      }
+    }
+
+    // Capability signals for the "non-obvious" scanners — only Container / IaC / DAST get a badge.
+    // SCA / secrets / SAST / license / malicious run on every repo, so they're not worth surfacing.
+    const { data: containerRows } = activeRunIds.length > 0
+      ? await supabase
+          .from('project_container_findings')
+          .select('project_id')
+          .in('project_id', projectIds)
+          .in('extraction_run_id', activeRunIds)
+      : { data: [] as any[] };
+
+    const [{ data: dastTargetRows }, { data: dastFindingRows }] = await Promise.all([
+      supabase.from('project_dast_targets').select('project_id').in('project_id', projectIds),
+      supabase.from('project_dast_findings').select('project_id').in('project_id', projectIds),
+    ]);
+
+    const containerProjects = new Set((containerRows ?? []).map((r: any) => r.project_id));
+    const dastProjects = new Set([
+      ...(dastTargetRows ?? []).map((r: any) => r.project_id),
+      ...(dastFindingRows ?? []).map((r: any) => r.project_id),
+    ]);
+
     const vulnByProject = new Map<string, any[]>();
     for (const v of vulnRows ?? []) {
       if (!vulnByProject.has(v.project_id)) vulnByProject.set(v.project_id, []);
       vulnByProject.get(v.project_id)!.push(v);
+    }
+
+    const ignoredByProject = new Map<string, number>();
+    for (const v of ignoredVulnRows ?? []) {
+      ignoredByProject.set(v.project_id, (ignoredByProject.get(v.project_id) ?? 0) + 1);
+    }
+
+    const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
+    for (const r of repoRows ?? []) {
+      if (!repoByProject.has(r.project_id)) {
+        repoByProject.set(r.project_id, {
+          provider: (r as any).provider ?? null,
+          repo_full_name: (r as any).repo_full_name ?? null,
+          last_extracted_at: (r as any).last_extracted_at ?? null,
+        });
+      }
     }
 
     const semgrepByProject = new Map<string, number>();
@@ -10555,6 +10625,18 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       const reachableCount = vulns.filter((v: any) => v.is_reachable).length;
       const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
       const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
+      const repo = repoByProject.get(p.id);
+
+      // Depscore-band buckets (reachability-aware, unlike raw CVSS severity): >=90 critical /
+      // >=70 high / >=40 medium / <40 low. Drives the C/H/M/L issue pills.
+      let bandCritical = 0, bandHigh = 0, bandMedium = 0, bandLow = 0;
+      for (const v of vulns) {
+        const s = v.contextual_depscore ?? v.depscore ?? 0;
+        if (s >= 90) bandCritical++;
+        else if (s >= 70) bandHigh++;
+        else if (s >= 40) bandMedium++;
+        else bandLow++;
+      }
 
       return {
         project_id: p.id,
@@ -10564,9 +10646,20 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
         critical_count: criticalCount,
         reachable_count: reachableCount,
         worst_depscore: worstDepscore,
+        band_critical: bandCritical,
+        band_high: bandHigh,
+        band_medium: bandMedium,
+        band_low: bandLow,
         semgrep_count: semgrepByProject.get(p.id) ?? 0,
         secret_count: secrets.total,
         verified_secret_count: secrets.verified,
+        ignored_count: ignoredByProject.get(p.id) ?? 0,
+        repo_provider: repo?.provider ?? null,
+        repo_full_name: repo?.repo_full_name ?? null,
+        last_scan_at: lastScanByProject.get(p.id) ?? repo?.last_extracted_at ?? null,
+        infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
+        has_container: containerProjects.has(p.id),
+        has_dast: dastProjects.has(p.id),
       };
     });
 

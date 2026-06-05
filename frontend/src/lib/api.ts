@@ -5567,9 +5567,26 @@ export interface ProjectSecuritySummary {
   critical_count: number;
   reachable_count: number;
   worst_depscore: number;
+  // Depscore-band buckets (reachability-aware): >=90 critical / >=70 high / >=40 medium / <40 low.
+  band_critical?: number;
+  band_high?: number;
+  band_medium?: number;
+  band_low?: number;
   semgrep_count: number;
   secret_count: number;
   verified_secret_count: number;
+  /** Number of suppressed/ignored vulnerabilities. */
+  ignored_count?: number;
+  /** Linked repo provider — github | gitlab | bitbucket. */
+  repo_provider?: string | null;
+  repo_full_name?: string | null;
+  /** Last successful extraction / scan completion (project_repositories.last_extracted_at). */
+  last_scan_at?: string | null;
+  /** "Non-obvious" scanner coverage — drives the capability badges in the Type column. */
+  /** Detected IaC technologies (e.g. ["dockerfile","kubernetes","terraform"]) — rendered as brand logos. */
+  infra_types?: string[];
+  has_container?: boolean;
+  has_dast?: boolean;
 }
 
 export interface PaginatedResponse<T> {
