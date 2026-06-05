@@ -20,10 +20,12 @@ sinks:
   # ---------- Code injection via _.template ----------
   # _.template compiles its argument (and the `imports` option) into an
   # executable function. CVE-2021-23337 and CVE-2026-4800 are the same
-  # vulnerable surface, so we emit one sink row per CVE: a reachable flow
-  # into _.template promotes whichever of the two dep-scan detected on the
-  # project to `confirmed` (the osv_id is stamped onto the flow and matched
-  # against the project's PDVs in the reachability classifier).
+  # vulnerable surface, so we emit one sink row per CVE. The engine's sink
+  # fan-out (matchSinkVariants in propagate-core.ts) emits ONE flow per CVE
+  # at a shared call site, so a reachable `_.template` promotes EVERY one of
+  # these CVEs dep-scan detected on the project to `confirmed` — not just the
+  # first-listed. Each flow's osv_id is matched against the project's PDVs in
+  # the reachability classifier.
   - pattern: _.template(*)
     vuln_class: code_injection
     argument_indices: [0, 1]
