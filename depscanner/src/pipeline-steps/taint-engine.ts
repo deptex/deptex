@@ -350,6 +350,18 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       // about AI-generated CVE specs) and get demoted from `confirmed` to
       // `data_flow` plus a spurious `osv_id_drift_rejected` security event.
       for (const osv of engineResult.loadedOsvIds) validOsvIds.add(osv);
+      // Fold every loaded sink's CVE→pattern mapping (framework-models +
+      // CVE-specs) into the map the reachability classifier's M2
+      // vulnerable-symbol check reads. This lets a framework CVE — e.g. express
+      // `res.redirect(*)` → CVE-2024-43796 — be demoted to `unreachable` when
+      // the app never calls the vulnerable function, instead of the weaker
+      // `module` fallback. cve-spec patterns added above take precedence; this
+      // only fills in osv_ids the cve-specs didn't already cover.
+      for (const [osv, pats] of engineResult.loadedCveSinkPatterns) {
+        const existing = cveSinkPatterns.get(osv) ?? [];
+        for (const p of pats) if (!existing.includes(p)) existing.push(p);
+        cveSinkPatterns.set(osv, existing);
+      }
       // v3 precision — surface usedDependencies for the reachability
       // classifier even when zero specs matched / zero flows emitted: the
       // callgraph may still have crossed into dep code and we want to
