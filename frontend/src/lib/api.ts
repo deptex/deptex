@@ -5611,8 +5611,10 @@ export interface ReachableFlowNode {
 
   // Phase 6.5 — engine-shape hop fields (newer than atom-shape; some flows
   // already carry both during the migration window — render code reads
-  // whichever is present).
+  // whichever is present). The propagator emits `filePath`; older atom rows
+  // used `file` / `parentFileName`.
   file?: string;
+  filePath?: string;
   line?: number;
 
   // Phase 6.5 — synthetic AI verdict node discriminator. When `synthetic` is
@@ -5647,6 +5649,10 @@ export interface ReachableFlow {
   entry_point_method: string | null;
   entry_point_line: number | null;
   entry_point_tag: string | null;
+  /** Source/sink code windows captured off the clone at scan time (phase46).
+   *  Null on flows written before the migration; UI falls back to path+symbol. */
+  entry_point_code?: string | null;
+  sink_code?: string | null;
   sink_file: string | null;
   sink_method: string | null;
   sink_line: number | null;

@@ -1439,7 +1439,9 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   reachability_source text NOT NULL DEFAULT 'atom'::text,
   osv_id text,
   rule_id text,
-  flow_signature_hash text
+  flow_signature_hash text,
+  entry_point_code text,
+  sink_code text
 );
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

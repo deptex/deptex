@@ -22,6 +22,9 @@
  * Run: npx tsx test/taint-engine-integration.test.ts
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { createPGLiteStorage } from '../src/storage';
 import {
   writeFlows,
@@ -310,6 +313,75 @@ async function testRolloutGate() {
   assert(shouldRunForRollout({}), 'unset env → true (test/dev mode)');
 }
 
+async function testSnippetCapture(storage: Awaited<ReturnType<typeof createPGLiteStorage>>) {
+  console.log('\n[test] writeFlows captures source/sink code windows from the workspace');
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'taint-snippet-'));
+  try {
+    const rel = 'app/handler.js';
+    const abs = path.join(workspaceRoot, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, [
+      'const express = require("express");',                       // 1
+      'const app = express();',                                    // 2
+      'app.get("/run", (req, res) => {',                           // 3
+      '  const cmd = req.query.cmd;',                              // 4  <- source
+      '  const out = require("child_process").execSync(cmd);',     // 5  <- sink
+      '  res.send(out);',                                          // 6
+      '});',                                                       // 7
+    ].join('\n'), 'utf8');
+
+    const RUN = 'run_snippet_capture_001';
+    const result = await writeFlows(storage, {
+      projectId: PROJECT_ID,
+      extractionRunId: RUN,
+      flows: [makeFlow({
+        id: 'flow_snippet',
+        entry_point_file: rel,
+        entry_point_line: 4,
+        sink_file: rel,
+        sink_line: 5,
+        sink_method: 'execSync',
+        // Point the hops at the temp file so per-hop capture has real lines.
+        flow_nodes: [
+          { filePath: rel, line: 4, column: 11, label: 'req.query.cmd', kind: 'source' },
+          { filePath: rel, line: 5, column: 3, label: 'execSync', kind: 'sink' },
+        ],
+        flow_length: 2,
+      })],
+      workspaceRoot,
+    });
+    assert(result.written === 1, `writeFlows wrote the flow (errors: ${result.errors.join('; ') || 'none'})`);
+
+    const { data: rows } = await storage
+      .from('project_reachable_flows')
+      .select('entry_point_code, sink_code, flow_nodes')
+      .eq('project_id', PROJECT_ID)
+      .eq('extraction_run_id', RUN);
+    const row = (rows ?? [])[0] as {
+      entry_point_code?: string | null;
+      sink_code?: string | null;
+      flow_nodes?: Array<{ kind?: string; code?: string | null; synthetic?: boolean }>;
+    } | undefined;
+    assert(!!row, 'flow row read back');
+    assert(typeof row?.entry_point_code === 'string' && row.entry_point_code.includes('req.query.cmd'),
+      `entry_point_code captured the source line (got: ${JSON.stringify(row?.entry_point_code?.slice(0, 60))})`);
+    assert(typeof row?.entry_point_code === 'string' && /→\s*4 │/.test(row!.entry_point_code!),
+      'entry_point_code marks the affected source line (→ 4)');
+    assert(typeof row?.sink_code === 'string' && row.sink_code.includes('execSync'),
+      `sink_code captured the sink line (got: ${JSON.stringify(row?.sink_code?.slice(0, 60))})`);
+    // Every real hop carries its own code window so the path stepper can show
+    // each step, not just the source/sink ends.
+    const hopNodes = (row?.flow_nodes ?? []).filter(n => !n?.synthetic);
+    assert(hopNodes.length === 2, `both hop nodes persisted (got ${hopNodes.length})`);
+    assert(typeof hopNodes[0]?.code === 'string' && hopNodes[0].code!.includes('req.query.cmd'),
+      'source hop node carries its own code window');
+    assert(typeof hopNodes[1]?.code === 'string' && hopNodes[1].code!.includes('execSync'),
+      'sink hop node carries its own code window');
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const t0 = Date.now();
   console.log('Booting PGLiteStorage...');
@@ -323,6 +395,7 @@ async function main() {
   await testKillswitchEngages(storage);
   await testWriteRunIdempotent(storage);
   await testFlowSignatureHashDeterminism(storage);
+  await testSnippetCapture(storage);
   await testRolloutGate();
 
   console.log(`\n${passes} passed, ${failures} failed`);

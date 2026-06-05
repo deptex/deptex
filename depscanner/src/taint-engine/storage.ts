@@ -43,12 +43,60 @@
 
 import { createHash } from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs';
 import type { Storage } from '../storage';
 import type { Flow } from './flow';
 import type { FilterTriple, TripleResult } from './fp-filter';
 
 function isFilterTriple(v: TripleResult): v is FilterTriple {
   return v.verdict === 'kept' || v.verdict === 'rejected';
+}
+
+/**
+ * Read a small window of source around `line` from `filePath` (relative to the
+ * engine's workspace root — the callgraph stores `path.relative(rootDir, …)`,
+ * and rootDir === workspaceRoot, so `path.join(workspaceRoot, filePath)`
+ * resolves to the file on disk). Formatted to match the legacy reachability
+ * code_snippet (`→ NN │ code` markers; the UI strips them and re-numbers from
+ * the affected line). Best-effort: returns null on any miss so a read failure
+ * never fails the scan. `cache` memoizes each file's line array so a flow set
+ * sharing a file reads it once.
+ */
+function readFlowSnippet(
+  workspaceRoot: string | undefined,
+  filePath: string | null | undefined,
+  line: number | null | undefined,
+  cache: Map<string, string[] | null>,
+  contextLines = 4,
+): string | null {
+  if (!workspaceRoot || !filePath || !line || !Number.isFinite(line) || line <= 0) return null;
+  let lines = cache.get(filePath);
+  if (lines === undefined) {
+    lines = null;
+    // atom-era paths were sometimes src/-relative; try that too, mirroring the
+    // reachability.ts readCodeSnippet resolution.
+    const candidates = [path.join(workspaceRoot, filePath), path.join(workspaceRoot, 'src', filePath)];
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c) && fs.statSync(c).isFile()) {
+          lines = fs.readFileSync(c, 'utf8').split(/\r?\n/);
+          break;
+        }
+      } catch { /* try the next candidate */ }
+    }
+    cache.set(filePath, lines);
+  }
+  if (!lines) return null;
+  const start = Math.max(0, line - contextLines - 1);
+  const end = Math.min(lines.length, line + contextLines);
+  if (start >= end) return null;
+  return lines.slice(start, end)
+    .map((l, i) => {
+      const num = start + i + 1;
+      const marker = num === line ? '→' : ' ';
+      return `${marker} ${num.toString().padStart(4)} │ ${l}`;
+    })
+    .join('\n');
 }
 
 const FLOW_BATCH_SIZE = 100;
@@ -129,19 +177,35 @@ export async function writeFlows(
   const errors: string[] = [];
 
   const rows: Record<string, unknown>[] = [];
+  // Per-call cache of file line-arrays so a flow set sharing a source file
+  // reads it from disk once.
+  const snippetCache = new Map<string, string[] | null>();
   for (const flow of flows) {
     const dep = resolveDep(flow);
     if (!dep) continue;
+    // Capture the source line + the sink call line off the clone (best-effort)
+    // so the detail view can show the code without a live repo fetch. The line
+    // numbers match the scanned commit.
+    const entryPointCode = readFlowSnippet(workspaceRoot, flow.entry_point_file, flow.entry_point_line, snippetCache);
+    const sinkCode = readFlowSnippet(workspaceRoot, flow.sink_file, flow.sink_line, snippetCache);
     // Embed AI verdict triple (M4) into the JSONB so admins can see why a
     // borderline flow survived. We append synthetic nodes rather than
     // adding top-level columns (keeps the project_reachable_flows schema
     // identical between engine + atom + reachability_rules sources). For
     // error paths (kept_on_error / ai_truncated) only the ai_filter_verdict
     // node is appended — sanitization + endpoint signals are unavailable.
+    // Attach a per-hop code window to every real hop (not just the source/sink
+    // ends) so the path stepper can show each step's code. Best-effort; shares
+    // the same file-line cache as the entry/sink reads above.
+    const hopNodesWithCode = flow.flow_nodes.map((node) => {
+      const code = readFlowSnippet(workspaceRoot, node.filePath, node.line, snippetCache);
+      return code ? { ...node, code } : node;
+    });
+
     const v = verdicts?.get(flow.id);
-    let flowNodesWithVerdict: unknown = flow.flow_nodes;
+    let flowNodesWithVerdict: unknown = hopNodesWithCode;
     if (v) {
-      const appended: unknown[] = [...flow.flow_nodes];
+      const appended: unknown[] = [...hopNodesWithCode];
       if (isFilterTriple(v)) {
         appended.push({
           kind: 'ai_filter_verdict',
@@ -205,9 +269,11 @@ export async function writeFlows(
       // engine flows with PUBLIC_UNAUTH which matches the spec's source
       // patterns (req.body etc).
       entry_point_tag: 'framework-input:PUBLIC_UNAUTH',
+      entry_point_code: entryPointCode,
       sink_file: flow.sink_file,
       sink_method: flow.sink_method,
       sink_line: flow.sink_line,
+      sink_code: sinkCode,
       sink_is_external: flow.sink_is_external,
       flow_length: flow.flow_length,
       llm_prompt: null,
