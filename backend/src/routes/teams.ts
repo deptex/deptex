@@ -1988,7 +1988,7 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
     const { data: vulnRows } = activeRunIds.length > 0
       ? await supabase
           .from('project_dependency_vulnerabilities')
-          .select('project_id, severity, depscore, is_reachable, suppressed')
+          .select('project_id, severity, depscore, contextual_depscore, is_reachable, suppressed')
           .in('project_id', projectIds)
           .in('extraction_run_id', activeRunIds)
           .eq('suppressed', false)
@@ -2036,6 +2036,17 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
       const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
       const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
 
+      // Depscore-band buckets (reachability-aware, unlike raw CVSS severity): >=90 critical /
+      // >=70 high / >=40 medium / <40 low. Drives the C/H/M/L issue pills.
+      let bandCritical = 0, bandHigh = 0, bandMedium = 0, bandLow = 0;
+      for (const v of vulns) {
+        const s = v.contextual_depscore ?? v.depscore ?? 0;
+        if (s >= 90) bandCritical++;
+        else if (s >= 70) bandHigh++;
+        else if (s >= 40) bandMedium++;
+        else bandLow++;
+      }
+
       return {
         project_id: p.id,
         project_name: p.name,
@@ -2044,6 +2055,10 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
         critical_count: criticalCount,
         reachable_count: reachableCount,
         worst_depscore: worstDepscore,
+        band_critical: bandCritical,
+        band_high: bandHigh,
+        band_medium: bandMedium,
+        band_low: bandLow,
         semgrep_count: semgrepByProject.get(p.id) ?? 0,
         secret_count: secrets.total,
         verified_secret_count: secrets.verified,

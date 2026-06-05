@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -65,6 +65,7 @@ import { TeamGroupNode } from '../../components/vulnerabilities-graph/TeamGroupN
 import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
+import { FindingTypeIcon } from '../../components/security/FindingTypeIcon';
 import { SeverityPills } from '../../components/SeverityPills';
 import { TeamIcon } from '../../components/TeamIcon';
 import { RoleBadge } from '../../components/RoleBadge';
@@ -186,6 +187,53 @@ const formatDate = (dateString: string): string => {
   return `${day} ${month} ${year}`;
 };
 
+/** "Last scan"-style relative time: just now / 5m / 3h / 2d, falling back to a date past ~7 days. */
+const formatRelativeTime = (dateString: string | null | undefined): string => {
+  if (!dateString) return 'Never';
+  const then = new Date(dateString).getTime();
+  if (Number.isNaN(then)) return 'Never';
+  const diffMs = Date.now() - then;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return formatDate(dateString);
+};
+
+/** Prettify a framework id for the Type column ("spring-boot" → "Spring Boot", "express" → "Express"). */
+const prettyFramework = (framework: string | null | undefined): string => {
+  if (!framework) return 'Unknown';
+  return framework
+    .split(/[-_]/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+};
+
+const PROVIDER_LOGOS: Record<string, string> = {
+  github: '/images/integrations/github.png',
+  gitlab: '/images/integrations/gitlab.png',
+  bitbucket: '/images/integrations/bitbucket.png',
+};
+
+/** Locked column widths for the org-sidebar projects table — shared by the skeleton and the
+ * loaded table (both `table-fixed`) so columns stay put when data arrives, no layout shift. */
+function OrgProjectsColgroup() {
+  return (
+    <colgroup>
+      <col className="w-[120px]" />
+      <col className="w-[200px]" />
+      <col className="w-[150px]" />
+      <col className="w-[240px]" />
+      <col className="w-[190px]" />
+      <col className="w-[90px]" />
+      <col className="w-[110px]" />
+    </colgroup>
+  );
+}
+
 /** Fixed column widths for project sidebar vuln table — keep skeleton + data table aligned (no layout shift). */
 function OrgProjectVulnerabilitiesTableColgroup() {
   return (
@@ -306,7 +354,6 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarSecuritySummary, setOrgSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
-  const [orgSidebarProjectsSearch, setOrgSidebarProjectsSearch] = useState('');
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -1406,6 +1453,14 @@ export default function OrganizationOverviewPage() {
     const q = teamSidebarProjectsSearch.toLowerCase();
     return teamSidebarProjects.filter((p) => p.name.toLowerCase().includes(q));
   }, [teamSidebarProjects, teamSidebarProjectsSearch]);
+
+  // Depscore-band issue counts per project, keyed by project id — drives the
+  // SeverityPills on each project row/card in the team sidebar's Projects tab.
+  const teamSidebarSecByProject = useMemo(() => {
+    const m = new Map<string, ProjectSecuritySummary>();
+    for (const s of teamSidebarSecuritySummary) m.set(s.project_id, s);
+    return m;
+  }, [teamSidebarSecuritySummary]);
 
   const teamSidebarFilteredMembers = useMemo(() => {
     let result = teamSidebarMembers;
@@ -2943,7 +2998,7 @@ export default function OrganizationOverviewPage() {
               )}
             >
             {/* Header - Org avatar and name */}
-            <div className="flex-shrink-0 flex items-center justify-between gap-4 border-b border-border px-5 pt-5 pb-4">
+            <div className="flex-shrink-0 flex items-center justify-between gap-4 px-5 pt-5 pb-3">
               <div className="flex items-center gap-3 min-w-0">
                 <img
                   src={organization.avatar_url || '/images/org_profile.png'}
@@ -2955,106 +3010,177 @@ export default function OrganizationOverviewPage() {
               <button
                 type="button"
                 onClick={closeOrgSidebar}
-                className="shrink-0 p-1 text-foreground-secondary hover:text-foreground transition-colors"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
                 aria-label="Close"
               >
-                <X className="h-5 w-5" />
+                <PanelRight className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
-              {/* Header */}
-              <div className="px-5 pt-5 pb-3">
-                <h3 className="text-base font-semibold text-foreground">Projects</h3>
-                <p className="text-sm text-foreground-secondary mt-1">All projects across your organization, by issue severity.</p>
-              </div>
-
-              {/* Search */}
-              <div className="px-5 pb-3">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-secondary" />
-                  <input
-                    type="text"
-                    placeholder="Search projects…"
-                    value={orgSidebarProjectsSearch}
-                    onChange={(e) => setOrgSidebarProjectsSearch(e.target.value)}
-                    className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  />
-                </div>
-              </div>
-
+            <div className="flex-1 overflow-y-auto px-5 pt-3 pb-5">
               {orgSidebarLoading ? (
-                <div className="flex items-center justify-center py-16 text-foreground-secondary">
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading projects…
+                <div
+                  className="bg-background-card border border-border rounded-lg overflow-hidden"
+                  style={{
+                    maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                    WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                  }}
+                >
+                  <table className="w-full table-fixed">
+                    <OrgProjectsColgroup />
+                    <thead className="bg-background-card-header border-b border-border">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Ignored</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last scan</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <tr key={i} className="animate-pulse">
+                          <td className="px-4 py-3"><div className="h-5 w-5 rounded bg-muted" /></td>
+                          <td className="px-4 py-3"><div className="h-4 w-28 rounded bg-muted" /></td>
+                          <td className="px-4 py-3"><div className="h-4 w-20 rounded bg-muted" /></td>
+                          <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-4 w-4 rounded-sm bg-muted" /><div className="h-4 w-24 rounded bg-muted" /></div></td>
+                          <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted" />))}</div></td>
+                          <td className="px-4 py-3"><div className="h-4 w-8 rounded bg-muted" /></td>
+                          <td className="px-4 py-3"><div className="h-4 w-14 rounded bg-muted" /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ) : (() => {
                 const projMap = new Map(orgSidebarProjects.map((p) => [p.id, p]));
-                const q = orgSidebarProjectsSearch.trim().toLowerCase();
-                const rows = orgSidebarSecuritySummary
-                  .filter((s) => !q || s.project_name.toLowerCase().includes(q))
-                  .sort((a, b) => (b.worst_depscore ?? 0) - (a.worst_depscore ?? 0));
+                const rows = [...orgSidebarSecuritySummary].sort(
+                  (a, b) => (b.worst_depscore ?? 0) - (a.worst_depscore ?? 0)
+                );
                 if (rows.length === 0) {
                   return (
-                    <div className="px-5 py-16 text-center text-sm text-foreground-secondary">
-                      {orgSidebarSecuritySummary.length === 0 ? 'No projects yet.' : 'No projects match your search.'}
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
+                        <FolderKanban className="h-6 w-6 text-foreground-secondary" />
+                      </div>
+                      <h3 className="text-base font-medium text-foreground mb-1">No projects yet</h3>
+                      <p className="text-sm text-foreground-secondary max-w-[260px]">
+                        Connect a repository to start seeing findings across your organization.
+                      </p>
                     </div>
                   );
                 }
                 return (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-foreground-secondary">
-                        <th className="px-5 py-2 font-medium">Project</th>
-                        <th className="px-3 py-2 font-medium">Issues</th>
-                        <th className="px-3 py-2 font-medium">Other</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((s) => {
-                        const proj = projMap.get(s.project_id);
-                        return (
-                          <tr
-                            key={s.project_id}
-                            onClick={() => proj && openProjectInSidebar(proj)}
-                            className={cn(
-                              'border-b border-border/60 transition-colors',
-                              proj ? 'cursor-pointer hover:bg-background-subtle/40' : 'opacity-70'
-                            )}
-                          >
-                            <td className="px-5 py-3">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <FrameworkIcon frameworkId={proj?.framework ?? null} size={16} className="flex-shrink-0" />
-                                <span className="truncate font-medium text-foreground">{s.project_name}</span>
-                              </div>
-                            </td>
-                            <td className="px-3 py-3">
-                              <SeverityPills
-                                critical={s.band_critical}
-                                high={s.band_high}
-                                medium={s.band_medium}
-                                low={s.band_low}
-                                hideZeros
-                              />
-                            </td>
-                            <td className="px-3 py-3">
-                              <div className="flex items-center gap-1.5 text-xs">
-                                {s.verified_secret_count > 0 && (
-                                  <span className="rounded-md bg-red-500/10 px-1.5 py-0.5 text-red-300">
-                                    {s.verified_secret_count} secret{s.verified_secret_count === 1 ? '' : 's'}
-                                  </span>
+                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <table className="w-full table-fixed">
+                      <OrgProjectsColgroup />
+                      <thead className="bg-background-card-header border-b border-border">
+                        <tr>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Ignored</th>
+                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last scan</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {rows.map((s) => {
+                          const proj = projMap.get(s.project_id);
+                          const logo = s.repo_provider ? PROVIDER_LOGOS[s.repo_provider] : null;
+                          // Container + IaC collapse into one Docker badge — both are "infra we scan".
+                          const hasInfra = s.has_container || (s.infra_types?.length ?? 0) > 0;
+                          return (
+                            <tr
+                              key={s.project_id}
+                              onClick={() => proj && openProjectInSidebar(proj)}
+                              className={cn(
+                                'transition-colors group',
+                                proj ? 'cursor-pointer hover:bg-table-hover' : 'opacity-70'
+                              )}
+                            >
+                              {/* Type — framework icon + real brand logos for the non-obvious infra coverage (Docker / K8s / Terraform / …) + DAST */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2.5">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="flex h-5 w-5 items-center justify-center">
+                                        <FrameworkIcon frameworkId={proj?.framework ?? null} size={20} className="text-white" />
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{prettyFramework(proj?.framework)}</TooltipContent>
+                                  </Tooltip>
+                                  {hasInfra && (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span className="flex h-5 w-5 items-center justify-center">
+                                          <FrameworkIcon frameworkId="dockerfile" size={16} className="text-white" />
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Container &amp; IaC scanning</TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                  {s.has_dast && (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span className="flex h-5 w-5 items-center justify-center">
+                                          <FindingTypeIcon type="dast" size={16} className="text-white" />
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>DAST (runtime scanning)</TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                </div>
+                              </td>
+                              {/* Project name */}
+                              <td className="px-4 py-3">
+                                <span className="truncate text-sm font-semibold text-foreground">{s.project_name}</span>
+                              </td>
+                              {/* Owner team */}
+                              <td className="px-4 py-3">
+                                {proj?.owner_team_name ? (
+                                  <span className="truncate text-sm text-foreground">{proj.owner_team_name}</span>
+                                ) : (
+                                  <span className="text-sm text-foreground-secondary/40">—</span>
                                 )}
-                                {s.semgrep_count > 0 && (
-                                  <span className="rounded-md bg-background-subtle/60 px-1.5 py-0.5 text-foreground-secondary">
-                                    {s.semgrep_count} SAST
-                                  </span>
+                              </td>
+                              {/* Repository — provider logo */}
+                              <td className="px-4 py-3">
+                                {logo ? (
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <img src={logo} alt={s.repo_provider ?? ''} className="h-4 w-4 rounded-sm flex-shrink-0 object-contain" />
+                                    <span className="truncate text-sm text-foreground">{s.repo_full_name ?? s.repo_provider}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-sm text-foreground-secondary/40">—</span>
                                 )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                              </td>
+                              {/* Issues — depscore-band pills */}
+                              <td className="px-4 py-3">
+                                <SeverityPills
+                                  critical={s.band_critical}
+                                  high={s.band_high}
+                                  medium={s.band_medium}
+                                  low={s.band_low}
+                                />
+                              </td>
+                              {/* Ignored count */}
+                              <td className="px-4 py-3">
+                                <span className="text-sm text-foreground-secondary">{s.ignored_count ?? 0}</span>
+                              </td>
+                              {/* Last scan */}
+                              <td className="px-4 py-3">
+                                <span className="text-sm text-foreground-secondary whitespace-nowrap">{formatRelativeTime(s.last_scan_at)}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 );
               })()}
             </div>
@@ -3078,10 +3204,10 @@ export default function OrganizationOverviewPage() {
               <button
                 type="button"
                 onClick={closeTeamSidebar}
-                className="shrink-0 p-1 text-foreground-secondary hover:text-foreground transition-colors"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
                 aria-label="Close"
               >
-                <X className="h-5 w-5" />
+                <PanelRight className="h-4 w-4" />
               </button>
             </div>
             {/* Tabs */}
@@ -3197,6 +3323,8 @@ export default function OrganizationOverviewPage() {
                           <thead className="bg-background-card-header border-b border-border">
                             <tr>
                               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
+                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
                               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
                               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Created</th>
                             </tr>
@@ -3205,6 +3333,7 @@ export default function OrganizationOverviewPage() {
                             {[1, 2, 3].map((i) => (
                               <tr key={i} className="animate-pulse">
                                 <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded bg-muted" /><div className="h-4 w-32 rounded bg-muted" /></div></td>
+                                <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted" />))}</div></td>
                                 <td className="px-4 py-3"><div className="h-5 w-20 rounded bg-muted" /></td>
                                 <td className="px-4 py-3"><div className="h-4 w-16 rounded bg-muted" /></td>
                               </tr>
@@ -3230,6 +3359,7 @@ export default function OrganizationOverviewPage() {
                       {teamSidebarFilteredProjects.map((project) => {
                         const { label, inProgress, isError } = projectStatusLabel(project);
                         const isContributing = project.owner_team_id !== selectedTeamId;
+                        const sec = teamSidebarSecByProject.get(project.id);
                         return (
                           <div
                             key={project.id}
@@ -3271,6 +3401,14 @@ export default function OrganizationOverviewPage() {
                               </div>
                               <ChevronRight className="h-5 w-5 text-foreground-secondary group-hover:text-foreground transition-colors flex-shrink-0 ml-2" />
                             </div>
+                            <div className="mt-4">
+                              <SeverityPills
+                                critical={sec?.band_critical}
+                                high={sec?.band_high}
+                                medium={sec?.band_medium}
+                                low={sec?.band_low}
+                              />
+                            </div>
                           </div>
                         );
                       })}
@@ -3281,6 +3419,8 @@ export default function OrganizationOverviewPage() {
                         <thead className="bg-background-card-header border-b border-border">
                           <tr>
                             <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
+                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
                             <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
                             <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Created</th>
                           </tr>
@@ -3289,6 +3429,7 @@ export default function OrganizationOverviewPage() {
                           {teamSidebarFilteredProjects.map((project) => {
                             const { label, inProgress, isError } = projectStatusLabel(project);
                             const isContributing = project.owner_team_id !== selectedTeamId;
+                            const sec = teamSidebarSecByProject.get(project.id);
                             return (
                               <tr
                                 key={project.id}
@@ -3310,6 +3451,14 @@ export default function OrganizationOverviewPage() {
                                       </Tooltip>
                                     )}
                                   </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <SeverityPills
+                                    critical={sec?.band_critical}
+                                    high={sec?.band_high}
+                                    medium={sec?.band_medium}
+                                    low={sec?.band_low}
+                                  />
                                 </td>
                                 <td className="px-4 py-3">
                                   {inProgress ? (

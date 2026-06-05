@@ -5575,6 +5575,18 @@ export interface ProjectSecuritySummary {
   semgrep_count: number;
   secret_count: number;
   verified_secret_count: number;
+  /** Number of suppressed/ignored vulnerabilities. */
+  ignored_count?: number;
+  /** Linked repo provider — github | gitlab | bitbucket. */
+  repo_provider?: string | null;
+  repo_full_name?: string | null;
+  /** Last successful extraction / scan completion (project_repositories.last_extracted_at). */
+  last_scan_at?: string | null;
+  /** "Non-obvious" scanner coverage — drives the capability badges in the Type column. */
+  /** Detected IaC technologies (e.g. ["dockerfile","kubernetes","terraform"]) — rendered as brand logos. */
+  infra_types?: string[];
+  has_container?: boolean;
+  has_dast?: boolean;
 }
 
 export interface PaginatedResponse<T> {
