@@ -140,14 +140,26 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
                   ? [String(r.extra.metadata.owasp)]
                   : [];
                 const category = r.extra?.metadata?.category ?? 'security';
-                const filePath = r.path ?? 'unknown';
+                // Semgrep reports absolute paths under the clone root (we invoke
+                // it with the workspace as the scan target). Store repo-relative
+                // so the UI never shows the ephemeral /tmp/deptex-extract-XXX/
+                // clone dir, and so the path lines up with the other scanners'
+                // relative paths. Keep the raw absolute path for the on-disk
+                // snippet read below. Defensive: a path that resolves outside
+                // the workspace (shouldn't happen) keeps its raw value.
+                const rawPath = r.path ?? 'unknown';
+                let filePath = rawPath;
+                if (rawPath !== 'unknown' && path.isAbsolute(rawPath)) {
+                  const rel = path.relative(workspaceRoot, rawPath).split(path.sep).join('/');
+                  if (rel && !rel.startsWith('..')) filePath = rel;
+                }
                 const startLine = r.start?.line ?? null;
 
                 // Extract code snippet around the affected line
                 let codeSnippet: string | null = null;
-                if (startLine != null && filePath !== 'unknown') {
+                if (startLine != null && rawPath !== 'unknown') {
                   try {
-                    const absPath = filePath.startsWith('/') ? filePath : path.join(workspaceRoot, filePath);
+                    const absPath = path.isAbsolute(rawPath) ? rawPath : path.join(workspaceRoot, rawPath);
                     if (fs.existsSync(absPath)) {
                       const fileLines = fs.readFileSync(absPath, 'utf8').split('\n');
                       const contextLines = 3;
