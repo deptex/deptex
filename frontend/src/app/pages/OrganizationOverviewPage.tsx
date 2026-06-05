@@ -523,7 +523,7 @@ export default function OrganizationOverviewPage() {
     } else if (sidebarParam === 'project') {
       const pid = searchParams.get('projectId');
       const tabRaw = searchParams.get('tab');
-      const validProjectTabs = new Set(['vulnerabilities', 'dependencies', 'compliance', 'settings']);
+      const validProjectTabs = new Set(['vulnerabilities', 'dependencies', 'settings']); // 'compliance' parked for MVP
       const tab = (tabRaw && validProjectTabs.has(tabRaw) ? tabRaw : 'vulnerabilities') as 'vulnerabilities' | 'dependencies' | 'compliance' | 'settings';
       const subtab = searchParams.get('subtab') ?? 'general';
       if (pid) {
@@ -4142,7 +4142,8 @@ export default function OrganizationOverviewPage() {
               </div>
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">
-                  {(['vulnerabilities', 'dependencies', 'compliance', 'settings'] as const).map((tab) => (
+                  {/* MVP scope cut: 'compliance' tab parked (compliance feature shelved). */}
+                  {(['vulnerabilities', 'dependencies', 'settings'] as const).map((tab) => (
                     <button
                       key={tab}
                       type="button"
