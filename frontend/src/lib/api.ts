@@ -5567,6 +5567,11 @@ export interface ProjectSecuritySummary {
   critical_count: number;
   reachable_count: number;
   worst_depscore: number;
+  // Depscore-band buckets (reachability-aware): >=90 critical / >=70 high / >=40 medium / <40 low.
+  band_critical?: number;
+  band_high?: number;
+  band_medium?: number;
+  band_low?: number;
   semgrep_count: number;
   secret_count: number;
   verified_secret_count: number;

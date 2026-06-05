@@ -65,6 +65,7 @@ import { TeamGroupNode } from '../../components/vulnerabilities-graph/TeamGroupN
 import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
+import { SeverityPills } from '../../components/SeverityPills';
 import { TeamIcon } from '../../components/TeamIcon';
 import { RoleBadge } from '../../components/RoleBadge';
 import { RoleDropdown } from '../../components/RoleDropdown';
@@ -302,6 +303,10 @@ export default function OrganizationOverviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [orgSidebarOpen, setOrgSidebarOpen] = useState(false);
   const [orgSidebarVisible, setOrgSidebarVisible] = useState(false);
+  const [orgSidebarSecuritySummary, setOrgSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
+  const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
+  const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
+  const [orgSidebarProjectsSearch, setOrgSidebarProjectsSearch] = useState('');
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -2157,6 +2162,28 @@ export default function OrganizationOverviewPage() {
     rawTeamsWithProjectsRef.current = rawTeamsWithProjects;
   }, [rawTeamsWithProjects]);
 
+  // Fetch the org-wide projects + security summary when the org sidebar opens.
+  useEffect(() => {
+    if (!orgId || !orgSidebarOpen) return;
+    let cancelled = false;
+    setOrgSidebarLoading(true);
+    Promise.all([
+      api.getOrgSecuritySummary(orgId).catch(() => ({ projects: [] as ProjectSecuritySummary[] })),
+      api.getProjects(orgId).catch(() => [] as Project[]),
+    ])
+      .then(([summary, projects]) => {
+        if (cancelled) return;
+        setOrgSidebarSecuritySummary(summary.projects || []);
+        setOrgSidebarProjects(projects);
+      })
+      .finally(() => {
+        if (!cancelled) setOrgSidebarLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, orgSidebarOpen]);
+
   // Fetch team stats, members, projects, org members, roles, and team data when team sidebar opens
   useEffect(() => {
     if (!orgId || !selectedTeamId || !teamSidebarOpen || selectedTeamId === UNGROUPED_TEAM_ID) {
@@ -2936,24 +2963,100 @@ export default function OrganizationOverviewPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {/* Section Title */}
-              <div className="px-5 pt-5 pb-4">
-                <h3 className="text-base font-semibold text-foreground">Organization Findings</h3>
-                <p className="text-sm text-foreground-secondary mt-1">Findings overview for your organization</p>
+              {/* Header */}
+              <div className="px-5 pt-5 pb-3">
+                <h3 className="text-base font-semibold text-foreground">Projects</h3>
+                <p className="text-sm text-foreground-secondary mt-1">All projects across your organization, by issue severity.</p>
               </div>
 
-              {/* Status Items */}
-              <div className="px-5 pt-6 pb-8">
-                <div className="flex flex-col items-center justify-center text-center">
-                  <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
-                    <ShieldCheck className="h-6 w-6 text-foreground-secondary" />
-                  </div>
-                  <h3 className="text-base font-medium text-foreground mb-1">All Projects Safe</h3>
-                  <p className="text-sm text-foreground-secondary max-w-[240px]">
-                    No major security threats found across your projects.
-                  </p>
+              {/* Search */}
+              <div className="px-5 pb-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-secondary" />
+                  <input
+                    type="text"
+                    placeholder="Search projects…"
+                    value={orgSidebarProjectsSearch}
+                    onChange={(e) => setOrgSidebarProjectsSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  />
                 </div>
               </div>
+
+              {orgSidebarLoading ? (
+                <div className="flex items-center justify-center py-16 text-foreground-secondary">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading projects…
+                </div>
+              ) : (() => {
+                const projMap = new Map(orgSidebarProjects.map((p) => [p.id, p]));
+                const q = orgSidebarProjectsSearch.trim().toLowerCase();
+                const rows = orgSidebarSecuritySummary
+                  .filter((s) => !q || s.project_name.toLowerCase().includes(q))
+                  .sort((a, b) => (b.worst_depscore ?? 0) - (a.worst_depscore ?? 0));
+                if (rows.length === 0) {
+                  return (
+                    <div className="px-5 py-16 text-center text-sm text-foreground-secondary">
+                      {orgSidebarSecuritySummary.length === 0 ? 'No projects yet.' : 'No projects match your search.'}
+                    </div>
+                  );
+                }
+                return (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-foreground-secondary">
+                        <th className="px-5 py-2 font-medium">Project</th>
+                        <th className="px-3 py-2 font-medium">Issues</th>
+                        <th className="px-3 py-2 font-medium">Other</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((s) => {
+                        const proj = projMap.get(s.project_id);
+                        return (
+                          <tr
+                            key={s.project_id}
+                            onClick={() => proj && openProjectInSidebar(proj)}
+                            className={cn(
+                              'border-b border-border/60 transition-colors',
+                              proj ? 'cursor-pointer hover:bg-background-subtle/40' : 'opacity-70'
+                            )}
+                          >
+                            <td className="px-5 py-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <FrameworkIcon frameworkId={proj?.framework ?? null} size={16} className="flex-shrink-0" />
+                                <span className="truncate font-medium text-foreground">{s.project_name}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-3">
+                              <SeverityPills
+                                critical={s.band_critical}
+                                high={s.band_high}
+                                medium={s.band_medium}
+                                low={s.band_low}
+                                hideZeros
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <div className="flex items-center gap-1.5 text-xs">
+                                {s.verified_secret_count > 0 && (
+                                  <span className="rounded-md bg-red-500/10 px-1.5 py-0.5 text-red-300">
+                                    {s.verified_secret_count} secret{s.verified_secret_count === 1 ? '' : 's'}
+                                  </span>
+                                )}
+                                {s.semgrep_count > 0 && (
+                                  <span className="rounded-md bg-background-subtle/60 px-1.5 py-0.5 text-foreground-secondary">
+                                    {s.semgrep_count} SAST
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
             </div>
             </div>
           )}
