@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { RolePermissions } from './api';
 
-export const VALID_SETTINGS_SECTIONS = new Set([
+const ALL_SETTINGS_SECTIONS = [
   'general',
   'members',
   'roles',
@@ -36,7 +36,25 @@ export const VALID_SETTINGS_SECTIONS = new Set([
   'ip_allowlist',
   'usage',
   'billing',
+];
+
+// MVP scope cut (2026-06): these settings sections are parked — hidden from the nav AND
+// excluded from VALID_SETTINGS_SECTIONS so deep-links fall back to General. The components
+// and routes are left intact; remove an id from this set to bring a section back.
+export const MVP_PARKED_SECTIONS = new Set<string>([
+  'policies',
+  'statuses',
+  'security_slas',
+  'malicious_allowlist',
+  'audit_logs',
+  'sso',
+  'mfa',
+  'ip_allowlist',
 ]);
+
+export const VALID_SETTINGS_SECTIONS = new Set(
+  ALL_SETTINGS_SECTIONS.filter((s) => !MVP_PARKED_SECTIONS.has(s)),
+);
 
 export type OrgSettingsCategoryEntry = {
   id: string;
@@ -161,5 +179,11 @@ export function buildOrgSettingsSections(
     entries.push({ id: 'billing', label: 'Billing', icon: <CreditCard className={iconClass} /> });
   }
 
-  return entries;
+  // MVP scope cut: drop parked sections, then drop any category header left with no sections.
+  const withoutParked = entries.filter((e) => e.isCategory || !MVP_PARKED_SECTIONS.has(e.id));
+  return withoutParked.filter((e, i) => {
+    if (!e.isCategory) return true;
+    const next = withoutParked[i + 1];
+    return next != null && !next.isCategory; // keep a category only if a real section follows it
+  });
 }
