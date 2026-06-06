@@ -118,6 +118,11 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
             const findings = semgrepParsed.results
               // Filter out secret-detection rules (TruffleHog handles these better)
               .filter((r: any) => !(r.check_id ?? '').startsWith('generic.secrets.'))
+              // Filter out Kubernetes manifest rules — Checkov owns IaC/k8s and
+              // reports the same misconfigs (privileged container, allowPrivilege
+              // Escalation, …) with rule docs + compliance refs. Semgrep's
+              // yaml.kubernetes.* pack just double-reports them on the same file.
+              .filter((r: any) => !(r.check_id ?? '').startsWith('yaml.kubernetes.'))
               // Filter out generated/report files
               .filter((r: any) => {
                 const p = r.path ?? '';
