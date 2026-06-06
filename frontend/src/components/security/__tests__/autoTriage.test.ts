@@ -39,7 +39,12 @@ describe('autoTriageRow — Refined/All reachability rules', () => {
     expect(autoTriageRow(vuln({ reachability_level: null, depscore: 90 }))).toBeNull();
   });
 
-  it('never triages non-vulnerability finding types', () => {
+  it('sets aside container (base-image) findings as base_image, even critical', () => {
+    const container = { type: 'container', data: { id: 'c1', severity: 'CRITICAL' } } as unknown as SecurityTableRow;
+    expect(autoTriageRow(container)?.reason).toBe('base_image');
+  });
+
+  it('never triages secret or code-issue finding types', () => {
     const secret = { type: 'secret', data: { id: 's1' } } as unknown as SecurityTableRow;
     const semgrep = { type: 'semgrep', data: { id: 'g1' } } as unknown as SecurityTableRow;
     expect(autoTriageRow(secret)).toBeNull();
