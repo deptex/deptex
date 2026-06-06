@@ -69,6 +69,33 @@ export interface TaintEngineOutput {
   usedDependencies: Set<string>;
 }
 
+/**
+ * Confirm-or-deny aliases: extra CVEs that target the SAME vulnerable symbol as
+ * a framework-model sink but which the SBOM/VDB reports under a different OSV
+ * id (so the engine never tagged a sink with them). Seeded into cveSinkPatterns
+ * so the reachability classifier's vulnerable-symbol check can demote them to
+ * `unreachable` when the app never calls the symbol — exactly as it already
+ * does for the primary CVE — instead of leaving them at the weaker `module`
+ * fallback.
+ *
+ * These feed ONLY the confirm-or-deny check, never flow emission, so they carry
+ * zero snapshot/flow impact. The classifier matches symbols by SUBSTRING, so
+ * every token here must be DISTINCTIVE: `res.redirect` → `redirect` is safe; a
+ * bare lodash `set` / `trim` would false-match `res.set` / String.trim and is
+ * intentionally omitted until the matcher does word-boundary matching.
+ */
+const CONFIRM_OR_DENY_CVE_ALIASES: Record<string, string[]> = {
+  // Express open redirect (CVE-2024-29041) — same res.redirect sink as the
+  // already-tagged CVE-2024-43796 (XSS via response.redirect), which the live
+  // classifier already demotes to `unreachable`. Keyed on the identical
+  // `res.redirect` token so the two get the same verdict instead of 29041
+  // sitting at the weaker `module` fallback.
+  'CVE-2024-29041': ['res.redirect(*)'],
+  // lodash prototype pollution via `_.unset` (CVE-2025-13465). `unset` is a
+  // distinctive token; an app that only calls `_.template` never trips it.
+  'CVE-2025-13465': ['_.unset(*)'],
+};
+
 export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOutput> {
   const { supabase, job, projectId, organizationId, log, workspaceRoot, runId } = ctx;
 
@@ -79,7 +106,12 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
   const validOsvIds = new Set<string>();
   // osv_id → vulnerable call patterns from CVE-targeted spec sinks; consumed
   // by the reachability classifier for function-tier symbol verification.
-  const cveSinkPatterns = new Map<string, string[]>();
+  // Seeded with the confirm-or-deny aliases (extra CVEs sharing a framework
+  // sink's symbol) so they apply on every return path; real cve-spec /
+  // framework-model patterns merge on top below.
+  const cveSinkPatterns = new Map<string, string[]>(
+    Object.entries(CONFIRM_OR_DENY_CVE_ALIASES).map(([osv, pats]) => [osv, [...pats]]),
+  );
   // v3 precision arc — lowercase npm/pypi/cargo/etc. package names the
   // engine's callgraph confirmed are reached. Empty here; populated when
   // the engine ran successfully and its callgraph carried usedDependencies.

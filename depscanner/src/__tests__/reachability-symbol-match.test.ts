@@ -155,6 +155,13 @@ describe('extractSymbolTokens', () => {
     // last segment `go` is 2 chars — only the full dotted token survives.
     expect(extractSymbolTokens('pkg.go')).toEqual(['pkg.go']);
   });
+  it('never yields the bare receiver for confirm-or-deny alias patterns', () => {
+    // The taint-engine CONFIRM_OR_DENY_CVE_ALIASES map relies on these patterns
+    // producing only DISTINCTIVE tokens — a bare `res` or `_` would substring-
+    // match half the codebase and wrongly promote the CVE to `function`.
+    expect(extractSymbolTokens('res.redirect(*)').sort()).toEqual(['redirect', 'res.redirect']);
+    expect(extractSymbolTokens('_.unset(*)').sort()).toEqual(['_.unset', 'unset']);
+  });
 });
 
 describe('updateReachabilityLevels — CVE-targeted symbol matching', () => {
