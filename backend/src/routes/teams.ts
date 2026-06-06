@@ -1,5 +1,6 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
+import { captureInfraError } from '../lib/observability/capture';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { createActivity } from '../lib/activities';
 import { getCached, setCached } from '../lib/cache';
@@ -38,6 +39,26 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
       teamMembership: null,
       orgRole: null,
       error: { status: 404, message: 'Organization not found or access denied' }
+    };
+  }
+
+  // Validate the team actually belongs to this organization. Without this a member of org A
+  // could pass a teamId from org B — and since the backend uses the service-role key (RLS
+  // bypassed), the cross-org rows would be returned (IDOR).
+  const { data: teamRow, error: teamLookupError } = await supabase
+    .from('teams')
+    .select('id')
+    .eq('id', teamId)
+    .eq('organization_id', organizationId)
+    .single();
+
+  if (teamLookupError || !teamRow) {
+    return {
+      hasAccess: false,
+      orgMembership,
+      teamMembership: null,
+      orgRole: null,
+      error: { status: 404, message: 'Team not found' }
     };
   }
 
@@ -1954,15 +1975,9 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
     const userId = req.user!.id;
     const { id, teamId } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    const access = await checkTeamAccess(userId, id, teamId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
     const { data: projectTeams } = await supabase
@@ -1985,90 +2000,41 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
       .map((p: any) => p.active_extraction_run_id)
       .filter(Boolean) as string[];
 
-    const { data: vulnRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_dependency_vulnerabilities')
-          .select('project_id, severity, depscore, contextual_depscore, is_reachable, suppressed')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-          .eq('suppressed', false)
-      : { data: [] as any[] };
-
-    const { data: semgrepRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_semgrep_findings')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-      : { data: [] as any[] };
-
-    const { data: secretRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_secret_findings')
-          .select('project_id, is_verified')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-      : { data: [] as any[] };
-
-    const vulnByProject = new Map<string, any[]>();
-    for (const v of vulnRows ?? []) {
-      if (!vulnByProject.has(v.project_id)) vulnByProject.set(v.project_id, []);
-      vulnByProject.get(v.project_id)!.push(v);
-    }
-
-    const semgrepByProject = new Map<string, number>();
-    for (const s of semgrepRows ?? []) {
-      semgrepByProject.set(s.project_id, (semgrepByProject.get(s.project_id) ?? 0) + 1);
-    }
-
-    const secretByProject = new Map<string, { total: number; verified: number }>();
-    for (const s of secretRows ?? []) {
-      const entry = secretByProject.get(s.project_id) ?? { total: 0, verified: 0 };
-      entry.total++;
-      if (s.is_verified) entry.verified++;
-      secretByProject.set(s.project_id, entry);
-    }
+    // Per-project counts computed in SQL (no PostgREST 1000-row truncation).
+    // See backend/database/phase47_security_summary_counts_rpc.sql.
+    const { data: countRows, error: countsError } = await supabase.rpc('security_summary_counts', {
+      p_project_ids: projectIds,
+      p_active_run_ids: activeRunIds,
+    });
+    if (countsError) throw countsError;
+    const countsByProject = new Map<string, any>();
+    for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
 
     const result = (projects ?? []).map((p: any) => {
-      const vulns = vulnByProject.get(p.id) ?? [];
-      const criticalCount = vulns.filter((v: any) => v.severity === 'critical').length;
-      const reachableCount = vulns.filter((v: any) => v.is_reachable).length;
-      const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
-      const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
-
-      // Depscore-band buckets (reachability-aware, unlike raw CVSS severity): >=90 critical /
-      // >=70 high / >=40 medium / <40 low. Drives the C/H/M/L issue pills.
-      let bandCritical = 0, bandHigh = 0, bandMedium = 0, bandLow = 0;
-      for (const v of vulns) {
-        const s = v.contextual_depscore ?? v.depscore ?? 0;
-        if (s >= 90) bandCritical++;
-        else if (s >= 70) bandHigh++;
-        else if (s >= 40) bandMedium++;
-        else bandLow++;
-      }
-
+      const c = countsByProject.get(p.id);
       return {
         project_id: p.id,
         project_name: p.name,
         team_id: teamId,
-        vuln_count: vulns.length,
-        critical_count: criticalCount,
-        reachable_count: reachableCount,
-        worst_depscore: worstDepscore,
-        band_critical: bandCritical,
-        band_high: bandHigh,
-        band_medium: bandMedium,
-        band_low: bandLow,
-        semgrep_count: semgrepByProject.get(p.id) ?? 0,
-        secret_count: secrets.total,
-        verified_secret_count: secrets.verified,
+        vuln_count: Number(c?.vuln_count ?? 0),
+        critical_count: Number(c?.critical_count ?? 0),
+        reachable_count: Number(c?.reachable_count ?? 0),
+        worst_depscore: Number(c?.worst_depscore ?? 0),
+        band_critical: Number(c?.band_critical ?? 0),
+        band_high: Number(c?.band_high ?? 0),
+        band_medium: Number(c?.band_medium ?? 0),
+        band_low: Number(c?.band_low ?? 0),
+        semgrep_count: Number(c?.semgrep_count ?? 0),
+        secret_count: Number(c?.secret_count ?? 0),
+        verified_secret_count: Number(c?.verified_secret_count ?? 0),
       };
     });
 
     res.json({ projects: result });
   } catch (error: any) {
     console.error('Error fetching team security summary:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch team security summary' });
+    captureInfraError(error, 'team-security-summary', { organization_id: req.params.id, team_id: req.params.teamId });
+    res.status(500).json({ error: 'Failed to fetch team security summary' });
   }
 });
 
@@ -2082,15 +2048,9 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id: orgId, teamId } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    const access = await checkTeamAccess(userId, orgId, teamId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
     const cacheKey = `team-stats:${teamId}`;
@@ -2277,15 +2237,9 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const userId = req.user!.id;
     const { id, teamId } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    const access = await checkTeamAccess(userId, id, teamId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
     const { data: projectTeams } = await supabase
@@ -2437,15 +2391,9 @@ router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) =
     const userId = req.user!.id;
     const { id, teamId } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    const access = await checkTeamAccess(userId, id, teamId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
     const { data: projectTeams } = await supabase
@@ -2525,15 +2473,9 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
     const userId = req.user!.id;
     const { id, teamId } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    const access = await checkTeamAccess(userId, id, teamId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
     const { data: projectTeams } = await supabase

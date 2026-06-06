@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -66,6 +66,7 @@ import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { FindingTypeIcon } from '../../components/security/FindingTypeIcon';
+import { filterAndSortOrgProjects } from '../../lib/orgSidebarProjects';
 import { SeverityPills } from '../../components/SeverityPills';
 import { TeamIcon } from '../../components/TeamIcon';
 import { RoleBadge } from '../../components/RoleBadge';
@@ -354,6 +355,12 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarSecuritySummary, setOrgSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
+  const [orgSidebarProjectsSearch, setOrgSidebarProjectsSearch] = useState('');
+  const [orgSidebarSort, setOrgSidebarSort] = useState<{ key: 'project' | 'team' | 'issues' | 'ignored' | 'lastScan'; dir: 'asc' | 'desc' }>({ key: 'issues', dir: 'desc' });
+  const [orgSidebarTeamFilter, setOrgSidebarTeamFilter] = useState<string[]>([]);
+  const [orgSidebarScannerFilter, setOrgSidebarScannerFilter] = useState<('infra' | 'dast')[]>([]);
+  const [orgSidebarError, setOrgSidebarError] = useState(false);
+  const [orgSidebarRefetch, setOrgSidebarRefetch] = useState(0);
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -2222,14 +2229,15 @@ export default function OrganizationOverviewPage() {
     if (!orgId || !orgSidebarOpen) return;
     let cancelled = false;
     setOrgSidebarLoading(true);
-    Promise.all([
-      api.getOrgSecuritySummary(orgId).catch(() => ({ projects: [] as ProjectSecuritySummary[] })),
-      api.getProjects(orgId).catch(() => [] as Project[]),
-    ])
+    setOrgSidebarError(false);
+    Promise.all([api.getOrgSecuritySummary(orgId), api.getProjects(orgId)])
       .then(([summary, projects]) => {
         if (cancelled) return;
         setOrgSidebarSecuritySummary(summary.projects || []);
         setOrgSidebarProjects(projects);
+      })
+      .catch(() => {
+        if (!cancelled) setOrgSidebarError(true);
       })
       .finally(() => {
         if (!cancelled) setOrgSidebarLoading(false);
@@ -2237,7 +2245,7 @@ export default function OrganizationOverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [orgId, orgSidebarOpen]);
+  }, [orgId, orgSidebarOpen, orgSidebarRefetch]);
 
   // Fetch team stats, members, projects, org members, roles, and team data when team sidebar opens
   useEffect(() => {
@@ -2993,7 +3001,7 @@ export default function OrganizationOverviewPage() {
           {orgSidebarOpen && organization && (
             <div
               className={cn(
-                'absolute top-6 bottom-0 right-0 w-full max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
+                'absolute top-6 bottom-0 right-0 w-[calc(100%_-_3rem)] max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
                 orgSidebarVisible ? 'translate-x-0' : 'translate-x-full'
               )}
             >
@@ -3018,6 +3026,73 @@ export default function OrganizationOverviewPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 pt-3 pb-5">
+              <div className="mb-3 flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-secondary" />
+                  <input
+                    type="text"
+                    value={orgSidebarProjectsSearch}
+                    onChange={(e) => setOrgSidebarProjectsSearch(e.target.value)}
+                    placeholder="Search projects, teams, repos…"
+                    className="w-full h-9 pl-9 pr-3 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  />
+                </div>
+                {(() => {
+                  const teamOptions = Array.from(
+                    new Set(orgSidebarProjects.map((p) => p.owner_team_name).filter((n): n is string => !!n))
+                  ).sort();
+                  const activeCount = orgSidebarTeamFilter.length + orgSidebarScannerFilter.length;
+                  return (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-background-card px-3 text-sm text-foreground-secondary hover:text-foreground transition-colors"
+                        >
+                          <Filter className="h-4 w-4" />
+                          Filter
+                          {activeCount > 0 && (
+                            <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-primary/15 px-1 text-xs font-semibold text-primary">{activeCount}</span>
+                          )}
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg">
+                        {teamOptions.length > 0 && (
+                          <>
+                            <DropdownMenuLabel className="text-xs uppercase tracking-wider text-foreground-secondary">Team</DropdownMenuLabel>
+                            {teamOptions.map((t) => (
+                              <DropdownMenuCheckboxItem
+                                key={t}
+                                checked={orgSidebarTeamFilter.includes(t)}
+                                onCheckedChange={() => setOrgSidebarTeamFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))}
+                                onSelect={(e) => e.preventDefault()}
+                              >
+                                {t}
+                              </DropdownMenuCheckboxItem>
+                            ))}
+                            <DropdownMenuSeparator />
+                          </>
+                        )}
+                        <DropdownMenuLabel className="text-xs uppercase tracking-wider text-foreground-secondary">Scanner</DropdownMenuLabel>
+                        <DropdownMenuCheckboxItem
+                          checked={orgSidebarScannerFilter.includes('infra')}
+                          onCheckedChange={() => setOrgSidebarScannerFilter((prev) => (prev.includes('infra') ? prev.filter((x) => x !== 'infra') : [...prev, 'infra']))}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          Container / IaC
+                        </DropdownMenuCheckboxItem>
+                        <DropdownMenuCheckboxItem
+                          checked={orgSidebarScannerFilter.includes('dast')}
+                          onCheckedChange={() => setOrgSidebarScannerFilter((prev) => (prev.includes('dast') ? prev.filter((x) => x !== 'dast') : [...prev, 'dast']))}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          DAST
+                        </DropdownMenuCheckboxItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })()}
+              </div>
               {orgSidebarLoading ? (
                 <div
                   className="bg-background-card border border-border rounded-lg overflow-hidden"
@@ -3054,10 +3129,47 @@ export default function OrganizationOverviewPage() {
                     </tbody>
                   </table>
                 </div>
+              ) : orgSidebarError ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
+                    <AlertTriangle className="h-6 w-6 text-foreground-secondary" />
+                  </div>
+                  <h3 className="text-base font-medium text-foreground mb-1">Couldn't load projects</h3>
+                  <p className="text-sm text-foreground-secondary max-w-[260px] mb-4">Something went wrong fetching this organization's projects.</p>
+                  <Button variant="outline" size="sm" onClick={() => setOrgSidebarRefetch((n) => n + 1)}>
+                    <RotateCw className="h-4 w-4 mr-2" /> Try again
+                  </Button>
+                </div>
               ) : (() => {
                 const projMap = new Map(orgSidebarProjects.map((p) => [p.id, p]));
-                const rows = [...orgSidebarSecuritySummary].sort(
-                  (a, b) => (b.worst_depscore ?? 0) - (a.worst_depscore ?? 0)
+                const teamNameById = new Map<string, string | null | undefined>(
+                  orgSidebarProjects.map((p) => [p.id, p.owner_team_name]),
+                );
+                const filtersActive =
+                  orgSidebarProjectsSearch.trim().length > 0 ||
+                  orgSidebarTeamFilter.length > 0 ||
+                  orgSidebarScannerFilter.length > 0;
+                const rows = filterAndSortOrgProjects(orgSidebarSecuritySummary, teamNameById, {
+                  search: orgSidebarProjectsSearch,
+                  teamFilter: orgSidebarTeamFilter,
+                  scannerFilter: orgSidebarScannerFilter,
+                  sort: orgSidebarSort,
+                });
+                const toggleSort = (key: typeof orgSidebarSort.key) =>
+                  setOrgSidebarSort((p) => (p.key === key ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
+                const sortTh = (label: string, key: typeof orgSidebarSort.key) => (
+                  <th className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(key)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-foreground-secondary hover:text-foreground transition-colors"
+                    >
+                      {label}
+                      {orgSidebarSort.key === key
+                        ? (orgSidebarSort.dir === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)
+                        : <ChevronsUpDown className="h-3 w-3 opacity-40" />}
+                    </button>
+                  </th>
                 );
                 if (rows.length === 0) {
                   return (
@@ -3065,9 +3177,9 @@ export default function OrganizationOverviewPage() {
                       <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
                         <FolderKanban className="h-6 w-6 text-foreground-secondary" />
                       </div>
-                      <h3 className="text-base font-medium text-foreground mb-1">No projects yet</h3>
+                      <h3 className="text-base font-medium text-foreground mb-1">{filtersActive ? 'No matches' : 'No projects yet'}</h3>
                       <p className="text-sm text-foreground-secondary max-w-[260px]">
-                        Connect a repository to start seeing findings across your organization.
+                        {filtersActive ? 'No projects match your search or filters.' : 'Connect a repository to start seeing findings across your organization.'}
                       </p>
                     </div>
                   );
@@ -3079,12 +3191,12 @@ export default function OrganizationOverviewPage() {
                       <thead className="bg-background-card-header border-b border-border">
                         <tr>
                           <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
+                          {sortTh('Project', 'project')}
+                          {sortTh('Team', 'team')}
                           <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Ignored</th>
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last scan</th>
+                          {sortTh('Issues', 'issues')}
+                          {sortTh('Ignored', 'ignored')}
+                          {sortTh('Last scan', 'lastScan')}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
@@ -3191,7 +3303,7 @@ export default function OrganizationOverviewPage() {
           {teamSidebarOpen && selectedTeamId && (
             <div
               className={cn(
-                'absolute top-6 bottom-0 right-0 w-full max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
+                'absolute top-6 bottom-0 right-0 w-[calc(100%_-_3rem)] max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
                 teamSidebarVisible ? 'translate-x-0' : 'translate-x-full'
               )}
             >
@@ -4324,7 +4436,7 @@ export default function OrganizationOverviewPage() {
           {projectSidebarOpen && selectedProjectId && orgId && (
             <div
               className={cn(
-                'absolute top-6 bottom-0 right-0 w-full max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
+                'absolute top-6 bottom-0 right-0 w-[calc(100%_-_3rem)] max-w-[1000px] sm:max-w-[1200px] bg-background-card-header border-l border-t border-border rounded-tl-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out z-20',
                 projectSidebarVisible ? 'translate-x-0' : 'translate-x-full'
               )}
             >
