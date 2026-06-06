@@ -7,7 +7,8 @@ export type FindingTypeIconKind =
   | 'malicious'
   | 'license'
   | 'iac'
-  | 'container';
+  | 'container'
+  | 'dast';
 
 interface FindingTypeIconProps {
   type: FindingTypeIconKind;
@@ -71,6 +72,16 @@ export function FindingTypeIcon({ type, size = 18, className }: FindingTypeIconP
         <rect x="11" y="11" width="3" height="3" />
         <rect x="16" y="11" width="3" height="3" />
         <path d="M3 8c2 0 3-2 3-2h12s1 2 3 2" />
+      </svg>
+    );
+  }
+  if (type === 'dast') {
+    // Globe — DAST probes the running app over the web.
+    return (
+      <svg className={cls} style={dim} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18z" />
       </svg>
     );
   }

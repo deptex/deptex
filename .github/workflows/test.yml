@@ -93,14 +93,6 @@ jobs:
 
       - name: Run backend tests
         working-directory: backend
-        # The plan-tier cleanup (remove_plan_limits app-wide) lands as its own
-        # arc after the prepaid-billing PR. Until then, the cleanup-pending
-        # branch of no-plan-tier-references.test.ts is gated off here so the
-        # partial cleanup doesn't fail CI. The always-forbidden identifiers
-        # (e.g. stripe_webhook_events) are still enforced. Drop this env once
-        # that cleanup lands.
-        env:
-          SKIP_TIER_CLEANUP_GUARD: '1'
         run: npm test
 
   depscanner:

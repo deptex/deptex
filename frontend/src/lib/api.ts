@@ -5567,9 +5567,26 @@ export interface ProjectSecuritySummary {
   critical_count: number;
   reachable_count: number;
   worst_depscore: number;
+  // Depscore-band buckets (reachability-aware): >=90 critical / >=70 high / >=40 medium / <40 low.
+  band_critical?: number;
+  band_high?: number;
+  band_medium?: number;
+  band_low?: number;
   semgrep_count: number;
   secret_count: number;
   verified_secret_count: number;
+  /** Number of suppressed/ignored vulnerabilities. */
+  ignored_count?: number;
+  /** Linked repo provider — github | gitlab | bitbucket. */
+  repo_provider?: string | null;
+  repo_full_name?: string | null;
+  /** Last successful extraction / scan completion (project_repositories.last_extracted_at). */
+  last_scan_at?: string | null;
+  /** "Non-obvious" scanner coverage — drives the capability badges in the Type column. */
+  /** Detected IaC technologies (e.g. ["dockerfile","kubernetes","terraform"]) — rendered as brand logos. */
+  infra_types?: string[];
+  has_container?: boolean;
+  has_dast?: boolean;
 }
 
 export interface PaginatedResponse<T> {
@@ -6000,100 +6017,6 @@ export interface LearningDashboard {
   totalRatings: number;
 }
 
-// ─── Billing API ───
-
-export interface StripeInvoice {
-  id: string;
-  number: string | null;
-  amount_due: number;
-  amount_paid: number;
-  currency: string;
-  status: string | null;
-  created: number;
-  period_start: number;
-  period_end: number;
-  invoice_pdf: string | null;
-  hosted_invoice_url: string | null;
-}
-
-export const billingApi = {
-  async getPlan(orgId: string) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/plan`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    if (!res.ok) throw new Error('Failed to fetch plan');
-    return res.json();
-  },
-
-  async getUsage(orgId: string) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/usage`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    if (!res.ok) throw new Error('Failed to fetch usage');
-    return res.json();
-  },
-
-  async createCheckoutSession(orgId: string, priceId: string, billingEmail?: string): Promise<{ url: string }> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/checkout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ priceId, billingEmail }),
-    });
-    if (!res.ok) {
-      let message = 'Failed to create checkout';
-      try {
-        const body = await res.json();
-        if (typeof body?.error === 'string') message = body.error;
-      } catch {
-        // non-JSON or empty body: keep default message
-      }
-      throw new Error(message);
-    }
-    return res.json();
-  },
-
-  async createPortalSession(orgId: string): Promise<{ url: string }> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/portal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-    });
-    if (!res.ok) throw new Error('Failed to create portal session');
-    return res.json();
-  },
-
-  async getInvoices(orgId: string, limit = 10, startingAfter?: string): Promise<{ invoices: StripeInvoice[]; has_more: boolean }> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const params = new URLSearchParams({ limit: String(limit) });
-    if (startingAfter) params.set('starting_after', startingAfter);
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/invoices?${params}`, {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    if (!res.ok) throw new Error('Failed to fetch invoices');
-    return res.json();
-  },
-
-  async checkDowngrade(orgId: string, targetTier: string): Promise<{ allowed: boolean; overLimits: Array<{ resource: string; current: number; targetLimit: number }> }> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-    const res = await fetch(`${API_BASE_URL}/api/organizations/${orgId}/billing/check-downgrade`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ targetTier }),
-    });
-    if (!res.ok) throw new Error('Failed to check downgrade');
-    return res.json();
-  },
-};
-
 // =============================================================================
 // Admin (Henry-only) API
 // =============================================================================
@@ -6163,4 +6086,81 @@ export async function apiAdminListExtractionFailures(params: {
   if (params.since) qs.set('since', params.since);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
+}
+
+export interface ExtractionTrendPoint {
+  date: string;
+  errors: number;
+  warns: number;
+}
+
+export interface ExtractionTrend {
+  series: ExtractionTrendPoint[];
+  truncated: boolean;
+}
+
+/** Daily extraction-failure counts (errors vs warns) over the last 365 days. */
+export async function apiAdminExtractionTrend(): Promise<ExtractionTrend> {
+  return fetchWithAuth('/api/admin/extraction-trend');
+}
+
+export interface AdminBillingActivity {
+  id: string;
+  kind: string;
+  amount_cents: number;
+  description: string | null;
+  organization_id: string;
+  organization_name: string | null;
+  created_at: string;
+}
+
+export interface AdminRevenuePoint {
+  date: string;
+  cents: number;
+}
+
+export interface AdminFinancials {
+  depositsCents: number;
+  deposits30dCents: number;
+  grossMarginCents: number;
+  freeCreditBurnedCents: number;
+  realBalanceHeldCents: number;
+  freeCreditOutstandingCents: number;
+  /** Free-credit figures assume free credit is spent first — an estimate. */
+  estimated: boolean;
+  /** True if the ledger row cap was hit, so totals are a floor not exact. */
+  truncated: boolean;
+}
+
+export interface AdminGrowthPoint {
+  date: string;
+  orgs: number;
+  projects: number;
+  users: number;
+}
+
+/** Platform scale — Overview tab. */
+export interface AdminOverview {
+  totals: {
+    organizations: number;
+    projects: number;
+    users: number;
+    scans30d: number;
+  };
+  growthSeries: AdminGrowthPoint[];
+}
+
+/** Financial snapshot — Billing tab. */
+export interface AdminBilling {
+  financials: AdminFinancials;
+  revenueSeries: AdminRevenuePoint[];
+  recentActivity: AdminBillingActivity[];
+}
+
+export async function apiAdminOverview(): Promise<AdminOverview> {
+  return fetchWithAuth('/api/admin/overview');
+}
+
+export async function apiAdminBilling(): Promise<AdminBilling> {
+  return fetchWithAuth('/api/admin/billing');
 }

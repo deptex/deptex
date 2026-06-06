@@ -9,6 +9,21 @@ export function setRpcResponse(name: string, value: { data: any; error: any }) {
   rpcRegistry[name] = value;
 }
 
+/**
+ * Queue an additional response for an RPC by name. Responses are consumed in FIFO
+ * order; the last one is reused once the queue is exhausted. Mirrors pushTableResponse,
+ * for tests that need successive RPC calls to return different values (e.g. retry paths).
+ */
+export function pushRpcResponse(name: string, value: { data: any; error: any }) {
+  const existing = rpcRegistry[name];
+  if (existing === undefined) {
+    rpcRegistry[name] = value;
+  } else {
+    const arr = Array.isArray(existing) ? existing : [existing];
+    rpcRegistry[name] = [...arr, value];
+  }
+}
+
 export function clearRpcRegistry() {
   for (const k of Object.keys(rpcRegistry)) delete rpcRegistry[k];
 }

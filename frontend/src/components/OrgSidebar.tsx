@@ -115,6 +115,10 @@ const allNavItems: NavItemDef[] = [
   { id: 'settings', label: 'Settings', path: 'settings', icon: Settings, requiredPermission: null, drilldown: true },
 ];
 
+// MVP scope cut (2026-06): top-level surfaces parked out of the sidebar. Routes/components are
+// left intact; remove an id to bring the tab back.
+const MVP_PARKED_NAV = new Set<string>(['compliance', 'flows']);
+
 export default function OrgSidebar({
   organizationId,
   organization,
@@ -171,6 +175,7 @@ export default function OrgSidebar({
 
   const visibleNavItems = useMemo(() => {
     return allNavItems.filter((item) => {
+      if (MVP_PARKED_NAV.has(item.id)) return false;
       if (!item.requiredPermission) return true;
       if (!userPermissions) return false;
       return userPermissions[item.requiredPermission] === true;

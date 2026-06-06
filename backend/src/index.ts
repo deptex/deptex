@@ -2,6 +2,7 @@
 // they are required. It loads dotenv itself; see ./instrument.
 import './instrument';
 import * as Sentry from '@sentry/node';
+import { routeErrorCaptureMiddleware } from './lib/observability/route-errors';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -24,7 +25,6 @@ import billingRouter from './routes/billing';
 import internalBillingRouter from './routes/internal-billing';
 import billingStripeWebhooksRouter from './routes/billing-stripe-webhooks';
 import billingDriftCronRouter from './routes/billing-drift-cron';
-import syncCounterResetRouter from './routes/sync-counter-reset';
 import scannerCacheReaperRouter from './routes/scanner-cache-reaper';
 import ssoRouter from './routes/sso';
 import userSessionsRouter from './routes/user-sessions';
@@ -156,6 +156,18 @@ app.use((req, res, next) => {
   return globalJsonParser(req, res, next);
 });
 
+// Capture every HTTP 5xx to Sentry (Phase 1 breadth-net). Registered before any
+// route (including /health) so its res.on('finish') listener is attached for
+// every request; it reads the matched route pattern at finish time. Routes that
+// use fail() (or errors that reach the global handler) set
+// res.locals.sentryCaptured, so the net skips them to avoid double-capture.
+//
+// Vercel-serverless caveat: the capture is queued in res.on('finish'), which
+// fires after the response is sent, so it relies on the @sentry/node SDK
+// flushing before the function freezes. Same flush watch-item the original
+// Sentry arc flagged — verify on a preview deploy with a forced 500.
+app.use(routeErrorCaptureMiddleware);
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -175,7 +187,6 @@ app.use('/api/internal/aegis', aegisTaskStepRouter);
 app.use('/api/stripe/webhooks', billingStripeWebhooksRouter);
 app.use('/api/internal/billing', internalBillingRouter);
 app.use('/api/internal/billing', billingDriftCronRouter);
-app.use('/api/workers', syncCounterResetRouter);
 app.use('/api/workers', scannerCacheReaperRouter);
 app.use('/api/sso', ssoRouter);
 app.use('/api/user/sessions', userSessionsRouter);
@@ -258,6 +269,10 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
     // body, bodyRaw, rawBody, statusCode, expose, type.
   };
   console.error('Error:', safe);
+  // setupExpressErrorHandler (registered just above) already captured this error
+  // to Sentry before delegating here; flag it so the 5xx finish-net does not
+  // capture the same failure a second time.
+  res.locals.sentryCaptured = true;
   res.status(500).json({ error: 'Internal server error' });
 });
 

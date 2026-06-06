@@ -4,6 +4,8 @@ import * as crypto from 'crypto';
 import { authenticateUser, AuthRequest, checkMFACompliance } from '../middleware/auth';
 import { createIPAllowlistMiddleware } from '../middleware/ip-allowlist';
 import { supabase } from '../lib/supabase';
+import { fail } from '../lib/responders';
+import { captureInfraError } from '../lib/observability/capture';
 import { sendInvitationEmail } from '../lib/email';
 import { createActivity } from '../lib/activities';
 import { getOpenAIClient } from '../lib/openai';
@@ -116,7 +118,7 @@ router.get('/', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
 
-    // Get organizations with user's role in a single query using join (plan comes from organization_plans)
+    // Get organizations with user's role in a single query using join
     const { data: memberships, error: membershipError } = await supabase
       .from('organization_members')
       .select(`
@@ -141,16 +143,6 @@ router.get('/', async (req: AuthRequest, res) => {
     }
 
     const organizationIds = memberships.map(m => m.organization_id);
-
-    // Plan tier from organization_plans (single source of truth)
-    const { data: planRows } = await supabase
-      .from('organization_plans')
-      .select('organization_id, plan_tier')
-      .in('organization_id', organizationIds);
-    const planByOrgId = new Map<string, string>();
-    (planRows || []).forEach((row: { organization_id: string; plan_tier: string }) => {
-      planByOrgId.set(row.organization_id, row.plan_tier ?? 'free');
-    });
 
     // Get member counts for all organizations in parallel using count queries
     const memberCountPromises = organizationIds.map(async (orgId) => {
@@ -199,7 +191,7 @@ router.get('/', async (req: AuthRequest, res) => {
 
         return {
           ...org,
-          plan: planByOrgId.get(m.organization_id) ?? 'free',
+          plan: 'free', // tiers retired with the prepaid billing model
           role: m.role || 'member',
           role_display_name: roleData?.displayName || null,
           role_color: roleData?.color || null,
@@ -212,8 +204,7 @@ router.get('/', async (req: AuthRequest, res) => {
 
     res.json(organizationsWithRole);
   } catch (error: any) {
-    console.error('Error fetching organizations:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch organizations' });
+    fail(res, error, error.message || 'Failed to fetch organizations');
   }
 });
 
@@ -245,7 +236,7 @@ router.post('/', async (req: AuthRequest, res) => {
       ?? idData?.avatar_url
       ?? null;
 
-    // Create organization (plan tier lives in organization_plans only)
+    // Create organization
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
       .insert({ name: name.trim(), avatar_url: creatorAvatarUrl })
@@ -256,7 +247,7 @@ router.post('/', async (req: AuthRequest, res) => {
       throw orgError;
     }
 
-    // The plan row, owner membership, default roles, and the seed data
+    // The owner membership, default roles, and the seed data
     // (statuses, asset tiers, policy code) all only need organization.id and
     // are mutually independent — insert them in one parallel batch instead of
     // ~8 sequential round trips.
@@ -284,8 +275,6 @@ router.post('/', async (req: AuthRequest, res) => {
     };
 
     const seedResults = await Promise.all([
-      supabase.from('organization_plans')
-        .insert({ organization_id: organization.id, plan_tier: 'free' }),
       supabase.from('organization_members')
         .insert({ organization_id: organization.id, user_id: userId, role: 'owner' }),
       supabase.from('organization_roles').insert([
@@ -341,8 +330,7 @@ router.post('/', async (req: AuthRequest, res) => {
       role_color: '#f59e0b',
     });
   } catch (error: any) {
-    console.error('Error creating organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to create organization' });
+    fail(res, error, error.message || 'Failed to create organization');
   }
 });
 
@@ -364,14 +352,12 @@ router.get('/:id', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Org details, plan tier, and the caller's role are independent reads.
+    // Org details and the caller's role are independent reads.
     const [
       { data: organization, error: orgError },
-      { data: planRow },
       { data: roleData },
     ] = await Promise.all([
       supabase.from('organizations').select('*').eq('id', id).single(),
-      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
       supabase
         .from('organization_roles')
         .select('display_name, color, display_order, permissions')
@@ -386,7 +372,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
 
     res.json({
       ...organization,
-      plan: planRow?.plan_tier ?? 'free',
+      plan: 'free', // tiers retired with the prepaid billing model
       role: membership.role,
       role_display_name: roleData?.display_name || null,
       role_color: roleData?.color || null,
@@ -394,8 +380,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
       permissions: roleData?.permissions || null,
     });
   } catch (error: any) {
-    console.error('Error fetching organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch organization' });
+    fail(res, error, error.message || 'Failed to fetch organization');
   }
 });
 
@@ -554,8 +539,7 @@ router.get('/:id/members', async (req: AuthRequest, res) => {
 
     res.json(formattedMembers);
   } catch (error: any) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch members' });
+    fail(res, error, error.message || 'Failed to fetch members');
   }
 });
 
@@ -633,8 +617,7 @@ router.get('/:id/invitations', async (req: AuthRequest, res) => {
 
     res.json(invitationsWithTeams);
   } catch (error: any) {
-    console.error('Error fetching invitations:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch invitations' });
+    fail(res, error, error.message || 'Failed to fetch invitations');
   }
 });
 
@@ -688,20 +671,6 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
     if (existingInvitation) {
       return res.status(400).json({ error: 'Already invited this person' });
     }
-
-    // Plan limit check: members
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'members');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} members.`,
-          resource: 'members', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
 
     // Validate team_ids if provided and get team names
     const teamNames: string[] = [];
@@ -830,8 +799,7 @@ router.post('/:id/invitations', async (req: AuthRequest, res) => {
 
     res.status(201).json(invitationWithTeams);
   } catch (error: any) {
-    console.error('Error creating invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to create invitation' });
+    fail(res, error, error.message || 'Failed to create invitation');
   }
 });
 
@@ -986,8 +954,7 @@ router.post('/:id/invitations/:invitationId/accept', async (req: AuthRequest, re
 
     res.json({ message: 'Invitation accepted', organization_id: id });
   } catch (error: any) {
-    console.error('Error accepting invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to accept invitation' });
+    fail(res, error, error.message || 'Failed to accept invitation');
   }
 });
 
@@ -1028,8 +995,7 @@ router.post('/:id/invitations/:invitationId/decline', async (req: AuthRequest, r
 
     res.json({ message: 'Invitation declined' });
   } catch (error: any) {
-    console.error('Error declining invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to decline invitation' });
+    fail(res, error, error.message || 'Failed to decline invitation');
   }
 });
 
@@ -1084,8 +1050,7 @@ router.delete('/:id/invitations/:invitationId', async (req: AuthRequest, res) =>
 
     res.json({ message: 'Invitation cancelled' });
   } catch (error: any) {
-    console.error('Error cancelling invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to cancel invitation' });
+    fail(res, error, error.message || 'Failed to cancel invitation');
   }
 });
 
@@ -1167,8 +1132,7 @@ router.post('/:id/invitations/:invitationId/resend', async (req: AuthRequest, re
 
     res.json({ message: 'Invitation resent', invitation });
   } catch (error: any) {
-    console.error('Error resending invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to resend invitation' });
+    fail(res, error, error.message || 'Failed to resend invitation');
   }
 });
 
@@ -1256,8 +1220,7 @@ router.post('/:id/join', async (req: AuthRequest, res) => {
       organization_id: id
     });
   } catch (error: any) {
-    console.error('Error joining organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to join organization' });
+    fail(res, error, error.message || 'Failed to join organization');
   }
 });
 
@@ -1341,8 +1304,7 @@ router.get('/invitations/:invitationId', async (req, res) => {
       team_names: teamNames,
     });
   } catch (error: any) {
-    console.error('Error fetching invitation:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch invitation' });
+    fail(res, error, error.message || 'Failed to fetch invitation');
   }
 });
 
@@ -1475,8 +1437,7 @@ router.put('/:id/members/:userId/role', async (req: AuthRequest, res) => {
 
     res.json({ message: 'Member role updated successfully' });
   } catch (error: any) {
-    console.error('Error updating member role:', error);
-    res.status(500).json({ error: error.message || 'Failed to update member role' });
+    fail(res, error, error.message || 'Failed to update member role');
   }
 });
 
@@ -1651,8 +1612,7 @@ router.delete('/:id/members/:userId', async (req: AuthRequest, res) => {
 
     res.json({ message: userId === targetUserId ? 'Left organization successfully' : 'Member removed successfully' });
   } catch (error: any) {
-    console.error('Error removing member:', error);
-    res.status(500).json({ error: error.message || 'Failed to remove member' });
+    fail(res, error, error.message || 'Failed to remove member');
   }
 });
 
@@ -1672,16 +1632,14 @@ router.put('/:id', async (req: AuthRequest, res) => {
       normalizedName = name.trim();
     }
 
-    // Membership (the owner gate), the plan tier (needed for the response),
-    // and the current name (for the activity log) are independent reads —
-    // run them as one parallel batch instead of three sequential trips.
+    // Membership (the owner gate) and the current name (for the activity log)
+    // are independent reads — run them as one parallel batch instead of two
+    // sequential trips.
     const [
       { data: membership, error: membershipError },
-      { data: planRow },
       { data: currentOrg },
     ] = await Promise.all([
       supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
-      supabase.from('organization_plans').select('plan_tier').eq('organization_id', id).single(),
       supabase.from('organizations').select('name').eq('id', id).single(),
     ]);
 
@@ -1708,7 +1666,7 @@ router.put('/:id', async (req: AuthRequest, res) => {
       throw updateError;
     }
 
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+    res.json({ ...organization, plan: 'free' });
 
     // Activity logging is non-critical — fire it after the response so it
     // never adds a round trip to the caller's save.
@@ -1732,8 +1690,7 @@ router.put('/:id', async (req: AuthRequest, res) => {
       });
     }
   } catch (error: any) {
-    console.error('Error updating organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to update organization' });
+    fail(res, error, error.message || 'Failed to update organization');
   }
 });
 
@@ -1773,16 +1730,9 @@ router.patch('/:id', async (req: AuthRequest, res) => {
 
     if (updateError) throw updateError;
 
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('plan_tier')
-      .eq('organization_id', id)
-      .single();
-
-    res.json({ ...organization, plan: planRow?.plan_tier ?? 'free' });
+    res.json({ ...organization, plan: 'free' });
   } catch (error: any) {
-    console.error('Error patching organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to update organization' });
+    fail(res, error, error.message || 'Failed to update organization');
   }
 });
 
@@ -1820,8 +1770,7 @@ router.delete('/:id', async (req: AuthRequest, res) => {
 
     res.json({ message: 'Organization deleted successfully' });
   } catch (error: any) {
-    console.error('Error deleting organization:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete organization' });
+    fail(res, error, error.message || 'Failed to delete organization');
   }
 });
 
@@ -1928,8 +1877,7 @@ router.post('/:id/transfer-ownership', async (req: AuthRequest, res) => {
 
     res.json({ message: 'Ownership transferred successfully' });
   } catch (error: any) {
-    console.error('Error transferring ownership:', error);
-    res.status(500).json({ error: error.message || 'Failed to transfer ownership' });
+    fail(res, error, error.message || 'Failed to transfer ownership');
   }
 });
 
@@ -1972,8 +1920,7 @@ router.get('/:id/roles', async (req: AuthRequest, res) => {
 
     res.json(roles);
   } catch (error: any) {
-    console.error('Error fetching roles:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch roles' });
+    fail(res, error, error.message || 'Failed to fetch roles');
   }
 });
 
@@ -2097,8 +2044,7 @@ router.post('/:id/roles', async (req: AuthRequest, res) => {
 
     res.json(role);
   } catch (error: any) {
-    console.error('Error creating role:', error);
-    res.status(500).json({ error: error.message || 'Failed to create role' });
+    fail(res, error, error.message || 'Failed to create role');
   }
 });
 
@@ -2308,8 +2254,7 @@ router.put('/:id/roles/:roleId', async (req: AuthRequest, res) => {
 
     res.json(updatedRole);
   } catch (error: any) {
-    console.error('Error updating role:', error);
-    res.status(500).json({ error: error.message || 'Failed to update role' });
+    fail(res, error, error.message || 'Failed to update role');
   }
 });
 
@@ -2409,8 +2354,7 @@ router.delete('/:id/roles/:roleId', async (req: AuthRequest, res) => {
 
     res.json({ message: 'Role deleted successfully' });
   } catch (error: any) {
-    console.error('Error deleting role:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete role' });
+    fail(res, error, error.message || 'Failed to delete role');
   }
 });
 
@@ -2463,8 +2407,7 @@ router.get('/:id/policies', async (req: AuthRequest, res) => {
       slsa_level: null,
     });
   } catch (error: any) {
-    console.error('Error fetching policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch policies' });
+    fail(res, error, error.message || 'Failed to fetch policies');
   }
 });
 
@@ -2567,8 +2510,7 @@ router.put('/:id/policies', async (req: AuthRequest, res) => {
       slsa_level: null,
     });
   } catch (error: any) {
-    console.error('Error updating policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to update policies' });
+    fail(res, error, error.message || 'Failed to update policies');
   }
 });
 
@@ -2622,8 +2564,7 @@ router.get('/:id/statuses', async (req: AuthRequest, res) => {
     if (error) throw error;
     res.json(statuses ?? []);
   } catch (error: any) {
-    console.error('Error fetching statuses:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch statuses' });
+    fail(res, error, error.message || 'Failed to fetch statuses');
   }
 });
 
@@ -2674,8 +2615,7 @@ router.post('/:id/statuses', async (req: AuthRequest, res) => {
 
     res.status(201).json(status);
   } catch (error: any) {
-    console.error('Error creating status:', error);
-    res.status(500).json({ error: error.message || 'Failed to create status' });
+    fail(res, error, error.message || 'Failed to create status');
   }
 });
 
@@ -2712,8 +2652,7 @@ router.put('/:id/statuses/reorder', async (req: AuthRequest, res) => {
     if (fetchError) throw fetchError;
     res.json({ statuses: statuses ?? [] });
   } catch (error: any) {
-    console.error('Error reordering statuses:', error);
-    res.status(500).json({ error: error.message || 'Failed to reorder statuses' });
+    fail(res, error, error.message || 'Failed to reorder statuses');
   }
 });
 
@@ -2750,8 +2689,7 @@ router.put('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
 
     res.json(status);
   } catch (error: any) {
-    console.error('Error updating status:', error);
-    res.status(500).json({ error: error.message || 'Failed to update status' });
+    fail(res, error, error.message || 'Failed to update status');
   }
 });
 
@@ -2806,8 +2744,7 @@ router.delete('/:id/statuses/:statusId', async (req: AuthRequest, res) => {
 
     res.json({ message: 'Status deleted' });
   } catch (error: any) {
-    console.error('Error deleting status:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete status' });
+    fail(res, error, error.message || 'Failed to delete status');
   }
 });
 
@@ -2860,8 +2797,7 @@ router.get('/:id/sla-policies', async (req: AuthRequest, res) => {
       sla_paused_at: (org as any)?.sla_paused_at ?? null,
     });
   } catch (error: any) {
-    console.error('Error fetching SLA policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch SLA policies' });
+    fail(res, error, error.message || 'Failed to fetch SLA policies');
   }
 });
 
@@ -2951,8 +2887,7 @@ router.put('/:id/sla-policies', async (req: AuthRequest, res) => {
 
     res.json({ policies: updated ?? [] });
   } catch (error: any) {
-    console.error('Error updating SLA policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to update SLA policies' });
+    fail(res, error, error.message || 'Failed to update SLA policies');
   }
 });
 
@@ -3024,8 +2959,7 @@ router.post('/:id/sla-policies/enable', async (req: AuthRequest, res) => {
       backfill_updated: (rpcResult as number) ?? 0,
     });
   } catch (error: any) {
-    console.error('Error enabling SLA policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to enable SLA policies' });
+    fail(res, error, error.message || 'Failed to enable SLA policies');
   }
 });
 
@@ -3067,8 +3001,7 @@ router.post('/:id/sla-policies/pause', async (req: AuthRequest, res) => {
 
     res.json({ sla_paused_at: now });
   } catch (error: any) {
-    console.error('Error pausing SLA:', error);
-    res.status(500).json({ error: error.message || 'Failed to pause SLA' });
+    fail(res, error, error.message || 'Failed to pause SLA');
   }
 });
 
@@ -3133,8 +3066,7 @@ router.post('/:id/sla-policies/resume', async (req: AuthRequest, res) => {
 
     res.json({ sla_paused_at: null });
   } catch (error: any) {
-    console.error('Error resuming SLA:', error);
-    res.status(500).json({ error: error.message || 'Failed to resume SLA' });
+    fail(res, error, error.message || 'Failed to resume SLA');
   }
 });
 
@@ -3208,8 +3140,7 @@ router.post('/:id/sla-policies/disable', async (req: AuthRequest, res) => {
 
     res.status(200).json({ ok: true });
   } catch (error: any) {
-    console.error('Error disabling SLA policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to disable SLA policies' });
+    fail(res, error, error.message || 'Failed to disable SLA policies');
   }
 });
 
@@ -3375,8 +3306,7 @@ router.get('/:id/sla-compliance', async (req: AuthRequest, res) => {
       team_breakdown: teamBreakdown,
     });
   } catch (error: any) {
-    console.error('Error fetching SLA compliance:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch SLA compliance' });
+    fail(res, error, error.message || 'Failed to fetch SLA compliance');
   }
 });
 
@@ -3446,8 +3376,7 @@ router.get('/:id/sla-compliance/export', async (req: AuthRequest, res) => {
 
     res.json({ rows, summary });
   } catch (error: any) {
-    console.error('Error exporting SLA compliance:', error);
-    res.status(500).json({ error: error.message || 'Failed to export SLA compliance' });
+    fail(res, error, error.message || 'Failed to export SLA compliance');
   }
 });
 
@@ -3500,8 +3429,7 @@ router.get('/:id/sla-policy-changes', async (req: AuthRequest, res) => {
     }));
     res.json(withUser);
   } catch (error: any) {
-    console.error('Error fetching SLA policy changes:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch SLA policy changes' });
+    fail(res, error, error.message || 'Failed to fetch SLA policy changes');
   }
 });
 
@@ -3536,8 +3464,7 @@ router.get('/:id/policy-code', async (req: AuthRequest, res) => {
       pr_check: prResult.data ?? { pr_check_code: null },
     });
   } catch (error: any) {
-    console.error('Error fetching policy code:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch policy code' });
+    fail(res, error, error.message || 'Failed to fetch policy code');
   }
 });
 
@@ -3646,8 +3573,7 @@ router.put('/:id/policy-code/:codeType', async (req: AuthRequest, res) => {
 
     res.json({ success: true, code_type: codeType });
   } catch (error: any) {
-    console.error('Error updating policy code:', error);
-    res.status(500).json({ error: error.message || 'Failed to update policy code' });
+    fail(res, error, error.message || 'Failed to update policy code');
   }
 });
 
@@ -3724,8 +3650,7 @@ router.get('/:id/policy-changes', async (req: AuthRequest, res) => {
 
     res.json(enriched);
   } catch (error: any) {
-    console.error('Error fetching policy changes:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch policy changes' });
+    fail(res, error, error.message || 'Failed to fetch policy changes');
   }
 });
 
@@ -3810,8 +3735,7 @@ router.get('/:id/policy-change-requests', async (req: AuthRequest, res) => {
 
     res.json(enriched);
   } catch (error: any) {
-    console.error('Error fetching policy change requests:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch policy change requests' });
+    fail(res, error, error.message || 'Failed to fetch policy change requests');
   }
 });
 
@@ -3909,8 +3833,7 @@ router.post('/:id/policy-code/:codeType/revert', async (req: AuthRequest, res) =
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Error reverting policy code:', error);
-    res.status(500).json({ error: error.message || 'Failed to revert policy code' });
+    fail(res, error, error.message || 'Failed to revert policy code');
   }
 });
 
@@ -3977,8 +3900,7 @@ router.get('/:id/notification-rules', async (req: AuthRequest, res) => {
 
     res.json(mapped);
   } catch (error: any) {
-    console.error('Error fetching notification rules:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch notification rules' });
+    fail(res, error, error.message || 'Failed to fetch notification rules');
   }
 });
 
@@ -4000,20 +3922,6 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
     if (!triggerType || !validTriggers.includes(triggerType)) {
       return res.status(400).json({ error: 'triggerType must be one of: weekly_digest, vulnerability_discovered, custom_code_pipeline' });
     }
-
-    // Plan limit check: notification rules
-    try {
-      const { checkPlanLimit, TIER_DISPLAY_NAMES } = require('../lib/plan-limits');
-      const planCheck = await checkPlanLimit(id, 'notification_rules');
-      if (!planCheck.allowed) {
-        return res.status(403).json({
-          error: 'PLAN_LIMIT',
-          message: `Your ${TIER_DISPLAY_NAMES[planCheck.tier]} plan supports up to ${planCheck.limit} notification rules.`,
-          resource: 'notification_rules', current: planCheck.current, limit: planCheck.limit,
-          tier: planCheck.tier, upgradeTier: planCheck.upgradeTier,
-        });
-      }
-    } catch (e) { /* fail open */ }
 
     const dests = Array.isArray(destinations) ? destinations : [];
     const insertData: Record<string, unknown> = {
@@ -4059,8 +3967,7 @@ router.post('/:id/notification-rules', async (req: AuthRequest, res) => {
       createdByName: created.created_by_name ?? undefined,
     });
   } catch (error: any) {
-    console.error('Error creating notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to create notification rule' });
+    fail(res, error, error.message || 'Failed to create notification rule');
   }
 });
 
@@ -4141,8 +4048,7 @@ router.put('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) => {
       createdByName: updated.created_by_name ?? undefined,
     });
   } catch (error: any) {
-    console.error('Error updating notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to update notification rule' });
+    fail(res, error, error.message || 'Failed to update notification rule');
   }
 });
 
@@ -4165,8 +4071,7 @@ router.delete('/:id/notification-rules/:ruleId', async (req: AuthRequest, res) =
     if (error) throw error;
     res.json({ message: 'Notification rule deleted' });
   } catch (error: any) {
-    console.error('Error deleting notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+    fail(res, error, error.message || 'Failed to delete notification rule');
   }
 });
 
@@ -4188,8 +4093,7 @@ router.post('/:id/validate-notification-rule', async (req: AuthRequest, res) => 
     const result = await validateNotificationTriggerCode(code);
     res.json(result);
   } catch (error: any) {
-    console.error('Validate notification rule error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4256,8 +4160,7 @@ router.post('/:id/test-notification-rule', async (req: AuthRequest, res) => {
     }
     res.json({ results });
   } catch (error: any) {
-    console.error('Test notification rule error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4300,8 +4203,7 @@ router.get('/:id/notification-history', async (req: AuthRequest, res) => {
     if (error) throw error;
     res.json({ deliveries: data || [], total: count || 0, page, perPage });
   } catch (error: any) {
-    console.error('Notification history error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4339,8 +4241,7 @@ router.post('/:id/notification-history/:deliveryId/retry', async (req: AuthReque
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Retry delivery error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4374,8 +4275,7 @@ router.get('/:id/notification-stats', async (req: AuthRequest, res) => {
       recent_failures: recentFailures.data || [],
     });
   } catch (error: any) {
-    console.error('Notification stats error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4399,7 +4299,7 @@ router.get('/:id/notification-rules/:ruleId/history', async (req: AuthRequest, r
     if (error) throw error;
     res.json(data || []);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4437,7 +4337,7 @@ router.post('/:id/notification-rules/:ruleId/revert/:changeId', async (req: Auth
     if (error) throw error;
     res.json(updated);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4488,8 +4388,7 @@ router.post('/:id/pagerduty/connect', async (req: AuthRequest, res) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('PagerDuty connect error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4515,7 +4414,7 @@ router.patch('/:id/notification-rules/:ruleId/snooze', async (req: AuthRequest, 
     if (error) throw error;
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -4729,6 +4628,12 @@ When providing code, always provide the COMPLETE function body, not a partial di
     res.write(`data: ${JSON.stringify({ type: 'done', fullContent })}\n\n`);
     res.end();
   } catch (error: any) {
+    // SSE handler: fail() can't be used (it always res.json, which would break
+    // the mid-stream branch below). Capture the exception with a stack ourselves
+    // and flag it so the 5xx finish-net doesn't double-capture the !headersSent
+    // branch.
+    res.locals.sentryCaptured = true;
+    captureInfraError(error, 'route');
     console.error('Error in notification AI assist:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: error.message || 'Failed to generate notification trigger code' });
@@ -4855,8 +4760,7 @@ Return a JSON object with a single key "recommended_licenses" containing an arra
 
     res.json({ recommended_licenses: validRecommendations });
   } catch (error: any) {
-    console.error('Error recommending policies:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate recommendations' });
+    fail(res, error, error.message || 'Failed to generate recommendations');
   }
 });
 
@@ -5163,6 +5067,10 @@ or when the user explicitly asked for a code change:
     res.write(`data: ${JSON.stringify({ type: 'done', fullContent, usage })}\n\n`);
     res.end();
   } catch (error: any) {
+    // SSE handler: see the notification ai-assist catch above — capture with a
+    // stack + flag so the finish-net doesn't double-capture the !headersSent path.
+    res.locals.sentryCaptured = true;
+    captureInfraError(error, 'route');
     console.error('Error in policy AI assist:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: error.message || 'Failed to generate policy code' });
@@ -5235,8 +5143,7 @@ router.post('/:id/deprecations', async (req: AuthRequest, res) => {
     await invalidateAllProjectCachesInOrg(id, { depsOnly: true }).catch(() => {});
     res.json(data);
   } catch (error: any) {
-    console.error('Error creating deprecation:', error);
-    res.status(500).json({ error: error.message || 'Failed to create deprecation' });
+    fail(res, error, error.message || 'Failed to create deprecation');
   }
 });
 
@@ -5282,8 +5189,7 @@ router.delete('/:id/deprecations/:dependencyId', async (req: AuthRequest, res) =
     await invalidateAllProjectCachesInOrg(id, { depsOnly: true }).catch(() => {});
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Error removing deprecation:', error);
-    res.status(500).json({ error: error.message || 'Failed to remove deprecation' });
+    fail(res, error, error.message || 'Failed to remove deprecation');
   }
 });
 
@@ -5349,8 +5255,7 @@ router.post('/:id/teams/:teamId/deprecations', async (req: AuthRequest, res) => 
     await invalidateProjectCachesForTeam(id, teamId).catch(() => {});
     res.json(data);
   } catch (error: any) {
-    console.error('Error creating team deprecation:', error);
-    res.status(500).json({ error: error.message || 'Failed to create deprecation' });
+    fail(res, error, error.message || 'Failed to create deprecation');
   }
 });
 
@@ -5422,8 +5327,7 @@ router.delete('/:id/teams/:teamId/deprecations/:dependencyId', async (req: AuthR
     await invalidateProjectCachesForTeam(id, teamId).catch(() => {});
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Error removing team deprecation:', error);
-    res.status(500).json({ error: error.message || 'Failed to remove deprecation' });
+    fail(res, error, error.message || 'Failed to remove deprecation');
   }
 });
 
@@ -5455,8 +5359,7 @@ router.post('/:id/dismiss-get-started', authenticateUser, async (req: AuthReques
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Error dismissing get started:', error);
-    res.status(500).json({ error: error.message || 'Failed to dismiss get started' });
+    fail(res, error, error.message || 'Failed to dismiss get started');
   }
 });
 
@@ -5547,8 +5450,7 @@ router.get('/:id/teams/:teamId/connections', async (req: AuthRequest, res) => {
     const teamSpecific = (teamConns || []).map((c: any) => ({ ...c, source: 'team' }));
     res.json({ inherited, team: teamSpecific });
   } catch (error: any) {
-    console.error('Error fetching team connections:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch connections' });
+    fail(res, error, error.message || 'Failed to fetch connections');
   }
 });
 
@@ -5579,8 +5481,7 @@ router.delete('/:id/teams/:teamId/connections/:connectionId', async (req: AuthRe
 
     res.json({ success: true, message: 'Connection removed' });
   } catch (error: any) {
-    console.error('Error deleting team connection:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete connection' });
+    fail(res, error, error.message || 'Failed to delete connection');
   }
 });
 
@@ -5639,8 +5540,7 @@ router.post('/:id/teams/:teamId/pagerduty/connect', async (req: AuthRequest, res
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Team PagerDuty connect error:', error);
-    res.status(500).json({ error: error.message });
+    fail(res, error, error.message);
   }
 });
 
@@ -5695,8 +5595,7 @@ router.post('/:id/teams/:teamId/email-notifications', async (req: AuthRequest, r
 
     res.json({ success: true, id: data?.id });
   } catch (error: any) {
-    console.error('Add team email notification error:', error);
-    res.status(500).json({ error: error.message || 'Failed to add email' });
+    fail(res, error, error.message || 'Failed to add email');
   }
 });
 
@@ -5761,8 +5660,7 @@ router.post('/:id/teams/:teamId/custom-integrations', async (req: AuthRequest, r
 
     res.json({ success: true, id: data?.id, secret });
   } catch (error: any) {
-    console.error('Create team custom integration error:', error);
-    res.status(500).json({ error: error.message || 'Failed to create custom integration' });
+    fail(res, error, error.message || 'Failed to create custom integration');
   }
 });
 
@@ -5811,8 +5709,7 @@ router.get('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, res
 
     res.json(mapped);
   } catch (error: any) {
-    console.error('Error fetching team notification rules:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch notification rules' });
+    fail(res, error, error.message || 'Failed to fetch notification rules');
   }
 });
 
@@ -5887,8 +5784,7 @@ router.post('/:id/teams/:teamId/notification-rules', async (req: AuthRequest, re
       createdByName: created.created_by_name ?? undefined,
     });
   } catch (error: any) {
-    console.error('Error creating team notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to create notification rule' });
+    fail(res, error, error.message || 'Failed to create notification rule');
   }
 });
 
@@ -5951,8 +5847,7 @@ router.put('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthRequ
       createdByName: updated.created_by_name ?? undefined,
     });
   } catch (error: any) {
-    console.error('Error updating team notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to update notification rule' });
+    fail(res, error, error.message || 'Failed to update notification rule');
   }
 });
 
@@ -5975,8 +5870,7 @@ router.delete('/:id/teams/:teamId/notification-rules/:ruleId', async (req: AuthR
     if (error) throw error;
     res.json({ message: 'Notification rule deleted' });
   } catch (error: any) {
-    console.error('Error deleting team notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete notification rule' });
+    fail(res, error, error.message || 'Failed to delete notification rule');
   }
 });
 
@@ -6002,8 +5896,7 @@ router.patch('/:id/teams/:teamId/notification-rules/:ruleId/snooze', async (req:
     if (error) throw error;
     res.json(data);
   } catch (error: any) {
-    console.error('Error snoozing team notification rule:', error);
-    res.status(500).json({ error: error.message || 'Failed to snooze' });
+    fail(res, error, error.message || 'Failed to snooze');
   }
 });
 
@@ -6053,8 +5946,7 @@ router.get('/:id/ai-settings', async (req: AuthRequest, res) => {
     if (error) throw error;
     res.json(data ?? { epd_max_run_cost_usd: null, epd_budget_exceeded_behavior: null });
   } catch (error: any) {
-    console.error('Error fetching AI settings:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch AI settings' });
+    fail(res, error, error.message || 'Failed to fetch AI settings');
   }
 });
 
@@ -6136,8 +6028,7 @@ router.patch('/:id/ai-settings', async (req: AuthRequest, res) => {
 
     res.json(data);
   } catch (error: any) {
-    console.error('Error updating AI settings:', error);
-    res.status(500).json({ error: error.message || 'Failed to update AI settings' });
+    fail(res, error, error.message || 'Failed to update AI settings');
   }
 });
 
@@ -6159,8 +6050,7 @@ router.get('/:id/ai-usage', async (req: AuthRequest, res) => {
     const summary = await getAIUsageSummary(orgId, period);
     res.json(summary);
   } catch (error: any) {
-    console.error('Error fetching AI usage:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch AI usage' });
+    fail(res, error, error.message || 'Failed to fetch AI usage');
   }
 });
 
@@ -6179,8 +6069,7 @@ router.get('/:id/ai-usage/logs', async (req: AuthRequest, res) => {
     const result = await getAIUsageLogs(orgId, page, perPage);
     res.json(result);
   } catch (error: any) {
-    console.error('Error fetching AI usage logs:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch AI usage logs' });
+    fail(res, error, error.message || 'Failed to fetch AI usage logs');
   }
 });
 
@@ -6222,8 +6111,7 @@ router.get('/:id/ai-default-provider', async (req: AuthRequest, res) => {
     const model = (data?.default_model && getModelById(data.default_model)) ? data.default_model : DEFAULT_MODELS[provider];
     res.json({ provider, model });
   } catch (error: any) {
-    console.error('Error fetching default AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch default AI provider' });
+    fail(res, error, error.message || 'Failed to fetch default AI provider');
   }
 });
 
@@ -6253,8 +6141,7 @@ router.patch('/:id/ai-default-provider', async (req: AuthRequest, res) => {
     const { DEFAULT_MODELS } = await import('../lib/ai/models');
     res.json({ provider, model: DEFAULT_MODELS[provider as ValidAIProvider] });
   } catch (error: any) {
-    console.error('Error updating default AI provider:', error);
-    res.status(500).json({ error: error.message || 'Failed to update default AI provider' });
+    fail(res, error, error.message || 'Failed to update default AI provider');
   }
 });
 
@@ -6303,8 +6190,7 @@ router.get('/:id/ai-models', async (req: AuthRequest, res) => {
     }
     res.json(await resolveAIModelsForOrg(orgId));
   } catch (error: any) {
-    console.error('Error fetching AI models:', error);
-    res.status(500).json({ error: 'Failed to fetch AI models' });
+    fail(res, error, 'Failed to fetch AI models');
   }
 });
 
@@ -6355,8 +6241,7 @@ router.patch('/:id/ai-models', async (req: AuthRequest, res) => {
 
     res.json(await resolveAIModelsForOrg(orgId));
   } catch (error: any) {
-    console.error('Error updating AI models:', error);
-    res.status(500).json({ error: 'Failed to update AI models' });
+    fail(res, error, 'Failed to update AI models');
   }
 });
 
@@ -6398,8 +6283,7 @@ router.get('/:id/ai-usage/daily', async (req: AuthRequest, res) => {
 
     res.json({ days, points });
   } catch (error: any) {
-    console.error('Error fetching daily AI usage:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch daily AI usage' });
+    fail(res, error, error.message || 'Failed to fetch daily AI usage');
   }
 });
 
@@ -6439,8 +6323,7 @@ router.get('/:id/aegis-tools/breakdown', async (req: AuthRequest, res) => {
 
     res.json({ days, limit, tools });
   } catch (error: any) {
-    console.error('Error fetching Aegis tool breakdown:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch Aegis tool breakdown' });
+    fail(res, error, error.message || 'Failed to fetch Aegis tool breakdown');
   }
 });
 
@@ -6517,8 +6400,7 @@ router.get('/:id/webhook-deliveries', async (req: AuthRequest, res) => {
 
     res.json({ deliveries: deliveries || [], total: count || 0, page, per_page: perPage });
   } catch (error: any) {
-    console.error('Error fetching webhook deliveries:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch webhook deliveries' });
+    fail(res, error, error.message || 'Failed to fetch webhook deliveries');
   }
 });
 
@@ -6578,8 +6460,7 @@ router.get('/:id/webhook-deliveries/stats', async (req: AuthRequest, res) => {
       skipped: all.filter((d: any) => d.processing_status === 'skipped').length,
     });
   } catch (error: any) {
-    console.error('Error fetching webhook delivery stats:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch webhook delivery stats' });
+    fail(res, error, error.message || 'Failed to fetch webhook delivery stats');
   }
 });
 
@@ -6770,186 +6651,9 @@ router.get('/:id/stats', async (req: AuthRequest, res) => {
     await setCached(cacheKey, result, 60);
     res.json(result);
   } catch (error: any) {
-    console.error('Error fetching org stats:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch organization stats' });
+    fail(res, error, error.message || 'Failed to fetch organization stats');
   }
 });
-
-// ═══════════════════════════════════════════════════════════════════════
-// PHASE 13: BILLING ENDPOINTS
-// ═══════════════════════════════════════════════════════════════════════
-
-// GET /:id/billing/plan -- plan details (any member)
-router.get('/:id/billing/plan', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', orgId)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-
-    const { getUsageSummary } = require('../lib/plan-limits');
-    const summary = await getUsageSummary(orgId);
-
-    const { data: planRow } = await supabase
-      .from('organization_plans')
-      .select('billing_cycle, cancel_at_period_end, cancel_at, payment_method_brand, payment_method_last4, billing_email, subscription_status')
-      .eq('organization_id', orgId)
-      .single();
-
-    res.json({
-      ...summary,
-      billing_cycle: planRow?.billing_cycle || 'monthly',
-      cancel_at_period_end: planRow?.cancel_at_period_end || false,
-      cancel_at: planRow?.cancel_at || null,
-      payment_method_brand: planRow?.payment_method_brand || null,
-      payment_method_last4: planRow?.payment_method_last4 || null,
-      billing_email: planRow?.billing_email || null,
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch plan' });
-  }
-});
-
-// GET /:id/billing/usage -- usage vs limits (manage_billing)
-router.get('/:id/billing/usage', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { getUsageSummary } = require('../lib/plan-limits');
-    const summary = await getUsageSummary(orgId);
-    res.json(summary);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch usage' });
-  }
-});
-
-// POST /:id/billing/checkout -- create Stripe Checkout session (manage_billing)
-router.post('/:id/billing/checkout', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { priceId, billingEmail } = req.body;
-    if (!priceId) return res.status(400).json({ error: 'priceId is required' });
-
-    // If downgrading, check usage fits target tier
-    const { checkDowngradeAllowed } = require('../lib/plan-limits');
-    const { tierFromPriceId: _tierCheck } = require('../lib/stripe');
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const successUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=success`;
-    const cancelUrl = `${frontendUrl}/organizations/${orgId}/settings/plan?billing=cancelled`;
-
-    const { createCheckoutSession } = require('../lib/stripe');
-    const url = await createCheckoutSession(orgId, priceId, successUrl, cancelUrl, billingEmail);
-
-    if (!url) return res.status(500).json({ error: 'Failed to create checkout session' });
-    res.json({ url });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create checkout session' });
-  }
-});
-
-// POST /:id/billing/portal -- create Stripe Customer Portal session (manage_billing)
-router.post('/:id/billing/portal', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const returnUrl = `${frontendUrl}/organizations/${orgId}/settings/plan`;
-
-    const { createPortalSession } = require('../lib/stripe');
-    const url = await createPortalSession(orgId, returnUrl);
-    res.json({ url });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create portal session' });
-  }
-});
-
-// GET /:id/billing/invoices -- paginated invoice list (manage_billing)
-router.get('/:id/billing/invoices', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
-    const startingAfter = req.query.starting_after as string | undefined;
-
-    const { getInvoices } = require('../lib/stripe');
-    const result = await getInvoices(orgId, limit, startingAfter);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch invoices' });
-  }
-});
-
-// POST /:id/billing/check-downgrade -- check if downgrade is possible (manage_billing)
-router.post('/:id/billing/check-downgrade', async (req: AuthRequest, res) => {
-  try {
-    const orgId = req.params.id;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const hasAccess = await checkBillingPermission(orgId, userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Insufficient permissions' });
-
-    const { targetTier } = req.body;
-    if (!targetTier) return res.status(400).json({ error: 'targetTier is required' });
-
-    const { checkDowngradeAllowed } = require('../lib/plan-limits');
-    const result = await checkDowngradeAllowed(orgId, targetTier);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to check downgrade' });
-  }
-});
-
-async function checkBillingPermission(orgId: string, userId: string): Promise<boolean> {
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', orgId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
-
-  const { data: role } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', orgId)
-    .eq('name', membership.role)
-    .single();
-
-  return role?.permissions?.manage_billing === true;
-}
 
 async function checkSecurityPermission(orgId: string, userId: string): Promise<boolean> {
   const { data: membership } = await supabase
@@ -7015,7 +6719,7 @@ router.get('/:id/security/audit-log', async (req: AuthRequest, res) => {
 
     res.json({ logs: logs || [], total: count || 0, page, limit });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch audit logs' });
+    fail(res, error, error.message || 'Failed to fetch audit logs');
   }
 });
 
@@ -7064,7 +6768,7 @@ router.get('/:id/security/audit-log/export', async (req: AuthRequest, res) => {
     res.set('Content-Disposition', `attachment; filename="audit-log-${orgId}-${new Date().toISOString().split('T')[0]}.csv"`);
     res.send(header + csvRows.join('\n'));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to export audit logs' });
+    fail(res, error, error.message || 'Failed to export audit logs');
   }
 });
 
@@ -7131,7 +6835,7 @@ router.get('/:id/security/mfa-status', async (req: AuthRequest, res) => {
       },
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch MFA status' });
+    fail(res, error, error.message || 'Failed to fetch MFA status');
   }
 });
 
@@ -7175,7 +6879,7 @@ router.patch('/:id/security/mfa-enforcement', async (req: AuthRequest, res) => {
 
     res.json({ success: true, ...updates });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update MFA enforcement' });
+    fail(res, error, error.message || 'Failed to update MFA enforcement');
   }
 });
 
@@ -7222,7 +6926,7 @@ router.post('/:id/security/mfa-exemptions', async (req: AuthRequest, res) => {
 
     res.status(201).json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create exemption' });
+    fail(res, error, error.message || 'Failed to create exemption');
   }
 });
 
@@ -7255,7 +6959,7 @@ router.delete('/:id/security/mfa-exemptions/:userId', async (req: AuthRequest, r
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to remove exemption' });
+    fail(res, error, error.message || 'Failed to remove exemption');
   }
 });
 
@@ -7294,7 +6998,7 @@ router.post('/:id/security/force-logout/:targetUserId', async (req: AuthRequest,
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to force logout' });
+    fail(res, error, error.message || 'Failed to force logout');
   }
 });
 
@@ -7317,7 +7021,7 @@ router.get('/:id/security/sso', async (req: AuthRequest, res) => {
 
     res.json({ sso: sso || null });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch SSO config' });
+    fail(res, error, error.message || 'Failed to fetch SSO config');
   }
 });
 
@@ -7380,7 +7084,7 @@ router.post('/:id/security/sso', async (req: AuthRequest, res) => {
       domain_verification_record: `deptex-domain-verify=${verificationToken}`,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create SSO config' });
+    fail(res, error, error.message || 'Failed to create SSO config');
   }
 });
 
@@ -7420,7 +7124,7 @@ router.put('/:id/security/sso', async (req: AuthRequest, res) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to update SSO config' });
+    fail(res, error, error.message || 'Failed to update SSO config');
   }
 });
 
@@ -7451,7 +7155,7 @@ router.delete('/:id/security/sso', async (req: AuthRequest, res) => {
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to remove SSO config' });
+    fail(res, error, error.message || 'Failed to remove SSO config');
   }
 });
 
@@ -7493,7 +7197,7 @@ router.post('/:id/security/sso/verify-domain', async (req: AuthRequest, res) => 
 
     res.json({ verified, domain: sso.domain });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to verify domain' });
+    fail(res, error, error.message || 'Failed to verify domain');
   }
 });
 
@@ -7523,7 +7227,7 @@ router.post('/:id/security/sso/test', async (req: AuthRequest, res) => {
       res.json({ success: false, error: err.message });
     }
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to test SSO' });
+    fail(res, error, error.message || 'Failed to test SSO');
   }
 });
 
@@ -7554,7 +7258,7 @@ router.post('/:id/security/sso/bypass-token', async (req: AuthRequest, res) => {
 
     res.status(201).json({ token: raw, expires_at: expiresAt });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create bypass token' });
+    fail(res, error, error.message || 'Failed to create bypass token');
   }
 });
 
@@ -7576,7 +7280,7 @@ router.get('/:id/security/sso/bypass-tokens', async (req: AuthRequest, res) => {
 
     res.json({ tokens: tokens || [] });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch bypass tokens' });
+    fail(res, error, error.message || 'Failed to fetch bypass tokens');
   }
 });
 
@@ -7608,7 +7312,7 @@ router.get('/:id/security/ip-allowlist', async (req: AuthRequest, res) => {
       entries: entries || [],
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch IP allowlist' });
+    fail(res, error, error.message || 'Failed to fetch IP allowlist');
   }
 });
 
@@ -7658,7 +7362,7 @@ router.post('/:id/security/ip-allowlist', async (req: AuthRequest, res) => {
 
     res.status(201).json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to add IP entry' });
+    fail(res, error, error.message || 'Failed to add IP entry');
   }
 });
 
@@ -7698,7 +7402,7 @@ router.delete('/:id/security/ip-allowlist/:entryId', async (req: AuthRequest, re
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to remove IP entry' });
+    fail(res, error, error.message || 'Failed to remove IP entry');
   }
 });
 
@@ -7749,7 +7453,7 @@ router.patch('/:id/security/ip-allowlist-enabled', async (req: AuthRequest, res)
 
     res.json({ success: true, enabled });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to toggle IP allowlist' });
+    fail(res, error, error.message || 'Failed to toggle IP allowlist');
   }
 });
 
@@ -7773,7 +7477,7 @@ router.get('/:id/security/api-tokens', async (req: AuthRequest, res) => {
 
     res.json({ tokens: tokens || [] });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch tokens' });
+    fail(res, error, error.message || 'Failed to fetch tokens');
   }
 });
 
@@ -7815,7 +7519,7 @@ router.delete('/:id/security/api-tokens/:tokenId', async (req: AuthRequest, res)
 
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to revoke token' });
+    fail(res, error, error.message || 'Failed to revoke token');
   }
 });
 
@@ -7843,7 +7547,7 @@ router.get('/:id/security/scim', async (req: AuthRequest, res) => {
       endpoint_url: `${baseUrl}/api/scim/v2`,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to fetch SCIM config' });
+    fail(res, error, error.message || 'Failed to fetch SCIM config');
   }
 });
 
@@ -7881,7 +7585,7 @@ router.post('/:id/security/scim', async (req: AuthRequest, res) => {
       endpoint_url: `${baseUrl}/api/scim/v2`,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to create SCIM config' });
+    fail(res, error, error.message || 'Failed to create SCIM config');
   }
 });
 
