@@ -29,14 +29,14 @@ describe('parseCheckovOutput', () => {
     expect(findings[0].severity).toBe('HIGH');
   });
 
-  it('defaults a severity-less community check (CKV_K8S_*) to MEDIUM, not null', () => {
+  it('defaults a severity-less hardening-nit check (CKV_K8S_*) to MEDIUM, not null', () => {
     const sample = JSON.stringify({
       check_type: 'kubernetes',
       results: {
         failed_checks: [
           {
-            check_id: 'CKV_K8S_16',
-            check_name: 'Container should not be privileged',
+            check_id: 'CKV_K8S_8', // liveness probe — a hardening nit, not high-impact
+            check_name: 'Liveness Probe Should be Configured',
             resource: 'Deployment.default.web',
             resource_address: 'Deployment.default.web',
             file_path: '/k8s.yaml',
@@ -49,6 +49,28 @@ describe('parseCheckovOutput', () => {
     const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
     expect(findings).toHaveLength(1);
     expect(findings[0].severity).toBe('MEDIUM');
+  });
+
+  it('promotes a security-critical severity-less rule (privileged container) to HIGH', () => {
+    const sample = JSON.stringify({
+      check_type: 'kubernetes',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_K8S_16', // container running as privileged
+            check_name: 'Container should not be privileged',
+            resource: 'Deployment.default.web',
+            resource_address: 'Deployment.default.web',
+            file_path: '/k8s.yaml',
+            file_line_range: [10, 14],
+            // no `severity` — community check, but this one is high-impact
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('HIGH');
   });
 
   it('parses an array-of-reports response (multi-framework run)', () => {
