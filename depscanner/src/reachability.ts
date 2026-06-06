@@ -905,6 +905,19 @@ export async function updateReachabilityLevels(
       }
     }
 
+    // Precision / noise reduction: a PDV earns `data_flow` only from flows that
+    // are about IT — an un-attributed flow (osv_id null: atom or a
+    // framework-generic engine flow, i.e. "the dep is reachable, CVE unknown")
+    // or one of its own CVE ids — NOT from a sibling CVE's flow on the same
+    // dependency. Without this, one confirmed CVE (e.g. lodash `_.template` →
+    // CVE-2021-23337) inflates every OTHER lodash CVE to `data_flow`, even
+    // though their vulnerable function (`_.trim`, `_.toNumber`, …) is never
+    // reached — pure noise. Own-CVE flows that land here rather than in
+    // `taintMatches` are suppressed / drift-demoted, still legitimate data-flow
+    // evidence for this CVE, so they stay eligible.
+    const ownOsvIds = new Set(candidateOsvIds);
+    const dataFlowFlows = matchingFlows.filter((f) => !f.osv_id || ownOsvIds.has(f.osv_id));
+
     let level: string = 'module';
     let details: any = null;
 
@@ -928,13 +941,13 @@ export async function updateReachabilityLevels(
         entry_points: taintMatches.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
         sink_methods: [...new Set(taintMatches.map((f) => f.sink_method).filter((x): x is string => !!x))],
       };
-    } else if (matchingFlows.length > 0) {
+    } else if (dataFlowFlows.length > 0) {
       level = 'data_flow';
       details = {
-        flow_count: matchingFlows.length,
-        entry_points: matchingFlows.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
-        sink_methods: [...new Set(matchingFlows.map((f) => f.sink_method).filter((x): x is string => !!x))],
-        tags: [...new Set(matchingFlows.map((f) => f.entry_point_tag).filter((x): x is string => !!x))],
+        flow_count: dataFlowFlows.length,
+        entry_points: dataFlowFlows.map((f) => `${f.entry_point_file}:${f.entry_point_line}`),
+        sink_methods: [...new Set(dataFlowFlows.map((f) => f.sink_method).filter((x): x is string => !!x))],
+        tags: [...new Set(dataFlowFlows.map((f) => f.entry_point_tag).filter((x): x is string => !!x))],
       };
     } else {
       // Dependency scope out-ranks the usage heuristic: a dev/test/build-scope

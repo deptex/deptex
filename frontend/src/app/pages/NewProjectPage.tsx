@@ -995,7 +995,7 @@ export default function NewProjectPage() {
               }
             >
               {creating ? (
-                <><Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />Create</>
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 'Create'
               )}

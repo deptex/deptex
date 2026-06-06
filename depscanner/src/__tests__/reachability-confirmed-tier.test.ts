@@ -347,6 +347,71 @@ describe('updateReachabilityLevels — Phase 6.5 confirmed-tier semantics', () =
     expect(update?.values.reachability_level).toBe('confirmed');
   });
 
+  it('does NOT inherit data_flow from a sibling CVE\'s flow (noise reduction)', async () => {
+    // lodash has CVE-2021-23337 (the `_.template` flow exists) and a sibling
+    // ReDoS CVE whose function (`_.trim`/`_.toNumber`) is never reached. The
+    // sibling must NOT borrow the template flow's reachability — it falls
+    // through to the heuristic ladder (module here; no usage slices) instead of
+    // being inflated to data_flow.
+    const SIBLING_PDV = 'pdv-sibling';
+    const SIBLING_CVE = 'CVE-2020-28500';
+    const fs = new FakeStorage();
+    fs.set('project_dependency_vulnerabilities', [
+      { id: PDV_ID, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: CVE },
+      { id: SIBLING_PDV, project_dependency_id: PD_ID, project_id: PROJECT_ID, extraction_run_id: RUN_ID, osv_id: SIBLING_CVE },
+    ]);
+    fs.set('project_dependencies', [
+      { id: PD_ID, project_id: PROJECT_ID, last_seen_extraction_run_id: RUN_ID, dependency_id: DEP_ID, is_direct: true, files_importing_count: 1 },
+    ]);
+    fs.set('project_usage_slices', []);
+    fs.set('project_reachable_flows', [
+      {
+        project_id: PROJECT_ID, extraction_run_id: RUN_ID, dependency_id: DEP_ID,
+        reachability_source: 'taint_engine', osv_id: CVE, rule_id: null,
+        flow_signature_hash: 'e'.repeat(64), entry_point_file: 'routes/api.js',
+        entry_point_line: 9, entry_point_tag: null, sink_method: '_.template',
+      },
+    ]);
+    fs.set('project_reachable_flow_suppressions', []);
+
+    await updateReachabilityLevels(
+      PROJECT_ID, RUN_ID, fs as unknown as Storage, log as any, undefined,
+      { validOsvIds: new Set([CVE]), organizationId: ORG_ID },
+    );
+
+    const own = fs.updates.find((u) => u.filter.id === PDV_ID);
+    const sibling = fs.updates.find((u) => u.filter.id === SIBLING_PDV);
+    expect(own?.values.reachability_level).toBe('confirmed');
+    expect(sibling?.values.reachability_level).not.toBe('data_flow');
+    expect(sibling?.values.reachability_level).not.toBe('confirmed');
+  });
+
+  it('an un-attributed flow (osv_id null) still grants data_flow to every CVE on the dep', async () => {
+    // Atom / framework-generic flows carry no osv_id — they mean "this dep is
+    // wired into the call graph, CVE unknown". They must still grant data_flow
+    // to the dep's CVEs (the tightening only excludes OTHER CVEs' attributed
+    // flows).
+    const fs = new FakeStorage();
+    seedBasePdv(fs);
+    fs.set('project_reachable_flows', [
+      {
+        project_id: PROJECT_ID, extraction_run_id: RUN_ID, dependency_id: DEP_ID,
+        reachability_source: 'atom', osv_id: null, rule_id: null,
+        flow_signature_hash: null, entry_point_file: 'routes/api.js',
+        entry_point_line: 9, entry_point_tag: null, sink_method: 'lodash.something',
+      },
+    ]);
+    fs.set('project_reachable_flow_suppressions', []);
+
+    await updateReachabilityLevels(
+      PROJECT_ID, RUN_ID, fs as unknown as Storage, log as any, undefined,
+      { validOsvIds: new Set([CVE]), organizationId: ORG_ID },
+    );
+
+    const update = fs.updates.find((u) => u.filter.id === PDV_ID);
+    expect(update?.values.reachability_level).toBe('data_flow');
+  });
+
   it('promotes a GHSA-primary PDV via its CVE alias matching a CVE-keyed flow', async () => {
     // Real-repo confirmed-tier bug: CVE-targeted specs (and the taint engine)
     // key on the CVE id, but a PDV's primary osv_id is often a GHSA advisory.

@@ -29,6 +29,25 @@ export interface GuardDogRule {
   evidence: { file_path: string; lines: [number, number]; snippet: string }[];
 }
 
+/**
+ * GuardDog source heuristics that are too low-precision to stand alone as a
+ * "this package is malicious" finding. `api-obfuscation` fires on any dynamic
+ * / minified API access (dynamic `require`, bracket access on `process`,
+ * etc.), which the vast majority of legitimate packages contain — it flagged
+ * `express@4.18.2` and `on-finished@2.4.1`, two of the most-vetted packages on
+ * npm. Real malware that obfuscates also trips higher-signal rules
+ * (exfiltration, install hooks, outbound network) which we keep, so dropping
+ * these standalone heuristic flags loses no real detection while killing a
+ * large source of false positives. Matched by rule-id suffix so it covers
+ * every ecosystem prefix (npm-/pypi-/go-/…).
+ */
+export const GUARDDOG_LOW_PRECISION_RULE_SUFFIXES = ['api-obfuscation'] as const;
+
+export function isLowPrecisionGuardDogRule(ruleId: string): boolean {
+  const id = (ruleId ?? '').toLowerCase();
+  return GUARDDOG_LOW_PRECISION_RULE_SUFFIXES.some((s) => id.endsWith(s));
+}
+
 export function isGuardDogAvailable(): boolean {
   try {
     if (!fs.existsSync(GUARDDOG_BIN)) return false;

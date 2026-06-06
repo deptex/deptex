@@ -12,6 +12,8 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
+import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { runIaCAndContainerScans, type ScannerSummary } from '../scanners/orchestrator';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -21,7 +23,7 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
   let scannerSummary: ScannerSummary | null = null;
   const scannerSummaryResult = await runStage<ScannerSummary | null>({
     name: 'iac_container_scan',
-    severity: 'warn',
+    severity: 'error',
     omitDuration: true,
     supabase,
     jobId: job.jobId,
@@ -29,8 +31,11 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
     log,
     onError: async ({ err }) => {
       // Top-level orchestrator failure (shouldn't happen — orchestrator
-      // catches per-scanner failures internally — but defensive).
-      await log.warn('iac_scan', `IaC + container scan failed: ${(err as Error)?.message ?? err}`);
+      // catches per-scanner failures internally — but defensive). severity:
+      // 'error' → rethrow; the pipeline outer catch sets the error state.
+      const msg = `IaC + container scan failed: ${(err as Error)?.message ?? err}`;
+      await log.error('iac_scan', msg);
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       // Resolve the org's GitHub App installation id once (used by ghcr.io
@@ -67,5 +72,26 @@ export async function doIaCContainer(ctx: PipelineContext): Promise<ScannerSumma
     },
   });
   if (scannerSummaryResult !== undefined) scannerSummary = scannerSummaryResult;
+
+  // A scanner that was supposed to run (infra detected, not disabled by env /
+  // killswitch) but failed → the IaC/container picture is incomplete. Keyed off
+  // the structured failedScanners list, NOT warning-string matching, so a
+  // deliberately-disabled scanner never false-positives. Hard-fail the scan.
+  if (scannerSummary && scannerSummary.failedScanners.length > 0) {
+    const detail = `IaC / container scanner(s) failed: ${scannerSummary.failedScanners.join(', ')}`;
+    await log.error('iac_scan', detail);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
+        step: 'iac_container_scan',
+        code: 'iac_failed',
+        message: detail,
+        severity: 'error',
+      });
+    }
+    throw new ScanFailedError(detail);
+  }
+
   return scannerSummary;
 }

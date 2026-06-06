@@ -235,6 +235,30 @@ export function parseSbom(sbom: CycloneDxSbom): {
   return { dependencies, relationships, rawComponentCount, droppedVersionlessCount, directSetTrusted };
 }
 
+/**
+ * Whether an npm package.json declares at least one dependency (any of the four
+ * dependency blocks). Used by the SBOM step to decide whether an empty SBOM is a
+ * hard failure: npm is the one ecosystem where a single unresolvable/unpublished
+ * dependency aborts the whole `npm install` and — with no committed lockfile for
+ * cdxgen to read statically — zeroes the SBOM. If the manifest declared deps we
+ * couldn't resolve, that's a failed scan; if it declared none, it's a
+ * legitimately zero-dependency project and not an error.
+ */
+export function npmManifestDeclaresDependencies(workspaceRoot: string): boolean {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      const block = pkg[field];
+      if (block && typeof block === 'object' && Object.keys(block as object).length > 0) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function extractLicense(licenses: unknown): string | null {
   if (!licenses) return null;
   if (typeof licenses === 'string') return licenses;

@@ -12,6 +12,7 @@
  */
 
 import { runStage } from '../pipeline-stage-runner';
+import { ScanFailedError } from '../scan-errors';
 import type { SupportedEcosystem } from '../tree-sitter-extractor';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -31,13 +32,17 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
 
   await runStage({
     name: 'malicious_scan',
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
-      await log.warn('malicious_scan', `Malicious-package scan failed: ${(err as Error)?.message ?? err}`);
+      const msg = `Malicious-package scan failed: ${(err as Error)?.message ?? err}`;
+      await log.error('malicious_scan', msg);
+      // severity: 'error' → runStage rethrows; the pipeline outer catch sets
+      // the project to error state with this message.
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const { data: pdRows, error: pdErr } = await supabase
@@ -165,14 +170,28 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
         }
       }
 
-      // Persist scan_status onto scan_jobs for the soft-fail UI banner.
+      // Persist scan_status onto scan_jobs for the malicious-specific
+      // "Partial coverage" banner.
       if (job.jobId) {
         try {
           await supabase
             .from('scan_jobs')
             .update({ malicious_scan_status: result.status })
             .eq('id', job.jobId);
-        } catch { /* column landed in malicious_packages_scan_status.sql */ }
+        } catch (e) {
+          // Non-fatal: the status column only drives the malicious "Partial
+          // coverage" banner. A transient write miss shouldn't fail an
+          // otherwise-successful scan.
+          await log.warn('malicious_scan', `malicious_scan_status write failed (non-fatal): ${(e as Error)?.message ?? e}`);
+        }
+      }
+
+      // Hard-fail only when the scan genuinely FAILED (a crash, e.g. GuardDog
+      // missing or erroring). 'partial' is a routine outcome (an ecosystem
+      // GuardDog only partly supports) and keeps its own dedicated "Partial
+      // coverage" banner — it does NOT fail the scan.
+      if (result.status === 'failed') {
+        throw new Error('Malicious-package scanner did not complete');
       }
     },
   });

@@ -15,6 +15,8 @@ type Props = {
 export function ProjectStatusBadge({ project, className }: Props) {
   const { label, inProgress, isError, statusColor } = projectStatusLabel(project);
 
+  // In-progress and error states are exclusive — never pair them with the
+  // degraded chip (a running/failed scan isn't a trustworthy-but-partial one).
   if (inProgress) {
     return (
       <span
@@ -47,9 +49,11 @@ export function ProjectStatusBadge({ project, className }: Props) {
     );
   }
 
+  // Terminal states (custom status / compliance).
+  let primaryBadge: JSX.Element;
   if (project.status_name) {
     if (statusColor) {
-      return (
+      primaryBadge = (
         <span
           className={cn('inline-flex px-2 py-0.5 rounded text-xs font-medium border shrink-0', className)}
           style={{
@@ -61,21 +65,20 @@ export function ProjectStatusBadge({ project, className }: Props) {
           {label}
         </span>
       );
+    } else {
+      primaryBadge = (
+        <span
+          className={cn(
+            'inline-flex px-2 py-0.5 rounded text-xs font-medium border bg-transparent text-foreground-secondary border-foreground/20 shrink-0',
+            className
+          )}
+        >
+          {label}
+        </span>
+      );
     }
-    return (
-      <span
-        className={cn(
-          'inline-flex px-2 py-0.5 rounded text-xs font-medium border bg-transparent text-foreground-secondary border-foreground/20 shrink-0',
-          className
-        )}
-      >
-        {label}
-      </span>
-    );
-  }
-
-  if (label === 'COMPLIANT') {
-    return (
+  } else if (label === 'COMPLIANT') {
+    primaryBadge = (
       <span
         className={cn(
           'inline-flex px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40 shrink-0',
@@ -85,16 +88,18 @@ export function ProjectStatusBadge({ project, className }: Props) {
         COMPLIANT
       </span>
     );
+  } else {
+    primaryBadge = (
+      <span
+        className={cn(
+          'inline-flex px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 shrink-0',
+          className
+        )}
+      >
+        NOT COMPLIANT
+      </span>
+    );
   }
 
-  return (
-    <span
-      className={cn(
-        'inline-flex px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 shrink-0',
-        className
-      )}
-    >
-      NOT COMPLIANT
-    </span>
-  );
+  return primaryBadge;
 }

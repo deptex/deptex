@@ -279,6 +279,13 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
 
         const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
         if (sinkMatch) {
+          // When several CVEs share one vulnerable surface (e.g. lodash
+          // `_.template` is the sink for BOTH CVE-2021-23337 and CVE-2026-4800),
+          // emit one flow per CVE so the reachability classifier can promote
+          // every affected PDV to `confirmed` — not just the first-listed CVE.
+          // Single-CVE and framework-generic sinks return `[sinkMatch]`, so the
+          // common path is unchanged.
+          const sinkVariants = matchSinkVariants(step.callee.calleeText, specs, language, sinkMatch);
           // Indices to check for taint at this call site.
           // - empty spec argument_indices → check every position (existing behaviour)
           // - non-empty + no kwargs → check the spec-declared positions only
@@ -310,12 +317,14 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             if (!trace) continue;
             seenArgs.add(argName);
             anyHit = true;
-            const hit: SinkHit = {
-              sink: sinkMatch,
-              trace: extendPath(trace, hopFromStep(step, 'sink'), maxPathLength),
-              hit_node: hopFromStep(step, 'sink'),
-            };
-            state.sinkHits.push(hit);
+            // The source→sink trace + hit node are identical across CVE
+            // variants (same physical call site); only the sink row (osv_id +
+            // description) differs. Compute once, then fan out one hit per CVE.
+            const sinkHopNode = hopFromStep(step, 'sink');
+            const sinkTrace = extendPath(trace, sinkHopNode, maxPathLength);
+            for (const variant of sinkVariants) {
+              state.sinkHits.push({ sink: variant, trace: sinkTrace, hit_node: sinkHopNode });
+            }
           }
           if (!anyHit) {
             // Spec sink matched the callee but none of the checked arg
@@ -565,6 +574,46 @@ function matchSinkPattern(
   return null;
 }
 
+/**
+ * Every CVE that fires on `calleeText` for the same vulnerable surface as
+ * `firstMatch`, deduped by osv_id. The taint engine matches a call site to one
+ * sink (`matchSinkPattern` returns the first hit), but a single surface is
+ * often shared by several CVEs — e.g. lodash `_.template` is the sink for both
+ * CVE-2021-23337 and CVE-2026-4800. Without this fan-out only the first-listed
+ * CVE's PDV promotes to `confirmed`; siblings drop to `data_flow`. We emit one
+ * flow per CVE so the classifier can promote each one.
+ *
+ * Scope: only fans out when `firstMatch` itself carries an osv_id (i.e. a
+ * CVE-targeted sink). Framework-generic matches return `[firstMatch]`, leaving
+ * the common path byte-for-byte unchanged. Sibling sinks are gathered only when
+ * they (a) match the same callee, (b) share `firstMatch`'s vuln_class — so a
+ * different vulnerability class on the same callee never borrows its osv_id —
+ * and (c) carry a distinct osv_id.
+ */
+function matchSinkVariants(
+  calleeText: string,
+  specs: FrameworkSpec[],
+  language: MatcherLanguage | undefined,
+  firstMatch: FrameworkSink,
+): FrameworkSink[] {
+  if (!firstMatch.osv_id) return [firstMatch];
+  const variants: FrameworkSink[] = [];
+  const seenOsv = new Set<string>();
+  for (const spec of specs) {
+    for (const sink of spec.sinks) {
+      if (!sink.osv_id) continue;
+      if (sink.vuln_class !== firstMatch.vuln_class) continue;
+      if (!matchesCallPattern(sink.pattern, calleeText, language)) continue;
+      if (seenOsv.has(sink.osv_id)) continue;
+      seenOsv.add(sink.osv_id);
+      variants.push(sink);
+    }
+  }
+  // `firstMatch` is always among the variants (it matched the callee, has an
+  // osv_id, and shares its own vuln_class), so this is never empty.
+  return variants;
+}
+
 function matchSanitizerPattern(
   calleeText: string,
   specs: FrameworkSpec[],
@@ -686,8 +735,13 @@ function sinkHitToFlow(hit: SinkHit, sinkContainingFunc: FunctionNode, maxPathLe
   // Include the sink pattern + column so two distinct sinks that fire on the
   // same source line (and hence the same source/sink file:line coords) don't
   // collapse to one flow id in aggregateFlows's `seen` set — that silently
-  // dropped the second flow.
-  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}:${sinkNode.column ?? 0}|${flowNodes.length}|${hit.sink.vuln_class}|${hit.sink.pattern}`);
+  // dropped the second flow. The osv_id segment further disambiguates flows
+  // that share one vulnerable surface across multiple CVEs (e.g. lodash
+  // `_.template` → CVE-2021-23337 + CVE-2026-4800): same pattern, distinct
+  // CVE, one flow each. Appended only when present so framework-generic flow
+  // ids stay byte-stable.
+  const osvSeg = hit.sink.osv_id ? `|${hit.sink.osv_id}` : '';
+  idHash.update(`${path0.filePath}:${path0.line}|${sinkNode.filePath}:${sinkNode.line}:${sinkNode.column ?? 0}|${flowNodes.length}|${hit.sink.vuln_class}|${hit.sink.pattern}${osvSeg}`);
 
   return {
     id: idHash.digest('hex').slice(0, 16),

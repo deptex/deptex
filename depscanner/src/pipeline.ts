@@ -194,6 +194,9 @@ export async function runPipeline(
 
     return { finalizeSummary };
   } catch (error: any) {
+    // Any step that throws (a failed scanner, unresolvable dependencies, a
+    // crashed binary) lands here → the project goes to 'error' state with the
+    // thrown message, surfaced on the card as 'Failed'.
     await setError(supabase, ctx.projectId, error.message);
     throw error;
   } finally {

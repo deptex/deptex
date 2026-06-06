@@ -24,7 +24,7 @@ import * as crypto from 'crypto';
 import type { Storage } from './storage';
 import { canonicalizeEcosystem } from './malicious/ecosystem';
 import { lookupFeed } from './malicious/feeds';
-import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, type GuardDogRule } from './malicious/guarddog';
+import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, isLowPrecisionGuardDogRule, type GuardDogRule } from './malicious/guarddog';
 import { TarballCache } from './malicious/tarball-cache';
 import pLimit from 'p-limit';
 
@@ -147,6 +147,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   let failed = 0;
   let feedHits = 0;
   let guarddogHits = 0;
+  let guarddogSuppressed = 0;
   const lastHeartbeat = { at: Date.now() };
 
   const limit = pLimit(MALICIOUS_SCAN_CONCURRENCY);
@@ -262,6 +263,14 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
 
         if (guarddogAvailable) {
           for (const rule of rules) {
+            // Drop low-precision GuardDog source heuristics (e.g.
+            // api-obfuscation) that flag well-vetted packages — express,
+            // on-finished — as "malicious". Real malware trips higher-signal
+            // rules (exfiltration / install hooks / network) which we keep.
+            if (isLowPrecisionGuardDogRule(rule.rule_id)) {
+              guarddogSuppressed++;
+              continue;
+            }
             guarddogHits++;
             pending.push(
               attachReachability(
@@ -349,7 +358,9 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
 
   await ctx.log.success(
     STEP,
-    `${scanned}/${ctx.packages.length} scanned, ${feedHits} feed + ${guarddogHits} GuardDog hits, ${inserted} new findings (${status})`,
+    `${scanned}/${ctx.packages.length} scanned, ${feedHits} feed + ${guarddogHits} GuardDog hits` +
+      (guarddogSuppressed > 0 ? ` (${guarddogSuppressed} low-precision suppressed)` : '') +
+      `, ${inserted} new findings (${status})`,
     Date.now() - start,
   );
 

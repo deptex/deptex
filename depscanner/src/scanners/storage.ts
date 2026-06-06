@@ -6,6 +6,29 @@ import type { ContainerFinding, IaCFinding } from './types';
 const BATCH_SIZE = 100;
 
 /**
+ * Drop rows that collide on the same Postgres ON CONFLICT target within one
+ * upsert statement. Postgres rejects an `INSERT ... ON CONFLICT DO UPDATE` that
+ * would touch the same conflict row twice in a single command ("cannot affect
+ * row a second time"), which aborts the entire batch — losing every finding for
+ * the run. Both Checkov/Trivy (IaC) and Trivy image scans can legitimately emit
+ * the same conflict-key tuple more than once (multiple layers, manifest-list
+ * arches, a rule firing twice at one location), so collapse to the conflict key
+ * before upserting. Keeps the LAST occurrence so the freshest copy wins — the
+ * same approach trufflehog.ts already uses for secret findings.
+ */
+function dedupeOnConflictKey<T>(rows: T[], keyOf: (r: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const k = keyOf(rows[i]);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(rows[i]);
+  }
+  return out.reverse();
+}
+
+/**
  * Multiplier applied to a container finding's severity-based depscore when the
  * reachability classifier proved the OS package is NOT loaded by the image's
  * entrypoint. `module` and unclassified (`null`) findings keep the full
@@ -152,9 +175,16 @@ export async function upsertIaCFindings(
     metadata: f.metadata,
   }));
 
+  // Collapse to the idx_pcf_unique conflict key. start_line_key is
+  // GENERATED AS COALESCE(start_line, -1), so mirror that here.
+  const deduped = dedupeOnConflictKey(
+    rows,
+    (r) => `${r.rule_id}\x00${r.file_path}\x00${r.start_line ?? -1}`,
+  );
+
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
+    const batch = deduped.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
       .from('project_iac_findings')
       .upsert(batch, {
@@ -211,9 +241,19 @@ export async function upsertContainerFindings(
     reachability_details: f.reachability_details ?? null,
   }));
 
+  // Collapse to the idx_pcf_unique conflict key. vulnerability_id is GENERATED
+  // AS COALESCE(osv_id, cve_id, 'unknown:'||md5(digest:pkg:ver)); the
+  // (digest, pkg, ver) tuple is already in the key, so osv_id ?? cve_id ?? ''
+  // is a faithful discriminator without recomputing the hash.
+  const deduped = dedupeOnConflictKey(
+    rows,
+    (r) =>
+      `${r.image_digest}\x00${r.os_package_name}\x00${r.os_package_version}\x00${r.osv_id ?? r.cve_id ?? ''}`,
+  );
+
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
+    const batch = deduped.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
       .from('project_container_findings')
       .upsert(batch, {

@@ -29,6 +29,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync, spawn } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
+import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import {
   calculateBaseDepscoreNoReachability,
   calculateDepscore,
@@ -194,6 +196,9 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   const scanStart = Date.now();
   const reportsDir = path.join(workspaceRoot, 'depscan-reports');
   let depScanSucceeded = false;
+  // Captured when dep-scan crashes / its binary is missing, so the degraded
+  // flag (set after the OSV fallback) carries the real cause to admin + logs.
+  let depScanFailureDetail: string | null = null;
 
   await runStage({
     name: 'dep_scan',
@@ -271,8 +276,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
           const excerpt = lines.length > 20 ? lines.slice(-20).join('\n') : finalStderr;
           const stderrSnippet = excerpt.slice(-2000) || 'unknown error';
           if (res.exitCode === 137) {
+            depScanFailureDetail = 'dep-scan ran out of memory (exit 137)';
             await log.warn('vuln_scan', 'dep-scan out of memory during atom analysis — falling back to basic scan results');
           } else {
+            depScanFailureDetail = `dep-scan exited with code ${res.exitCode}: ${stderrSnippet}`;
             await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrSnippet}`);
           }
         } else {
@@ -290,6 +297,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       } catch (spawnErr: any) {
         if (spawnErr.code === 'ENOENT') {
+          depScanFailureDetail = 'dep-scan binary not found (ENOENT) — image may be misbuilt';
           await log.warn('vuln_scan', 'Vulnerability scanning unavailable (dep-scan not installed)');
         } else {
           throw spawnErr;
@@ -327,6 +335,30 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       // findings (if any) still get processed below.
       await log.warn('vuln_scan_osv', `OSV fallback errored (continuing): ${(e as Error).message}`);
     }
+  }
+
+  // dep-scan crashed (disk-full apsw.FullError, OOM-137, VDB-corruption,
+  // ENOENT) AND the OSV fallback rescued nothing → the vulnerability scan did
+  // not run, so the CVE picture is unknown, not clean. Fail the scan loudly
+  // rather than silently reporting zero vulnerabilities. `depScanSucceeded` is
+  // true on a clean exit (even with a genuinely empty VDR) or a successful OSV
+  // fallback, so a legitimately vuln-free project still passes. Skipped in
+  // CLI/local mode, where dep-scan's binary is legitimately absent.
+  if (!depScanSucceeded && process.env.DEPTEX_CLI_MODE !== '1') {
+    const detail = depScanFailureDetail ?? 'dep-scan produced no results';
+    const userMsg = `Vulnerability scan failed — could not check your dependencies for known vulnerabilities: ${detail}`;
+    await log.error('vuln_scan', userMsg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
+        step: 'vuln_scan',
+        code: 'depscan_failed',
+        message: detail,
+        severity: 'error',
+      });
+    }
+    throw new ScanFailedError(userMsg);
   }
 
   // === Process dep-scan results ===

@@ -9970,12 +9970,27 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       .order('created_at', { ascending: false })
       .limit(50);
 
-    const { data: globalVuln } = await supabase
+    // Resolve the global advisory by osv_id, then fall back to an alias match.
+    // The project may reference a CVE while the advisory is stored under its
+    // GHSA id (or vice-versa) — e.g. CVE-2021-23337 ↔ GHSA-35jh-r3h4-6jhm — so
+    // an exact osv_id match alone misses the summary/details/fix metadata. The
+    // `aliases` text[] carries the cross-ids.
+    const GLOBAL_VULN_COLS = 'summary, details, aliases, affected_versions, fixed_versions, published_at, modified_at';
+    let { data: globalVuln } = await supabase
       .from('dependency_vulnerabilities')
-      .select('summary, details, aliases, affected_versions, fixed_versions, published_at, modified_at')
+      .select(GLOBAL_VULN_COLS)
       .eq('osv_id', osvId)
       .limit(1)
-      .single();
+      .maybeSingle();
+    if (!globalVuln) {
+      const { data: aliasMatch } = await supabase
+        .from('dependency_vulnerabilities')
+        .select(GLOBAL_VULN_COLS)
+        .contains('aliases', [osvId])
+        .limit(1)
+        .maybeSingle();
+      globalVuln = aliasMatch ?? null;
+    }
 
     // fetch reachable flows for affected dependencies
     const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);

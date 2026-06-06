@@ -411,6 +411,59 @@ async function testFollowRedirectsSanitizerAbsence() {
   assert(safeFindings.length === 0, `safe fixture surfaces 0 ssrf sanitizer-absence findings (got ${safeFindings.length})`);
 }
 
+async function testMultiCveSinkFanOut() {
+  console.log('\n[test] (k) one vulnerable surface shared by N CVEs → one flow per CVE');
+  // lodash `_.template` is the exact sink for both CVE-2021-23337 and
+  // CVE-2026-4800. The engine matches a call site to the first sink row, so
+  // without fan-out only the first-listed CVE would get a flow (and only its
+  // PDV would promote to `confirmed`). Assert BOTH CVEs get a flow.
+  const MULTI_CVE_SPEC: FrameworkSpec = {
+    framework: 'lodash-test',
+    version: '*',
+    sources: [
+      { pattern: 'req.query.*', taint_kind: 'http_input', description: 'request query' },
+    ],
+    sinks: [
+      { pattern: '_.template(*)', vuln_class: 'code_injection', argument_indices: [0], osv_id: 'CVE-2021-23337', description: 'lodash template (23337)' },
+      { pattern: '_.template(*)', vuln_class: 'code_injection', argument_indices: [0], osv_id: 'CVE-2026-4800', description: 'lodash template (4800)' },
+    ],
+    sanitizers: [],
+  };
+  const root = makeWorkspace('multi-cve', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      function handler(req: any) {
+        const tpl = req.query.tpl;
+        _.template(tpl);
+      }
+      handler({ query: { tpl: '<%= x %>' } });
+    `,
+  });
+  const result = await propagate({ rootDir: root, specs: [MULTI_CVE_SPEC] });
+  const templateFlows = result.flows.filter((f) => f.sink_pattern === '_.template(*)');
+  const osvIds = new Set(templateFlows.map((f) => f.osv_id));
+  assert(templateFlows.length >= 2, `_.template emits one flow per CVE (got ${templateFlows.length})`);
+  assert(osvIds.has('CVE-2021-23337'), 'a flow is stamped CVE-2021-23337');
+  assert(osvIds.has('CVE-2026-4800'), 'a flow is stamped CVE-2026-4800');
+  // Single-CVE / framework-generic sinks must NOT fan out: the express spec's
+  // generic `child_process.exec` sink should still produce exactly one flow.
+  const genericRoot = makeWorkspace('multi-cve-generic', {
+    'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'ES2020', strict: false } }),
+    'src/server.ts': `
+      function handler(req: any) {
+        const cmd = req.body.cmd;
+        child_process.exec(cmd);
+      }
+      handler({ body: { cmd: 'ls' } });
+    `,
+  });
+  const genericResult = await propagate({ rootDir: genericRoot, specs: [EXPRESS_LIKE_SPEC] });
+  const execFlows = genericResult.flows.filter((f) => f.sink_pattern.startsWith('child_process.exec'));
+  assert(execFlows.length === 1, `framework-generic sink does not fan out (got ${execFlows.length})`);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(genericRoot, { recursive: true, force: true });
+}
+
 async function main() {
   console.log('=== taint-engine propagator tests ===');
   await testDirectFlow();
@@ -421,6 +474,7 @@ async function main() {
   await testMethodChainSink();
   await testComputedKeySource();
   await testReceiverTaintPassThrough();
+  await testMultiCveSinkFanOut();
   await testJsonwebtokenSanitizerAbsence();
   await testFollowRedirectsSanitizerAbsence();
   await testSpecLoader();

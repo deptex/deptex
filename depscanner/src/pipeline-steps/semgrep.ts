@@ -14,6 +14,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { calculateSemgrepDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -22,8 +23,26 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('semgrep')) {
-    await log.warn('semgrep', INSTALL_HINTS.semgrep);
-    return;
+    // CLI/local dev legitimately lacks semgrep — skip quietly there.
+    if (process.env.DEPTEX_CLI_MODE === '1') {
+      await log.warn('semgrep', INSTALL_HINTS.semgrep);
+      return;
+    }
+    // The worker image bundles semgrep, so a missing binary means a misbuilt
+    // image that would silently ship SAST-off scans fleet-wide. Fail loudly.
+    const msg = `Static analysis could not run: ${INSTALL_HINTS.semgrep}`;
+    await log.error('semgrep', msg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
+        step: 'semgrep',
+        code: 'binary_missing_semgrep',
+        message: INSTALL_HINTS.semgrep,
+        severity: 'error',
+      });
+    }
+    throw new ScanFailedError(msg);
   }
 
   await log.info('semgrep', 'Running static code analysis...');
@@ -31,18 +50,19 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   await runStage({
     name: 'semgrep',
     timeoutMs: 20 * 60_000,
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
       const e = err as { status?: number; message?: string };
-      if (e?.status === 137) {
-        await log.warn('semgrep', 'Static analysis ran out of memory — scanning skipped');
-      } else {
-        await log.warn('semgrep', 'Static analysis failed');
-      }
+      const msg = e?.status === 137
+        ? 'Static analysis ran out of memory'
+        : `Static analysis failed: ${e?.message ?? 'unknown error'}`;
+      await log.error('semgrep', msg);
+      // severity: 'error' → rethrow; pipeline outer catch sets error state.
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
@@ -98,6 +118,11 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
             const findings = semgrepParsed.results
               // Filter out secret-detection rules (TruffleHog handles these better)
               .filter((r: any) => !(r.check_id ?? '').startsWith('generic.secrets.'))
+              // Filter out Kubernetes manifest rules — Checkov owns IaC/k8s and
+              // reports the same misconfigs (privileged container, allowPrivilege
+              // Escalation, …) with rule docs + compliance refs. Semgrep's
+              // yaml.kubernetes.* pack just double-reports them on the same file.
+              .filter((r: any) => !(r.check_id ?? '').startsWith('yaml.kubernetes.'))
               // Filter out generated/report files
               .filter((r: any) => {
                 const p = r.path ?? '';
@@ -120,14 +145,26 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
                   ? [String(r.extra.metadata.owasp)]
                   : [];
                 const category = r.extra?.metadata?.category ?? 'security';
-                const filePath = r.path ?? 'unknown';
+                // Semgrep reports absolute paths under the clone root (we invoke
+                // it with the workspace as the scan target). Store repo-relative
+                // so the UI never shows the ephemeral /tmp/deptex-extract-XXX/
+                // clone dir, and so the path lines up with the other scanners'
+                // relative paths. Keep the raw absolute path for the on-disk
+                // snippet read below. Defensive: a path that resolves outside
+                // the workspace (shouldn't happen) keeps its raw value.
+                const rawPath = r.path ?? 'unknown';
+                let filePath = rawPath;
+                if (rawPath !== 'unknown' && path.isAbsolute(rawPath)) {
+                  const rel = path.relative(workspaceRoot, rawPath).split(path.sep).join('/');
+                  if (rel && !rel.startsWith('..')) filePath = rel;
+                }
                 const startLine = r.start?.line ?? null;
 
                 // Extract code snippet around the affected line
                 let codeSnippet: string | null = null;
-                if (startLine != null && filePath !== 'unknown') {
+                if (startLine != null && rawPath !== 'unknown') {
                   try {
-                    const absPath = filePath.startsWith('/') ? filePath : path.join(workspaceRoot, filePath);
+                    const absPath = path.isAbsolute(rawPath) ? rawPath : path.join(workspaceRoot, rawPath);
                     if (fs.existsSync(absPath)) {
                       const fileLines = fs.readFileSync(absPath, 'utf8').split('\n');
                       const contextLines = 3;

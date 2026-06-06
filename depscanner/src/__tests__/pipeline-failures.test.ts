@@ -84,6 +84,20 @@ jest.mock('../tree-sitter-extractor/storage', () => ({
   storeUsageExtractionResults: jest.fn().mockResolvedValue({ success: true }),
 }));
 
+// IaC/container + malicious are now hard-fail scanners. The tests that exercise
+// a LATER scanner's hard-fail (semgrep) need these earlier optional scanners to
+// pass cleanly so the run reaches semgrep — stub them to a clean result.
+jest.mock('../scanners/orchestrator', () => ({
+  runIaCAndContainerScans: jest.fn().mockResolvedValue({ infraTypes: [], failedScanners: [] }),
+}));
+
+jest.mock('../malicious-scan', () => ({
+  runMaliciousScan: jest.fn().mockResolvedValue({
+    status: 'completed', inserted_findings: 0, feed_hits: 0, guarddog_hits: 0,
+  }),
+  eventDeduplicationKey: jest.fn(() => 'dedup-key'),
+}));
+
 const SBOM_WITH_DEPS = JSON.stringify({
   bomFormat: 'CycloneDX',
   specVersion: '1.5',
@@ -147,7 +161,7 @@ describe('runPipeline', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true });
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({}), text: async () => '' });
     // binaryAvailable() uses spawnSync(which/where, [name]) and checks
     // .status === 0. Default the mock to "installed" so the semgrep /
     // trufflehog steps run their logic; individual tests can override.
@@ -175,7 +189,11 @@ describe('runPipeline', () => {
     await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/SBOM/);
   }, 25000);
 
-  it('clone + SBOM succeed but SBOM has 0 deps -> pipeline warns and continues (semgrep/trufflehog still produce value)', async () => {
+  it('empty SBOM but the npm manifest declares dependencies -> pipeline HARD-FAILS (unresolved dependencies)', async () => {
+    // The express-dogfood shape: one unpublished dep (event-stream@3.3.6) aborts
+    // `npm install`, so cdxgen emits an empty SBOM. The manifest clearly declared
+    // dependencies we couldn't resolve, so the scan must fail loudly rather than
+    // report a misleading "0 dependencies, all clear".
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockReturnValue(undefined);
@@ -188,21 +206,59 @@ describe('runPipeline', () => {
           dependencies: [{ ref: 'root', dependsOn: [] }],
         });
       }
+      if (String(p).endsWith('package.json')) {
+        return JSON.stringify({ name: 'app', dependencies: { express: '4.18.2', 'event-stream': '3.3.6' } });
+      }
       throw new Error('unexpected read');
     };
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
-    const result = await runPipeline(baseJob, mockLog);
-    expect(result.finalizeSummary).toBeDefined();
-    // The sbom step should have warned about 0 deps; previously this case
-    // hard-failed (false-positive on legitimate zero-dep libraries).
-    const sbomWarns = mockLog.warn.mock.calls.filter(
-      (c) => c[0] === 'sbom' && /No dependencies parsed/.test(c[1] ?? ''),
-    );
-    expect(sbomWarns.length).toBeGreaterThan(0);
+    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/Unable to resolve/i);
+    expect(mockLog.error).toHaveBeenCalledWith('sbom', expect.stringContaining('Unable to resolve'));
   });
 
-  it('dep-scan not installed (ENOENT) -> pipeline does NOT throw, logs warning', async () => {
+  it('empty SBOM and the manifest declares no dependencies -> pipeline continues (legitimate zero-dep project)', async () => {
+    const repoPath = path.join(process.cwd(), 'fake-repo');
+    mockCloneByProvider.mockResolvedValue(repoPath);
+    mockExecSync.mockReturnValue(undefined);
+    // dep-scan exits cleanly (empty VDR) so the vuln scan succeeds on a zero-dep
+    // project. Optional scans are skipped so this test stays focused on the
+    // sbom-continues path.
+    mockSpawn.mockImplementation(() => {
+      const child: { stdout: { on: jest.Mock }; stderr: { on: jest.Mock }; on: jest.Mock; kill: jest.Mock } = {
+        stdout: { on: jest.fn() }, stderr: { on: jest.fn() }, on: jest.fn(), kill: jest.fn(),
+      };
+      (child.on as jest.Mock).mockImplementation((ev: string, cb: (code?: number) => void) => {
+        if (ev === 'close') setImmediate(() => cb(0));
+        return child;
+      });
+      return child;
+    });
+    fsExistsSync = () => true;
+    fsReadFileSync = (p: string) => {
+      if (String(p).endsWith('sbom.json')) {
+        return JSON.stringify({
+          metadata: { component: { 'bom-ref': 'root' } },
+          components: [],
+          dependencies: [{ ref: 'root', dependsOn: [] }],
+        });
+      }
+      if (String(p).endsWith('package.json')) return JSON.stringify({ name: 'docs-only', version: '1.0.0' });
+      return '{"vulnerabilities":[]}';
+    };
+    fsMkdirSync = () => {};
+    fsReaddirSync = () => [];
+    process.env.DEPTEX_SKIP_OPTIONAL_SCANS = '1';
+    try {
+      const result = await runPipeline(baseJob, mockLog);
+      expect(result.finalizeSummary).toBeDefined();
+    } finally {
+      delete process.env.DEPTEX_SKIP_OPTIONAL_SCANS;
+    }
+    expect(mockLog.warn).toHaveBeenCalledWith('sbom', expect.stringContaining('No dependencies to analyze'));
+  });
+
+  it('dep-scan not installed (ENOENT) -> pipeline HARD-FAILS (vulnerability scan did not run)', async () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockReturnValue(undefined);
@@ -219,13 +275,13 @@ describe('runPipeline', () => {
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    // runPipeline now returns { finalizeSummary } on success; the test only
-    // cares that the pipeline doesn't throw on this missing-dep-scan path.
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
+    // dep-scan crashing (here: not installed) means the CVE picture is unknown,
+    // not clean — the scan now hard-fails instead of silently reporting 0 vulns.
+    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/Vulnerability scan failed/i);
     expect(mockLog.warn).toHaveBeenCalledWith('vuln_scan', expect.stringContaining('dep-scan not installed'));
   });
 
-  it('semgrep OOM (exit 137) -> pipeline does NOT throw, logs warning', async () => {
+  it('semgrep OOM (exit 137) with no output -> pipeline HARD-FAILS', async () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockImplementation((cmd: string) => {
@@ -236,17 +292,11 @@ describe('runPipeline', () => {
       }
       return undefined;
     });
+    // dep-scan + every spawned scanner exits cleanly (close 0) so the run
+    // reaches semgrep; semgrep then OOMs with no output and hard-fails.
     mockSpawn.mockImplementation(() => {
-      const child: {
-        stdout: { on: jest.Mock };
-        stderr: { on: jest.Mock };
-        on: jest.Mock;
-        kill: jest.Mock;
-      } = {
-        stdout: { on: jest.fn() },
-        stderr: { on: jest.fn() },
-        on: jest.fn(),
-        kill: jest.fn(),
+      const child: { stdout: { on: jest.Mock }; stderr: { on: jest.Mock }; on: jest.Mock; kill: jest.Mock } = {
+        stdout: { on: jest.fn() }, stderr: { on: jest.fn() }, on: jest.fn(), kill: jest.fn(),
       };
       (child.on as jest.Mock).mockImplementation((ev: string, cb: (code?: number) => void) => {
         if (ev === 'close') setImmediate(() => cb(0));
@@ -254,17 +304,14 @@ describe('runPipeline', () => {
       });
       return child;
     });
-    // semgrep.json is absent — an OOM-killed semgrep wrote no output, so the
-    // step rethrows and the OOM-specific onError branch fires. (When a partial
-    // output file exists the step instead swallows the error and keeps it.)
+    // semgrep.json is absent — an OOM-killed semgrep wrote no output, so the step
+    // rethrows and (severity: 'error') the whole scan hard-fails.
     fsExistsSync = (p: string) => !String(p).endsWith('semgrep.json');
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    // runPipeline now returns { finalizeSummary } on success; the test only
-    // cares that the pipeline doesn't throw on this semgrep-OOM path.
-    await expect(runPipeline(baseJob, mockLog)).resolves.toBeDefined();
-    expect(mockLog.warn).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
+    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/out of memory/i);
+    expect(mockLog.error).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
   });
 });

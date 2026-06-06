@@ -12,6 +12,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { runStage } from '../pipeline-stage-runner';
+import { logStepError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import { calculateSecretDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -20,8 +22,26 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
   if (!binaryAvailable('trufflehog')) {
-    await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
-    return;
+    // CLI/local dev legitimately lacks trufflehog — skip quietly there.
+    if (process.env.DEPTEX_CLI_MODE === '1') {
+      await log.warn('trufflehog', INSTALL_HINTS.trufflehog);
+      return;
+    }
+    // The worker image bundles trufflehog, so a missing binary means a misbuilt
+    // image that would silently ship secret-scanning-off scans. Fail loudly.
+    const msg = `Secret scanning could not run: ${INSTALL_HINTS.trufflehog}`;
+    await log.error('trufflehog', msg);
+    if (job.jobId) {
+      await logStepError(supabase, {
+        jobId: job.jobId,
+        projectId,
+        step: 'trufflehog',
+        code: 'binary_missing_trufflehog',
+        message: INSTALL_HINTS.trufflehog,
+        severity: 'error',
+      });
+    }
+    throw new ScanFailedError(msg);
   }
 
   await log.info('trufflehog', 'Scanning for exposed secrets...');
@@ -29,13 +49,16 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   await runStage({
     name: 'trufflehog',
     timeoutMs: 10 * 60_000,
-    severity: 'warn',
+    severity: 'error',
     supabase,
     jobId: job.jobId,
     projectId,
     log,
     onError: async ({ err }) => {
-      await log.warn('trufflehog', `Secret scanning failed: ${(err as Error).message ?? String(err)}`);
+      const msg = `Secret scanning failed: ${(err as Error).message ?? String(err)}`;
+      await log.error('trufflehog', msg);
+      // severity: 'error' → rethrow; pipeline outer catch sets error state.
+      return { rethrow: true, throwAs: new ScanFailedError(msg) };
     },
     fn: async () => {
       const trufflehogOut = path.join(workspaceRoot, 'trufflehog.json');
@@ -74,12 +97,18 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
       const exitCode = thResult.status ?? -1;
 
       if (exitCode !== 0) {
-        await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}`);
         // TruffleHog stderr can echo fragments of detected secrets. Keep raw
         // stderr in the worker console only; extraction_logs is browser-streamed.
         if (stderr.trim()) {
           console.error('[trufflehog] stderr:\n' + stderr.trim());
         }
+        // No usable output on a non-zero exit = a real scanner failure. Throw so
+        // the run hard-fails (severity: 'error'). When stdout DID land, TruffleHog
+        // merely exited non-zero on a partial scan — use the partial results.
+        if (!stdout.trim()) {
+          throw new Error(`TruffleHog exited with code ${exitCode} and produced no output`);
+        }
+        await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}; using the partial output it produced`);
       }
 
       if (stdout.trim()) {
@@ -186,7 +215,11 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
         } catch { /* upload failure non-fatal */ }
         await log.success('trufflehog', 'Secret scan complete', Date.now() - thStart);
       } else {
-        await log.warn('trufflehog', 'Secret scanning skipped (TruffleHog not installed or no output)');
+        // Binary presence was already asserted above (line ~24), so reaching
+        // here means TruffleHog ran and exited cleanly with empty output —
+        // i.e. a successful scan that found zero secrets. Don't conflate that
+        // with "not installed": a real no-binary case hard-fails earlier.
+        await log.success('trufflehog', 'Secret scan complete — no secrets found', Date.now() - thStart);
       }
     },
   });

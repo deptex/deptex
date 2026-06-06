@@ -72,11 +72,34 @@ function snippet(raw: CheckovRawCheck): string | null {
   return raw.code_block.map(([, line]) => line).join('').trimEnd() || null;
 }
 
-function normalizeSeverity(raw: CheckovRawCheck): string | null {
-  if (!raw.severity) return null;
-  const upper = String(raw.severity).toUpperCase();
+// A privileged container or a host-namespace share is a genuine
+// container-escape risk, not the same as a missing liveness probe — yet
+// Checkov's community checks ship no severity, so without this map every k8s
+// finding flattens into one MEDIUM band. Pin the handful of rules that flag
+// real privilege/exposure escalation to HIGH so they sort above the hardening
+// nits. Keep this list short and security-critical — everything else stays
+// MEDIUM by default.
+const HIGH_IMPACT_RULE_IDS = new Set<string>([
+  'CKV_K8S_16', // container running as privileged
+  'CKV_K8S_20', // allowPrivilegeEscalation enabled
+  'CKV_K8S_23', // root containers admitted (runAsNonRoot unset)
+  'CKV_K8S_17', // shares host PID namespace
+  'CKV_K8S_18', // shares host IPC namespace
+  'CKV_K8S_19', // shares host network namespace
+]);
+
+function normalizeSeverity(raw: CheckovRawCheck): string {
+  const upper = String(raw.severity ?? '').toUpperCase();
   if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(upper)) return upper;
-  return null;
+  // Checkov's community checks — every CKV_*/CKV2_* rule outside the paid
+  // Prisma feed, which is what we run — ship with NO severity, so this branch
+  // is the common case, not the exception. Promote the security-critical rules
+  // to HIGH; default the rest to MEDIUM (rather than null) so each finding
+  // sorts, filters, and scores as a real failed policy check instead of
+  // showing up as "unknown" / unsorted noise.
+  const ruleId = raw.check_id ?? raw.bc_check_id ?? '';
+  if (HIGH_IMPACT_RULE_IDS.has(ruleId)) return 'HIGH';
+  return 'MEDIUM';
 }
 
 function normalizeBenchmarkKey(name: string): string {

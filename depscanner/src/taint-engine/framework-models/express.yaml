@@ -71,10 +71,16 @@ sinks:
     argument_indices: [0]
     description: Express sendFile
 
-  # Open redirect — res.redirect with attacker-controlled URL
+  # Open redirect / XSS — res.redirect with attacker-controlled URL.
+  # osv-tagged so the reachability classifier's vulnerable-symbol check can
+  # confirm-or-deny CVE-2024-43796 (XSS via response.redirect): if the app
+  # never calls res.redirect, the finding is downgraded to `unreachable`
+  # rather than the weaker `module` fallback. If it IS called with tainted
+  # input, the engine traces a real source→redirect flow and promotes it.
   - pattern: res.redirect(*)
     vuln_class: open_redirect
     argument_indices: [0]
+    osv_id: CVE-2024-43796
     description: Express res.redirect
 
 sanitizers: []

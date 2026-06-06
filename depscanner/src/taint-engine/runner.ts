@@ -219,6 +219,24 @@ export interface RunEngineResult {
    * classifier treats undefined as "no signal" and stays on v2 behavior.
    */
   usedDependencies?: Set<string>;
+  /**
+   * Union of every `osv_id` carried by a loaded spec sink — both the bundled
+   * framework-models/*.yaml (e.g. lodash `_.template` → CVE-2021-23337) and
+   * the CVE-targeted specs from organization_generated_rules. The pipeline
+   * folds this into `validOsvIds` so the reachability classifier's osv_id
+   * drift guard treats a framework-model CVE attribution as a legitimately
+   * loaded osv_id rather than rejecting it as data drift.
+   */
+  loadedOsvIds: Set<string>;
+  /**
+   * Per-CVE vulnerable call patterns from every loaded sink that carries an
+   * `osv_id` (framework-models + CVE-targeted specs). The reachability
+   * classifier reads this (as `cveSinkPatterns`) to run its M2 vulnerable-symbol
+   * check: when a CVE's specific sink pattern (e.g. express `res.redirect(*)` →
+   * CVE-2024-43796) names a symbol that appears on no call path, the finding is
+   * downgraded to `unreachable` instead of the weaker `module` fallback.
+   */
+  loadedCveSinkPatterns: Map<string, string[]>;
 }
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
@@ -254,6 +272,23 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
   const specs = allSpecs.filter((s) => (s.language ?? 'js') === language);
   const frameworksLoaded = specs.map((s) => s.framework);
 
+  // Union of osv_ids across every loaded sink (framework-model + CVE-targeted).
+  // Surfaced so the pipeline can whitelist framework-model CVE attributions in
+  // the classifier's osv_id drift guard.
+  const loadedOsvIds = new Set<string>();
+  const loadedCveSinkPatterns = new Map<string, string[]>();
+  for (const s of specs) {
+    for (const sink of s.sinks) {
+      if (!sink.osv_id) continue;
+      loadedOsvIds.add(sink.osv_id);
+      if (sink.pattern) {
+        const pats = loadedCveSinkPatterns.get(sink.osv_id) ?? [];
+        if (!pats.includes(sink.pattern)) pats.push(sink.pattern);
+        loadedCveSinkPatterns.set(sink.osv_id, pats);
+      }
+    }
+  }
+
   if (specs.length === 0) {
     return {
       ran: false,
@@ -263,6 +298,8 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       flowsAfterFilter: null,
       aiFilter: null,
       detectorFlows: [],
+      loadedOsvIds,
+      loadedCveSinkPatterns,
     };
   }
 
@@ -386,6 +423,8 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     // For other languages this is undefined until their per-language
     // extractor lands (T3.2-Python / -Go / -Rust / -Java follow-ups).
     usedDependencies: lowercaseSet(propagation.callgraph.usedDependencies),
+    loadedOsvIds,
+    loadedCveSinkPatterns,
   };
 }
 

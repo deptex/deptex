@@ -16,10 +16,12 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
+import { ScanFailedError } from '../scan-errors';
 import {
   parseSbom,
   getBomRefToNameVersion,
   patchDevDependencies,
+  npmManifestDeclaresDependencies,
   type ParsedSbomDep,
   type ParsedSbomRelationship,
 } from '../sbom';
@@ -97,7 +99,7 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
       const userMsg = classifyCdxgenError((err as Error).message ?? String(err));
       await log.error('sbom', userMsg, err);
       await setError(supabase, projectId, userMsg);
-      return { rethrow: true, throwAs: new Error(userMsg) };
+      return { rethrow: true, throwAs: new ScanFailedError(userMsg) };
     },
   })) as string;
 
@@ -315,21 +317,57 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
   }
 
   if (dependencies.length === 0) {
-    // Two cases collapse into one symptom here:
-    //   1. SBOM was truly empty (rawComponentCount == 0) — manifest unsupported
-    //      or genuinely zero-dep project (e.g. a small CLI tool, a library).
-    //   2. SBOM had components but they all had no version (rawComponentCount > 0,
-    //      all dropped above) — upstream resolver failed (e.g. bundler not in
-    //      image, npm install broke on workspace refs).
-    // Both are recoverable: semgrep + trufflehog + framework-entry-point
-    // detection still produce value on a zero-dep scan. Warn and continue.
-    const reason =
-      rawComponentCount > 0
-        ? `SBOM had ${rawComponentCount} component(s) but none had a resolvable version`
-        : 'SBOM is empty';
+    // We ended up with zero usable dependencies. Two failure shapes collapse
+    // here:
+    //   1. cdxgen emitted components but every one was versionless
+    //      (rawComponentCount > 0, all dropped above) — the package manager
+    //      resolved partially but couldn't pin versions.
+    //   2. cdxgen emitted nothing at all (rawComponentCount === 0). For npm
+    //      specifically this is the "one unresolvable/unpublished dep aborts
+    //      the whole `npm install`, and with no committed lockfile cdxgen has
+    //      nothing to read" case — a single bad dependency zeroes the tree.
+    //
+    // If the project actually declared dependencies we couldn't resolve, that's
+    // a FAILED scan, not a clean one — every dependency-level scanner (SCA,
+    // reachability, malicious-package) would silently report nothing. Fail loudly
+    // so the user fixes their manifest, rather than shipping a false "all clear".
+    //
+    // The trigger is "we declared deps but resolved none", NOT "the install
+    // command errored": real repos with a committed lockfile scan fine off the
+    // lockfile even when `npm install` hiccups. rawComponentCount > 0 already
+    // proves deps were declared (any ecosystem); for npm we additionally parse
+    // package.json because its empty SBOM carries no components to count.
+    const declaredButUnresolved =
+      rawComponentCount > 0 ||
+      (jobEcosystem === 'npm' && npmManifestDeclaresDependencies(workspaceRoot));
+
+    if (declaredButUnresolved) {
+      const userMsg =
+        rawComponentCount > 0
+          ? `Unable to resolve your dependencies: the SBOM listed ${rawComponentCount} package(s) but none had a resolvable version. Your package manager likely failed to install a dependency. Make sure your manifest and lockfile are valid and every listed version exists, then re-scan.`
+          : `Unable to resolve any dependencies from your manifest. A dependency is likely unpublished, yanked, or otherwise uninstallable (which aborts the whole install). Make sure your manifest and lockfile are valid and every listed dependency and version exists, then re-scan.`;
+      await log.error('sbom', userMsg);
+      if (job.jobId) {
+        await logStepError(supabase, {
+          jobId: job.jobId,
+          projectId,
+          step: 'sbom',
+          code: 'dependencies_unresolved',
+          message: userMsg,
+          severity: 'error',
+        });
+      }
+      // ScanFailedError (not a plain Error): an unresolvable manifest is a
+      // recorded, user-facing project outcome — the job loop skips Sentry for it.
+      throw new ScanFailedError(userMsg);
+    }
+
+    // No manifest, or a manifest that genuinely declares zero dependencies — a
+    // docs/config repo or a zero-dep app. Nothing to fail on; SAST + secret
+    // scans still cover the code.
     await log.warn(
       'sbom',
-      `No dependencies parsed (${reason}) — continuing without dependency analysis; SAST and secret scans will still run`,
+      'No dependencies to analyze (no manifest, or an empty dependency list) — continuing with code and secret scanning only',
     );
   }
 
