@@ -29,6 +29,28 @@ describe('parseCheckovOutput', () => {
     expect(findings[0].severity).toBe('HIGH');
   });
 
+  it('defaults a severity-less community check (CKV_K8S_*) to MEDIUM, not null', () => {
+    const sample = JSON.stringify({
+      check_type: 'kubernetes',
+      results: {
+        failed_checks: [
+          {
+            check_id: 'CKV_K8S_16',
+            check_name: 'Container should not be privileged',
+            resource: 'Deployment.default.web',
+            resource_address: 'Deployment.default.web',
+            file_path: '/k8s.yaml',
+            file_line_range: [10, 14],
+            // no `severity` — the common case for Checkov community checks
+          },
+        ],
+      },
+    });
+    const findings = parseCheckovOutput(sample, 'checkov@3.2.420');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('MEDIUM');
+  });
+
   it('parses an array-of-reports response (multi-framework run)', () => {
     const sample = JSON.stringify([
       {

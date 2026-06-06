@@ -72,11 +72,15 @@ function snippet(raw: CheckovRawCheck): string | null {
   return raw.code_block.map(([, line]) => line).join('').trimEnd() || null;
 }
 
-function normalizeSeverity(raw: CheckovRawCheck): string | null {
-  if (!raw.severity) return null;
-  const upper = String(raw.severity).toUpperCase();
+function normalizeSeverity(raw: CheckovRawCheck): string {
+  const upper = String(raw.severity ?? '').toUpperCase();
   if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(upper)) return upper;
-  return null;
+  // Checkov's community checks — every CKV_*/CKV2_* rule outside the paid
+  // Prisma feed, which is what we run — ship with NO severity, so this branch
+  // is the common case, not the exception. Default to MEDIUM rather than null
+  // so each finding sorts, filters, and scores as a real failed policy check
+  // instead of showing up as "unknown" / unsorted noise.
+  return 'MEDIUM';
 }
 
 function normalizeBenchmarkKey(name: string): string {
