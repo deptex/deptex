@@ -7354,6 +7354,8 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
       dependency_version: vuln.dependency_version ?? 'Unknown',
       ...(usePdv && {
         is_reachable: vuln.is_reachable ?? true,
+        reachability_level: vuln.reachability_level ?? null,
+        runtime_confirmed_at: vuln.runtime_confirmed_at ?? null,
         epss_score: vuln.epss_score,
         cvss_score: vuln.cvss_score ?? null,
         cisa_kev: vuln.cisa_kev ?? false,
@@ -9992,8 +9994,21 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
       globalVuln = aliasMatch ?? null;
     }
 
-    // fetch reachable flows for affected dependencies
+    // fetch reachable flows for THIS vulnerability. Flows are tagged with the
+    // osv_id of the CVE whose taint rule produced them
+    // (project_reachable_flows.osv_id), so filter on it — not just dependency_id.
+    // Two CVEs on one package that share a sink (e.g. lodash CVE-2021-23337 +
+    // CVE-2026-4800, both hitting `_.template`) each own their own flow rows; a
+    // dependency-only filter leaked every CVE's flows into every CVE's detail
+    // panel (the "4 flows = 2 paths shown twice" bug). Match the requested osv_id
+    // plus its aliases so a CVE↔GHSA mismatch between the advisory and the
+    // engine-written flow still resolves.
     const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);
+    const flowOsvIds = [...new Set([
+      osvId,
+      ...(((vuln.aliases as string[] | null) ?? [])),
+      ...((((globalVuln as any)?.aliases as string[] | null) ?? [])),
+    ].filter(Boolean))];
     let reachableFlows: any[] = [];
     if (affectedDepIds.length > 0) {
       const { data: flows } = await supabase
@@ -10001,6 +10016,7 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         .select('*')
         .eq('project_id', projectId)
         .in('dependency_id', affectedDepIds)
+        .in('osv_id', flowOsvIds)
         .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
         .order('flow_length', { ascending: true })
         .limit(20);
