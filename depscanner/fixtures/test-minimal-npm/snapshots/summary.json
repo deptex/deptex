@@ -13,6 +13,8 @@
       "pdv_deleted": 0,
       "flows_deleted": 0,
       "secret_deleted": 0,
+      "iac_deleted": 0,
+      "container_deleted": 0,
       "slices_deleted": 0,
       "semgrep_deleted": 0,
       "dep_files_deleted": 0,
