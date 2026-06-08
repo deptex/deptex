@@ -3,6 +3,7 @@ import express from 'express';
 import * as crypto from 'crypto';
 import semver from 'semver';
 import { supabase } from '../lib/supabase';
+import { captureInfraError } from '../lib/observability/capture';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { createActivity } from '../lib/activities';
 import {
@@ -10484,21 +10485,23 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    // Scope to the projects this member can actually see (owner / manage_teams_and_projects ->
+    // all; otherwise their team + directly-assigned projects). Matches the org /vulnerabilities
+    // endpoint instead of leaking every project's posture to any member.
+    const { projectIds: accessibleProjectIds, error: accessError } =
+      await getAccessibleProjectIdsInOrganization(userId, id);
+    if (accessError) {
+      return res.status(accessError.status).json({ error: accessError.message });
+    }
+    if (accessibleProjectIds.length === 0) {
+      return res.json({ projects: [] });
     }
 
     const { data: projects } = await supabase
       .from('projects')
       .select('id, name, active_extraction_run_id, infra_types')
-      .eq('organization_id', id);
+      .eq('organization_id', id)
+      .in('id', accessibleProjectIds);
 
     if (!projects || projects.length === 0) {
       return res.json({ projects: [] });
@@ -10520,95 +10523,22 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
     }
 
-    const { data: vulnRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_dependency_vulnerabilities')
-          .select('project_id, severity, depscore, contextual_depscore, is_reachable, suppressed')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-          .eq('suppressed', false)
-      : { data: [] as any[] };
+    // All per-project finding counts + coverage flags are computed in SQL (no row transfer, no
+    // PostgREST 1000-row truncation). See backend/database/phase47_security_summary_counts_rpc.sql.
+    const { data: countRows, error: countsError } = await supabase.rpc('security_summary_counts', {
+      p_project_ids: projectIds,
+      p_active_run_ids: activeRunIds,
+    });
+    if (countsError) throw countsError;
+    const countsByProject = new Map<string, any>();
+    for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
 
-    const { data: semgrepRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_semgrep_findings')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-      : { data: [] as any[] };
-
-    const { data: secretRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_secret_findings')
-          .select('project_id, is_verified')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-      : { data: [] as any[] };
-
-    // Ignored (suppressed) vulnerabilities per project — surfaced as an "ignored" count.
-    const { data: ignoredVulnRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_dependency_vulnerabilities')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-          .eq('suppressed', true)
-      : { data: [] as any[] };
-
-    // Primary linked repository per project (provider logo + repo name).
+    // Primary linked repository per project (provider logo + repo name) — one row per project,
+    // bounded by project count, so a plain select is fine here.
     const { data: repoRows } = await supabase
       .from('project_repositories')
       .select('project_id, provider, repo_full_name, last_extracted_at')
       .in('project_id', projectIds);
-
-    // Last completed scan per project — the freshest "last scan" signal.
-    // (project_repositories.last_extracted_at isn't bumped on re-scan, so it goes stale.)
-    const { data: scanJobRows } = await supabase
-      .from('scan_jobs')
-      .select('project_id, completed_at')
-      .in('project_id', projectIds)
-      .eq('status', 'completed')
-      .not('completed_at', 'is', null)
-      .order('completed_at', { ascending: false });
-
-    const lastScanByProject = new Map<string, string>();
-    for (const j of scanJobRows ?? []) {
-      if (j.completed_at && !lastScanByProject.has(j.project_id)) {
-        lastScanByProject.set(j.project_id, j.completed_at);
-      }
-    }
-
-    // Capability signals for the "non-obvious" scanners — only Container / IaC / DAST get a badge.
-    // SCA / secrets / SAST / license / malicious run on every repo, so they're not worth surfacing.
-    const { data: containerRows } = activeRunIds.length > 0
-      ? await supabase
-          .from('project_container_findings')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('extraction_run_id', activeRunIds)
-      : { data: [] as any[] };
-
-    const [{ data: dastTargetRows }, { data: dastFindingRows }] = await Promise.all([
-      supabase.from('project_dast_targets').select('project_id').in('project_id', projectIds),
-      supabase.from('project_dast_findings').select('project_id').in('project_id', projectIds),
-    ]);
-
-    const containerProjects = new Set((containerRows ?? []).map((r: any) => r.project_id));
-    const dastProjects = new Set([
-      ...(dastTargetRows ?? []).map((r: any) => r.project_id),
-      ...(dastFindingRows ?? []).map((r: any) => r.project_id),
-    ]);
-
-    const vulnByProject = new Map<string, any[]>();
-    for (const v of vulnRows ?? []) {
-      if (!vulnByProject.has(v.project_id)) vulnByProject.set(v.project_id, []);
-      vulnByProject.get(v.project_id)!.push(v);
-    }
-
-    const ignoredByProject = new Map<string, number>();
-    for (const v of ignoredVulnRows ?? []) {
-      ignoredByProject.set(v.project_id, (ignoredByProject.get(v.project_id) ?? 0) + 1);
-    }
 
     const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
     for (const r of repoRows ?? []) {
@@ -10621,67 +10551,39 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       }
     }
 
-    const semgrepByProject = new Map<string, number>();
-    for (const s of semgrepRows ?? []) {
-      semgrepByProject.set(s.project_id, (semgrepByProject.get(s.project_id) ?? 0) + 1);
-    }
-
-    const secretByProject = new Map<string, { total: number; verified: number }>();
-    for (const s of secretRows ?? []) {
-      const entry = secretByProject.get(s.project_id) ?? { total: 0, verified: 0 };
-      entry.total++;
-      if (s.is_verified) entry.verified++;
-      secretByProject.set(s.project_id, entry);
-    }
-
     const result = projects.map((p: any) => {
-      const vulns = vulnByProject.get(p.id) ?? [];
-      const criticalCount = vulns.filter((v: any) => v.severity === 'critical').length;
-      const reachableCount = vulns.filter((v: any) => v.is_reachable).length;
-      const worstDepscore = vulns.reduce((max: number, v: any) => Math.max(max, v.depscore ?? 0), 0);
-      const secrets = secretByProject.get(p.id) ?? { total: 0, verified: 0 };
+      const c = countsByProject.get(p.id);
       const repo = repoByProject.get(p.id);
-
-      // Depscore-band buckets (reachability-aware, unlike raw CVSS severity): >=90 critical /
-      // >=70 high / >=40 medium / <40 low. Drives the C/H/M/L issue pills.
-      let bandCritical = 0, bandHigh = 0, bandMedium = 0, bandLow = 0;
-      for (const v of vulns) {
-        const s = v.contextual_depscore ?? v.depscore ?? 0;
-        if (s >= 90) bandCritical++;
-        else if (s >= 70) bandHigh++;
-        else if (s >= 40) bandMedium++;
-        else bandLow++;
-      }
-
       return {
         project_id: p.id,
         project_name: p.name,
         team_id: ownerTeamMap.get(p.id) ?? null,
-        vuln_count: vulns.length,
-        critical_count: criticalCount,
-        reachable_count: reachableCount,
-        worst_depscore: worstDepscore,
-        band_critical: bandCritical,
-        band_high: bandHigh,
-        band_medium: bandMedium,
-        band_low: bandLow,
-        semgrep_count: semgrepByProject.get(p.id) ?? 0,
-        secret_count: secrets.total,
-        verified_secret_count: secrets.verified,
-        ignored_count: ignoredByProject.get(p.id) ?? 0,
+        vuln_count: Number(c?.vuln_count ?? 0),
+        critical_count: Number(c?.critical_count ?? 0),
+        reachable_count: Number(c?.reachable_count ?? 0),
+        worst_depscore: Number(c?.worst_depscore ?? 0),
+        band_critical: Number(c?.band_critical ?? 0),
+        band_high: Number(c?.band_high ?? 0),
+        band_medium: Number(c?.band_medium ?? 0),
+        band_low: Number(c?.band_low ?? 0),
+        semgrep_count: Number(c?.semgrep_count ?? 0),
+        secret_count: Number(c?.secret_count ?? 0),
+        verified_secret_count: Number(c?.verified_secret_count ?? 0),
+        ignored_count: Number(c?.ignored_count ?? 0),
         repo_provider: repo?.provider ?? null,
         repo_full_name: repo?.repo_full_name ?? null,
-        last_scan_at: lastScanByProject.get(p.id) ?? repo?.last_extracted_at ?? null,
+        last_scan_at: c?.last_scan_at ?? repo?.last_extracted_at ?? null,
         infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
-        has_container: containerProjects.has(p.id),
-        has_dast: dastProjects.has(p.id),
+        has_container: !!c?.has_container,
+        has_dast: !!c?.has_dast,
       };
     });
 
     res.json({ projects: result });
   } catch (error: any) {
     console.error('Error fetching org security summary:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch security summary' });
+    captureInfraError(error, 'org-security-summary', { organization_id: req.params.id });
+    res.status(500).json({ error: 'Failed to fetch security summary' });
   }
 });
 
