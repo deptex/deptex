@@ -3,7 +3,7 @@ import {
   SiPhp, SiOpenjdk, SiKotlin, SiDotnet, SiHtml5, SiCss, SiGnubash,
   SiYaml, SiJson, SiMarkdown, SiTerraform,
 } from '@icons-pack/react-simple-icons';
-import { FileCode } from 'lucide-react';
+import { FileCode, Cog, FileLock } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 // Brand-icon components accept extra SVG props; keep this loose to avoid
@@ -51,6 +51,18 @@ const BY_EXT: Record<string, { Icon: IconComp; tint: string }> = {
  *  code-file glyph for unmapped types. */
 export function FileTypeIcon({ file, size = 14, className }: { file: string; size?: number; className?: string }) {
   const base = (file?.split(/[\\/]/).pop() ?? '').toLowerCase();
+
+  // Env files (.env, .env.local, .env.example, *.env) are config, so give them
+  // the settings-cog glyph editors use rather than the generic file icon — the
+  // extension split below would otherwise resolve ".env.example" to "example".
+  if (base === '.env' || base === 'env' || /(?:^|\.)env(?:\.|$)/.test(base)) {
+    return <Cog size={size} className={cn('text-zinc-300', className)} aria-hidden />;
+  }
+  // Lockfiles (yarn.lock, Gemfile.lock, poetry.lock, *.lock) — a lock glyph.
+  if (base.endsWith('.lock') || base === 'gemfile.lock' || base === 'poetry.lock') {
+    return <FileLock size={size} className={cn('text-zinc-400', className)} aria-hidden />;
+  }
+
   let entry: { Icon: IconComp; tint: string } | undefined;
   if (base === 'dockerfile' || base.startsWith('dockerfile.') || base.endsWith('.dockerfile')) {
     entry = { Icon: SiDocker, tint: 'text-sky-400' };

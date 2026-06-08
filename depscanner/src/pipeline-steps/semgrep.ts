@@ -123,6 +123,20 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
               // Escalation, …) with rule docs + compliance refs. Semgrep's
               // yaml.kubernetes.* pack just double-reports them on the same file.
               .filter((r: any) => !(r.check_id ?? '').startsWith('yaml.kubernetes.'))
+              // Filter out Dockerfile rules for the same reason — Checkov owns
+              // Dockerfile IaC (CKV_DOCKER_*) and reports the same misconfigs with
+              // rule docs + compliance refs. e.g. dockerfile.security.last-user-is-root
+              // is a literal duplicate of CKV_DOCKER_8. Drop the namespace so the
+              // user sees each Dockerfile misconfig once, from Checkov.
+              .filter((r: any) => !(r.check_id ?? '').startsWith('dockerfile.'))
+              // Filter out "missing middleware" best-practice nudges
+              // (express-check-*-usage: csurf, helmet, directory-listing, …).
+              // These are context-blind ABSENCE checks: they fire on every express
+              // app that doesn't import the middleware — including token-auth JSON
+              // APIs that legitimately don't need it — and anchor confusingly on the
+              // `const app = express()` line (the absence has no real line to flag).
+              // INFO severity, high false-positive rate, zero reachability signal.
+              .filter((r: any) => !(r.check_id ?? '').includes('express-check-'))
               // Filter out generated/report files
               .filter((r: any) => {
                 const p = r.path ?? '';
