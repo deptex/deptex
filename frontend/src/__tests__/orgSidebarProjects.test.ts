@@ -95,6 +95,20 @@ describe('filterAndSortOrgProjects', () => {
     expect(ids(filterAndSortOrgProjects(projects, teamNameById, { ...base, scannerFilter: ['dast', 'infra'] })).sort()).toEqual(['1', '2']);
   });
 
+  it('scanner filter also matches a selected framework (OR with infra/dast)', () => {
+    const frameworkById = new Map<string, string | null | undefined>([
+      ['1', 'express'],
+      ['2', 'django'],
+      ['3', 'express'],
+    ]);
+    // framework token alone
+    expect(ids(filterAndSortOrgProjects(projects, teamNameById, { ...base, frameworkById, scannerFilter: ['express'] })).sort()).toEqual(['1', '3']);
+    // framework OR a coverage flag — django projects OR anything with DAST
+    expect(ids(filterAndSortOrgProjects(projects, teamNameById, { ...base, frameworkById, scannerFilter: ['django', 'dast'] })).sort()).toEqual(['1', '2']);
+    // no frameworkById passed → framework tokens simply never match
+    expect(filterAndSortOrgProjects(projects, teamNameById, { ...base, scannerFilter: ['express'] })).toEqual([]);
+  });
+
   it('stacks search + team + scanner (AND across facets)', () => {
     const rows = filterAndSortOrgProjects(projects, teamNameById, {
       ...base,

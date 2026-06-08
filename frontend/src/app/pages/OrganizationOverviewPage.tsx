@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { useOutletContext, useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   ReactFlow,
@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, ChevronDown, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -230,8 +230,28 @@ function OrgProjectsColgroup() {
       <col className="w-[240px]" />
       <col className="w-[190px]" />
       <col className="w-[90px]" />
-      <col className="w-[110px]" />
+      <col className="w-[140px]" />
     </colgroup>
+  );
+}
+
+// Shared header row for the org-sidebar projects table — used by BOTH the loading skeleton and the
+// loaded table so they render at exactly the same height (no jump on load). Plain labels; the table
+// is always sorted by issues (worst first), so there's no interactive sort affordance.
+function OrgProjectsHeader() {
+  const th = 'text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider';
+  return (
+    <thead className="bg-background-card-header border-b border-border">
+      <tr>
+        <th className={th}>Type</th>
+        <th className={th}>Project name</th>
+        <th className={th}>Team</th>
+        <th className={th}>Repository</th>
+        <th className={th}>Issues</th>
+        <th className={th}>Ignored</th>
+        <th className={th}>Last scan</th>
+      </tr>
+    </thead>
   );
 }
 
@@ -356,10 +376,11 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
   const [orgSidebarProjectsSearch, setOrgSidebarProjectsSearch] = useState('');
-  const [orgSidebarSort, setOrgSidebarSort] = useState<{ key: 'project' | 'team' | 'issues' | 'ignored' | 'lastScan'; dir: 'asc' | 'desc' }>({ key: 'issues', dir: 'desc' });
   const [orgSidebarTeamFilter, setOrgSidebarTeamFilter] = useState<string[]>([]);
-  const [orgSidebarScannerFilter, setOrgSidebarScannerFilter] = useState<('infra' | 'dast')[]>([]);
+  // Scanner tokens: 'infra' (container/IaC), 'dast', or a framework id (e.g. 'express').
+  const [orgSidebarScannerFilter, setOrgSidebarScannerFilter] = useState<string[]>([]);
   const [orgSidebarError, setOrgSidebarError] = useState(false);
+  const [orgSidebarErrorMsg, setOrgSidebarErrorMsg] = useState<string | null>(null);
   const [orgSidebarRefetch, setOrgSidebarRefetch] = useState(0);
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
@@ -2230,14 +2251,17 @@ export default function OrganizationOverviewPage() {
     let cancelled = false;
     setOrgSidebarLoading(true);
     setOrgSidebarError(false);
+    setOrgSidebarErrorMsg(null);
     Promise.all([api.getOrgSecuritySummary(orgId), api.getProjects(orgId)])
       .then(([summary, projects]) => {
         if (cancelled) return;
         setOrgSidebarSecuritySummary(summary.projects || []);
         setOrgSidebarProjects(projects);
       })
-      .catch(() => {
-        if (!cancelled) setOrgSidebarError(true);
+      .catch((err) => {
+        if (cancelled) return;
+        setOrgSidebarError(true);
+        setOrgSidebarErrorMsg(err instanceof Error ? err.message : String(err ?? ''));
       })
       .finally(() => {
         if (!cancelled) setOrgSidebarLoading(false);
@@ -3034,68 +3058,113 @@ export default function OrganizationOverviewPage() {
                     value={orgSidebarProjectsSearch}
                     onChange={(e) => setOrgSidebarProjectsSearch(e.target.value)}
                     placeholder="Search projects, teams, repos…"
-                    className="w-full h-9 pl-9 pr-3 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    className="w-full h-9 pl-9 pr-3 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
                   />
                 </div>
                 {(() => {
                   const teamOptions = Array.from(
                     new Set(orgSidebarProjects.map((p) => p.owner_team_name).filter((n): n is string => !!n))
                   ).sort();
-                  const activeCount = orgSidebarTeamFilter.length + orgSidebarScannerFilter.length;
+                  const frameworkOptions = Array.from(
+                    new Set(orgSidebarProjects.map((p) => p.framework).filter((f): f is string => !!f))
+                  ).sort();
+                  const toggleTeam = (t: string) =>
+                    setOrgSidebarTeamFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+                  const toggleScanner = (k: string) =>
+                    setOrgSidebarScannerFilter((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+                  // Checkbox row matching the graph's "Filter by" dropdown. The whole row toggles; the
+                  // Checkbox is presentational (pointer-events-none) so a direct click can't double-toggle.
+                  const filterRow = (key: string, checked: boolean, onToggle: () => void, label: ReactNode) => (
+                    <div
+                      key={key}
+                      role="option"
+                      aria-selected={checked}
+                      tabIndex={0}
+                      onClick={onToggle}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+                      className="flex items-center gap-2 rounded-md px-1 py-1 cursor-pointer hover:bg-white/5"
+                    >
+                      <Checkbox
+                        checked={checked}
+                        tabIndex={-1}
+                        className="pointer-events-none data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
+                      />
+                      <span className="flex-1 truncate text-sm text-foreground">{label}</span>
+                    </div>
+                  );
                   return (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-background-card px-3 text-sm text-foreground-secondary hover:text-foreground transition-colors"
-                        >
-                          <Filter className="h-4 w-4" />
-                          Filter
-                          {activeCount > 0 && (
-                            <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-primary/15 px-1 text-xs font-semibold text-primary">{activeCount}</span>
-                          )}
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg">
-                        {teamOptions.length > 0 && (
-                          <>
-                            <DropdownMenuLabel className="text-xs uppercase tracking-wider text-foreground-secondary">Team</DropdownMenuLabel>
-                            {teamOptions.map((t) => (
-                              <DropdownMenuCheckboxItem
-                                key={t}
-                                checked={orgSidebarTeamFilter.includes(t)}
-                                onCheckedChange={() => setOrgSidebarTeamFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))}
-                                onSelect={(e) => e.preventDefault()}
-                              >
-                                {t}
-                              </DropdownMenuCheckboxItem>
-                            ))}
-                            <DropdownMenuSeparator />
-                          </>
-                        )}
-                        <DropdownMenuLabel className="text-xs uppercase tracking-wider text-foreground-secondary">Scanner</DropdownMenuLabel>
-                        <DropdownMenuCheckboxItem
-                          checked={orgSidebarScannerFilter.includes('infra')}
-                          onCheckedChange={() => setOrgSidebarScannerFilter((prev) => (prev.includes('infra') ? prev.filter((x) => x !== 'infra') : [...prev, 'infra']))}
-                          onSelect={(e) => e.preventDefault()}
-                        >
-                          Container / IaC
-                        </DropdownMenuCheckboxItem>
-                        <DropdownMenuCheckboxItem
-                          checked={orgSidebarScannerFilter.includes('dast')}
-                          onCheckedChange={() => setOrgSidebarScannerFilter((prev) => (prev.includes('dast') ? prev.filter((x) => x !== 'dast') : [...prev, 'dast']))}
-                          onSelect={(e) => e.preventDefault()}
-                        >
-                          DAST
-                        </DropdownMenuCheckboxItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <>
+                      {/* Teams dropdown */}
+                      {teamOptions.length > 0 && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-background-card px-3 text-sm text-foreground-secondary hover:text-foreground transition-colors"
+                            >
+                              <Users className="h-4 w-4" />
+                              Teams
+                              {orgSidebarTeamFilter.length > 0 && (
+                                <span className="ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background">{orgSidebarTeamFilter.length}</span>
+                              )}
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg p-0">
+                            <div className="px-2 py-2 max-h-[260px] overflow-y-auto">
+                              {teamOptions.map((t) => filterRow(`team-${t}`, orgSidebarTeamFilter.includes(t), () => toggleTeam(t), t))}
+                            </div>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {/* Type filter — frameworks + container/IaC + DAST */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="Filter by type"
+                            className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background-card text-foreground-secondary hover:text-foreground transition-colors"
+                          >
+                            <Filter className="h-4 w-4" />
+                            {orgSidebarScannerFilter.length > 0 && (
+                              <span className="absolute -right-1.5 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background">{orgSidebarScannerFilter.length}</span>
+                            )}
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg p-0">
+                          <div className="px-2 py-2">
+                            <div className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Type</div>
+                            <div className="max-h-[260px] overflow-y-auto">
+                              {frameworkOptions.map((fw) =>
+                                filterRow(`fw-${fw}`, orgSidebarScannerFilter.includes(fw), () => toggleScanner(fw), (
+                                  <span className="flex items-center gap-2">
+                                    <FrameworkIcon frameworkId={fw} size={16} className="text-white" />
+                                    {prettyFramework(fw)}
+                                  </span>
+                                ))
+                              )}
+                              {filterRow('infra', orgSidebarScannerFilter.includes('infra'), () => toggleScanner('infra'), (
+                                <span className="flex items-center gap-2">
+                                  <FrameworkIcon frameworkId="dockerfile" size={16} className="text-white" />
+                                  Container / IaC
+                                </span>
+                              ))}
+                              {filterRow('dast', orgSidebarScannerFilter.includes('dast'), () => toggleScanner('dast'), (
+                                <span className="flex items-center gap-2">
+                                  <FindingTypeIcon type="dast" size={16} className="text-white" />
+                                  DAST
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </>
                   );
                 })()}
               </div>
               {orgSidebarLoading ? (
                 <div
-                  className="bg-background-card border border-border rounded-lg overflow-hidden"
+                  className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
                   style={{
                     maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
                     WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
@@ -3103,17 +3172,7 @@ export default function OrganizationOverviewPage() {
                 >
                   <table className="w-full table-fixed">
                     <OrgProjectsColgroup />
-                    <thead className="bg-background-card-header border-b border-border">
-                      <tr>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Ignored</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Last scan</th>
-                      </tr>
-                    </thead>
+                    <OrgProjectsHeader />
                     <tbody className="divide-y divide-border">
                       {[1, 2, 3, 4, 5].map((i) => (
                         <tr key={i} className="animate-pulse">
@@ -3135,7 +3194,10 @@ export default function OrganizationOverviewPage() {
                     <AlertTriangle className="h-6 w-6 text-foreground-secondary" />
                   </div>
                   <h3 className="text-base font-medium text-foreground mb-1">Couldn't load projects</h3>
-                  <p className="text-sm text-foreground-secondary max-w-[260px] mb-4">Something went wrong fetching this organization's projects.</p>
+                  <p className="text-sm text-foreground-secondary max-w-[260px] mb-3">Something went wrong fetching this organization's projects.</p>
+                  {orgSidebarErrorMsg && (
+                    <p className="text-xs text-foreground-secondary/70 font-mono max-w-[280px] mb-4 break-words">{orgSidebarErrorMsg}</p>
+                  )}
                   <Button variant="outline" size="sm" onClick={() => setOrgSidebarRefetch((n) => n + 1)}>
                     <RotateCw className="h-4 w-4 mr-2" /> Try again
                   </Button>
@@ -3145,32 +3207,21 @@ export default function OrganizationOverviewPage() {
                 const teamNameById = new Map<string, string | null | undefined>(
                   orgSidebarProjects.map((p) => [p.id, p.owner_team_name]),
                 );
+                const frameworkById = new Map<string, string | null | undefined>(
+                  orgSidebarProjects.map((p) => [p.id, p.framework]),
+                );
                 const filtersActive =
                   orgSidebarProjectsSearch.trim().length > 0 ||
                   orgSidebarTeamFilter.length > 0 ||
                   orgSidebarScannerFilter.length > 0;
+                // Always sorted by issues, worst first — no interactive sort.
                 const rows = filterAndSortOrgProjects(orgSidebarSecuritySummary, teamNameById, {
                   search: orgSidebarProjectsSearch,
                   teamFilter: orgSidebarTeamFilter,
                   scannerFilter: orgSidebarScannerFilter,
-                  sort: orgSidebarSort,
+                  frameworkById,
+                  sort: { key: 'issues', dir: 'desc' },
                 });
-                const toggleSort = (key: typeof orgSidebarSort.key) =>
-                  setOrgSidebarSort((p) => (p.key === key ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
-                const sortTh = (label: string, key: typeof orgSidebarSort.key) => (
-                  <th className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(key)}
-                      className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-foreground-secondary hover:text-foreground transition-colors"
-                    >
-                      {label}
-                      {orgSidebarSort.key === key
-                        ? (orgSidebarSort.dir === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)
-                        : <ChevronsUpDown className="h-3 w-3 opacity-40" />}
-                    </button>
-                  </th>
-                );
                 if (rows.length === 0) {
                   return (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -3188,17 +3239,7 @@ export default function OrganizationOverviewPage() {
                   <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                     <table className="w-full table-fixed">
                       <OrgProjectsColgroup />
-                      <thead className="bg-background-card-header border-b border-border">
-                        <tr>
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                          {sortTh('Project', 'project')}
-                          {sortTh('Team', 'team')}
-                          <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Repository</th>
-                          {sortTh('Issues', 'issues')}
-                          {sortTh('Ignored', 'ignored')}
-                          {sortTh('Last scan', 'lastScan')}
-                        </tr>
-                      </thead>
+                      <OrgProjectsHeader />
                       <tbody className="divide-y divide-border">
                         {rows.map((s) => {
                           const proj = projMap.get(s.project_id);

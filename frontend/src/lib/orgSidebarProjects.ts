@@ -6,12 +6,17 @@ import type { ProjectSecuritySummary } from './api';
 
 export type OrgProjectSortKey = 'project' | 'team' | 'issues' | 'ignored' | 'lastScan';
 export type OrgProjectSort = { key: OrgProjectSortKey; dir: 'asc' | 'desc' };
-export type OrgScannerKey = 'infra' | 'dast';
+// Scanner-filter tokens: the reserved 'infra' (container / IaC) and 'dast', PLUS any framework id
+// (e.g. 'express', 'django') — selecting a framework filters to projects of that type. Framework ids
+// never collide with 'infra' / 'dast'.
+export type OrgScannerKey = string;
 
 export interface OrgProjectQuery {
   search: string;
   teamFilter: string[];
   scannerFilter: OrgScannerKey[];
+  /** project id -> framework id, so the Scanner section's framework options can filter. */
+  frameworkById?: Map<string, string | null | undefined>;
   sort: OrgProjectSort;
 }
 
@@ -32,7 +37,7 @@ export function projectHasInfra(s: ProjectSecuritySummary): boolean {
 export function filterAndSortOrgProjects(
   summaries: ProjectSecuritySummary[],
   teamNameById: Map<string, string | null | undefined>,
-  { search, teamFilter, scannerFilter, sort }: OrgProjectQuery,
+  { search, teamFilter, scannerFilter, frameworkById, sort }: OrgProjectQuery,
 ): ProjectSecuritySummary[] {
   const q = search.trim().toLowerCase();
   const dir = sort.dir === 'asc' ? 1 : -1;
@@ -60,8 +65,12 @@ export function filterAndSortOrgProjects(
       }
       if (teamFilter.length && !teamFilter.includes(teamOf(s))) return false;
       if (scannerFilter.length) {
+        const fw = frameworkById?.get(s.project_id) ?? null;
         const ok = scannerFilter.some(
-          (k) => (k === 'infra' && projectHasInfra(s)) || (k === 'dast' && !!s.has_dast),
+          (k) =>
+            (k === 'infra' && projectHasInfra(s)) ||
+            (k === 'dast' && !!s.has_dast) ||
+            (fw != null && fw === k),
         );
         if (!ok) return false;
       }

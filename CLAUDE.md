@@ -80,7 +80,7 @@ frontend/src/
 **Roles are permission bundles, not a fixed ladder.** Each role is a row in `organization_roles` (org-scoped) carrying a `permissions` JSONB; `organization_members.role` stores the role *name*. `owner` is the only structural role — all permissions, cannot be removed. Org creation seeds exactly two default roles, `owner` and `member`; **there is no built-in `admin` role**, and orgs add/rename/delete their own roles freely. Authorize by checking the relevant permission key in the role's `permissions` JSONB (`owner` always passes) — never by matching a role *name* (`role === 'admin'` is a legacy bug: a non-existent role name).
 
 **Organization permission keys** (`organization_roles.permissions` JSONB):
-- `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `manage_teams_and_projects`, `view_all_teams_and_projects`, `view_settings`, `view_activity`, `view_members`, `add_members`, `kick_members`, `edit_roles`, `edit_permissions`
+- `manage_organization_settings`, `manage_integrations`, `manage_members`, `manage_policies`, `manage_notifications`, `manage_statuses`, `manage_teams_and_projects`, `view_settings`, `view_activity`, `view_members`, `add_members`, `kick_members`, `edit_roles`, `edit_permissions`
 - AI & Aegis: `interact_with_aegis`, `manage_aegis`, `trigger_fix`, `view_ai_spending`, `manage_incidents`
 - Billing: `manage_billing` — gates top-up, payment-method CRUD, auto-recharge config, receipt download. Required to be included in billing-alert email recipients.
 

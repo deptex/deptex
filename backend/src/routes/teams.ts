@@ -78,17 +78,16 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
     .eq('name', orgMembership.role)
     .single();
 
-  // Check if user has access:
-  // 1. Is a team member, OR
-  // 2. Is org owner/admin, OR
-  // 3. Has view_all_teams_and_projects or manage_teams_and_projects permission
+  // Access is granted to a team member, the org owner, or anyone with the manage_teams_and_projects
+  // permission. No role-NAME checks: 'owner' is the only structural role, there is no built-in 'admin'
+  // role, and view_all_teams_and_projects was folded into manage_teams_and_projects by
+  // combine_team_project_permissions.sql (it's no longer a real permission key). This mirrors
+  // getAccessibleProjectIdsInOrganization in projects.ts.
   const isTeamMember = !!teamMembership;
-  const isOrgAdminOrOwner = orgMembership.role === 'owner' || orgMembership.role === 'admin';
-  const hasOrgPermission = 
-    orgRole?.permissions?.view_all_teams_and_projects === true ||
+  const hasAccess =
+    isTeamMember ||
+    orgMembership.role === 'owner' ||
     orgRole?.permissions?.manage_teams_and_projects === true;
-
-  const hasAccess = isTeamMember || isOrgAdminOrOwner || hasOrgPermission;
 
   if (!hasAccess) {
     return {
