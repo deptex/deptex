@@ -42,16 +42,17 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
     };
   }
 
-  // Validate the team actually belongs to this organization. Without this a member of org A
-  // could pass a teamId from org B — and since the backend uses the service-role key (RLS
-  // bypassed), the cross-org rows would be returned (IDOR).
-  const { data: teamRow, error: teamLookupError } = await supabase
-    .from('teams')
-    .select('id')
-    .eq('id', teamId)
-    .eq('organization_id', organizationId)
-    .single();
+  // Validate the team belongs to this org (IDOR guard — the service-role key bypasses RLS, so a
+  // member of org A could otherwise pass a teamId from org B), and load the caller's team membership
+  // + org role. These three reads are independent once we have orgMembership, so run them in parallel
+  // — this is the hot path shared by every team endpoint, so the saved round-trips add up.
+  const [teamRowRes, teamMembershipRes, orgRoleRes] = await Promise.all([
+    supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', organizationId).single(),
+    supabase.from('team_members').select('role_id').eq('team_id', teamId).eq('user_id', userId).single(),
+    supabase.from('organization_roles').select('permissions, display_order').eq('organization_id', organizationId).eq('name', orgMembership.role).single(),
+  ]);
 
+  const { data: teamRow, error: teamLookupError } = teamRowRes;
   if (teamLookupError || !teamRow) {
     return {
       hasAccess: false,
@@ -62,21 +63,8 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
     };
   }
 
-  // Get user's team membership
-  const { data: teamMembership } = await supabase
-    .from('team_members')
-    .select('role_id')
-    .eq('team_id', teamId)
-    .eq('user_id', userId)
-    .single();
-
-  // Get user's org role permissions
-  const { data: orgRole } = await supabase
-    .from('organization_roles')
-    .select('permissions, display_order')
-    .eq('organization_id', organizationId)
-    .eq('name', orgMembership.role)
-    .single();
+  const { data: teamMembership } = teamMembershipRes;
+  const { data: orgRole } = orgRoleRes;
 
   // Access is granted to a team member, the org owner, or anyone with the manage_teams_and_projects
   // permission. No role-NAME checks: 'owner' is the only structural role, there is no built-in 'admin'
@@ -451,9 +439,12 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Team not found' });
     }
 
-    // Create activity logs for changes
+    // Create activity logs for changes. These are non-critical (createActivity swallows its own
+    // errors) and independent, so fire them in parallel rather than serializing the response behind
+    // one insert per changed field.
+    const activityLogs: Promise<void>[] = [];
     if (name !== undefined && name.trim() !== currentTeam?.name) {
-      await createActivity({
+      activityLogs.push(createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_team_name',
@@ -464,11 +455,11 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
           old_name: currentTeam?.name,
           new_name: name.trim()
         },
-      });
+      }));
     }
 
     if (description !== undefined && description !== currentTeam?.description) {
-      await createActivity({
+      activityLogs.push(createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_team_description',
@@ -477,11 +468,11 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
           team_id: teamId,
           team_name: team.name,
         },
-      });
+      }));
     }
 
     if (avatar_url !== undefined && avatar_url !== currentTeam?.avatar_url) {
-      await createActivity({
+      activityLogs.push(createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'changed_team_avatar',
@@ -490,8 +481,10 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
           team_id: teamId,
           team_name: team.name,
         },
-      });
+      }));
     }
+
+    await Promise.all(activityLogs);
 
     res.json(team);
   } catch (error: any) {
@@ -1238,84 +1231,91 @@ router.get('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    // Get team members with role_id
-    const { data: teamMembers, error: teamMembersError } = await supabase
-      .from('team_members')
-      .select('user_id, role_id, created_at')
-      .eq('team_id', teamId);
+    // Team members + the two lookup tables (team roles, org roles) are independent, so fetch them in
+    // one parallel round. The org-roles table gives a role-name → rank map, which replaces the
+    // per-member organization_roles query the old code ran in a loop (mirrors organizations.ts).
+    const [teamMembersRes, teamRolesRes, orgRolesRes] = await Promise.all([
+      supabase.from('team_members').select('user_id, role_id, created_at').eq('team_id', teamId),
+      supabase.from('team_roles').select('id, name, display_name, display_order, permissions, color').eq('team_id', teamId),
+      supabase.from('organization_roles').select('name, display_order').eq('organization_id', id),
+    ]);
 
-    if (teamMembersError) {
-      throw teamMembersError;
+    if (teamMembersRes.error) {
+      throw teamMembersRes.error;
     }
 
-    // Get all team roles for lookup
-    const { data: teamRoles } = await supabase
-      .from('team_roles')
-      .select('id, name, display_name, display_order, permissions, color')
-      .eq('team_id', teamId);
+    const memberRows = teamMembersRes.data || [];
+    const rolesMap = new Map((teamRolesRes.data || []).map(r => [r.id, r]));
+    const orgRankByRole = new Map((orgRolesRes.data || []).map((r: any) => [r.name, r.display_order]));
 
-    const rolesMap = new Map((teamRoles || []).map(r => [r.id, r]));
+    if (memberRows.length === 0) {
+      return res.json([]);
+    }
 
-    // Get user details for each member
-    const membersWithDetails = await Promise.all(
-      (teamMembers || []).map(async (tm) => {
-        const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(tm.user_id);
-        if (userError || !user) return null;
+    const userIds = memberRows.map((tm) => tm.user_id);
 
-        // Get user profile for full name
-        const { data: userProfile } = await supabase
-          .from('user_profiles')
-          .select('full_name, avatar_url')
-          .eq('user_id', tm.user_id)
-          .single();
+    // The org memberships (one batched query for all members, replacing the per-member loop) and the
+    // auth users run in parallel. getUserById has no batch-by-id, so fan it out — but it's the only
+    // per-member call left, and they all resolve concurrently.
+    const [orgMembershipsRes, authUsers] = await Promise.all([
+      supabase.from('organization_members').select('user_id, role').eq('organization_id', id).in('user_id', userIds),
+      Promise.all(memberRows.map((tm) => supabase.auth.admin.getUserById(tm.user_id))),
+    ]);
 
-        // Get organization membership for org_rank
-        const { data: orgMembership } = await supabase
-          .from('organization_members')
-          .select('role')
-          .eq('organization_id', id)
-          .eq('user_id', tm.user_id)
-          .single();
+    const orgRoleByUser = new Map((orgMembershipsRes.data || []).map((m: any) => [m.user_id, m.role]));
 
-        // Get organization role for rank by role name
-        let orgRank = 999; // Default to lowest rank
-        if (orgMembership?.role) {
-          const { data: orgRole } = await supabase
-            .from('organization_roles')
-            .select('display_order')
-            .eq('organization_id', id)
-            .eq('name', orgMembership.role)
-            .single();
+    const membersWithDetails = memberRows.map((tm, i) => {
+      const user = authUsers[i]?.data?.user;
+      if (!user) return null;
 
-          if (orgRole) {
-            orgRank = orgRole.display_order;
-          }
-        }
+      // Resolve avatar + name from the auth user. Identity lives on user_metadata after the
+      // user_profiles refactor; prefer a custom-uploaded avatar, then the OAuth picture, then the raw
+      // identity_data (Supabase doesn't always merge OAuth fields into user_metadata on the first
+      // session after sign-up). Mirrors the org members endpoint in organizations.ts.
+      const meta = user.user_metadata;
+      const idData = user.identities?.[0]?.identity_data as
+        | { picture?: string; avatar_url?: string; full_name?: string; name?: string }
+        | undefined;
+      const avatarUrl =
+        meta?.custom_avatar_url
+        ?? meta?.picture
+        ?? meta?.avatar_url
+        ?? idData?.picture
+        ?? idData?.avatar_url
+        ?? null;
+      const fullName =
+        meta?.custom_full_name
+        ?? meta?.full_name
+        ?? meta?.name
+        ?? idData?.full_name
+        ?? idData?.name
+        ?? null;
 
-        const role = tm.role_id ? rolesMap.get(tm.role_id) : null;
+      const orgRoleName = orgRoleByUser.get(tm.user_id);
+      const orgRank = orgRoleName ? (orgRankByRole.get(orgRoleName) ?? 999) : 999;
+      const role = tm.role_id ? rolesMap.get(tm.role_id) : null;
 
-        return {
-          user_id: user.id,
-          email: user.email,
-          full_name: userProfile?.full_name || user.user_metadata?.full_name || null,
-          avatar_url: userProfile?.avatar_url || user.user_metadata?.avatar_url || null,
-          role: role?.name || 'member',
-          role_display_name: role?.display_name || 'Member',
-          role_color: role?.color || null,
-          rank: role?.display_order ?? 999,
-          org_rank: orgRank, // Organization-level rank
-          permissions: role?.permissions || {
-            view_overview: true,
-            manage_projects: false,
-            manage_members: false,
-            view_settings: false,
-            view_roles: false,
-            edit_roles: false,
-          },
-          created_at: tm.created_at,
-        };
-      })
-    );
+      return {
+        user_id: user.id,
+        email: user.email,
+        full_name: fullName,
+        avatar_url: avatarUrl,
+        role: role?.name || 'member',
+        role_display_name: role?.display_name || 'Member',
+        role_color: role?.color || null,
+        rank: role?.display_order ?? 999,
+        org_rank: orgRank, // Organization-level rank
+        permissions: role?.permissions || {
+          view_overview: true,
+          manage_projects: false,
+          manage_members: false,
+          view_settings: false,
+          view_roles: false,
+          edit_roles: false,
+        },
+        created_at: tm.created_at,
+      };
+    });
 
     res.json(membersWithDetails.filter(Boolean));
   } catch (error: any) {
@@ -1991,7 +1991,7 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
 
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, name, active_extraction_run_id')
+      .select('id, name, active_extraction_run_id, infra_types')
       .in('id', projectIds);
 
     // Phase 19: only include findings tagged with each project's currently active run
@@ -2009,8 +2009,25 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
     const countsByProject = new Map<string, any>();
     for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
 
+    // Primary linked repository per project (provider logo + repo name) — one row per project.
+    const { data: repoRows } = await supabase
+      .from('project_repositories')
+      .select('project_id, provider, repo_full_name, last_extracted_at')
+      .in('project_id', projectIds);
+    const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
+    for (const r of repoRows ?? []) {
+      if (!repoByProject.has(r.project_id)) {
+        repoByProject.set(r.project_id, {
+          provider: (r as any).provider ?? null,
+          repo_full_name: (r as any).repo_full_name ?? null,
+          last_extracted_at: (r as any).last_extracted_at ?? null,
+        });
+      }
+    }
+
     const result = (projects ?? []).map((p: any) => {
       const c = countsByProject.get(p.id);
+      const repo = repoByProject.get(p.id);
       return {
         project_id: p.id,
         project_name: p.name,
@@ -2026,6 +2043,13 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
         semgrep_count: Number(c?.semgrep_count ?? 0),
         secret_count: Number(c?.secret_count ?? 0),
         verified_secret_count: Number(c?.verified_secret_count ?? 0),
+        ignored_count: Number(c?.ignored_count ?? 0),
+        repo_provider: repo?.provider ?? null,
+        repo_full_name: repo?.repo_full_name ?? null,
+        last_scan_at: c?.last_scan_at ?? repo?.last_extracted_at ?? null,
+        infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
+        has_container: !!c?.has_container,
+        has_dast: !!c?.has_dast,
       };
     });
 

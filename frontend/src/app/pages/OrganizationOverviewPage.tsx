@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -22,6 +22,7 @@ import {
 import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
 import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type LicenseViolation } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
@@ -68,6 +69,8 @@ import { FrameworkIcon } from '../../components/framework-icon';
 import { FindingTypeIcon } from '../../components/security/FindingTypeIcon';
 import { filterAndSortOrgProjects } from '../../lib/orgSidebarProjects';
 import { SeverityPills } from '../../components/SeverityPills';
+import { ProjectsAssetTable } from '../../components/ProjectsAssetTable';
+import { formatDate, formatRelativeTime, prettyFramework, PROVIDER_LOGOS } from '../../lib/projectDisplay';
 import { TeamIcon } from '../../components/TeamIcon';
 import { RoleBadge } from '../../components/RoleBadge';
 import { RoleDropdown } from '../../components/RoleDropdown';
@@ -158,102 +161,6 @@ function getReactFlowPaneSize(paneEl: HTMLElement | null): { width: number; heig
 }
 
 export type ExpandFilter = 'all' | 'vulnerable' | 'not_allowed' | 'outdated';
-
-function projectStatusLabel(project: Project): { label: string; inProgress: boolean; isError: boolean } {
-  const status = project.repo_status;
-  // Only show "Creating" for initial extraction; re-syncs keep their real status
-  if (isInitialExtraction(status || '', project.extraction_step ?? null, project.last_extracted_at ?? null)) {
-    const step = project.extraction_step;
-    const labels: Record<string, string> = {
-      queued: 'Creating', cloning: 'Creating', sbom: 'Creating', deps_synced: 'Creating',
-      usage_extraction: 'Creating', framework_detection: 'Creating', taint_engine: 'Creating', scanning: 'Creating',
-      uploading: 'Creating', completed: 'Creating',
-    };
-    const label = step ? (labels[step] ?? 'Creating') : (status === 'analyzing' || status === 'finalizing' ? 'Analyzing' : 'Creating');
-    return { label, inProgress: true, isError: false };
-  }
-  if (status === 'error') return { label: 'Failed', inProgress: false, isError: true };
-  return {
-    label: project.is_compliant !== false ? 'COMPLIANT' : 'NOT COMPLIANT',
-    inProgress: false,
-    isError: false,
-  };
-}
-
-const formatDate = (dateString: string): string => {
-  const date = new Date(dateString);
-  const day = date.getDate().toString().padStart(2, '0');
-  const month = date.toLocaleDateString('en-US', { month: 'short' });
-  const year = date.getFullYear().toString().slice(-2);
-  return `${day} ${month} ${year}`;
-};
-
-/** "Last scan"-style relative time: just now / 5m / 3h / 2d, falling back to a date past ~7 days. */
-const formatRelativeTime = (dateString: string | null | undefined): string => {
-  if (!dateString) return 'Never';
-  const then = new Date(dateString).getTime();
-  if (Number.isNaN(then)) return 'Never';
-  const diffMs = Date.now() - then;
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return formatDate(dateString);
-};
-
-/** Prettify a framework id for the Type column ("spring-boot" → "Spring Boot", "express" → "Express"). */
-const prettyFramework = (framework: string | null | undefined): string => {
-  if (!framework) return 'Unknown';
-  return framework
-    .split(/[-_]/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-};
-
-const PROVIDER_LOGOS: Record<string, string> = {
-  github: '/images/integrations/github.png',
-  gitlab: '/images/integrations/gitlab.png',
-  bitbucket: '/images/integrations/bitbucket.png',
-};
-
-/** Locked column widths for the org-sidebar projects table — shared by the skeleton and the
- * loaded table (both `table-fixed`) so columns stay put when data arrives, no layout shift. */
-function OrgProjectsColgroup() {
-  return (
-    <colgroup>
-      <col className="w-[120px]" />
-      <col className="w-[200px]" />
-      <col className="w-[150px]" />
-      <col className="w-[240px]" />
-      <col className="w-[190px]" />
-      <col className="w-[90px]" />
-      <col className="w-[140px]" />
-    </colgroup>
-  );
-}
-
-// Shared header row for the org-sidebar projects table — used by BOTH the loading skeleton and the
-// loaded table so they render at exactly the same height (no jump on load). Plain labels; the table
-// is always sorted by issues (worst first), so there's no interactive sort affordance.
-function OrgProjectsHeader() {
-  const th = 'text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider';
-  return (
-    <thead className="bg-background-card-header border-b border-border">
-      <tr>
-        <th className={th}>Type</th>
-        <th className={th}>Project name</th>
-        <th className={th}>Team</th>
-        <th className={th}>Repository</th>
-        <th className={th}>Issues</th>
-        <th className={th}>Ignored</th>
-        <th className={th}>Last scan</th>
-      </tr>
-    </thead>
-  );
-}
 
 /** Fixed column widths for project sidebar vuln table — keep skeleton + data table aligned (no layout shift). */
 function OrgProjectVulnerabilitiesTableColgroup() {
@@ -375,10 +282,6 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarSecuritySummary, setOrgSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
-  const [orgSidebarProjectsSearch, setOrgSidebarProjectsSearch] = useState('');
-  const [orgSidebarTeamFilter, setOrgSidebarTeamFilter] = useState<string[]>([]);
-  // Scanner tokens: 'infra' (container/IaC), 'dast', or a framework id (e.g. 'express').
-  const [orgSidebarScannerFilter, setOrgSidebarScannerFilter] = useState<string[]>([]);
   const [orgSidebarError, setOrgSidebarError] = useState(false);
   const [orgSidebarErrorMsg, setOrgSidebarErrorMsg] = useState<string | null>(null);
   const [orgSidebarRefetch, setOrgSidebarRefetch] = useState(0);
@@ -459,7 +362,7 @@ export default function OrganizationOverviewPage() {
   // Ref to ensure URL→state restoration only happens once per mount
   const restoredRef = useRef(false);
   // Team sidebar settings state
-  const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'notifications' | 'roles'>('general');
+  const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'roles'>('general');
   const [teamSettingsName, setTeamSettingsName] = useState('');
   const [teamSettingsDescription, setTeamSettingsDescription] = useState('');
   const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
@@ -592,8 +495,8 @@ export default function OrganizationOverviewPage() {
       const validTeamTabs = new Set(['projects', 'issues', 'members', 'settings']);
       const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'issues') as 'projects' | 'issues' | 'members' | 'settings';
       const subtabRaw = searchParams.get('subtab');
-      const validTeamSubtabs = new Set(['general', 'notifications', 'roles']);
-      const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'notifications' | 'roles';
+      const validTeamSubtabs = new Set(['general', 'roles']);
+      const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'roles';
       if (tid) {
         setSelectedTeamId(tid);
         setSelectedTeamName(teamsById[tid]?.name ?? null);
@@ -626,6 +529,10 @@ export default function OrganizationOverviewPage() {
   useEffect(() => {
     const instance = reactFlowInstanceRef.current;
     if (!instance) return;
+
+    // When switching to another sidebar, skip the close→full-screen recenter (the incoming
+    // sidebar's own effect recenters). Lets the org sidebar animate out without a viewport fight.
+    if (!orgSidebarVisible && sidebarSwitchingRef.current) return;
 
     const nodeId = focusedNodeIdRef.current;
     if (!nodeId) return;
@@ -1478,20 +1385,6 @@ export default function OrganizationOverviewPage() {
     return counts;
   }, [teamSidebarMembers]);
 
-  const teamSidebarFilteredProjects = useMemo(() => {
-    if (!teamSidebarProjectsSearch.trim()) return teamSidebarProjects;
-    const q = teamSidebarProjectsSearch.toLowerCase();
-    return teamSidebarProjects.filter((p) => p.name.toLowerCase().includes(q));
-  }, [teamSidebarProjects, teamSidebarProjectsSearch]);
-
-  // Depscore-band issue counts per project, keyed by project id — drives the
-  // SeverityPills on each project row/card in the team sidebar's Projects tab.
-  const teamSidebarSecByProject = useMemo(() => {
-    const m = new Map<string, ProjectSecuritySummary>();
-    for (const s of teamSidebarSecuritySummary) m.set(s.project_id, s);
-    return m;
-  }, [teamSidebarSecuritySummary]);
-
   const teamSidebarFilteredMembers = useMemo(() => {
     let result = teamSidebarMembers;
     if (teamSidebarMembersSearch.trim()) {
@@ -1544,7 +1437,6 @@ export default function OrganizationOverviewPage() {
       );
       toast({ title: 'Success', description: 'Member role updated' });
       setTeamSidebarRoleChangeOpen(false);
-      setTeamSidebarMemberToChangeRole(null);
     } catch (err: any) {
       toast({ title: 'Error', description: err?.message || 'Failed to update role', variant: 'destructive' });
     } finally {
@@ -1572,7 +1464,6 @@ export default function OrganizationOverviewPage() {
         toast({ title: 'Success', description: 'Member removed from team' });
       }
       setTeamSidebarRemoveConfirmOpen(false);
-      setTeamSidebarMemberToRemove(null);
     } catch (err: any) {
       toast({ title: 'Error', description: err?.message || 'Failed to remove member', variant: 'destructive' });
     } finally {
@@ -1661,7 +1552,6 @@ export default function OrganizationOverviewPage() {
 
   /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
   const openProjectInSidebar = useCallback((project: Project) => {
-    closeOrgSidebarImmediate();
     focusedNodeIdRef.current = `project-${project.id}`;
     const openProject = () => {
       setSelectedProjectId(project.id);
@@ -1679,7 +1569,15 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
     };
-    if (teamSidebarVisible) {
+    if (orgSidebarVisible) {
+      sidebarSwitchingRef.current = true;
+      setOrgSidebarVisible(false);
+      setTimeout(() => {
+        sidebarSwitchingRef.current = false;
+        setOrgSidebarOpen(false);
+        openProject();
+      }, 150);
+    } else if (teamSidebarVisible) {
       sidebarSwitchingRef.current = true;
       setTeamSidebarVisible(false);
       setTimeout(() => {
@@ -1690,10 +1588,11 @@ export default function OrganizationOverviewPage() {
         openProject();
       }, 150);
     } else {
+      closeOrgSidebarImmediate();
       closeTeamSidebarImmediate();
       openProject();
     }
-  }, [closeOrgSidebarImmediate, closeTeamSidebarImmediate, teamSidebarVisible, setSidebarParams]);
+  }, [closeOrgSidebarImmediate, closeTeamSidebarImmediate, orgSidebarVisible, teamSidebarVisible, setSidebarParams]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -1711,7 +1610,6 @@ export default function OrganizationOverviewPage() {
       if (node.type === 'teamGroupNode') {
         const teamData = node.data as { teamId?: string; teamName?: string };
         if (teamData.teamId) {
-          closeOrgSidebarImmediate();
           focusedNodeIdRef.current = node.id;
           const openNewTeam = () => {
             setSelectedTeamId(teamData.teamId!);
@@ -1721,7 +1619,15 @@ export default function OrganizationOverviewPage() {
             requestAnimationFrame(() => setTeamSidebarVisible(true));
           };
           // Animate close whichever sidebar is open, then open the team sidebar
-          if (projectSidebarVisible) {
+          if (orgSidebarVisible) {
+            sidebarSwitchingRef.current = true;
+            setOrgSidebarVisible(false);
+            setTimeout(() => {
+              sidebarSwitchingRef.current = false;
+              setOrgSidebarOpen(false);
+              openNewTeam();
+            }, 150);
+          } else if (projectSidebarVisible) {
             sidebarSwitchingRef.current = true;
             setProjectSidebarVisible(false);
             setTimeout(() => {
@@ -1740,6 +1646,7 @@ export default function OrganizationOverviewPage() {
               openNewTeam();
             }, 150);
           } else {
+            closeOrgSidebarImmediate();
             closeProjectSidebarImmediate();
             openNewTeam();
           }
@@ -1757,7 +1664,6 @@ export default function OrganizationOverviewPage() {
         isInitialExtracting?: boolean;
       };
       if (d.projectId && d.isTeamNode) {
-        closeOrgSidebarImmediate();
         focusedNodeIdRef.current = node.id;
         const openNewTeam = () => {
           setSelectedTeamId(d.projectId!);
@@ -1766,7 +1672,15 @@ export default function OrganizationOverviewPage() {
           setTeamSidebarOpen(true);
           requestAnimationFrame(() => setTeamSidebarVisible(true));
         };
-        if (projectSidebarVisible) {
+        if (orgSidebarVisible) {
+          sidebarSwitchingRef.current = true;
+          setOrgSidebarVisible(false);
+          setTimeout(() => {
+            sidebarSwitchingRef.current = false;
+            setOrgSidebarOpen(false);
+            openNewTeam();
+          }, 150);
+        } else if (projectSidebarVisible) {
           sidebarSwitchingRef.current = true;
           setProjectSidebarVisible(false);
           setTimeout(() => {
@@ -1785,12 +1699,12 @@ export default function OrganizationOverviewPage() {
             openNewTeam();
           }, 150);
         } else {
+          closeOrgSidebarImmediate();
           openNewTeam();
         }
         return;
       }
       if (d.projectId) {
-        closeOrgSidebarImmediate();
         focusedNodeIdRef.current = node.id;
         const openNewProject = () => {
           setSelectedProjectId(d.projectId!);
@@ -1810,7 +1724,15 @@ export default function OrganizationOverviewPage() {
           requestAnimationFrame(() => setProjectSidebarVisible(true));
         };
         // Animate close whichever sidebar is open, then open the project sidebar
-        if (teamSidebarVisible) {
+        if (orgSidebarVisible) {
+          sidebarSwitchingRef.current = true;
+          setOrgSidebarVisible(false);
+          setTimeout(() => {
+            sidebarSwitchingRef.current = false;
+            setOrgSidebarOpen(false);
+            openNewProject();
+          }, 150);
+        } else if (teamSidebarVisible) {
           sidebarSwitchingRef.current = true;
           setTeamSidebarVisible(false);
           setTimeout(() => {
@@ -1832,6 +1754,7 @@ export default function OrganizationOverviewPage() {
             openNewProject();
           }, 150);
         } else {
+          closeOrgSidebarImmediate();
           closeTeamSidebarImmediate();
           openNewProject();
         }
@@ -1839,6 +1762,7 @@ export default function OrganizationOverviewPage() {
     },
     [
       orgId,
+      orgSidebarVisible,
       closeOrgSidebarImmediate,
       closeTeamSidebarImmediate,
       closeProjectSidebarImmediate,
@@ -2424,12 +2348,6 @@ export default function OrganizationOverviewPage() {
     }
   }, [orgId, selectedTeamId]);
 
-  useEffect(() => {
-    if (teamSidebarTab === 'settings' && teamSettingsSubTab === 'notifications' && selectedTeamId) {
-      loadTeamConnections();
-    }
-  }, [teamSidebarTab, teamSettingsSubTab, selectedTeamId, loadTeamConnections]);
-
   // Team settings handlers
   const handleTeamSettingsSave = async () => {
     if (!orgId || !selectedTeamId || !teamSidebarTeamData) return;
@@ -2598,12 +2516,8 @@ export default function OrganizationOverviewPage() {
   useEffect(() => {
     if (!teamSidebarOpen || !teamSidebarTeamData || teamSidebarDataLoading) return;
     if (teamSidebarTab === 'settings') {
-      const canNotifications = teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission;
       const canRoles = teamSidebarPermissions?.view_roles || teamSidebarPermissions?.edit_roles || teamSidebarHasOrgManagePermission;
-      if (teamSettingsSubTab === 'notifications' && !canNotifications) {
-        setTeamSettingsSubTab('general');
-        setSidebarParams({ subtab: 'general' });
-      } else if (teamSettingsSubTab === 'roles' && !canRoles) {
+      if (teamSettingsSubTab === 'roles' && !canRoles) {
         setTeamSettingsSubTab('general');
         setSidebarParams({ subtab: 'general' });
       }
@@ -3066,292 +2980,18 @@ export default function OrganizationOverviewPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 pt-3 pb-5">
-              <div className="mb-3 flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-secondary" />
-                  <input
-                    type="text"
-                    value={orgSidebarProjectsSearch}
-                    onChange={(e) => setOrgSidebarProjectsSearch(e.target.value)}
-                    placeholder="Search projects, teams, repos…"
-                    className="w-full h-9 pl-9 pr-3 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
-                  />
-                </div>
-                {(() => {
-                  const teamOptions = Array.from(
-                    new Set(orgSidebarProjects.map((p) => p.owner_team_name).filter((n): n is string => !!n))
-                  ).sort();
-                  const frameworkOptions = Array.from(
-                    new Set(orgSidebarProjects.map((p) => p.framework).filter((f): f is string => !!f))
-                  ).sort();
-                  const toggleTeam = (t: string) =>
-                    setOrgSidebarTeamFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
-                  const toggleScanner = (k: string) =>
-                    setOrgSidebarScannerFilter((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
-                  // Checkbox row matching the graph's "Filter by" dropdown. The whole row toggles; the
-                  // Checkbox is presentational (pointer-events-none) so a direct click can't double-toggle.
-                  const filterRow = (key: string, checked: boolean, onToggle: () => void, label: ReactNode) => (
-                    <div
-                      key={key}
-                      role="option"
-                      aria-selected={checked}
-                      tabIndex={0}
-                      onClick={onToggle}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
-                      className="flex items-center gap-2 rounded-md px-1 py-1 cursor-pointer hover:bg-white/5"
-                    >
-                      <Checkbox
-                        checked={checked}
-                        tabIndex={-1}
-                        className="pointer-events-none data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <span className="flex-1 truncate text-sm text-foreground">{label}</span>
-                    </div>
-                  );
-                  return (
-                    <>
-                      {/* Teams dropdown */}
-                      {teamOptions.length > 0 && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-background-card px-3 text-sm text-foreground-secondary hover:text-foreground transition-colors"
-                            >
-                              <Users className="h-4 w-4" />
-                              Teams
-                              {orgSidebarTeamFilter.length > 0 && (
-                                <span className="ml-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background">{orgSidebarTeamFilter.length}</span>
-                              )}
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg p-0">
-                            <div className="px-2 py-2 max-h-[260px] overflow-y-auto">
-                              {teamOptions.map((t) => filterRow(`team-${t}`, orgSidebarTeamFilter.includes(t), () => toggleTeam(t), t))}
-                            </div>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                      {/* Type filter — frameworks + container/IaC + DAST */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            aria-label="Filter by type"
-                            className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background-card text-foreground-secondary hover:text-foreground transition-colors"
-                          >
-                            <Filter className="h-4 w-4" />
-                            {orgSidebarScannerFilter.length > 0 && (
-                              <span className="absolute -right-1.5 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-foreground px-1 text-[10px] font-semibold text-background">{orgSidebarScannerFilter.length}</span>
-                            )}
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg p-0">
-                          <div className="px-2 py-2">
-                            <div className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Type</div>
-                            <div className="max-h-[260px] overflow-y-auto">
-                              {frameworkOptions.map((fw) =>
-                                filterRow(`fw-${fw}`, orgSidebarScannerFilter.includes(fw), () => toggleScanner(fw), (
-                                  <span className="flex items-center gap-2">
-                                    <FrameworkIcon frameworkId={fw} size={16} className="text-white" />
-                                    {prettyFramework(fw)}
-                                  </span>
-                                ))
-                              )}
-                              {filterRow('infra', orgSidebarScannerFilter.includes('infra'), () => toggleScanner('infra'), (
-                                <span className="flex items-center gap-2">
-                                  <FrameworkIcon frameworkId="dockerfile" size={16} className="text-white" />
-                                  Container / IaC
-                                </span>
-                              ))}
-                              {filterRow('dast', orgSidebarScannerFilter.includes('dast'), () => toggleScanner('dast'), (
-                                <span className="flex items-center gap-2">
-                                  <FindingTypeIcon type="dast" size={16} className="text-white" />
-                                  DAST
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </>
-                  );
-                })()}
-              </div>
-              {orgSidebarLoading ? (
-                <div
-                  className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
-                  style={{
-                    maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-                    WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-                  }}
-                >
-                  <table className="w-full table-fixed">
-                    <OrgProjectsColgroup />
-                    <OrgProjectsHeader />
-                    <tbody className="divide-y divide-border">
-                      {[1, 2, 3, 4, 5].map((i) => (
-                        <tr key={i} className="animate-pulse">
-                          <td className="px-4 py-3"><div className="h-5 w-5 rounded bg-muted" /></td>
-                          <td className="px-4 py-3"><div className="h-4 w-28 rounded bg-muted" /></td>
-                          <td className="px-4 py-3"><div className="h-4 w-20 rounded bg-muted" /></td>
-                          <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-4 w-4 rounded-sm bg-muted" /><div className="h-4 w-24 rounded bg-muted" /></div></td>
-                          <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted" />))}</div></td>
-                          <td className="px-4 py-3"><div className="h-4 w-8 rounded bg-muted" /></td>
-                          <td className="px-4 py-3"><div className="h-4 w-14 rounded bg-muted" /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : orgSidebarError ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
-                    <AlertTriangle className="h-6 w-6 text-foreground-secondary" />
-                  </div>
-                  <h3 className="text-base font-medium text-foreground mb-1">Couldn't load projects</h3>
-                  <p className="text-sm text-foreground-secondary max-w-[260px] mb-3">Something went wrong fetching this organization's projects.</p>
-                  {orgSidebarErrorMsg && (
-                    <p className="text-xs text-foreground-secondary/70 font-mono max-w-[280px] mb-4 break-words">{orgSidebarErrorMsg}</p>
-                  )}
-                  <Button variant="outline" size="sm" onClick={() => setOrgSidebarRefetch((n) => n + 1)}>
-                    <RotateCw className="h-4 w-4 mr-2" /> Try again
-                  </Button>
-                </div>
-              ) : (() => {
-                const projMap = new Map(orgSidebarProjects.map((p) => [p.id, p]));
-                const teamNameById = new Map<string, string | null | undefined>(
-                  orgSidebarProjects.map((p) => [p.id, p.owner_team_name]),
-                );
-                const frameworkById = new Map<string, string | null | undefined>(
-                  orgSidebarProjects.map((p) => [p.id, p.framework]),
-                );
-                const filtersActive =
-                  orgSidebarProjectsSearch.trim().length > 0 ||
-                  orgSidebarTeamFilter.length > 0 ||
-                  orgSidebarScannerFilter.length > 0;
-                // Always sorted by issues, worst first — no interactive sort.
-                const rows = filterAndSortOrgProjects(orgSidebarSecuritySummary, teamNameById, {
-                  search: orgSidebarProjectsSearch,
-                  teamFilter: orgSidebarTeamFilter,
-                  scannerFilter: orgSidebarScannerFilter,
-                  frameworkById,
-                  sort: { key: 'issues', dir: 'desc' },
-                });
-                if (rows.length === 0) {
-                  return (
-                    <div className="flex flex-col items-center justify-center py-12 text-center">
-                      <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
-                        <FolderKanban className="h-6 w-6 text-foreground-secondary" />
-                      </div>
-                      <h3 className="text-base font-medium text-foreground mb-1">{filtersActive ? 'No matches' : 'No projects yet'}</h3>
-                      <p className="text-sm text-foreground-secondary max-w-[260px]">
-                        {filtersActive ? 'No projects match your search or filters.' : 'Connect a repository to start seeing findings across your organization.'}
-                      </p>
-                    </div>
-                  );
-                }
-                return (
-                  <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                    <table className="w-full table-fixed">
-                      <OrgProjectsColgroup />
-                      <OrgProjectsHeader />
-                      <tbody className="divide-y divide-border">
-                        {rows.map((s) => {
-                          const proj = projMap.get(s.project_id);
-                          const logo = s.repo_provider ? PROVIDER_LOGOS[s.repo_provider] : null;
-                          // Container + IaC collapse into one Docker badge — both are "infra we scan".
-                          const hasInfra = s.has_container || (s.infra_types?.length ?? 0) > 0;
-                          return (
-                            <tr
-                              key={s.project_id}
-                              onClick={() => proj && openProjectInSidebar(proj)}
-                              className={cn(
-                                'transition-colors group',
-                                proj ? 'cursor-pointer hover:bg-table-hover' : 'opacity-70'
-                              )}
-                            >
-                              {/* Type — framework icon + real brand logos for the non-obvious infra coverage (Docker / K8s / Terraform / …) + DAST */}
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2.5">
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="flex h-5 w-5 items-center justify-center">
-                                        <FrameworkIcon frameworkId={proj?.framework ?? null} size={20} className="text-white" />
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent>{prettyFramework(proj?.framework)}</TooltipContent>
-                                  </Tooltip>
-                                  {hasInfra && (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span className="flex h-5 w-5 items-center justify-center">
-                                          <FrameworkIcon frameworkId="dockerfile" size={16} className="text-white" />
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>Container &amp; IaC scanning</TooltipContent>
-                                    </Tooltip>
-                                  )}
-                                  {s.has_dast && (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span className="flex h-5 w-5 items-center justify-center">
-                                          <FindingTypeIcon type="dast" size={16} className="text-white" />
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>DAST (runtime scanning)</TooltipContent>
-                                    </Tooltip>
-                                  )}
-                                </div>
-                              </td>
-                              {/* Project name */}
-                              <td className="px-4 py-3">
-                                <span className="truncate text-sm font-semibold text-foreground">{s.project_name}</span>
-                              </td>
-                              {/* Owner team */}
-                              <td className="px-4 py-3">
-                                {proj?.owner_team_name ? (
-                                  <span className="truncate text-sm text-foreground">{proj.owner_team_name}</span>
-                                ) : (
-                                  <span className="text-sm text-foreground-secondary/40">—</span>
-                                )}
-                              </td>
-                              {/* Repository — provider logo */}
-                              <td className="px-4 py-3">
-                                {logo ? (
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <img src={logo} alt={s.repo_provider ?? ''} className="h-4 w-4 rounded-sm flex-shrink-0 object-contain" />
-                                    <span className="truncate text-sm text-foreground">{s.repo_full_name ?? s.repo_provider}</span>
-                                  </div>
-                                ) : (
-                                  <span className="text-sm text-foreground-secondary/40">—</span>
-                                )}
-                              </td>
-                              {/* Issues — depscore-band pills */}
-                              <td className="px-4 py-3">
-                                <SeverityPills
-                                  critical={s.band_critical}
-                                  high={s.band_high}
-                                  medium={s.band_medium}
-                                  low={s.band_low}
-                                />
-                              </td>
-                              {/* Ignored count */}
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-foreground-secondary">{s.ignored_count ?? 0}</span>
-                              </td>
-                              {/* Last scan */}
-                              <td className="px-4 py-3">
-                                <span className="text-sm text-foreground-secondary whitespace-nowrap">{formatRelativeTime(s.last_scan_at)}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
+              <ProjectsAssetTable
+                summaries={orgSidebarSecuritySummary}
+                projects={orgSidebarProjects}
+                loading={orgSidebarLoading}
+                error={orgSidebarError}
+                errorMsg={orgSidebarErrorMsg}
+                onRetry={() => setOrgSidebarRefetch((n) => n + 1)}
+                onProjectClick={openProjectInSidebar}
+                showTeamColumn
+                errorContext="this organization's projects"
+                emptyHint="Connect a repository to start seeing findings across your organization."
+              />
             </div>
             </div>
           )}
@@ -3405,255 +3045,30 @@ export default function OrganizationOverviewPage() {
             <div className="flex-1 overflow-y-auto px-5 py-5">
               {/* Projects Tab */}
               {teamSidebarTab === 'projects' && (
-                <div className="space-y-4">
-                  {/* Search, View Toggle, and Create Button */}
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="relative w-64">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
-                      <input
-                        type="text"
-                        placeholder="Filter projects..."
-                        value={teamSidebarProjectsSearch}
-                        onChange={(e) => setTeamSidebarProjectsSearch(e.target.value)}
-                        className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${teamSidebarProjectsSearch ? 'pr-14' : 'pr-4'}`}
-                      />
-                      {teamSidebarProjectsSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setTeamSidebarProjectsSearch('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
-                          aria-label="Clear search (Esc)"
-                        >
-                          Esc
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {/* View Toggle */}
-                      <div className="flex items-center border border-border rounded-md overflow-hidden">
-                        <button
-                          onClick={() => setTeamSidebarProjectsViewMode('grid')}
-                          className={`px-3 py-1.5 text-sm transition-colors ${teamSidebarProjectsViewMode === 'grid'
-                            ? 'bg-background-card text-foreground'
-                            : 'text-foreground-secondary hover:text-foreground hover:bg-background-card/50'
-                          }`}
-                          aria-label="Grid view"
-                        >
-                          <Grid3x3 className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setTeamSidebarProjectsViewMode('list')}
-                          className={`px-3 py-1.5 text-sm transition-colors border-l border-border ${teamSidebarProjectsViewMode === 'list'
-                            ? 'bg-background-card text-foreground'
-                            : 'text-foreground-secondary hover:text-foreground hover:bg-background-card/50'
-                          }`}
-                          aria-label="List view"
-                        >
-                          <List className="h-4 w-4" />
-                        </button>
-                      </div>
-                      {(teamSidebarPermissions?.manage_projects || teamSidebarHasOrgManagePermission) && (
-                      <Button
-                        onClick={() => navigate(`/organizations/${orgId}/new-project`, {
-                          state: {
-                            lockedTeam: teamSidebarTeamData ?? null,
-                            teams: Object.values(teamsById),
-                          },
-                        })}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                      >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Create Project
-                      </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Projects Grid/List */}
-                  {teamSidebarDataLoading ? (
-                    teamSidebarProjectsViewMode === 'grid' ? (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {[1, 2, 3].map((i) => (
-                          <div key={i} className="bg-background-card border border-border rounded-lg p-5 animate-pulse">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className="h-6 w-6 rounded bg-muted" />
-                                <div className="h-4 w-24 rounded bg-muted" />
-                                <div className="h-4 w-20 rounded bg-muted" />
-                              </div>
-                              <div className="h-5 w-5 rounded-full bg-muted" />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                        <table className="w-full">
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Created</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {[1, 2, 3].map((i) => (
-                              <tr key={i} className="animate-pulse">
-                                <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-5 w-5 rounded bg-muted" /><div className="h-4 w-32 rounded bg-muted" /></div></td>
-                                <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted" />))}</div></td>
-                                <td className="px-4 py-3"><div className="h-5 w-20 rounded bg-muted" /></td>
-                                <td className="px-4 py-3"><div className="h-4 w-16 rounded bg-muted" /></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )
-                  ) : teamSidebarFilteredProjects.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-center">
-                      <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
-                        <FolderKanban className="h-6 w-6 text-foreground-secondary" />
-                      </div>
-                      <h3 className="text-base font-medium text-foreground mb-1">No projects found</h3>
-                      <p className="text-sm text-foreground-secondary max-w-[240px]">
-                        {teamSidebarProjects.length === 0
-                          ? "This team doesn't have any projects yet."
-                          : "No projects match your search criteria."}
-                      </p>
-                    </div>
-                  ) : teamSidebarProjectsViewMode === 'grid' ? (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {teamSidebarFilteredProjects.map((project) => {
-                        const { label, inProgress, isError } = projectStatusLabel(project);
-                        const isContributing = project.owner_team_id !== selectedTeamId;
-                        const sec = teamSidebarSecByProject.get(project.id);
-                        return (
-                          <div
-                            key={project.id}
-                            onClick={() => openProjectInSidebar(project)}
-                            className="bg-background-card border border-border rounded-lg p-5 hover:bg-background-card/80 transition-all cursor-pointer group"
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <FrameworkIcon frameworkId={project.framework ?? undefined} size={24} />
-                                <h3 className="text-base font-semibold text-foreground truncate">{project.name}</h3>
-                                {isContributing && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="flex-shrink-0 text-muted-foreground">
-                                        <GitFork className="h-3.5 w-3.5" />
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" sideOffset={4}>Contributing team</TooltipContent>
-                                  </Tooltip>
-                                )}
-                                {inProgress ? (
-                                  <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                    {label}
-                                  </span>
-                                ) : isError ? (
-                                  <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                                    Failed
-                                  </span>
-                                ) : label === 'COMPLIANT' ? (
-                                  <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40 flex-shrink-0">
-                                    COMPLIANT
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                                    NOT COMPLIANT
-                                  </span>
-                                )}
-                              </div>
-                              <ChevronRight className="h-5 w-5 text-foreground-secondary group-hover:text-foreground transition-colors flex-shrink-0 ml-2" />
-                            </div>
-                            <div className="mt-4">
-                              <SeverityPills
-                                critical={sec?.band_critical}
-                                high={sec?.band_high}
-                                medium={sec?.band_medium}
-                                low={sec?.band_low}
-                              />
-                            </div>
-                          </div>
-                        );
+                <ProjectsAssetTable
+                  summaries={teamSidebarSecuritySummary}
+                  projects={teamSidebarProjects}
+                  loading={teamSidebarDataLoading}
+                  onProjectClick={openProjectInSidebar}
+                  showTeamColumn={false}
+                  searchPlaceholder="Search projects, repos…"
+                  emptyHint="This team doesn't have any projects yet."
+                  errorContext="this team's projects"
+                  action={(teamSidebarPermissions?.manage_projects || teamSidebarHasOrgManagePermission) ? (
+                    <Button
+                      variant="green"
+                      onClick={() => navigate(`/organizations/${orgId}/new-project`, {
+                        state: {
+                          lockedTeam: teamSidebarTeamData ?? null,
+                          teams: Object.values(teamsById),
+                        },
                       })}
-                    </div>
-                  ) : (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                      <table className="w-full">
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Team</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Issues</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Created</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {teamSidebarFilteredProjects.map((project) => {
-                            const { label, inProgress, isError } = projectStatusLabel(project);
-                            const isContributing = project.owner_team_id !== selectedTeamId;
-                            const sec = teamSidebarSecByProject.get(project.id);
-                            return (
-                              <tr
-                                key={project.id}
-                                onClick={() => openProjectInSidebar(project)}
-                                className="hover:bg-table-hover transition-colors cursor-pointer group"
-                              >
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-2">
-                                    <FrameworkIcon frameworkId={project.framework ?? undefined} size={20} />
-                                    <span className="text-sm font-semibold text-foreground">{project.name}</span>
-                                    {isContributing && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <span className="text-muted-foreground">
-                                            <GitFork className="h-3.5 w-3.5" />
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="top" sideOffset={4}>Contributing team</TooltipContent>
-                                      </Tooltip>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <SeverityPills
-                                    critical={sec?.band_critical}
-                                    high={sec?.band_high}
-                                    medium={sec?.band_medium}
-                                    low={sec?.band_low}
-                                  />
-                                </td>
-                                <td className="px-4 py-3">
-                                  {inProgress ? (
-                                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex items-center gap-1 w-fit">
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                      {label}
-                                    </span>
-                                  ) : isError ? (
-                                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40">Failed</span>
-                                  ) : label === 'COMPLIANT' ? (
-                                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-success/20 text-success border-success/40">COMPLIANT</span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40">NOT COMPLIANT</span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span className="text-sm text-foreground-secondary">{formatDate(project.created_at)}</span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+                      className="shrink-0"
+                    >
+                      Create Project
+                    </Button>
+                  ) : undefined}
+                />
               )}
 
               {/* Issues Tab */}
@@ -3735,13 +3150,14 @@ export default function OrganizationOverviewPage() {
                         placeholder="Filter members..."
                         value={teamSidebarMembersSearch}
                         onChange={(e) => setTeamSidebarMembersSearch(e.target.value)}
-                        className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${teamSidebarMembersSearch ? 'pr-14' : 'pr-4'}`}
+                        onKeyDown={(e) => { if (e.key === 'Escape' && teamSidebarMembersSearch) { e.preventDefault(); setTeamSidebarMembersSearch(''); } }}
+                        className={`w-full pl-9 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20 ${teamSidebarMembersSearch ? 'pr-14' : 'pr-4'}`}
                       />
                       {teamSidebarMembersSearch && (
                         <button
                           type="button"
                           onClick={() => setTeamSidebarMembersSearch('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-xs font-medium text-foreground-secondary hover:text-foreground bg-transparent border border-border/60 hover:border-border transition-colors"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-foreground/15 px-2 py-1 text-xs text-foreground-secondary transition-colors hover:bg-background-subtle/85 hover:text-foreground"
                           aria-label="Clear search (Esc)"
                         >
                           Esc
@@ -3750,11 +3166,12 @@ export default function OrganizationOverviewPage() {
                     </div>
                     {(teamSidebarCanAddMembers || teamSidebarHasOrgManagePermission) && (
                     <Button
+                      variant="green"
                       onClick={() => {
                         setTeamSidebarAddMemberOpen(true);
                         requestAnimationFrame(() => setTeamSidebarAddMemberVisible(true));
                       }}
-                      className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
+                      className="shrink-0"
                     >
                       Add Member
                     </Button>
@@ -3763,11 +3180,17 @@ export default function OrganizationOverviewPage() {
 
                   {/* Members List */}
                   {teamSidebarDataLoading ? (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden divide-y divide-border">
-                      {[1, 2, 3].map((i) => (
+                    <div
+                      className="bg-background-card border border-border rounded-lg overflow-hidden divide-y divide-border pointer-events-none select-none"
+                      style={{
+                        maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                      }}
+                    >
+                      {[1, 2, 3, 4, 5, 6].map((i) => (
                         <div key={i} className="px-4 py-3 grid grid-cols-[1fr_auto] gap-4 items-center animate-pulse">
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="h-10 w-10 bg-muted rounded-full" />
+                            <div className="h-10 w-10 bg-muted rounded-full flex-shrink-0" />
                             <div className="min-w-0">
                               <div className="h-4 bg-muted rounded w-24 mb-1" />
                               <div className="h-3 bg-muted rounded w-32" />
@@ -3914,19 +3337,6 @@ export default function OrganizationOverviewPage() {
                         <Settings className="h-4 w-4 tab-icon-shake" />
                         General
                       </button>
-                      {(teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission) && (
-                        <button
-                          type="button"
-                          onClick={() => { setTeamSettingsSubTab('notifications'); setSidebarParams({ subtab: 'notifications' }); }}
-                          className={cn(
-                            'group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
-                            teamSettingsSubTab === 'notifications' ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
-                          )}
-                        >
-                          <Bell className="h-4 w-4 tab-icon-shake" />
-                          Notifications
-                        </button>
-                      )}
                       {((teamSidebarPermissions?.view_roles || teamSidebarPermissions?.edit_roles) || teamSidebarHasOrgManagePermission) && (
                         <button
                           type="button"
@@ -3949,406 +3359,127 @@ export default function OrganizationOverviewPage() {
                     {teamSettingsSubTab === 'general' && (
                       <div className="space-y-6">
                         <h2 className="text-2xl font-bold text-foreground">General</h2>
+
+                        {/* Team details */}
                         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                           <div className="p-6">
-                            <h3 className="text-base font-semibold text-foreground mb-1">Team Name</h3>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              This is your team's visible name.
-                            </p>
-                            <div className="max-w-md mb-6">
-                              <input
-                                type="text"
-                                value={teamSettingsName}
-                                onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsName(e.target.value)}
-                                readOnly={!teamSettingsCanManageSettings}
-                                placeholder="Enter team name"
-                                className={cn("w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all", !teamSettingsCanManageSettings && "opacity-70 cursor-default")}
-                              />
+                            <h3 className="text-base font-semibold text-foreground mb-4">Team details</h3>
+                            <div className="space-y-4">
+                              <div className="max-w-md">
+                                <label className="block text-sm font-medium text-foreground mb-1.5">Name</label>
+                                <input
+                                  type="text"
+                                  value={teamSettingsName}
+                                  onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsName(e.target.value)}
+                                  readOnly={!teamSettingsCanManageSettings}
+                                  placeholder="Enter team name"
+                                  className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-foreground mb-1.5">Description</label>
+                                <textarea
+                                  value={teamSettingsDescription}
+                                  onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsDescription(e.target.value)}
+                                  readOnly={!teamSettingsCanManageSettings}
+                                  placeholder="Describe the team's purpose…"
+                                  rows={3}
+                                  className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors resize-none", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
+                                />
+                              </div>
                             </div>
-
-                            <h3 className="text-base font-semibold text-foreground mb-1">Team Description</h3>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Describe your team's purpose and responsibilities.
-                            </p>
-                            <textarea
-                              value={teamSettingsDescription}
-                              onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsDescription(e.target.value)}
-                              readOnly={!teamSettingsCanManageSettings}
-                              placeholder="Describe the team's purpose..."
-                              rows={3}
-                              className={cn("w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none", !teamSettingsCanManageSettings && "opacity-70 cursor-default")}
-                            />
                           </div>
-                          {teamSettingsCanManageSettings && (
-                          <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                            <p className="text-xs text-foreground-secondary">Changes will be visible to all team members.</p>
-                            <Button
-                              onClick={handleTeamSettingsSave}
-                              disabled={teamSettingsSaving || (teamSettingsName === teamSidebarTeamData.name && teamSettingsDescription === (teamSidebarTeamData.description || ''))}
-                              size="sm"
-                              className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                            >
-                              {teamSettingsSaving && <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />}
-                              Save
-                            </Button>
-                          </div>
+                          {teamSettingsCanManageSettings ? (
+                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+                              <Button
+                                variant="green"
+                                onClick={handleTeamSettingsSave}
+                                disabled={teamSettingsSaving || (teamSettingsName === teamSidebarTeamData.name && teamSettingsDescription === (teamSidebarTeamData.description || ''))}
+                                className="relative"
+                              >
+                                <span className={teamSettingsSaving ? 'invisible' : undefined}>Save</span>
+                                {teamSettingsSaving && (
+                                  <span className="absolute inset-0 flex items-center justify-center">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  </span>
+                                )}
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="px-6 py-3 bg-black/20 border-t border-border">
+                              <p className="text-xs text-foreground-secondary flex items-center gap-1.5">
+                                <Lock className="h-3 w-3" />
+                                You don't have permission to edit these settings.
+                              </p>
+                            </div>
                           )}
                         </div>
 
-                      {/* Danger Zone */}
-                      {teamSettingsCanDeleteTeam && (
-                        <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
-                          <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
-                            <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
-                          </div>
-                          <div className="p-6">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex-1">
-                                <h4 className="text-base font-semibold text-foreground mb-1">Delete Team</h4>
-                                <p className="text-sm text-foreground-secondary">
-                                  Permanently delete this team and all of its data. This action cannot be undone.
-                                </p>
+                        {/* Danger Zone */}
+                        {teamSettingsCanDeleteTeam && (
+                          <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+                            <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+                              <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
+                            </div>
+                            <div className="p-6">
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1">
+                                  <h4 className="text-base font-semibold text-foreground mb-1">Delete Team</h4>
+                                  <p className="text-sm text-foreground-secondary">
+                                    Permanently delete this team and all of its data. This action cannot be undone.
+                                  </p>
+                                </div>
+                                {!teamSettingsShowDeleteConfirm && (
+                                  <Button
+                                    onClick={() => setTeamSettingsShowDeleteConfirm(true)}
+                                    variant="destructive"
+                                    className="flex-shrink-0"
+                                  >
+                                    Delete
+                                  </Button>
+                                )}
                               </div>
-                              {!teamSettingsShowDeleteConfirm && (
-                                <Button
-                                  onClick={() => setTeamSettingsShowDeleteConfirm(true)}
-                                  variant="outline"
-                                  size="sm"
-                                  className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                  Delete
-                                </Button>
+                              {teamSettingsShowDeleteConfirm && (
+                                <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
+                                  <p className="text-sm text-foreground">
+                                    To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{teamSidebarTeamData.name}</strong> below:
+                                  </p>
+                                  <input
+                                    type="text"
+                                    value={teamSettingsDeleteConfirmText}
+                                    onChange={(e) => setTeamSettingsDeleteConfirmText(e.target.value)}
+                                    placeholder={teamSidebarTeamData.name}
+                                    autoFocus
+                                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
+                                  />
+                                  <div className="flex gap-2">
+                                    <Button
+                                      onClick={handleTeamSettingsDelete}
+                                      variant="destructive"
+                                      disabled={teamSettingsDeleteConfirmText !== teamSidebarTeamData.name || teamSettingsDeleting}
+                                    >
+                                      <span className={teamSettingsDeleting ? 'invisible' : undefined}>Delete Forever</span>
+                                      {teamSettingsDeleting && (
+                                        <span className="absolute inset-0 flex items-center justify-center">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        </span>
+                                      )}
+                                    </Button>
+                                    <Button
+                                      onClick={() => { setTeamSettingsShowDeleteConfirm(false); setTeamSettingsDeleteConfirmText(''); }}
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8"
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </div>
                               )}
                             </div>
-                            {teamSettingsShowDeleteConfirm && (
-                              <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
-                                <p className="text-sm text-foreground">
-                                  To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{teamSidebarTeamData.name}</strong> below:
-                                </p>
-                                <input
-                                  type="text"
-                                  value={teamSettingsDeleteConfirmText}
-                                  onChange={(e) => setTeamSettingsDeleteConfirmText(e.target.value)}
-                                  placeholder={teamSidebarTeamData.name}
-                                  className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
-                                />
-                                <div className="flex gap-2">
-                                  <Button
-                                    onClick={handleTeamSettingsDelete}
-                                    variant="destructive"
-                                    size="sm"
-                                    disabled={teamSettingsDeleteConfirmText !== teamSidebarTeamData.name || teamSettingsDeleting}
-                                    className="h-8"
-                                  >
-                                    {teamSettingsDeleting ? (
-                                      <>
-                                        <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                        Deleting
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                        Delete Forever
-                                      </>
-                                    )}
-                                  </Button>
-                                  <Button
-                                    onClick={() => { setTeamSettingsShowDeleteConfirm(false); setTeamSettingsDeleteConfirmText(''); }}
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8"
-                                  >
-                                    Cancel
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                    {/* Notifications Settings */}
-                    {teamSettingsSubTab === 'notifications' && orgId && selectedTeamId && (teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission) && (
-                      <div className="space-y-6">
-                        <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                              <Link to="/docs/notification-rules" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground">
-                                <BookOpen className="h-4 w-4" />
-                              </Link>
-                            </div>
-                            <p className="mt-1.5 text-sm text-foreground-secondary">
-                              Create custom rules to decide when to notify. Send alerts to Slack, email, Jira, and more.
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={teamSettingsNotifPauseLoading}>
-                                  {teamSettingsNotifPauseLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PauseCircle className="h-3.5 w-3.5" />}
-                                  {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() ? (
-                                  <DropdownMenuItem onClick={async () => {
-                                    setTeamSettingsNotifPauseLoading(true);
-                                    try {
-                                      await api.updateTeam(orgId, selectedTeamId, { notifications_paused_until: null });
-                                      setTeamSettingsNotifPausedUntil(null);
-                                      toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                                    } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                                    finally { setTeamSettingsNotifPauseLoading(false); }
-                                  }}>
-                                    Resume notifications
-                                  </DropdownMenuItem>
-                                ) : (
-                                  <>
-                                    {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                                      <DropdownMenuItem key={hours} onClick={async () => {
-                                        setTeamSettingsNotifPauseLoading(true);
-                                        try {
-                                          const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                          await api.updateTeam(orgId, selectedTeamId, { notifications_paused_until: until });
-                                          setTeamSettingsNotifPausedUntil(until);
-                                          toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                        } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                                        finally { setTeamSettingsNotifPauseLoading(false); }
-                                      }}>
-                                        {label}
-                                      </DropdownMenuItem>
-                                    ))}
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {teamSettingsNotifActiveTab === 'notifications' && (
-                              <Button
-                                onClick={() => teamSettingsNotificationCreateRef.current?.()}
-                                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                              >
-                                Create Rule
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-
-                        {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() && (
-                          <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                            <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                            <span className="text-sm text-amber-400">
-                              Notifications paused until {new Date(teamSettingsNotifPausedUntil).toLocaleString()}
-                            </span>
                           </div>
                         )}
-
-                        <div className="flex items-center gap-6 border-b border-border pb-px">
-                          <button
-                            type="button"
-                            onClick={() => setTeamSettingsNotifActiveTab('notifications')}
-                            className={cn(
-                              'pb-3 text-sm font-medium transition-colors border-b-2 -mb-px',
-                              teamSettingsNotifActiveTab === 'notifications' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                            )}
-                          >
-                            Notifications
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTeamSettingsNotifActiveTab('destinations')}
-                            className={cn(
-                              'pb-3 text-sm font-medium transition-colors border-b-2 -mb-px',
-                              teamSettingsNotifActiveTab === 'destinations' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                            )}
-                          >
-                            Destinations
-                          </button>
-                        </div>
-
-                        {teamSettingsNotifActiveTab === 'notifications' && (
-                          <div className="pt-2">
-                          <NotificationRulesSection
-                            organizationId={orgId}
-                            teamId={selectedTeamId}
-                            hideTitle
-                            createHandlerRef={teamSettingsNotificationCreateRef}
-                            connections={[...teamSettingsConnections.inherited, ...teamSettingsConnections.team]}
-                          />
-                        </div>
-                      )}
-
-                      {teamSettingsNotifActiveTab === 'destinations' && (
-                        <div className="pt-2 space-y-8">
-                          {/* Inherited from organization */}
-                          <div>
-                            <h4 className="text-base font-semibold text-foreground mb-3">Inherited from organization</h4>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Integrations connected at the organization level are available for this team.
-                            </p>
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <table className="w-full table-fixed">
-                                <colgroup><col className="w-[200px]" /><col /><col className="w-[120px]" /></colgroup>
-                                <thead className="bg-background-card-header border-b border-border">
-                                  <tr>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                  {teamSettingsConnectionsLoading ? (
-                                    [1, 2, 3].map((i) => (
-                                      <tr key={i}>
-                                        <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3" />
-                                      </tr>
-                                    ))
-                                  ) : teamSettingsConnections.inherited.length === 0 ? (
-                                    <tr>
-                                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                        No inherited integrations. Connect integrations in Organization Settings.
-                                      </td>
-                                    </tr>
-                                  ) : (
-                                    teamSettingsConnections.inherited.map((conn) => (
-                                      <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                        <td className="px-4 py-3">
-                                          <div className="flex items-center gap-2.5">
-                                            {['slack', 'discord'].includes(conn.provider) && <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />}
-                                            {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                            {['custom_notification', 'custom_ticketing'].includes(conn.provider) && (conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />)}
-                                            {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                              ['jira', 'linear', 'pagerduty'].includes(conn.provider) ? <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                            )}
-                                            <span className="text-sm font-medium text-foreground">
-                                              {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' : conn.provider === 'email' ? 'Email' : conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') : conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}
-                                            </span>
-                                          </div>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                          <span className="text-sm text-foreground truncate block">{conn.display_name || '-'}</span>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                          <span className="text-xs text-foreground-secondary px-2 py-1 rounded border border-border bg-transparent">Inherited</span>
-                                        </td>
-                                      </tr>
-                                    ))
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-
-                          {/* Team-specific */}
-                          <div>
-                            <h4 className="text-base font-semibold text-foreground mb-3">Team-specific</h4>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Add integrations that are specific to this team.
-                            </p>
-                            {teamSettingsCanManageSettings && (
-                              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectSlackOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Slack', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/slack.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Slack
-                                </Button>
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectDiscordOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Discord', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/discord.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Discord
-                                </Button>
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectLinearOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Linear', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/linear.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Linear
-                                </Button>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <table className="w-full table-fixed">
-                                <colgroup><col className="w-[200px]" /><col /><col className="w-[140px]" /></colgroup>
-                                <thead className="bg-background-card-header border-b border-border">
-                                  <tr>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                  {teamSettingsConnectionsLoading ? (
-                                    [1, 2].map((i) => (
-                                      <tr key={i}>
-                                        <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3" />
-                                      </tr>
-                                    ))
-                                  ) : teamSettingsConnections.team.length === 0 ? (
-                                    <tr>
-                                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                        No team-specific integrations. Add one above.
-                                      </td>
-                                    </tr>
-                                  ) : (
-                                    teamSettingsConnections.team.map((conn) => (
-                                      <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                        <td className="px-4 py-3">
-                                          <div className="flex items-center gap-2.5">
-                                            {['slack', 'discord'].includes(conn.provider) && <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />}
-                                            {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                            {['custom_notification', 'custom_ticketing'].includes(conn.provider) && (conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />)}
-                                            {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                              ['jira', 'linear', 'pagerduty'].includes(conn.provider) ? <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                            )}
-                                            <span className="text-sm font-medium text-foreground">
-                                              {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' : conn.provider === 'email' ? 'Email' : conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') : conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}
-                                            </span>
-                                          </div>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                          <span className="text-sm text-foreground truncate block">
-                                            {conn.provider === 'email' ? conn.metadata?.email || conn.display_name : conn.display_name || '-'}
-                                          </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                          {teamSettingsCanManageSettings && (
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                              onClick={async () => {
-                                                if (!confirm('Remove this integration?')) return;
-                                                try {
-                                                  await api.deleteTeamConnection(orgId, selectedTeamId, conn.id);
-                                                  toast({ title: 'Removed', description: 'Integration removed.' });
-                                                  loadTeamConnections();
-                                                } catch (err: unknown) {
-                                                  toast({ title: 'Failed to remove', description: (err as Error).message, variant: 'destructive' });
-                                                }
-                                              }}
-                                            >
-                                              Remove
-                                            </Button>
-                                          )}
-                                        </td>
-                                      </tr>
-                                    ))
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                      </div>
                   )}
 
                     {/* Roles Settings */}
@@ -4361,16 +3492,15 @@ export default function OrganizationOverviewPage() {
                           </div>
                           {teamSettingsCanManageSettings && (teamSidebarPermissions?.edit_roles || teamSidebarHasOrgManagePermission) && (
                             <Button
+                              variant="green"
                               onClick={() => {
-                              setTeamSettingsShowAddRoleSidepanel(true);
-                              requestAnimationFrame(() => setTeamSettingsAddRolePanelVisible(true));
-                            }}
-                            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                          >
-                            <Plus className="h-4 w-4 mr-2" />
-                            Add Role
-                          </Button>
-                        )}
+                                setTeamSettingsShowAddRoleSidepanel(true);
+                                requestAnimationFrame(() => setTeamSettingsAddRolePanelVisible(true));
+                              }}
+                            >
+                              Add Role
+                            </Button>
+                          )}
                       </div>
 
                       {/* Roles List */}
@@ -4712,47 +3842,42 @@ export default function OrganizationOverviewPage() {
             </div>
           )}
 
-      {/* Add Team Member sidebar (from team sidebar) */}
-      {teamSidebarAddMemberOpen && selectedTeamId && orgId && selectedTeamId !== UNGROUPED_TEAM_ID && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150"
-            onClick={closeTeamSidebarAddMember}
-            aria-hidden
-          />
-          <div
-            className="relative w-full max-w-[520px] max-h-[85vh] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 pt-5 pb-3 flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Add Team Member</h2>
+      {/* Add Team Member dialog — mirrors the org Invite-member dialog chrome (InviteMemberDialog.tsx) */}
+      {selectedTeamId && orgId && selectedTeamId !== UNGROUPED_TEAM_ID && (
+        <Dialog open={teamSidebarAddMemberOpen} onOpenChange={(next) => { if (!next) closeTeamSidebarAddMember(); }}>
+          <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+            <div className="px-6 pt-6 pb-4 flex-shrink-0">
+              <DialogTitle>Add team member</DialogTitle>
+              <DialogDescription className="mt-1">
+                Add existing members of your organization to this team and assign them a role.
+              </DialogDescription>
             </div>
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <label className="text-base font-semibold text-foreground">
-                    Select Member
-                  </label>
-                  <div className="relative mb-2">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-foreground-secondary" />
-                    <input
-                      type="text"
-                      placeholder="Search organization members..."
-                      value={addMemberSearchQuery}
-                      onChange={(e) => setAddMemberSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    />
-                  </div>
-                  <div className="h-56 overflow-y-auto border border-border rounded-md">
-                    {teamSidebarFilteredAvailableMembers.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                        <Users className="h-8 w-8 text-muted-foreground/50 mb-2" />
-                        <p className="text-sm font-medium text-foreground-secondary">
-                          {addMemberSearchQuery.trim() ? 'No members match your search' : 'All organization members are already in this team'}
-                        </p>
-                      </div>
-                    ) : (
-                      teamSidebarFilteredAvailableMembers.map((member) => (
+
+            <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto flex-1 min-h-0">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-foreground">Members</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-secondary pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search organization members…"
+                    value={addMemberSearchQuery}
+                    onChange={(e) => setAddMemberSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-4 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
+                  />
+                </div>
+                <div className="h-56 overflow-y-auto border border-border rounded-md">
+                  {teamSidebarFilteredAvailableMembers.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center px-4">
+                      <Users className="h-8 w-8 text-muted-foreground/50 mb-2" />
+                      <p className="text-sm font-medium text-foreground-secondary">
+                        {addMemberSearchQuery.trim() ? 'No members match your search' : 'All organization members are already in this team'}
+                      </p>
+                    </div>
+                  ) : (
+                    teamSidebarFilteredAvailableMembers.map((member) => {
+                      const selected = addMemberSelectedUserIds.includes(member.user_id);
+                      return (
                         <button
                           key={member.user_id}
                           type="button"
@@ -4765,72 +3890,106 @@ export default function OrganizationOverviewPage() {
                           }}
                           className={cn(
                             'w-full flex items-center gap-3 px-3 py-2 text-left transition-colors',
-                            addMemberSelectedUserIds.includes(member.user_id) ? 'bg-background-card/80' : 'hover:bg-background-card/60'
+                            selected ? 'bg-background-card/80' : 'hover:bg-background-card/60'
                           )}
                         >
                           <img
                             src={member.avatar_url || '/images/blank_profile_image.png'}
                             alt={member.full_name || member.email}
-                            className="h-8 w-8 rounded-full object-cover border border-border"
+                            className="h-8 w-8 rounded-full object-cover border border-border flex-shrink-0"
                             referrerPolicy="no-referrer"
                             onError={(e) => { e.currentTarget.src = '/images/blank_profile_image.png'; }}
                           />
-                          <div className="flex-1 min-w-0 text-left">
-                            <div className="text-sm font-medium text-foreground">{member.full_name || 'Unknown'}</div>
-                            <div className="text-xs text-foreground-secondary">{member.email}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-foreground truncate">{member.full_name || 'Unknown'}</div>
+                            <div className="text-xs text-foreground-secondary truncate">{member.email}</div>
                           </div>
-                          {addMemberSelectedUserIds.includes(member.user_id) && (
-                            <Check className="h-4 w-4 text-white flex-shrink-0" />
-                          )}
+                          <span
+                            className={cn(
+                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+                              selected ? 'bg-foreground border-foreground text-background' : 'border-border'
+                            )}
+                          >
+                            {selected && <Check className="h-3 w-3" />}
+                          </span>
                         </button>
-                      ))
-                    )}
-                  </div>
-                </div>
-                <div className="border-t border-border" />
-                <div className="space-y-3">
-                  <label className="text-base font-semibold text-foreground">
-                    Role
-                  </label>
-                  <RoleDropdown
-                    value={addMemberSelectedRoleId}
-                    onChange={(value) => setAddMemberSelectedRoleId(value)}
-                    roles={teamSidebarRoles.filter((r) => r.name !== 'owner')}
-                    variant="modal"
-                    className="w-full"
-                    showBadges={true}
-                    memberCounts={teamSidebarMemberCounts}
-                  />
+                      );
+                    })
+                  )}
                 </div>
               </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-foreground">Role</label>
+                <RoleDropdown
+                  value={addMemberSelectedRoleId}
+                  onChange={(value) => setAddMemberSelectedRoleId(value)}
+                  roles={teamSidebarRoles.filter((r) => r.name !== 'owner')}
+                  variant="modal"
+                  className="w-full"
+                  showBadges={true}
+                  memberCounts={teamSidebarMemberCounts}
+                />
+              </div>
             </div>
-            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
-              <Button variant="outline" onClick={closeTeamSidebarAddMember} disabled={addMemberAdding}>
+
+            <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+              <Button variant="outline" onClick={closeTeamSidebarAddMember} disabled={addMemberAdding} className="h-8 rounded-lg px-3">
                 Cancel
               </Button>
               <Button
+                variant="green"
                 onClick={async () => {
                   if (!orgId || !selectedTeamId || addMemberSelectedUserIds.length === 0) return;
                   const role = teamSidebarRoles.find((r) => r.name === addMemberSelectedRoleId);
                   const roleId = role?.id;
+                  const userIds = addMemberSelectedUserIds;
+                  // Build optimistic rows from the org-member data we already hold, so the
+                  // members appear instantly instead of waiting on the slow post-add refetch
+                  // (getTeamMembers + getOrganizationMembers each fan out a per-user
+                  // auth.admin.getUserById call — multiple seconds for a large org).
+                  const optimistic: TeamMember[] = userIds
+                    .map((uid) => teamSidebarOrgMembers.find((m) => m.user_id === uid))
+                    .filter((m): m is OrganizationMember => !!m)
+                    .map((m) => ({
+                      user_id: m.user_id,
+                      email: m.email,
+                      full_name: m.full_name ?? null,
+                      avatar_url: m.avatar_url ?? null,
+                      role: role?.name ?? 'member',
+                      role_display_name: role?.display_name ?? null,
+                      role_color: role?.color ?? null,
+                      rank: role?.display_order ?? 999,
+                      org_rank: m.rank ?? 999,
+                      permissions: role?.permissions,
+                      created_at: new Date().toISOString(),
+                    }));
                   setAddMemberAdding(true);
                   try {
                     await Promise.all(
-                      addMemberSelectedUserIds.map((userId) =>
-                        api.addTeamMember(orgId, selectedTeamId, userId, roleId)
-                      )
+                      userIds.map((uid) => api.addTeamMember(orgId, selectedTeamId, uid, roleId))
                     );
+                    // Show them immediately + close; don't block the UI on the refetch.
+                    setTeamSidebarMembers((prev) => [
+                      ...prev,
+                      ...optimistic.filter((nm) => !prev.some((p) => p.user_id === nm.user_id)),
+                    ]);
                     toast({
                       title: 'Success',
-                      description: addMemberSelectedUserIds.length === 1 ? 'Member added to team' : 'Members added to team',
+                      description: userIds.length === 1 ? 'Member added to team' : 'Members added to team',
                     });
-                    const [members, orgMembers] = await Promise.all([
+                    closeTeamSidebarAddMember();
+                    // Reconcile against server truth in the background (exact ranks, etc.)
+                    // and refresh the available-members list.
+                    Promise.all([
                       api.getTeamMembers(orgId, selectedTeamId),
                       api.getOrganizationMembers(orgId),
-                    ]);
-                    setTeamSidebarMembers(members);
-                    setTeamSidebarOrgMembers(orgMembers);
-                    closeTeamSidebarAddMember();
+                    ])
+                      .then(([members, orgMembers]) => {
+                        setTeamSidebarMembers(members);
+                        setTeamSidebarOrgMembers(orgMembers);
+                      })
+                      .catch(() => { /* optimistic state stands; next open refetches */ });
                   } catch (err: any) {
                     toast({
                       title: 'Error',
@@ -4842,151 +4001,135 @@ export default function OrganizationOverviewPage() {
                   }
                 }}
                 disabled={addMemberSelectedUserIds.length === 0 || addMemberAdding}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                className="relative"
               >
+                <span className={addMemberAdding ? 'invisible' : undefined}>
+                  {addMemberSelectedUserIds.length <= 1 ? 'Add member' : `Add ${addMemberSelectedUserIds.length} members`}
+                </span>
                 {addMemberAdding && (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </span>
                 )}
-                {addMemberSelectedUserIds.length <= 1 ? 'Add Member' : `Add ${addMemberSelectedUserIds.length} Members`}
               </Button>
-            </div>
-          </div>
-        </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
-      {/* Team Sidebar: Change Role Dialog */}
-      {teamSidebarRoleChangeOpen && teamSidebarMemberToChangeRole && (
-        <div className="fixed inset-0 z-[70]">
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setTeamSidebarRoleChangeOpen(false);
-              setTeamSidebarMemberToChangeRole(null);
-            }}
-          />
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <div
-              className="bg-background border border-border rounded-lg shadow-2xl w-full max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="px-6 py-5 border-b border-border">
-                <h2 className="text-xl font-semibold text-foreground">Change Role</h2>
-                <p className="text-sm text-foreground-secondary mt-1">
-                  Select a new role for {teamSidebarMemberToChangeRole.full_name || teamSidebarMemberToChangeRole.email?.split('@')[0] || 'this member'}.
-                </p>
-              </div>
-              <div className="px-6 py-6 space-y-4">
-                <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
-                  <img
-                    src={teamSidebarMemberToChangeRole.avatar_url || '/images/blank_profile_image.png'}
-                    alt={teamSidebarMemberToChangeRole.full_name || teamSidebarMemberToChangeRole.email}
-                    className="h-10 w-10 rounded-full object-cover border border-border"
-                    referrerPolicy="no-referrer"
-                    onError={(e) => { e.currentTarget.src = '/images/blank_profile_image.png'; }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-foreground truncate">
-                      {teamSidebarMemberToChangeRole.full_name || teamSidebarMemberToChangeRole.email?.split('@')[0]}
-                    </div>
-                    <div className="text-xs text-foreground-secondary truncate">
-                      {teamSidebarMemberToChangeRole.email}
-                    </div>
+      {/* Team Sidebar: Change Role dialog — same chrome as the Add-team-member dialog */}
+      {selectedTeamId && (
+        <Dialog open={teamSidebarRoleChangeOpen} onOpenChange={(next) => { if (!next) setTeamSidebarRoleChangeOpen(false); }}>
+          <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+            <div className="px-6 pt-6 pb-4 flex-shrink-0">
+              <DialogTitle>Change role</DialogTitle>
+              <DialogDescription className="mt-1">
+                Select a new role for {teamSidebarMemberToChangeRole?.full_name || teamSidebarMemberToChangeRole?.email?.split('@')[0] || 'this member'}.
+              </DialogDescription>
+            </div>
+
+            <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto flex-1 min-h-0">
+              <div className="flex items-center gap-3 p-3 bg-background-card border border-border rounded-md">
+                <img
+                  src={teamSidebarMemberToChangeRole?.avatar_url || '/images/blank_profile_image.png'}
+                  alt={teamSidebarMemberToChangeRole?.full_name || teamSidebarMemberToChangeRole?.email || ''}
+                  className="h-10 w-10 rounded-full object-cover border border-border flex-shrink-0"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => { e.currentTarget.src = '/images/blank_profile_image.png'; }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-foreground truncate">
+                    {teamSidebarMemberToChangeRole?.full_name || teamSidebarMemberToChangeRole?.email?.split('@')[0]}
+                  </div>
+                  <div className="text-xs text-foreground-secondary truncate">
+                    {teamSidebarMemberToChangeRole?.email}
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Role</label>
-                  <RoleDropdown
-                    value={teamSidebarNewRole}
-                    onChange={(value) => setTeamSidebarNewRole(value)}
-                    roles={teamSidebarHasOrgManagePermission
-                      ? teamSidebarRoles.filter((r) => r.name !== 'owner')
-                      : teamSidebarRoles.filter((r) => r.name !== 'owner' && r.display_order >= (teamSidebarUserRank ?? 999))
-                    }
-                    variant="modal"
-                    className="w-full"
-                    showBadges={true}
-                    memberCounts={teamSidebarMemberCounts}
-                  />
-                </div>
               </div>
-              <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setTeamSidebarRoleChangeOpen(false);
-                    setTeamSidebarMemberToChangeRole(null);
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleTeamSidebarUpdateRole}
-                  disabled={teamSidebarUpdatingRole}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                >
-                  {teamSidebarUpdatingRole && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  )}
-                  Update Role
-                </Button>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-foreground">Role</label>
+                <RoleDropdown
+                  value={teamSidebarNewRole}
+                  onChange={(value) => setTeamSidebarNewRole(value)}
+                  roles={teamSidebarHasOrgManagePermission
+                    ? teamSidebarRoles.filter((r) => r.name !== 'owner')
+                    : teamSidebarRoles.filter((r) => r.name !== 'owner' && r.display_order >= (teamSidebarUserRank ?? 999))
+                  }
+                  variant="modal"
+                  className="w-full"
+                  showBadges={true}
+                  memberCounts={teamSidebarMemberCounts}
+                />
               </div>
             </div>
-          </div>
-        </div>
+
+            <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+              <Button
+                variant="outline"
+                onClick={() => setTeamSidebarRoleChangeOpen(false)}
+                disabled={teamSidebarUpdatingRole}
+                className="h-8 rounded-lg px-3"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="green"
+                onClick={handleTeamSidebarUpdateRole}
+                disabled={teamSidebarUpdatingRole}
+                className="relative"
+              >
+                <span className={teamSidebarUpdatingRole ? 'invisible' : undefined}>Update role</span>
+                {teamSidebarUpdatingRole && (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </span>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
-      {/* Team Sidebar: Leave/Remove Confirmation Modal */}
-      {teamSidebarRemoveConfirmOpen && teamSidebarMemberToRemove && (
-        <div className="fixed inset-0 z-[70]">
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-            onClick={() => {
-              setTeamSidebarRemoveConfirmOpen(false);
-              setTeamSidebarMemberToRemove(null);
-            }}
-          />
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <div
-              className="bg-background border border-border rounded-lg shadow-2xl w-full max-w-md"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="px-6 py-5 border-b border-border">
-                <h2 className="text-xl font-semibold text-foreground">
-                  {user?.id === teamSidebarMemberToRemove ? 'Leave Team' : 'Remove Member'}
-                </h2>
-              </div>
-              <div className="px-6 py-6">
-                <p className="text-foreground-secondary">
-                  {user?.id === teamSidebarMemberToRemove
-                    ? 'Are you sure you want to leave this team? You will need to be re-added by a team admin to rejoin.'
-                    : 'Are you sure you want to remove this member from the team?'}
-                </p>
-              </div>
-              <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setTeamSidebarRemoveConfirmOpen(false);
-                    setTeamSidebarMemberToRemove(null);
-                  }}
-                  disabled={teamSidebarRemovingMember}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={confirmTeamSidebarRemoveMember}
-                  disabled={teamSidebarRemovingMember}
-                  className="bg-red-600 text-white hover:bg-red-700"
-                >
-                  {teamSidebarRemovingMember && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  )}
-                    {user?.id === teamSidebarMemberToRemove ? 'Leave Team' : 'Remove Member'}
-                </Button>
-              </div>
+      {/* Team Sidebar: Leave/Remove confirmation dialog — same chrome as the other team dialogs */}
+      {selectedTeamId && (
+        <Dialog open={teamSidebarRemoveConfirmOpen} onOpenChange={(next) => { if (!next) setTeamSidebarRemoveConfirmOpen(false); }}>
+          <DialogContent hideClose className="sm:max-w-md bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+            <div className="px-6 pt-6 pb-4 flex-shrink-0">
+              <DialogTitle>{user?.id === teamSidebarMemberToRemove ? 'Leave team' : 'Remove member'}</DialogTitle>
+              <DialogDescription className="mt-1">
+                {user?.id === teamSidebarMemberToRemove
+                  ? 'Are you sure you want to leave this team? You will need to be re-added by a team admin to rejoin.'
+                  : 'Are you sure you want to remove this member from the team?'}
+              </DialogDescription>
             </div>
-          </div>
-        </div>
+
+            <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+              <Button
+                variant="outline"
+                onClick={() => setTeamSidebarRemoveConfirmOpen(false)}
+                disabled={teamSidebarRemovingMember}
+                className="h-8 rounded-lg px-3"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmTeamSidebarRemoveMember}
+                disabled={teamSidebarRemovingMember}
+                className="relative"
+              >
+                <span className={teamSidebarRemovingMember ? 'invisible' : undefined}>
+                  {user?.id === teamSidebarMemberToRemove ? 'Leave team' : 'Remove member'}
+                </span>
+                {teamSidebarRemovingMember && (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </span>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Team Settings: Create New Role Sidepanel */}
@@ -5017,7 +4160,7 @@ export default function OrganizationOverviewPage() {
                     value={teamSettingsNewRoleNameInput}
                     onChange={(e) => setTeamSettingsNewRoleNameInput(e.target.value)}
                     maxLength={24}
-                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                     autoFocus
                     disabled={teamSettingsIsCreatingRole}
                   />
@@ -5086,19 +4229,21 @@ export default function OrganizationOverviewPage() {
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
-              <Button variant="outline" onClick={() => setTeamSettingsShowAddRoleSidepanel(false)} disabled={teamSettingsIsCreatingRole}>
+            <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+              <Button variant="outline" onClick={() => setTeamSettingsShowAddRoleSidepanel(false)} disabled={teamSettingsIsCreatingRole} className="!h-8 !px-3 !rounded-lg">
                 Cancel
               </Button>
               <Button
+                variant="green"
                 onClick={() => handleTeamSettingsCreateRole(teamSettingsNewRolePermissions)}
                 disabled={teamSettingsIsCreatingRole || !teamSettingsNewRoleNameInput.trim()}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
+                <span className={teamSettingsIsCreatingRole ? 'invisible' : undefined}>Create Role</span>
                 {teamSettingsIsCreatingRole && (
-                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  </span>
                 )}
-                Create Role
               </Button>
             </div>
           </div>
@@ -5134,7 +4279,7 @@ export default function OrganizationOverviewPage() {
                     value={teamSettingsEditingRoleName}
                     onChange={(e) => setTeamSettingsEditingRoleName(e.target.value)}
                     maxLength={24}
-                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-60"
+                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors disabled:opacity-60"
                     disabled={!teamSettingsCanEditSelectedRole || teamSettingsIsSavingRole}
                   />
                 </div>
@@ -5204,20 +4349,21 @@ export default function OrganizationOverviewPage() {
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
-              <Button variant="outline" onClick={() => setTeamSettingsShowRoleSettingsModal(false)} disabled={teamSettingsIsSavingRole}>
+            <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+              <Button variant="outline" onClick={() => setTeamSettingsShowRoleSettingsModal(false)} disabled={teamSettingsIsSavingRole} className="!h-8 !px-3 !rounded-lg">
                 {teamSettingsCanEditSelectedRole ? 'Cancel' : 'Close'}
               </Button>
               {teamSettingsCanEditSelectedRole && (
                 <Button
+                  variant="green"
                   onClick={handleTeamSettingsSaveRolePermissions}
                   disabled={teamSettingsIsSavingRole}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
-                  {teamSettingsIsSavingRole ? (
-                    <><span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />Save</>
-                  ) : (
-                    'Save'
+                  <span className={teamSettingsIsSavingRole ? 'invisible' : undefined}>Save</span>
+                  {teamSettingsIsSavingRole && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
                   )}
                 </Button>
               )}
