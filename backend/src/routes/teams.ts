@@ -1262,12 +1262,30 @@ router.get('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
         const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(tm.user_id);
         if (userError || !user) return null;
 
-        // Get user profile for full name
-        const { data: userProfile } = await supabase
-          .from('user_profiles')
-          .select('full_name, avatar_url')
-          .eq('user_id', tm.user_id)
-          .single();
+        // Resolve avatar + name from the auth user. Identity lives on
+        // user_metadata after the user_profiles refactor; prefer a
+        // custom-uploaded avatar, then the OAuth picture, then the raw
+        // identity_data (Supabase doesn't always merge OAuth fields into
+        // user_metadata on the first session after sign-up). Mirrors the
+        // org members endpoint in organizations.ts.
+        const meta = user.user_metadata;
+        const idData = user.identities?.[0]?.identity_data as
+          | { picture?: string; avatar_url?: string; full_name?: string; name?: string }
+          | undefined;
+        const avatarUrl =
+          meta?.custom_avatar_url
+          ?? meta?.picture
+          ?? meta?.avatar_url
+          ?? idData?.picture
+          ?? idData?.avatar_url
+          ?? null;
+        const fullName =
+          meta?.custom_full_name
+          ?? meta?.full_name
+          ?? meta?.name
+          ?? idData?.full_name
+          ?? idData?.name
+          ?? null;
 
         // Get organization membership for org_rank
         const { data: orgMembership } = await supabase
@@ -1297,8 +1315,8 @@ router.get('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
         return {
           user_id: user.id,
           email: user.email,
-          full_name: userProfile?.full_name || user.user_metadata?.full_name || null,
-          avatar_url: userProfile?.avatar_url || user.user_metadata?.avatar_url || null,
+          full_name: fullName,
+          avatar_url: avatarUrl,
           role: role?.name || 'member',
           role_display_name: role?.display_name || 'Member',
           role_color: role?.color || null,
@@ -1991,7 +2009,7 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
 
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, name, active_extraction_run_id')
+      .select('id, name, active_extraction_run_id, infra_types')
       .in('id', projectIds);
 
     // Phase 19: only include findings tagged with each project's currently active run
@@ -2009,8 +2027,25 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
     const countsByProject = new Map<string, any>();
     for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
 
+    // Primary linked repository per project (provider logo + repo name) — one row per project.
+    const { data: repoRows } = await supabase
+      .from('project_repositories')
+      .select('project_id, provider, repo_full_name, last_extracted_at')
+      .in('project_id', projectIds);
+    const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
+    for (const r of repoRows ?? []) {
+      if (!repoByProject.has(r.project_id)) {
+        repoByProject.set(r.project_id, {
+          provider: (r as any).provider ?? null,
+          repo_full_name: (r as any).repo_full_name ?? null,
+          last_extracted_at: (r as any).last_extracted_at ?? null,
+        });
+      }
+    }
+
     const result = (projects ?? []).map((p: any) => {
       const c = countsByProject.get(p.id);
+      const repo = repoByProject.get(p.id);
       return {
         project_id: p.id,
         project_name: p.name,
@@ -2026,6 +2061,13 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
         semgrep_count: Number(c?.semgrep_count ?? 0),
         secret_count: Number(c?.secret_count ?? 0),
         verified_secret_count: Number(c?.verified_secret_count ?? 0),
+        ignored_count: Number(c?.ignored_count ?? 0),
+        repo_provider: repo?.provider ?? null,
+        repo_full_name: repo?.repo_full_name ?? null,
+        last_scan_at: c?.last_scan_at ?? repo?.last_extracted_at ?? null,
+        infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
+        has_container: !!c?.has_container,
+        has_dast: !!c?.has_dast,
       };
     });
 
