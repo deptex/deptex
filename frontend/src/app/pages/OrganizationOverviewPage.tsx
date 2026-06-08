@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -362,7 +362,7 @@ export default function OrganizationOverviewPage() {
   // Ref to ensure URL→state restoration only happens once per mount
   const restoredRef = useRef(false);
   // Team sidebar settings state
-  const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'notifications' | 'roles'>('general');
+  const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'roles'>('general');
   const [teamSettingsName, setTeamSettingsName] = useState('');
   const [teamSettingsDescription, setTeamSettingsDescription] = useState('');
   const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
@@ -495,8 +495,8 @@ export default function OrganizationOverviewPage() {
       const validTeamTabs = new Set(['projects', 'issues', 'members', 'settings']);
       const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'issues') as 'projects' | 'issues' | 'members' | 'settings';
       const subtabRaw = searchParams.get('subtab');
-      const validTeamSubtabs = new Set(['general', 'notifications', 'roles']);
-      const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'notifications' | 'roles';
+      const validTeamSubtabs = new Set(['general', 'roles']);
+      const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'roles';
       if (tid) {
         setSelectedTeamId(tid);
         setSelectedTeamName(teamsById[tid]?.name ?? null);
@@ -2348,12 +2348,6 @@ export default function OrganizationOverviewPage() {
     }
   }, [orgId, selectedTeamId]);
 
-  useEffect(() => {
-    if (teamSidebarTab === 'settings' && teamSettingsSubTab === 'notifications' && selectedTeamId) {
-      loadTeamConnections();
-    }
-  }, [teamSidebarTab, teamSettingsSubTab, selectedTeamId, loadTeamConnections]);
-
   // Team settings handlers
   const handleTeamSettingsSave = async () => {
     if (!orgId || !selectedTeamId || !teamSidebarTeamData) return;
@@ -2522,12 +2516,8 @@ export default function OrganizationOverviewPage() {
   useEffect(() => {
     if (!teamSidebarOpen || !teamSidebarTeamData || teamSidebarDataLoading) return;
     if (teamSidebarTab === 'settings') {
-      const canNotifications = teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission;
       const canRoles = teamSidebarPermissions?.view_roles || teamSidebarPermissions?.edit_roles || teamSidebarHasOrgManagePermission;
-      if (teamSettingsSubTab === 'notifications' && !canNotifications) {
-        setTeamSettingsSubTab('general');
-        setSidebarParams({ subtab: 'general' });
-      } else if (teamSettingsSubTab === 'roles' && !canRoles) {
+      if (teamSettingsSubTab === 'roles' && !canRoles) {
         setTeamSettingsSubTab('general');
         setSidebarParams({ subtab: 'general' });
       }
@@ -3347,19 +3337,6 @@ export default function OrganizationOverviewPage() {
                         <Settings className="h-4 w-4 tab-icon-shake" />
                         General
                       </button>
-                      {(teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission) && (
-                        <button
-                          type="button"
-                          onClick={() => { setTeamSettingsSubTab('notifications'); setSidebarParams({ subtab: 'notifications' }); }}
-                          className={cn(
-                            'group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
-                            teamSettingsSubTab === 'notifications' ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
-                          )}
-                        >
-                          <Bell className="h-4 w-4 tab-icon-shake" />
-                          Notifications
-                        </button>
-                      )}
                       {((teamSidebarPermissions?.view_roles || teamSidebarPermissions?.edit_roles) || teamSidebarHasOrgManagePermission) && (
                         <button
                           type="button"
@@ -3382,406 +3359,127 @@ export default function OrganizationOverviewPage() {
                     {teamSettingsSubTab === 'general' && (
                       <div className="space-y-6">
                         <h2 className="text-2xl font-bold text-foreground">General</h2>
+
+                        {/* Team details */}
                         <div className="bg-background-card border border-border rounded-lg overflow-hidden">
                           <div className="p-6">
-                            <h3 className="text-base font-semibold text-foreground mb-1">Team Name</h3>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              This is your team's visible name.
-                            </p>
-                            <div className="max-w-md mb-6">
-                              <input
-                                type="text"
-                                value={teamSettingsName}
-                                onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsName(e.target.value)}
-                                readOnly={!teamSettingsCanManageSettings}
-                                placeholder="Enter team name"
-                                className={cn("w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all", !teamSettingsCanManageSettings && "opacity-70 cursor-default")}
-                              />
+                            <h3 className="text-base font-semibold text-foreground mb-4">Team details</h3>
+                            <div className="space-y-4">
+                              <div className="max-w-md">
+                                <label className="block text-sm font-medium text-foreground mb-1.5">Name</label>
+                                <input
+                                  type="text"
+                                  value={teamSettingsName}
+                                  onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsName(e.target.value)}
+                                  readOnly={!teamSettingsCanManageSettings}
+                                  placeholder="Enter team name"
+                                  className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-foreground mb-1.5">Description</label>
+                                <textarea
+                                  value={teamSettingsDescription}
+                                  onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsDescription(e.target.value)}
+                                  readOnly={!teamSettingsCanManageSettings}
+                                  placeholder="Describe the team's purpose…"
+                                  rows={3}
+                                  className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors resize-none", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
+                                />
+                              </div>
                             </div>
-
-                            <h3 className="text-base font-semibold text-foreground mb-1">Team Description</h3>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Describe your team's purpose and responsibilities.
-                            </p>
-                            <textarea
-                              value={teamSettingsDescription}
-                              onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsDescription(e.target.value)}
-                              readOnly={!teamSettingsCanManageSettings}
-                              placeholder="Describe the team's purpose..."
-                              rows={3}
-                              className={cn("w-full px-3 py-2.5 bg-background-content border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all resize-none", !teamSettingsCanManageSettings && "opacity-70 cursor-default")}
-                            />
                           </div>
-                          {teamSettingsCanManageSettings && (
-                          <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                            <p className="text-xs text-foreground-secondary">Changes will be visible to all team members.</p>
-                            <Button
-                              onClick={handleTeamSettingsSave}
-                              disabled={teamSettingsSaving || (teamSettingsName === teamSidebarTeamData.name && teamSettingsDescription === (teamSidebarTeamData.description || ''))}
-                              size="sm"
-                              className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                            >
-                              {teamSettingsSaving && <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />}
-                              Save
-                            </Button>
-                          </div>
+                          {teamSettingsCanManageSettings ? (
+                            <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+                              <Button
+                                variant="green"
+                                onClick={handleTeamSettingsSave}
+                                disabled={teamSettingsSaving || (teamSettingsName === teamSidebarTeamData.name && teamSettingsDescription === (teamSidebarTeamData.description || ''))}
+                                className="relative"
+                              >
+                                <span className={teamSettingsSaving ? 'invisible' : undefined}>Save</span>
+                                {teamSettingsSaving && (
+                                  <span className="absolute inset-0 flex items-center justify-center">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  </span>
+                                )}
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="px-6 py-3 bg-black/20 border-t border-border">
+                              <p className="text-xs text-foreground-secondary flex items-center gap-1.5">
+                                <Lock className="h-3 w-3" />
+                                You don't have permission to edit these settings.
+                              </p>
+                            </div>
                           )}
                         </div>
 
-                      {/* Danger Zone */}
-                      {teamSettingsCanDeleteTeam && (
-                        <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
-                          <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
-                            <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
-                          </div>
-                          <div className="p-6">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex-1">
-                                <h4 className="text-base font-semibold text-foreground mb-1">Delete Team</h4>
-                                <p className="text-sm text-foreground-secondary">
-                                  Permanently delete this team and all of its data. This action cannot be undone.
-                                </p>
+                        {/* Danger Zone */}
+                        {teamSettingsCanDeleteTeam && (
+                          <div className="border border-destructive/30 rounded-lg overflow-hidden bg-destructive/5">
+                            <div className="px-6 py-3 border-b border-destructive/30 bg-destructive/10">
+                              <h3 className="text-sm font-semibold text-destructive uppercase tracking-wide">Danger Zone</h3>
+                            </div>
+                            <div className="p-6">
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1">
+                                  <h4 className="text-base font-semibold text-foreground mb-1">Delete Team</h4>
+                                  <p className="text-sm text-foreground-secondary">
+                                    Permanently delete this team and all of its data. This action cannot be undone.
+                                  </p>
+                                </div>
+                                {!teamSettingsShowDeleteConfirm && (
+                                  <Button
+                                    onClick={() => setTeamSettingsShowDeleteConfirm(true)}
+                                    variant="destructive"
+                                    className="flex-shrink-0"
+                                  >
+                                    Delete
+                                  </Button>
+                                )}
                               </div>
-                              {!teamSettingsShowDeleteConfirm && (
-                                <Button
-                                  onClick={() => setTeamSettingsShowDeleteConfirm(true)}
-                                  variant="outline"
-                                  size="sm"
-                                  className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                  Delete
-                                </Button>
+                              {teamSettingsShowDeleteConfirm && (
+                                <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
+                                  <p className="text-sm text-foreground">
+                                    To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{teamSidebarTeamData.name}</strong> below:
+                                  </p>
+                                  <input
+                                    type="text"
+                                    value={teamSettingsDeleteConfirmText}
+                                    onChange={(e) => setTeamSettingsDeleteConfirmText(e.target.value)}
+                                    placeholder={teamSidebarTeamData.name}
+                                    autoFocus
+                                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
+                                  />
+                                  <div className="flex gap-2">
+                                    <Button
+                                      onClick={handleTeamSettingsDelete}
+                                      variant="destructive"
+                                      disabled={teamSettingsDeleteConfirmText !== teamSidebarTeamData.name || teamSettingsDeleting}
+                                    >
+                                      <span className={teamSettingsDeleting ? 'invisible' : undefined}>Delete Forever</span>
+                                      {teamSettingsDeleting && (
+                                        <span className="absolute inset-0 flex items-center justify-center">
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        </span>
+                                      )}
+                                    </Button>
+                                    <Button
+                                      onClick={() => { setTeamSettingsShowDeleteConfirm(false); setTeamSettingsDeleteConfirmText(''); }}
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8"
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </div>
                               )}
                             </div>
-                            {teamSettingsShowDeleteConfirm && (
-                              <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
-                                <p className="text-sm text-foreground">
-                                  To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{teamSidebarTeamData.name}</strong> below:
-                                </p>
-                                <input
-                                  type="text"
-                                  value={teamSettingsDeleteConfirmText}
-                                  onChange={(e) => setTeamSettingsDeleteConfirmText(e.target.value)}
-                                  placeholder={teamSidebarTeamData.name}
-                                  className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
-                                />
-                                <div className="flex gap-2">
-                                  <Button
-                                    onClick={handleTeamSettingsDelete}
-                                    variant="destructive"
-                                    size="sm"
-                                    disabled={teamSettingsDeleteConfirmText !== teamSidebarTeamData.name || teamSettingsDeleting}
-                                    className="h-8"
-                                  >
-                                    {teamSettingsDeleting ? (
-                                      <>
-                                        <span className="animate-spin h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full mr-2" />
-                                        Deleting
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                        Delete Forever
-                                      </>
-                                    )}
-                                  </Button>
-                                  <Button
-                                    onClick={() => { setTeamSettingsShowDeleteConfirm(false); setTeamSettingsDeleteConfirmText(''); }}
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-8"
-                                  >
-                                    Cancel
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                    {/* Notifications Settings */}
-                    {teamSettingsSubTab === 'notifications' && orgId && selectedTeamId && (teamSidebarPermissions?.manage_notification_settings || teamSidebarHasOrgManagePermission) && (
-                      <div className="space-y-6">
-                        <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                              <Link to="/docs/notification-rules" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground">
-                                <BookOpen className="h-4 w-4" />
-                              </Link>
-                            </div>
-                            <p className="mt-1.5 text-sm text-foreground-secondary">
-                              Create custom rules to decide when to notify. Send alerts to Slack, email, Jira, and more.
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={teamSettingsNotifPauseLoading}>
-                                  {teamSettingsNotifPauseLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PauseCircle className="h-3.5 w-3.5" />}
-                                  {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() ? (
-                                  <DropdownMenuItem onClick={async () => {
-                                    setTeamSettingsNotifPauseLoading(true);
-                                    try {
-                                      await api.updateTeam(orgId, selectedTeamId, { notifications_paused_until: null });
-                                      setTeamSettingsNotifPausedUntil(null);
-                                      toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                                    } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                                    finally { setTeamSettingsNotifPauseLoading(false); }
-                                  }}>
-                                    Resume notifications
-                                  </DropdownMenuItem>
-                                ) : (
-                                  <>
-                                    {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                                      <DropdownMenuItem key={hours} onClick={async () => {
-                                        setTeamSettingsNotifPauseLoading(true);
-                                        try {
-                                          const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                          await api.updateTeam(orgId, selectedTeamId, { notifications_paused_until: until });
-                                          setTeamSettingsNotifPausedUntil(until);
-                                          toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                        } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                                        finally { setTeamSettingsNotifPauseLoading(false); }
-                                      }}>
-                                        {label}
-                                      </DropdownMenuItem>
-                                    ))}
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                            {teamSettingsNotifActiveTab === 'notifications' && (
-                              <Button
-                                onClick={() => teamSettingsNotificationCreateRef.current?.()}
-                                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                              >
-                                Create Rule
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-
-                        {teamSettingsNotifPausedUntil && new Date(teamSettingsNotifPausedUntil) > new Date() && (
-                          <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                            <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                            <span className="text-sm text-amber-400">
-                              Notifications paused until {new Date(teamSettingsNotifPausedUntil).toLocaleString()}
-                            </span>
                           </div>
                         )}
-
-                        <div className="flex items-center gap-6 border-b border-border pb-px">
-                          <button
-                            type="button"
-                            onClick={() => setTeamSettingsNotifActiveTab('notifications')}
-                            className={cn(
-                              'pb-3 text-sm font-medium transition-colors border-b-2 -mb-px',
-                              teamSettingsNotifActiveTab === 'notifications' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                            )}
-                          >
-                            Notifications
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTeamSettingsNotifActiveTab('destinations')}
-                            className={cn(
-                              'pb-3 text-sm font-medium transition-colors border-b-2 -mb-px',
-                              teamSettingsNotifActiveTab === 'destinations' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                            )}
-                          >
-                            Destinations
-                          </button>
-                        </div>
-
-                        {teamSettingsNotifActiveTab === 'notifications' && (
-                          <div className="pt-2">
-                          <NotificationRulesSection
-                            organizationId={orgId}
-                            teamId={selectedTeamId}
-                            hideTitle
-                            createHandlerRef={teamSettingsNotificationCreateRef}
-                            connections={[...teamSettingsConnections.inherited, ...teamSettingsConnections.team]}
-                          />
-                        </div>
-                      )}
-
-                      {teamSettingsNotifActiveTab === 'destinations' && (
-                        <div className="pt-2 space-y-8">
-                          {/* Inherited from organization */}
-                          <div>
-                            <h4 className="text-base font-semibold text-foreground mb-3">Inherited from organization</h4>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Integrations connected at the organization level are available for this team.
-                            </p>
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <table className="w-full table-fixed">
-                                <colgroup><col className="w-[200px]" /><col /><col className="w-[120px]" /></colgroup>
-                                <thead className="bg-background-card-header border-b border-border">
-                                  <tr>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                  {teamSettingsConnectionsLoading ? (
-                                    [1, 2, 3].map((i) => (
-                                      <tr key={i}>
-                                        <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3" />
-                                      </tr>
-                                    ))
-                                  ) : teamSettingsConnections.inherited.length === 0 ? (
-                                    <tr>
-                                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                        No inherited integrations. Connect integrations in Organization Settings.
-                                      </td>
-                                    </tr>
-                                  ) : (
-                                    teamSettingsConnections.inherited.map((conn) => (
-                                      <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                        <td className="px-4 py-3">
-                                          <div className="flex items-center gap-2.5">
-                                            {['slack', 'discord'].includes(conn.provider) && <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />}
-                                            {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                            {['custom_notification', 'custom_ticketing'].includes(conn.provider) && (conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />)}
-                                            {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                              ['jira', 'linear', 'pagerduty'].includes(conn.provider) ? <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                            )}
-                                            <span className="text-sm font-medium text-foreground">
-                                              {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' : conn.provider === 'email' ? 'Email' : conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') : conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}
-                                            </span>
-                                          </div>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                          <span className="text-sm text-foreground truncate block">{conn.display_name || '-'}</span>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                          <span className="text-xs text-foreground-secondary px-2 py-1 rounded border border-border bg-transparent">Inherited</span>
-                                        </td>
-                                      </tr>
-                                    ))
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-
-                          {/* Team-specific */}
-                          <div>
-                            <h4 className="text-base font-semibold text-foreground mb-3">Team-specific</h4>
-                            <p className="text-sm text-foreground-secondary mb-4">
-                              Add integrations that are specific to this team.
-                            </p>
-                            {teamSettingsCanManageSettings && (
-                              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectSlackOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Slack', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/slack.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Slack
-                                </Button>
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectDiscordOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Discord', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/discord.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Discord
-                                </Button>
-                                <Button variant="outline" size="sm" className="text-xs" onClick={async () => {
-                                  try { const { redirectUrl } = await api.connectLinearOrg(orgId, undefined, selectedTeamId); window.location.href = redirectUrl; }
-                                  catch (err: unknown) { toast({ title: 'Error', description: (err as Error).message || 'Failed to connect Linear', variant: 'destructive' }); }
-                                }}>
-                                  <img src="/images/integrations/linear.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />Add Linear
-                                </Button>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <table className="w-full table-fixed">
-                                <colgroup><col className="w-[200px]" /><col /><col className="w-[140px]" /></colgroup>
-                                <thead className="bg-background-card-header border-b border-border">
-                                  <tr>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                                    <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                  {teamSettingsConnectionsLoading ? (
-                                    [1, 2].map((i) => (
-                                      <tr key={i}>
-                                        <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                        <td className="px-4 py-3" />
-                                      </tr>
-                                    ))
-                                  ) : teamSettingsConnections.team.length === 0 ? (
-                                    <tr>
-                                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                        No team-specific integrations. Add one above.
-                                      </td>
-                                    </tr>
-                                  ) : (
-                                    teamSettingsConnections.team.map((conn) => (
-                                      <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                        <td className="px-4 py-3">
-                                          <div className="flex items-center gap-2.5">
-                                            {['slack', 'discord'].includes(conn.provider) && <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />}
-                                            {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                            {['custom_notification', 'custom_ticketing'].includes(conn.provider) && (conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />)}
-                                            {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                              ['jira', 'linear', 'pagerduty'].includes(conn.provider) ? <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                            )}
-                                            <span className="text-sm font-medium text-foreground">
-                                              {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' : conn.provider === 'email' ? 'Email' : conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') : conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1)}
-                                            </span>
-                                          </div>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                          <span className="text-sm text-foreground truncate block">
-                                            {conn.provider === 'email' ? conn.metadata?.email || conn.display_name : conn.display_name || '-'}
-                                          </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                          {teamSettingsCanManageSettings && (
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                              onClick={async () => {
-                                                if (!confirm('Remove this integration?')) return;
-                                                try {
-                                                  await api.deleteTeamConnection(orgId, selectedTeamId, conn.id);
-                                                  toast({ title: 'Removed', description: 'Integration removed.' });
-                                                  loadTeamConnections();
-                                                } catch (err: unknown) {
-                                                  toast({ title: 'Failed to remove', description: (err as Error).message, variant: 'destructive' });
-                                                }
-                                              }}
-                                            >
-                                              Remove
-                                            </Button>
-                                          )}
-                                        </td>
-                                      </tr>
-                                    ))
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                      </div>
                   )}
 
                     {/* Roles Settings */}
@@ -3794,16 +3492,15 @@ export default function OrganizationOverviewPage() {
                           </div>
                           {teamSettingsCanManageSettings && (teamSidebarPermissions?.edit_roles || teamSidebarHasOrgManagePermission) && (
                             <Button
+                              variant="green"
                               onClick={() => {
-                              setTeamSettingsShowAddRoleSidepanel(true);
-                              requestAnimationFrame(() => setTeamSettingsAddRolePanelVisible(true));
-                            }}
-                            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                          >
-                            <Plus className="h-4 w-4 mr-2" />
-                            Add Role
-                          </Button>
-                        )}
+                                setTeamSettingsShowAddRoleSidepanel(true);
+                                requestAnimationFrame(() => setTeamSettingsAddRolePanelVisible(true));
+                              }}
+                            >
+                              Add Role
+                            </Button>
+                          )}
                       </div>
 
                       {/* Roles List */}
@@ -4463,7 +4160,7 @@ export default function OrganizationOverviewPage() {
                     value={teamSettingsNewRoleNameInput}
                     onChange={(e) => setTeamSettingsNewRoleNameInput(e.target.value)}
                     maxLength={24}
-                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
                     autoFocus
                     disabled={teamSettingsIsCreatingRole}
                   />
@@ -4532,19 +4229,21 @@ export default function OrganizationOverviewPage() {
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
-              <Button variant="outline" onClick={() => setTeamSettingsShowAddRoleSidepanel(false)} disabled={teamSettingsIsCreatingRole}>
+            <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+              <Button variant="outline" onClick={() => setTeamSettingsShowAddRoleSidepanel(false)} disabled={teamSettingsIsCreatingRole} className="!h-8 !px-3 !rounded-lg">
                 Cancel
               </Button>
               <Button
+                variant="green"
                 onClick={() => handleTeamSettingsCreateRole(teamSettingsNewRolePermissions)}
                 disabled={teamSettingsIsCreatingRole || !teamSettingsNewRoleNameInput.trim()}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
               >
+                <span className={teamSettingsIsCreatingRole ? 'invisible' : undefined}>Create Role</span>
                 {teamSettingsIsCreatingRole && (
-                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  </span>
                 )}
-                Create Role
               </Button>
             </div>
           </div>
@@ -4580,7 +4279,7 @@ export default function OrganizationOverviewPage() {
                     value={teamSettingsEditingRoleName}
                     onChange={(e) => setTeamSettingsEditingRoleName(e.target.value)}
                     maxLength={24}
-                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-60"
+                    className="w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors disabled:opacity-60"
                     disabled={!teamSettingsCanEditSelectedRole || teamSettingsIsSavingRole}
                   />
                 </div>
@@ -4650,20 +4349,21 @@ export default function OrganizationOverviewPage() {
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 flex items-center justify-end gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
-              <Button variant="outline" onClick={() => setTeamSettingsShowRoleSettingsModal(false)} disabled={teamSettingsIsSavingRole}>
+            <div className="px-6 py-4 flex items-center justify-between gap-3 flex-shrink-0 border-t border-border bg-background-card-header">
+              <Button variant="outline" onClick={() => setTeamSettingsShowRoleSettingsModal(false)} disabled={teamSettingsIsSavingRole} className="!h-8 !px-3 !rounded-lg">
                 {teamSettingsCanEditSelectedRole ? 'Cancel' : 'Close'}
               </Button>
               {teamSettingsCanEditSelectedRole && (
                 <Button
+                  variant="green"
                   onClick={handleTeamSettingsSaveRolePermissions}
                   disabled={teamSettingsIsSavingRole}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
                 >
-                  {teamSettingsIsSavingRole ? (
-                    <><span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />Save</>
-                  ) : (
-                    'Save'
+                  <span className={teamSettingsIsSavingRole ? 'invisible' : undefined}>Save</span>
+                  {teamSettingsIsSavingRole && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </span>
                   )}
                 </Button>
               )}
