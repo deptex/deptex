@@ -31,7 +31,11 @@ export interface SynthesizeOpts {
 // generates a lot of noise and zero useful security signal. The list is
 // the de facto health-probe convention across Kubernetes / Spring Boot
 // Actuator / Express middlewares.
-const HEALTH_PATH = /^\/(health|_status|livez|readyz|healthz)\/?$/i;
+// Match a health-probe segment anywhere as the final path segment, so a
+// mounted probe (`/api/health` after router mount-prefix composition) is
+// filtered the same as a top-level `/health`. `/api/healthcheck` is NOT a
+// probe and stays (trailing-segment anchored).
+const HEALTH_PATH = /(?:^|\/)(health|_status|livez|readyz|healthz)\/?$/i;
 
 const VALID_HTTP_METHODS = new Set([
   'get', 'post', 'put', 'patch', 'delete', 'head', 'options',
@@ -86,7 +90,7 @@ function authMechanismToScheme(
 
 interface ParamForEmit {
   name: string;
-  in: 'path';
+  in: 'query' | 'path' | 'header' | 'cookie';
   required: boolean;
   schema: Record<string, unknown>;
   'x-deptex-wildcard'?: boolean;
@@ -107,6 +111,35 @@ function buildParameters(
     if (p.wildcard) out['x-deptex-wildcard'] = true;
     return out;
   });
+}
+
+// Phase 48: append the deterministically-harvested query/header/cookie params
+// (project_entry_points.request_params) to the path params translatePathPattern
+// already produced. Deduped by (in, name) against the path params — path stays
+// owned by the route string. Without these, ZAP's active scanner has no query
+// parameter to inject into and the express `/api/users?id=` SQLi is missed.
+function appendRequestParams(
+  pathParams: ParamForEmit[],
+  requestParams: EntryPointRow['request_params'],
+): ParamForEmit[] {
+  if (!requestParams || requestParams.length === 0) return pathParams;
+  const seen = new Set(pathParams.map((p) => `${p.in} ${p.name}`));
+  const out = [...pathParams];
+  for (const rp of requestParams) {
+    // rp.in is query|header|cookie by construction (path stays owned by the
+    // route string) — dedupe by (in, name) against the path params.
+    if (!rp || !rp.name) continue;
+    const key = `${rp.in} ${rp.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name: rp.name,
+      in: rp.in,
+      required: !!rp.required,
+      schema: { type: rp.schema?.type ?? 'string' },
+    });
+  }
+  return out;
 }
 
 /**
@@ -182,7 +215,7 @@ export function synthesizeOpenApi(
       },
     };
 
-    const params = buildParameters(translated.params);
+    const params = appendRequestParams(buildParameters(translated.params), ep.request_params);
     if (params.length > 0) op.parameters = params;
 
     if (ep.middleware_chain && ep.middleware_chain.length > 0) {

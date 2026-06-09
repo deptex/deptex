@@ -79,7 +79,8 @@
     "tournament:spot-check": "tsx test/iterate/tournament-2026-05-10/spot-check-runner.ts",
     "dogfood:check": "tsx scripts/dogfood-check.ts",
     "test:dogfood-check": "tsx test/dogfood-check.test.ts",
-    "test:param-harvest": "tsx test/param-harvest.test.ts"
+    "test:param-harvest": "tsx test/param-harvest.test.ts",
+    "test:dast-param-enrich": "tsx test/dast-param-enrich.test.ts"
   },
   "keywords": [
     "extraction",
