@@ -58,6 +58,7 @@ const STAGES: Stage[] = [
   { name: 'const-resolver',   cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-const-resolver'] },
   { name: 'regex-literal',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-regex-literal'] },
   { name: 'insecure-default', cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-insecure-default'] },
+  { name: 'param-harvest',    cmd: 'npm', args: ['run', '--silent', 'test:param-harvest'] },
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },
   { name: 'sanitizer-audit',  cmd: 'npm', args: ['run', '--silent', 'taint-engine:sanitizer-audit'] },
   { name: 'cve-targeted',     cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-cve-targeted-fixtures'] },

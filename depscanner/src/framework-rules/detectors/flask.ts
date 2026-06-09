@@ -12,6 +12,7 @@ import {
   textOf,
   walkTree,
 } from '../util/python';
+import { harvestFlaskParams } from '../../param-harvest/flask-harvest';
 
 // Flask route patterns:
 //   app = Flask(__name__)
@@ -43,6 +44,8 @@ export const flaskDetector: FrameworkDetector = {
       if (decorators.length === 0) return;
       const funcName = node.childForFieldName('name');
       const handlerName = funcName ? textOf(funcName, source) : null;
+      // Harvest once per view function — shared across all its HTTP methods.
+      const requestParams = harvestFlaskParams(node, source);
 
       for (const dec of decorators) {
         const parsed = parseDecorator(dec, source);
@@ -76,6 +79,7 @@ export const flaskDetector: FrameworkDetector = {
             authMechanism,
             middlewareChain: null,
             metadata: { instance: parsed.object, decorator: parsed.attr },
+            requestParams,
           });
         }
       }
