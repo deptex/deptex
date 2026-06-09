@@ -122,6 +122,29 @@ function main(): void {
     passed++;
   }
 
+  // ---- health-filter precision: probes drop, business routes survive -------
+  // A top-level / one-prefix probe (`/health`, `/api/readyz`) is health-check
+  // noise and must drop. A deeper business route that merely ENDS in a probe
+  // word (`/api/patient/health`, `/v2/account/_status`) is a real endpoint and
+  // must stay scannable — otherwise we silently lose attack surface.
+  {
+    const doc = synth([
+      row({ route_pattern: '/health', handler_name: 'h1' }),
+      row({ route_pattern: '/api/readyz', handler_name: 'h2' }),
+      row({ route_pattern: '/api/patient/health', handler_name: 'h3', request_params: [qp('id')] }),
+      row({ route_pattern: '/v2/account/_status', handler_name: 'h4', request_params: [qp('token')] }),
+      row({ route_pattern: '/api/healthcheck', handler_name: 'h5' }),
+    ]);
+    assertValid31(doc);
+    ok(!doc.paths['/health'], 'top-level /health probe dropped');
+    ok(!doc.paths['/api/readyz'], 'one-prefix /api/readyz probe dropped');
+    ok(!!doc.paths['/api/patient/health']?.get, 'business route /api/patient/health kept (ends in "health" but is not a probe)');
+    ok(!!doc.paths['/v2/account/_status']?.get, 'business route /v2/account/_status kept');
+    ok(!!doc.paths['/api/healthcheck']?.get, '/api/healthcheck kept (not a probe word)');
+    assert.deepStrictEqual(queryParams(doc, '/api/patient/health', 'get'), ['id'], 'kept business route still enriched with its query param');
+    passed++;
+  }
+
   console.log(`\ndast-param-enrich: ${passed} assertions passed`);
 }
 

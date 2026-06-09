@@ -195,6 +195,34 @@ async function main(): Promise<void> {
     resolveMountPrefixes([server, r]);
     eq((r.entryPoints ?? [])[0].routePattern, '/x', "mount at '/' is a no-op");
   }
+  // DOUBLE-MOUNT GUARD (same-file): one router instance mounted at TWO prefixes
+  // must compose ONCE from the original literal (first mount wins), never
+  // double-prefix into `/admin/api/x` (a 404 that ZAP would miss).
+  {
+    const f = extracted('app.js', [
+      epRow({ filePath: 'app.js', routePattern: '/api', handlerName: 'r', httpMethod: null, metadata: { instance: 'app', call: 'app.use' } }),
+      epRow({ filePath: 'app.js', routePattern: '/admin', handlerName: 'r', httpMethod: null, metadata: { instance: 'app', call: 'app.use' } }),
+      epRow({ filePath: 'app.js', routePattern: '/x', handlerName: '(anonymous)', httpMethod: 'GET', metadata: { instance: 'r', call: 'r.get' } }),
+    ]);
+    resolveMountPrefixes([f]);
+    const route = (f.entryPoints ?? []).find((e) => e.httpMethod === 'GET')!;
+    eq(route.routePattern, '/api/x', 'same router mounted twice → composed once (first prefix), never /admin/api/x');
+  }
+  // DOUBLE-MOUNT GUARD (cross-file): one module required + mounted from two
+  // parents must likewise compose once, not stack both prefixes.
+  {
+    const server = extracted('server.js', [
+      epRow({ filePath: 'server.js', routePattern: '/api', handlerName: 'shared', httpMethod: null, metadata: { instance: 'app', call: 'app.use' } }),
+    ], [imp('shared', './routes/shared')]);
+    const admin = extracted('admin.js', [
+      epRow({ filePath: 'admin.js', routePattern: '/admin', handlerName: 'shared', httpMethod: null, metadata: { instance: 'app', call: 'app.use' } }),
+    ], [imp('shared', './routes/shared')]);
+    const shared = extracted('routes/shared.js', [
+      epRow({ filePath: 'routes/shared.js', routePattern: '/items', handlerName: '(anonymous)', httpMethod: 'GET', metadata: { instance: 'router', call: 'router.get' } }),
+    ]);
+    resolveMountPrefixes([server, admin, shared]);
+    eq((shared.entryPoints ?? [])[0].routePattern, '/api/items', 'cross-file module mounted from two parents → composed once, no /admin/api/items');
+  }
 
   console.log(`\nparam-harvest: ${passed} assertions passed`);
 }

@@ -31,11 +31,13 @@ export interface SynthesizeOpts {
 // generates a lot of noise and zero useful security signal. The list is
 // the de facto health-probe convention across Kubernetes / Spring Boot
 // Actuator / Express middlewares.
-// Match a health-probe segment anywhere as the final path segment, so a
-// mounted probe (`/api/health` after router mount-prefix composition) is
-// filtered the same as a top-level `/health`. `/api/healthcheck` is NOT a
-// probe and stays (trailing-segment anchored).
-const HEALTH_PATH = /(?:^|\/)(health|_status|livez|readyz|healthz)\/?$/i;
+// Match a probe word as a whole path segment, allowing at most ONE leading
+// mount-prefix segment — so a top-level `/health` and a mounted probe
+// `/api/health` (after router mount-prefix composition) both drop, while a
+// genuine business route that merely ENDS in a probe word
+// (`/api/patient/health`, `/v2/account/_status`) is kept and still scanned.
+// `/api/healthcheck` is not a probe and stays (whole-segment anchored).
+const HEALTH_PATH = /^\/(?:[\w.-]+\/)?(?:health|_status|livez|readyz|healthz)\/?$/i;
 
 const VALID_HTTP_METHODS = new Set([
   'get', 'post', 'put', 'patch', 'delete', 'head', 'options',

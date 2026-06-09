@@ -83,6 +83,26 @@ export function resolveMountPrefixes(files: readonly ExtractedFile[]): void {
   const byPath = new Map<string, ExtractedFile>();
   for (const f of files) byPath.set(norm(f.filePath), f);
 
+  // Collect the prefix to apply to each real route BEFORE mutating any of them.
+  // Resolving into a map first (rather than mutating in the mount loop) makes
+  // the pass idempotent against the double-prefix bug: when one router instance
+  // or module is mounted at several prefixes, an in-place mutate would compose
+  // the second prefix onto the already-prefixed value (`/api/x` → `/admin/api/x`,
+  // a path the app never serves → ZAP 404s and misses the route). Here every
+  // route is composed exactly once, from its original literal.
+  //
+  // A router mounted at multiple prefixes keeps the FIRST mount's served path
+  // (deterministic in file/mount order). We deliberately don't fan out one
+  // entry point per prefix: the entry-point upsert is keyed on
+  // (file, line, framework, handler) with no route_pattern, so two siblings
+  // sharing a handler would collide on conflict (a Postgres cardinality
+  // violation) — emitting both `/api/x` and `/admin/x` needs route_pattern in
+  // that key, a migration-scoped follow-up.
+  const prefixOf = new Map<EntryPoint, string>();
+  const claim = (route: EntryPoint, prefix: string): void => {
+    if (!prefixOf.has(route)) prefixOf.set(route, prefix);
+  };
+
   for (const mountFile of files) {
     for (const ep of mountFile.entryPoints ?? []) {
       if (ep.framework !== 'express' || ep.httpMethod !== null) continue;
@@ -98,7 +118,7 @@ export function resolveMountPrefixes(files: readonly ExtractedFile[]): void {
       for (const other of mountFile.entryPoints ?? []) {
         if (other === ep || !isRealRoute(other)) continue;
         if (other.metadata?.instance === target) {
-          other.routePattern = joinRoute(prefix, other.routePattern!);
+          claim(other, prefix);
           appliedSameFile = true;
         }
       }
@@ -110,8 +130,12 @@ export function resolveMountPrefixes(files: readonly ExtractedFile[]): void {
       const targetFile = resolveTargetFile(byPath, mountFile.filePath, imp.source);
       if (!targetFile || targetFile === mountFile) continue;
       for (const r of targetFile.entryPoints ?? []) {
-        if (isRealRoute(r)) r.routePattern = joinRoute(prefix, r.routePattern!);
+        if (isRealRoute(r)) claim(r, prefix);
       }
     }
+  }
+
+  for (const [route, prefix] of prefixOf) {
+    route.routePattern = joinRoute(prefix, route.routePattern!);
   }
 }
