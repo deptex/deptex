@@ -145,7 +145,7 @@ const requestFix: AegisToolEntry<{
     // a duplicate.
     if (ctx.turnState.requestedFindings.has(findingKey)) {
       return {
-        error: `A fix for ${findingType} ${findingHandle} on project '${projectName}' was already requested in this turn — the plan is already on screen.`,
+        error: `A fix for ${findingType} ${findingHandle} on project '${projectName}' was already requested in this turn — the plan is already on screen. (This guard is scoped to the current user message only; it resets on the next one. Never refuse a future request or revision because of it.)`,
       };
     }
 
@@ -267,7 +267,7 @@ const reviseFix: AegisToolEntry<{
   description:
     "Revise the plan for an EXISTING fix in this chat thread, incorporating user feedback as binding direction. Use this when the user pushes back on a plan you already produced (e.g. 'add more tests', 'use a different library', 'skip the rollback step'). Do NOT use this to start a new fix — call `request_fix` for that. " +
     "Resolves the target fix automatically; if the thread has multiple revisable plans, pass `planMatch` to disambiguate. `planMatch` matches case-insensitively against the plan summary AND against the underlying finding identifier (CVE / OSV id for vulnerabilities, file:line for Semgrep / secrets), so a CVE id like 'CVE-2022-42889' always works even after the plan title is rewritten. " +
-    "When the user asks to revise N≥2 plans, call `set_todos` first (rule 10) — `revise_fix` will refuse the 2nd plan in a turn otherwise. Each plan can only be revised once per turn — a duplicate `revise_fix` returns an error. Replaces the existing plan and re-arms the approval flow.",
+    "When the user asks to revise N≥2 plans, call `set_todos` first (rule 10) — `revise_fix` will refuse the 2nd plan in a turn otherwise. Each plan can only be revised once per turn — a duplicate `revise_fix` returns an error. IMPORTANT: that once-per-turn limit resets on every new user message. A plan revised in an earlier turn can ALWAYS be revised again in the current one — never refuse a revision request because the plan was revised before. Replaces the existing plan and re-arms the approval flow.",
   permission: 'trigger_fix',
   danger: 'medium',
   inputSchema: jsonSchema({
@@ -379,7 +379,7 @@ const reviseFix: AegisToolEntry<{
     if (ctx.turnState.revisedFixIds.has(target.id)) {
       const summary = target.plan?.summary ?? '(unnamed plan)';
       return {
-        error: `Plan '${summary}' was already revised in this turn — the latest revision is already on screen. Move on to the next plan or finalize.`,
+        error: `Plan '${summary}' was already revised in this turn — the latest revision is already on screen. Move on to the next plan or finalize. (This guard is scoped to the current user message only; it resets on the next one. When the user asks for another revision in a later message, call revise_fix again — never refuse based on this turn's dedup.)`,
       };
     }
 

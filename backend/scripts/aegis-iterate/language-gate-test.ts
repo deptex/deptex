@@ -18,7 +18,7 @@ import * as dotenv from 'dotenv';
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 import { getEnabledPlannerLanguages } from '../../src/lib/aegis-v3/fix-planner';
-import { getEnabledLanguages as getEnabledWorkerLanguages } from '../../fix-worker/src/plan-types';
+import { getEnabledLanguages as getEnabledWorkerLanguages } from '../../../fix-worker/src/plan-types';
 
 interface Case {
   name: string;
