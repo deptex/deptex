@@ -5,16 +5,73 @@
  * entrance animation, no Reveal). The trace panel's one-time draw-on
  * pass lives inside TraceSpecimen. Everything else here is static.
  */
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
 import { RepoLink, SpecimenFrame } from "./primitives";
 import { REPO_PUBLIC, REPO_URL } from "./repoLinks";
 import TraceSpecimen from "./TraceSpecimen";
 
+/**
+ * Atmosphere variants — competitors all carry a designed background field
+ * (Endor's chevron aurora, Snyk's dot matrix, Socket's pixel blocks); a bare
+ * void reads unfinished. Dev-only switcher (keys 1/2/3) until the founder
+ * picks one, then this collapses to the winner.
+ */
+type Atmosphere = "aurora" | "wave" | "grid";
+
+function AtmosphereLayer({ variant }: { variant: Atmosphere }) {
+  if (variant === "aurora") {
+    return <div className="hero-aurora" aria-hidden />;
+  }
+  if (variant === "wave") {
+    // The original wave-gradient node chain, positioned behind the headline zone.
+    return (
+      <div className="absolute inset-x-0 top-0 h-[700px] pointer-events-none" aria-hidden>
+        <div className="wave-gradient">
+          <div className="wave-node node-1" />
+          <div className="wave-node node-2" />
+          <div className="wave-node node-3" />
+          <div className="wave-node node-4" />
+          <div className="wave-node node-5" />
+        </div>
+      </div>
+    );
+  }
+  // grid: dot texture around the headline + a softened aurora behind it
+  return (
+    <div className="absolute inset-0 pointer-events-none" aria-hidden>
+      <div className="hero-aurora hero-aurora--soft" />
+      <div className="hero-grid" />
+    </div>
+  );
+}
+
 export default function HeroSection() {
+  const [atmosphere, setAtmosphere] = useState<Atmosphere>("aurora");
+
+  // Dev-only variant switcher: 1 = aurora, 2 = wave, 3 = grid.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+      if (e.key === "1") setAtmosphere("aurora");
+      if (e.key === "2") setAtmosphere("wave");
+      if (e.key === "3") setAtmosphere("grid");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <section className="relative w-full overflow-hidden bg-[#050505]">
-      <div className="mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pb-24 sm:pt-36">
+      <AtmosphereLayer variant={atmosphere} />
+      {import.meta.env.DEV && (
+        <div className="absolute right-4 top-4 z-20 font-mono text-[10px] text-foreground-secondary">
+          bg: {atmosphere} · press 1/2/3
+        </div>
+      )}
+      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pb-24 sm:pt-36">
         <div className="mx-auto max-w-[800px] text-center">
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
             Your repo sets the score.
