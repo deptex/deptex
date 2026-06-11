@@ -248,6 +248,21 @@ export interface FixPlan {
   refusal?: { reason: string; manualSuggestion?: string };
 }
 
+/** Scanner-truth details for the finding a fix targets — drives the issue
+ * card in the fix panel. Null when the finding row no longer exists (e.g.
+ * reaped by a rescan after the fix was created). */
+export interface FixFindingDetail {
+  kind: 'vulnerability' | 'semgrep' | 'secret';
+  title: string;
+  severity: string | null;
+  depscore: number | null;
+  reachabilityLevel: string | null;
+  packageName: string | null;
+  packageVersion: string | null;
+  filePath: string | null;
+  line: number | null;
+}
+
 export interface FixRecord {
   threadId?: string | null;
   id: string;
@@ -255,6 +270,7 @@ export interface FixRecord {
   projectId: string;
   status: FixStatus;
   finding: { type: FindingType; id: string };
+  findingDetail?: FixFindingDetail | null;
   plan: FixPlan | null;
   planGeneratedAt: string | null;
   planBaseSha: string | null;

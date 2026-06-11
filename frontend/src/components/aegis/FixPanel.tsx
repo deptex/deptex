@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { FixStatusPill } from './FixStatusPill';
+import { FixIssueCard } from './FixIssueCard';
 import { useFixPanel } from './FixPanelContext';
 
 interface StalenessState {
@@ -374,14 +375,25 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
       )}
 
       <div className="mt-6 space-y-6">
-              {plan.issue && (
+              {(plan.issue || fix?.findingDetail) && (
                 <div>
                   <div className="text-sm font-semibold text-foreground mb-2">
                     Issue
                   </div>
-                  <div className="text-sm leading-relaxed text-foreground/80">
-                    <MarkdownRenderer content={plan.issue} />
-                  </div>
+                  {plan.issue && (
+                    <div className="text-sm leading-relaxed text-foreground/80">
+                      <MarkdownRenderer content={plan.issue} />
+                    </div>
+                  )}
+                  {fix?.findingDetail && (
+                    <div className={cn(plan.issue && 'mt-3')}>
+                      <FixIssueCard
+                        organizationId={fix.organizationId}
+                        projectId={fix.projectId}
+                        detail={fix.findingDetail}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
               {plan.description && (
