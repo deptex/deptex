@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { RepoLink, SpecimenFrame } from "./primitives";
 import { REPO_PUBLIC, REPO_URL } from "./repoLinks";
 import HeroGraphBackground from "./HeroGraphBackground";
+import HeroVideoBackground from "./HeroVideoBackground";
 import TraceSpecimen from "./TraceSpecimen";
 
 /**
@@ -20,11 +21,14 @@ import TraceSpecimen from "./TraceSpecimen";
  * the original wave survives as the founder's alternate. Dev-only switcher
  * (keys 1/2) until one wins, then this collapses.
  */
-type Atmosphere = "graph" | "wave";
+type Atmosphere = "graph" | "wave" | "video";
 
 function AtmosphereLayer({ variant }: { variant: Atmosphere }) {
   if (variant === "graph") {
     return <HeroGraphBackground />;
+  }
+  if (variant === "video") {
+    return <HeroVideoBackground />;
   }
   // The original wave-gradient node chain, positioned behind the headline zone.
   return (
@@ -43,13 +47,14 @@ function AtmosphereLayer({ variant }: { variant: Atmosphere }) {
 export default function HeroSection() {
   const [atmosphere, setAtmosphere] = useState<Atmosphere>("graph");
 
-  // Dev-only variant switcher: 1 = graph, 2 = wave.
+  // Dev-only variant switcher: 1 = graph, 2 = wave, 3 = video loop.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
       if (e.key === "1") setAtmosphere("graph");
       if (e.key === "2") setAtmosphere("wave");
+      if (e.key === "3") setAtmosphere("video");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -60,7 +65,7 @@ export default function HeroSection() {
       <AtmosphereLayer variant={atmosphere} />
       {import.meta.env.DEV && (
         <div className="absolute right-4 top-4 z-20 font-mono text-[10px] text-foreground-secondary">
-          bg: {atmosphere} · press 1/2
+          bg: {atmosphere} · press 1/2/3
         </div>
       )}
       <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pb-24 sm:pt-36">
