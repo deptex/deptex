@@ -573,7 +573,7 @@ export function ChatPane({
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, 3);
     return (
-      <div className="h-full overflow-y-auto px-6 pt-20 pb-12">
+      <div className="h-full overflow-y-auto custom-scrollbar px-6 pt-20 pb-12">
         <div className="mx-auto w-full max-w-2xl">
           <div className="mb-6">
             <div className="text-sm text-foreground/60 mb-1">Hi {displayName}</div>
@@ -635,7 +635,7 @@ export function ChatPane({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="py-4">
           {messages.map((m, i) => (
             <MessageBubble

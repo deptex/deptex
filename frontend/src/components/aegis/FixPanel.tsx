@@ -47,7 +47,7 @@ export function FixPanel({ fixId, onClose }: FixPanelProps) {
 
   return (
     <div className="h-full flex flex-col bg-background overflow-hidden relative">
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
         {showListView ? (
           <FixListBody />
         ) : (
