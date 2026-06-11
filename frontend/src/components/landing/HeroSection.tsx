@@ -24,8 +24,8 @@ export default function HeroSection() {
           </h1>
           <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground-secondary sm:text-[17px]">
             Every finding gets a contextual risk score built from your code, not just its
-            CVSS number. Aegis works as your org's own security engineer: it investigates,
-            writes the fix, and opens a draft PR for your review.
+            CVSS number. Aegis works as your org's own security engineer: it investigates
+            and writes the fix.
           </p>
 
           {/* CTAs — mobile: stack full-width, green first */}
