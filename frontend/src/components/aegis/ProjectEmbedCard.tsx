@@ -5,39 +5,6 @@ import { api, type ProjectWithRole } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { FrameworkIcon } from '../framework-icon';
 
-function StatusBadge({
-  label,
-  isPassing,
-}: {
-  label: string | null | undefined;
-  isPassing: boolean | null | undefined;
-}) {
-  if (!label) {
-    return (
-      <span className="inline-flex max-w-full shrink-0 truncate rounded border border-border bg-background-card px-2 py-0.5 text-xs font-medium text-foreground-muted">
-        No status
-      </span>
-    );
-  }
-  const tone =
-    isPassing === true
-      ? 'border border-success/40 bg-success/20 text-success'
-      : isPassing === false
-        ? 'border border-destructive/40 bg-destructive/20 text-destructive'
-        : 'border border-foreground-secondary/40 bg-foreground-secondary/20 text-foreground-secondary';
-  return (
-    <span
-      title={label}
-      className={cn(
-        'inline-flex max-w-full shrink-0 truncate rounded px-2 py-0.5 text-xs font-medium',
-        tone,
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
 interface ProjectEmbedCardProps {
   organizationId: string;
   projectId: string;
@@ -110,10 +77,9 @@ export function ProjectEmbedCard({ organizationId, projectId }: ProjectEmbedCard
     <div className="flex items-center justify-between">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <FrameworkIcon frameworkId={project.framework ?? undefined} size={24} />
-        <h3 className="truncate text-base font-semibold text-foreground" title={project.name}>
+        <h3 className="truncate text-base font-semibold text-foreground">
           {project.name}
         </h3>
-        <StatusBadge label={project.status_name} isPassing={project.status_is_passing} />
       </div>
       <ChevronRight className="ml-2 h-5 w-5 shrink-0 text-foreground-secondary transition-colors group-hover:text-foreground" />
     </div>
