@@ -1158,7 +1158,7 @@ export default function MembersPage({
           setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background-card-header p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
           <div className="px-6 pt-6 pb-4 flex-shrink-0">
             <DialogTitle>Invite new member</DialogTitle>
             <DialogDescription className="mt-1">
@@ -1166,7 +1166,7 @@ export default function MembersPage({
             </DialogDescription>
           </div>
 
-          <div className="px-6 py-4 grid gap-4 overflow-y-auto max-h-[60vh] min-h-0">
+          <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto flex-1 min-h-0">
             <div className="grid gap-2">
               <label htmlFor="invite-email" className="text-sm font-medium text-foreground">Email Address</label>
               <input
@@ -1175,7 +1175,7 @@ export default function MembersPage({
                 placeholder=""
                 value={inviteForms[0]?.email || ''}
                 onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-                className="w-full px-3 py-2 bg-background-card-header border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input"
+                className="w-full px-3 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && inviteForms[0]?.email) {
                     handleSendInvites();
@@ -1237,10 +1237,11 @@ export default function MembersPage({
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 bg-background border-t border-border sm:justify-between">
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
             <Button
               variant="outline"
-              className="!h-8 !px-3 !rounded-lg"
+              className="h-8 rounded-lg px-3"
+              disabled={inviting}
               onClick={() => {
                 setShowInviteModal(false);
                 setInviteForms([{ email: '', role: 'member', team_ids: [] }]);
