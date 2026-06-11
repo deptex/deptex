@@ -158,6 +158,19 @@ export default function TraceSpecimen() {
         })}
       </ol>
 
+      {/* "Why 92" — the context behind the score (the headline's receipt:
+          scored by the repo's context, not bare CVSS). Sample factors until A1. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border px-4 py-2.5 font-mono text-[11px] leading-none text-foreground-secondary sm:px-5">
+        <span className="text-foreground">why 92:</span>
+        <span>confirmed ×1.0</span>
+        <span aria-hidden>·</span>
+        <span>public, unauthenticated route</span>
+        <span aria-hidden>·</span>
+        <span>KEV-listed</span>
+        <span aria-hidden>·</span>
+        <span>importance ×1.5</span>
+      </div>
+
       {/* Verdict footer */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border px-4 py-3 font-mono text-xs sm:px-5">
         <span className="text-foreground-secondary">

@@ -17,12 +17,13 @@ export default function HeroSection() {
       <div className="mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pb-24 sm:pt-36">
         <div className="mx-auto max-w-[800px] text-center">
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
-            Security findings that show their work.
+            Your repo sets the score.
+            <span className="block">Aegis writes the fix.</span>
           </h1>
           <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground-secondary sm:text-[17px]">
-            Deptex checks every CVE for a path from your entry points to the vulnerable
-            function, in 8 languages. Proven paths ship with the finding, hop by hop;
-            unreachable ones score zero.
+            Depscore reranks every CVE by what's true in your repository: reachability,
+            exploit signals, project importance. Then Aegis plans the fix, you approve,
+            and a draft PR lands.
           </p>
 
           {/* CTAs — mobile: stack full-width, green first */}
