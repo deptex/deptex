@@ -8,7 +8,6 @@
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
-import { PlaceholderCanvas } from "./primitives";
 
 export default function HeroSection() {
   return (
@@ -66,18 +65,18 @@ export default function HeroSection() {
             aria-hidden
           />
           <div className="relative">
-            <PlaceholderCanvas
-              assetId="HERO-1"
-              description="Findings table — real app screenshot: depscore pills, reachability verdicts, statuses"
-              aspect="16/9"
-              className="shadow-[0_8px_40px_-8px_rgba(0,0,0,0.7)]"
+            {/* HERO-1: the findings dashboard — "your repo sets the score" */}
+            <img
+              src="/images/landing/hero-findings.png"
+              alt="Deptex findings dashboard: vulnerability prioritization funnel, findings by type, and the findings table with contextual depscores"
+              className="w-full rounded-xl border border-border shadow-[0_8px_40px_-8px_rgba(0,0,0,0.7)]"
             />
-            <div className="relative mx-6 -mt-8 sm:absolute sm:-bottom-10 sm:-right-8 sm:mx-0 sm:mt-0 sm:w-[320px]">
-              <PlaceholderCanvas
-                assetId="HERO-2"
-                description="Aegis fix card — plan → diff → draft PR"
-                aspect="4/3"
-                className="!bg-[#0d0d0d] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)]"
+            {/* HERO-2: the Aegis fix plan — "Aegis writes the fix" */}
+            <div className="relative mx-6 -mt-8 overflow-hidden rounded-xl border border-[#333] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)] sm:absolute sm:-bottom-10 sm:-right-8 sm:mx-0 sm:mt-0 sm:w-[300px]">
+              <img
+                src="/images/landing/hero-aegis-plan.png"
+                alt="Aegis fix plan: patch CVE-2021-23337 by bumping lodash — issue, plan, to-dos, and verification steps"
+                className="aspect-[3/4] w-full object-cover object-top"
               />
             </div>
           </div>
