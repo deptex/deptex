@@ -12,7 +12,6 @@ import {
   Mail,
   LogOut,
   Loader2,
-  Plus,
   ChevronLeft,
   ChevronRight,
   Search,
@@ -932,17 +931,17 @@ export default function OrgSidebar({
       >
         <DialogContent
           hideClose
-          className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden max-h-[90vh] flex flex-col"
+          className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col"
         >
-          <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
-            <DialogTitle>Create Team</DialogTitle>
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle>Create team</DialogTitle>
             <DialogDescription className="mt-1">
               Teams let you group projects and members together with scoped access control.
             </DialogDescription>
           </div>
-          <div className="px-6 py-4 bg-background">
-            <label htmlFor="sidebar-team-name" className="block text-sm font-medium text-foreground mb-2">
-              Team Name
+          <div className="px-6 py-4 grid gap-2 bg-background overflow-y-auto flex-1 min-h-0">
+            <label htmlFor="sidebar-team-name" className="text-sm font-medium text-foreground">
+              Team name
             </label>
             <input
               id="sidebar-team-name"
@@ -950,7 +949,7 @@ export default function OrgSidebar({
               value={createTeamName}
               onChange={(e) => setCreateTeamName(e.target.value)}
               placeholder=""
-              className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="w-full px-3 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
@@ -959,9 +958,11 @@ export default function OrgSidebar({
               }}
             />
           </div>
-          <DialogFooter className="px-6 py-4 bg-background">
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
             <Button
               variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={creating}
               onClick={() => {
                 setShowCreateTeamModal(false);
                 setCreateTeamName('');
@@ -971,17 +972,14 @@ export default function OrgSidebar({
             </Button>
             <Button
               onClick={handleCreateTeam}
-              disabled={creating}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-9"
+              variant="green"
+              disabled={creating || !createTeamName.trim()}
             >
-              {creating ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" /> Create
-                </>
-              ) : (
-                <>
-                  <Plus className="h-4 w-4 mr-2" /> Create
-                </>
+              <span className={creating ? 'invisible' : undefined}>Create team</span>
+              {creating && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
               )}
             </Button>
           </DialogFooter>

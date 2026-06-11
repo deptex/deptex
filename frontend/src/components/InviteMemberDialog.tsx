@@ -191,14 +191,14 @@ export function InviteMemberDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-visible max-h-[90vh] flex flex-col">
-        <div className="px-6 pt-6 pb-4 border-b border-border flex-shrink-0">
+        <div className="px-6 pt-6 pb-4 flex-shrink-0">
           <DialogTitle>Invite new member</DialogTitle>
           <DialogDescription className="mt-1">
             Invite new members to your organization by email. You can assign them a role and optionally add them to a team.
           </DialogDescription>
         </div>
 
-        <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto max-h-[60vh] min-h-0">
+        <div className="px-6 py-4 grid gap-4 bg-background overflow-y-auto flex-1 min-h-0">
           <div className="grid gap-2">
             <label htmlFor="invite-email" className="text-sm font-medium text-foreground">
               Email Address
@@ -209,7 +209,7 @@ export function InviteMemberDialog({
               placeholder=""
               value={inviteForms[0]?.email || ''}
               onChange={(e) => handleInviteChange(0, 'email', e.target.value)}
-              className="w-full px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="w-full px-3 h-9 bg-background-card border border-border rounded-md text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:border-foreground-secondary/50 focus:ring-1 focus:ring-foreground-secondary/20"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && inviteForms[0]?.email) handleSendInvites();
               }}
@@ -243,39 +243,35 @@ export function InviteMemberDialog({
             )}
           </div>
 
-          <div className="grid gap-2">
-            <label className="text-sm font-medium text-foreground">Teams</label>
-            {teams.length > 0 ? (
-              <ProjectTeamMultiSelect
-                value={inviteForms[0]?.team_ids || []}
-                onChange={(value) => handleInviteChange(0, 'team_ids', value)}
-                teams={teams}
-                variant="modal"
-              />
-            ) : (
-              <div className="flex items-center gap-2 min-h-9 px-3 py-2 bg-background-card border border-border rounded-md text-sm text-foreground-secondary">
-                {loading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    <span>Loading teams…</span>
-                  </>
-                ) : (
-                  <span>No teams</span>
-                )}
-              </div>
-            )}
-          </div>
+          {(teams.length > 0 || loading) && (
+            <div className="grid gap-2">
+              <label className="text-sm font-medium text-foreground">Teams</label>
+              {teams.length > 0 ? (
+                <ProjectTeamMultiSelect
+                  value={inviteForms[0]?.team_ids || []}
+                  onChange={(value) => handleInviteChange(0, 'team_ids', value)}
+                  teams={teams}
+                  variant="modal"
+                />
+              ) : (
+                <div className="flex items-center gap-2 h-9 px-3 bg-background-card border border-border rounded-md text-sm text-foreground-secondary">
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                  <span>Loading teams…</span>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="pt-2">
-            <Button variant="outline" size="sm" onClick={handleCopyShareLink} className="text-xs">
+            <Button variant="outline" onClick={handleCopyShareLink} className="!h-8 !px-3 !rounded-lg">
               {shareLinkCopied ? (
                 <>
-                  <Check className="h-3 w-3 mr-1" />
+                  <Check />
                   Copied!
                 </>
               ) : (
                 <>
-                  <LinkIcon className="h-3 w-3 mr-1" />
+                  <LinkIcon />
                   Copy Invite Link
                 </>
               )}
@@ -283,20 +279,27 @@ export function InviteMemberDialog({
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-4 bg-background">
+        <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
           <Button
             variant="outline"
+            className="h-8 rounded-lg px-3"
+            disabled={inviting}
             onClick={() => handleOpenChange(false)}
           >
             Cancel
           </Button>
           <Button
             onClick={handleSendInvites}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+            variant="green"
             disabled={inviting}
+            className="relative"
           >
-            {inviting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Send Invitation
+            <span className={inviting ? 'invisible' : undefined}>Send Invitation</span>
+            {inviting && (
+              <span className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              </span>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

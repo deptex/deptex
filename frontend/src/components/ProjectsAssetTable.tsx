@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Search, Filter, Users, AlertTriangle, RotateCw, FolderKanban } from 'lucide-react';
+import { Search, Filter, Users, FolderKanban } from 'lucide-react';
 import { cn } from '../lib/utils';
 import type { Project, ProjectSecuritySummary } from '../lib/api';
 import { filterAndSortOrgProjects } from '../lib/orgSidebarProjects';
@@ -57,7 +57,6 @@ export interface ProjectsAssetTableProps {
   projects: Project[];
   loading: boolean;
   error?: boolean;
-  errorMsg?: string | null;
   onRetry?: () => void;
   onProjectClick?: (project: Project) => void;
   /** Show the Team column + Teams filter (org context). Off for the team sidebar (single team). */
@@ -76,7 +75,6 @@ export function ProjectsAssetTable({
   projects,
   loading,
   error = false,
-  errorMsg = null,
   onRetry,
   onProjectClick,
   showTeamColumn = true,
@@ -240,17 +238,11 @@ export function ProjectsAssetTable({
         </div>
       ) : error ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
-          <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
-            <AlertTriangle className="h-6 w-6 text-foreground-secondary" />
-          </div>
           <h3 className="text-base font-medium text-foreground mb-1">Couldn't load projects</h3>
-          <p className="text-sm text-foreground-secondary max-w-[260px] mb-3">Something went wrong fetching {errorContext}.</p>
-          {errorMsg && (
-            <p className="text-xs text-foreground-secondary/70 font-mono max-w-[280px] mb-4 break-words">{errorMsg}</p>
-          )}
+          <p className="text-sm text-foreground-secondary max-w-[260px] mb-4">Something went wrong fetching {errorContext}.</p>
           {onRetry && (
-            <Button variant="outline" size="sm" onClick={onRetry}>
-              <RotateCw className="h-4 w-4 mr-2" /> Try again
+            <Button variant="outline" onClick={onRetry} className="h-8 rounded-lg px-3">
+              Try again
             </Button>
           )}
         </div>

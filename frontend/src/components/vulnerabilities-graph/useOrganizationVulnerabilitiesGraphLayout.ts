@@ -418,7 +418,6 @@ export function useOrganizationOverviewGraphLayout(
   orgRole?: string | null,
   orgStatusRollup?: OverviewStatusRollup | null,
   teamStatusRollups?: Record<string, OverviewStatusRollup> | null,
-  orgPlan?: string | null,
   /** When true, collapse project satellites back into compact team-only cards. */
   compactTeams?: boolean
 ): { nodes: Node[]; edges: Edge[] } {
@@ -464,7 +463,6 @@ export function useOrganizationOverviewGraphLayout(
       projectCount: totalProjectCount,
       teamCount: realTeams.length,
       memberCount: totalMemberCount,
-      plan: orgPlan ?? undefined,
       ...(orgStatusRollup
         ? {
             overviewStatusBadgeLabel: orgStatusRollup.badgeLabel,
