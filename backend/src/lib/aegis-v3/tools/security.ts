@@ -5,6 +5,7 @@ import {
   getActiveExtractionIds,
   NO_ACTIVE_RUN,
 } from '../../active-extraction';
+import { vulnAutoIgnoreReason } from '../finding-triage';
 import { resolveProject, resolveProjectVulnerability } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
@@ -16,7 +17,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
 }> = {
   name: 'get_project_vulnerabilities',
   description:
-    'Vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, and fixed versions. Pass the project name exactly as the user said it.',
+    "Vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, fixed versions, and `autoIgnored` (true = the findings table sets this row aside as Auto Ignored because it isn't reachable — treat those as low priority and don't propose fixes for them unprompted). Pass the project name exactly as the user said it.",
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
@@ -42,7 +43,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
+        'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, runtime_confirmed_at, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
       )
       .eq('project_id', resolved.id)
       .eq('extraction_run_id', activeRunId)
@@ -81,6 +82,9 @@ const getProjectVulnerabilities: AegisToolEntry<{
           isKev: !!v.cisa_kev,
           isReachable: !!v.is_reachable,
           reachabilityLevel: v.reachability_level,
+          // Same derivation as the findings table's Auto Ignored status —
+          // keeps the agent's narrative consistent with what the user sees.
+          autoIgnored: vulnAutoIgnoreReason(v) != null,
           depscore: v.depscore,
           publishedAt: v.published_at,
           summary: v.summary,

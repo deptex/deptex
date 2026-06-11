@@ -1,6 +1,9 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AegisToolEntry } from '../tool-types';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 import { generateFixPlan } from '../fix-planner';
+import { autoIgnoreReasonText, vulnAutoIgnoreReason } from '../finding-triage';
 import { signApprovalToken, verifyApprovalToken } from '../approval-token';
 import { resolveProject } from './resolvers';
 import {
@@ -73,6 +76,7 @@ const requestFix: AegisToolEntry<{
   findingType: FindingType;
   findingHandle: string;
   projectName: string;
+  allowIgnored?: boolean;
 }, {
   fixId?: string;
   status?: FixStatus;
@@ -82,7 +86,7 @@ const requestFix: AegisToolEntry<{
 }> = {
   name: 'request_fix',
   description:
-    "Generate a fix plan for a security issue (vulnerability / Semgrep / secret). Pass `projectName` exactly as the user said it (the resolver fuzzy-matches), `findingType` ('vulnerability' | 'semgrep' | 'secret'), and `findingHandle` exactly as returned in the `handle` field by `list_project_issues`. Always call `list_project_issues` first to obtain the right handle; never invent one. The plan must be approved (via `approve_fix`) before execution. Returns the plan, status (awaiting_approval | failed on refusal), and a fix id. Does not open a PR.",
+    "Generate a fix plan for a security issue (vulnerability / Semgrep / secret). Pass `projectName` exactly as the user said it (the resolver fuzzy-matches), `findingType` ('vulnerability' | 'semgrep' | 'secret'), and `findingHandle` exactly as returned in the `handle` field by `list_project_issues`. Always call `list_project_issues` first to obtain the right handle; never invent one. Findings the platform has ignored / auto-ignored (suppressed, risk-accepted, or triaged not-reachable) are refused unless `allowIgnored: true` — only pass that after the user explicitly confirms. The plan must be approved (via `approve_fix`) before execution. Returns the plan, status (awaiting_approval | failed on refusal), and a fix id. Does not open a PR.",
   permission: 'trigger_fix',
   danger: 'medium',
   inputSchema: jsonSchema({
@@ -91,11 +95,16 @@ const requestFix: AegisToolEntry<{
       findingType: { type: 'string', enum: [...FINDING_TYPES] },
       findingHandle: { type: 'string', minLength: 1, description: 'The `handle` from list_project_issues. Opaque — never paraphrase to the user.' },
       projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
+      allowIgnored: {
+        type: 'boolean',
+        description:
+          'Set true ONLY after the user explicitly confirms they want a fix for a finding the platform has ignored / auto-ignored (suppressed, risk-accepted, or triaged as not reachable).',
+      },
     },
     required: ['findingType', 'findingHandle', 'projectName'],
     additionalProperties: false,
   }),
-  execute: async ({ findingType, findingHandle, projectName }, ctx) => {
+  execute: async ({ findingType, findingHandle, projectName, allowIgnored }, ctx) => {
     // Synchronous ordinal — captured BEFORE any await so parallel calls each
     // get a unique number. Used by the fan-out guard below (Set-based dedup
     // updates after async work, which leaks the race).
@@ -147,6 +156,43 @@ const requestFix: AegisToolEntry<{
       return {
         error: `A fix for ${findingType} ${findingHandle} on project '${projectName}' was already requested in this turn — the plan is already on screen. (This guard is scoped to the current user message only; it resets on the next one. Never refuse a future request or revision because of it.)`,
       };
+    }
+
+    // Set-aside guard. Findings the platform has ignored — user-suppressed,
+    // risk-accepted, or auto-triaged (the findings table shows them as
+    // "Auto Ignored": not reachable / no path to the vulnerable function) —
+    // shouldn't get fix plans by default; the user has already decided (or
+    // the scanner has determined) they don't matter. Overridable only after
+    // the user explicitly confirms.
+    if (findingType === 'vulnerability' && !allowIgnored) {
+      const activeRunId =
+        (await getActiveExtractionId(ctx.supabase as SupabaseClient, projectId)) ?? NO_ACTIVE_RUN;
+      const { data: pdvRow } = await ctx.supabase
+        .from('project_dependency_vulnerabilities')
+        .select('suppressed, risk_accepted, reachability_level, is_reachable, runtime_confirmed_at')
+        .eq('project_id', projectId)
+        .eq('osv_id', findingId)
+        .eq('extraction_run_id', activeRunId)
+        .limit(1)
+        .maybeSingle();
+      if (pdvRow) {
+        const triage = vulnAutoIgnoreReason(pdvRow as any);
+        const setAside = (pdvRow as any).suppressed
+          ? 'ignored (suppressed by a user)'
+          : (pdvRow as any).risk_accepted
+            ? 'risk-accepted by a user'
+            : triage
+              ? `auto-ignored: ${autoIgnoreReasonText(triage)}`
+              : null;
+        if (setAside) {
+          return {
+            error:
+              `Not creating a plan: ${findingHandle} on '${projectName}' is ${setAside}. ` +
+              `The findings table shows it as Ignored/Auto Ignored, so fixing it is usually wasted effort. ` +
+              `Explain this to the user; only if they explicitly confirm they still want it fixed, call request_fix again with allowIgnored: true.`,
+          };
+        }
+      }
     }
 
     // Fan-out guard: 2nd+ request_fix in the turn AND no set_todos = refuse.
