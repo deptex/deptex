@@ -762,76 +762,23 @@ table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]):no
 }
 
 /* ============================================================
-   Hero atmosphere variants (dev-switchable; founder picks one)
+   Hero atmosphere — node-graph constellation (HeroGraphBackground)
    ============================================================ */
-
-/* Variant A — "aurora": one large anchored green light field bleeding
-   down from above the headline + a faint counter-glow lower-left.
-   Slow breathing only; no positional drift. */
-.hero-aurora {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
+.hero-graph {
   pointer-events: none;
 }
-.hero-aurora::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: -32%;
-  width: 1300px;
-  height: 950px;
-  transform: translateX(-50%);
-  background: radial-gradient(
-    ellipse at center,
-    rgba(2, 82, 48, 0.32) 0%,
-    rgba(2, 82, 48, 0.12) 42%,
-    transparent 70%
-  );
-  filter: blur(60px);
-  animation: aurora-breathe 16s ease-in-out infinite;
+@keyframes hero-node-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.9; }
 }
-.hero-aurora::after {
-  content: "";
-  position: absolute;
-  left: -12%;
-  bottom: -10%;
-  width: 700px;
-  height: 600px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(52, 208, 138, 0.07) 0%,
-    transparent 65%
-  );
-  filter: blur(70px);
-  animation: aurora-breathe 16s ease-in-out 8s infinite;
+.hero-graph .node-pulse {
+  animation: hero-node-pulse 5s ease-in-out infinite;
 }
-.hero-aurora--soft::before {
-  opacity: 0.55;
-}
-.hero-aurora--soft::after {
-  display: none;
-}
-@keyframes aurora-breathe {
-  0%, 100% { opacity: 0.75; }
-  50% { opacity: 1; }
-}
-
-/* Variant C — "grid": green-tinted dot grid, radially masked so it only
-   exists around the headline zone. Static (texture, not motion). */
-.hero-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(rgba(52, 208, 138, 0.16) 1px, transparent 1px);
-  background-size: 28px 28px;
-  -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 30%, black 0%, transparent 72%);
-  mask-image: radial-gradient(ellipse 75% 55% at 50% 30%, black 0%, transparent 72%);
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .hero-aurora::before,
-  .hero-aurora::after {
+  .hero-graph .node-pulse {
     animation: none;
+  }
+  .hero-graph .graph-packet {
+    display: none;
   }
 }
