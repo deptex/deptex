@@ -682,6 +682,17 @@ async function runZapWithControlPlane(
     pollIntervalMs: number;
   },
 ): Promise<ZapRunOutputs> {
+  // Create the per-job tmpdir BEFORE building the YAML so the traditional-json
+  // report job can target it via reportDirAbsolute. ZAP writes the report to
+  // `${reportDir}/${reportFile}` and the worker reads it back from
+  // `${tmpDir}/zap-report.json` — these MUST be the same directory. They were
+  // not: the report job wrote to the hardcoded /zap/wrk while the worker read
+  // the tmpdir, so `fs.existsSync(reportPath)` was always false and every scan
+  // silently parsed zero findings.
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const reportPath = path.join(tmpDir, 'zap-report.json');
+
   let yamlText: string;
   try {
     yamlText = buildAutomationYaml({
@@ -689,6 +700,7 @@ async function runZapWithControlPlane(
       scanProfile: inputs.scanProfile,
       detectedRuntime: inputs.detectedRuntime,
       reportRelativePath: 'zap-report.json',
+      reportDirAbsolute: tmpDir,
       scope: inputs.scope,
       authStrategy: inputs.authStrategy,
       authPayload: inputs.authPayload,
@@ -698,6 +710,12 @@ async function runZapWithControlPlane(
       openApiSpecPath: inputs.openApiSpecPath,
     });
   } catch (e) {
+    // tmpDir exists now — clean it up before surfacing the build failure.
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* noop */
+    }
     if (e instanceof InvalidCredentialCharacterError) {
       // A crafted credential (CR/LF/control char in a cookie, bad-alphabet
       // JWT) could inject headers into every ZAP request. Fail the job
@@ -712,9 +730,6 @@ async function runZapWithControlPlane(
     throw e;
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
-  const yamlPath = path.join(tmpDir, 'automation.yaml');
-  const reportPath = path.join(tmpDir, 'zap-report.json');
   // automation.yaml embeds plaintext form/JWT/cookie credentials — write it
   // owner-read/write only so it is never world-readable on disk.
   fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
