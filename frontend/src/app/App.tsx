@@ -52,9 +52,17 @@ export default function App() {
     <>
       <div className="bg-background text-foreground min-h-screen flex flex-col">
         <NavBar />
-        <div className="mx-auto max-w-screen-2xl flex-1">
-          <Outlet />
-        </div>
+        {/* Landing page is full-bleed (sections own their max-w containers);
+            other marketing routes keep the centered shell. */}
+        {isIndexRoute ? (
+          <div className="flex-1 pt-14">
+            <Outlet />
+          </div>
+        ) : (
+          <div className="mx-auto max-w-screen-2xl flex-1">
+            <Outlet />
+          </div>
+        )}
         <Footer />
       </div>
       <Toaster position="bottom-right" />

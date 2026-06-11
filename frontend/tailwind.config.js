@@ -50,6 +50,9 @@ export default {
           foreground: "#F0F4F8",
         },
         border: "#262626",
+        // Brand-hue green for TEXT on dark surfaces (≥4.5:1 on #0a0a0a).
+        // #025230 stays surfaces/CTA-only — it fails contrast as text.
+        "accent-text": "#34d08a",
         input: "#262626",
         ring: "#525252",
         card: {
