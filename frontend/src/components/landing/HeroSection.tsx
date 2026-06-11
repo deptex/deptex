@@ -2,9 +2,9 @@
  * HeroSection — landing-page-redesign.plan.md §3.2.
  *
  * Motion: H1 + subhead + CTAs render INSTANTLY (LCP candidates — zero
- * entrance animation, no Reveal). The trace panel's one-time draw-on
- * pass lives inside TraceSpecimen. Atmosphere = the wave-gradient node
- * chain (founder pick, 2026-06-11).
+ * entrance animation, no Reveal). Atmosphere = the wave-gradient node
+ * chain (founder pick, 2026-06-11). Visual = two-piece collage:
+ * findings table + Aegis fix card (one receipt per headline beat).
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
