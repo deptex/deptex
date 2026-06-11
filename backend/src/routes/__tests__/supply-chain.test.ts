@@ -390,6 +390,49 @@ describe('Supply Chain Routes', () => {
   });
 
   describe('DELETE /api/organizations/:id/ban-version/:banId', () => {
+    it('returns 403 for an unprivileged member and never executes the delete', async () => {
+      (supabase.auth.getUser as jest.Mock).mockResolvedValue({
+        data: { user: mockUser },
+        error: null,
+      });
+      // Unprivileged: plain member whose role bundle lacks manage_teams_and_projects.
+      queryBuilder.single.mockImplementation(function (this: any) {
+        if (this._table === 'organization_members') {
+          return Promise.resolve({ data: { role: 'member' }, error: null });
+        }
+        if (this._table === 'organization_roles') {
+          return Promise.resolve({ data: { permissions: {} }, error: null });
+        }
+        return Promise.resolve({ data: {}, error: null });
+      });
+      // An org-level ban with this id exists (the SELECT-before-DELETE lookup).
+      queryBuilder.maybeSingle.mockImplementation(function (this: any) {
+        if (this._table === 'banned_versions') {
+          return Promise.resolve({
+            data: { id: 'ban-1', dependency_id: 'dep-1', banned_version: '1.0.0' },
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: {}, error: null });
+      });
+
+      const deletedTables: string[] = [];
+      queryBuilder.delete.mockImplementation(function (this: any) {
+        deletedTables.push(this._table);
+        return this;
+      });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/ban-version/ban-1`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      // Authorization must run BEFORE the mutation: 403 and the banned_versions
+      // row untouched (the old shape deleted the row, then returned 403).
+      expect(res.status).toBe(403);
+      expect(deletedTables).not.toContain('banned_versions');
+      expect(queryBuilder.delete).not.toHaveBeenCalled();
+    });
+
     it('should update watchlist latest_allowed_version when removing org ban and unbanned version is greater than current', async () => {
       mockOrgManagePermission();
       queryBuilder.single.mockResolvedValueOnce({

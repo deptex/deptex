@@ -54,6 +54,8 @@ import {
   invalidateProjectCachesForTeam,
   CACHE_TTL_SECONDS,
 } from '../lib/cache';
+import { recordMeterEvent } from '../lib/billing/ledger';
+import { chargedCentsForAi } from '../lib/ai/pricing';
 
 /** True if version is a stable release (no canary/experimental/alpha/beta/rc). */
 function isStableVersion(version: string): boolean {
@@ -647,19 +649,14 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     });
 
     // Determine user's role for each project
-    // Org owners get 'owner', org admins get 'editor'
-    // For regular members, check project_members and team memberships
+    // Org owners get 'owner'; everyone else (including custom roles) is
+    // resolved via project_members and team memberships — never by role name.
     let projectRoles: Record<string, string> = {};
 
     if (membership.role === 'owner') {
       // Org owners are owners of all projects
       projectIds.forEach((pid: string) => {
         projectRoles[pid] = 'owner';
-      });
-    } else if (membership.role === 'admin') {
-      // Org admins are editors of all projects
-      projectIds.forEach((pid: string) => {
-        projectRoles[pid] = 'editor';
       });
     } else if (projectIds.length > 0) {
       // For regular members, check project memberships
@@ -716,7 +713,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
 
     // Get user's team memberships and their permissions for owner team checks
     let userTeamPermissions: Record<string, any> = {};
-    if (membership.role !== 'owner' && membership.role !== 'admin' && !hasOrgManagePermission) {
+    if (membership.role !== 'owner' && !hasOrgManagePermission) {
       // Get all teams user is a member of with their roles
       const { data: userTeamMemberships } = await supabase
         .from('team_members')
@@ -852,7 +849,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
           view_settings: true,
           edit_settings: true,
         };
-      } else if (membership.role === 'admin' || hasOrgManagePermission) {
+      } else if (hasOrgManagePermission) {
         permissions = {
           view_overview: true,
           view_dependencies: true,
@@ -2074,17 +2071,19 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     let userRole = null;
     let userPermissions = null;
 
-    // First check if user is an org owner/admin (they get full access)
-    if (membership.role === 'owner' || membership.role === 'admin') {
-      userRole = membership.role === 'owner' ? 'owner' : 'editor';
+    // First check if user is the org owner (full access). Any other role —
+    // including one literally named "admin" — is resolved via its permissions
+    // bundle below, never by role name.
+    if (membership.role === 'owner') {
+      userRole = 'owner';
       userPermissions = {
         view_overview: true,
         view_dependencies: true,
         view_watchlist: true,
         view_members: true,
-        manage_members: membership.role === 'owner',
+        manage_members: true,
         view_settings: true,
-        edit_settings: membership.role === 'owner',
+        edit_settings: true,
       };
     } else {
       // Check org-level manage_teams_and_projects permission
@@ -3171,7 +3170,6 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
     // Whether a policy change request from this user would be auto-accepted (owner/admin or manage_compliance)
     const requestWillAutoAccept =
       accessCheck.orgMembership?.role === 'owner' ||
-      accessCheck.orgMembership?.role === 'admin' ||
       accessCheck.orgRole?.permissions?.manage_compliance === true;
 
     // Verify project exists and belongs to org; include effective code columns
@@ -3628,7 +3626,6 @@ router.put('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) 
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     if (!canEditPolicies) {
@@ -3716,7 +3713,6 @@ router.put('/:id/policy-exceptions/:exceptionId/revoke', async (req: AuthRequest
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     if (!canEditPolicies) {
@@ -3799,7 +3795,6 @@ router.delete('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, re
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     const { data: exception } = await supabase
@@ -5754,12 +5749,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    // 1. Fetch dependency info
+    // 1. Fetch dependency info (including any previously stored analysis)
     const { data: pd, error: pdError } = await supabase
       .from('project_dependencies')
-      .select('name, version, files_importing_count, is_direct')
+      .select('name, version, files_importing_count, is_direct, ai_usage_summary, ai_usage_analyzed_at')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
       .is('removed_at', null)
@@ -5768,6 +5761,19 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
     if (pdError || !pd) {
       return res.status(404).json({ error: 'Project dependency not found' });
     }
+
+    // Serve the stored summary unless the caller explicitly asks for a refresh.
+    // Every fresh analysis is a metered LLM call, so re-running it for identical
+    // output would burn platform AI spend on every click.
+    const refresh = req.query.refresh === 'true' || req.body?.refresh === true;
+    if (!refresh && (pd as any).ai_usage_summary) {
+      return res.json({
+        ai_usage_summary: (pd as any).ai_usage_summary,
+        ai_usage_analyzed_at: (pd as any).ai_usage_analyzed_at ?? null,
+      });
+    }
+
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const depName = (pd as any).name;
     const depVersion = (pd as any).version;
@@ -5948,6 +5954,37 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
 
     if (updateError) {
       console.error('Failed to store AI usage summary:', updateError);
+    }
+
+    // 9. Meter the LLM call against the org's prepaid balance (same pattern as
+    // aegis-v3 agent.ts onFinish). recordMeterEvent handles the enforcement
+    // kill switch and idempotency internally. Errors are swallowed so a
+    // billing-DB blip can't fail an analysis that already completed — the
+    // daily drift cron reconciles.
+    try {
+      const inputTokens = chatResult.usage?.inputTokens ?? 0;
+      const outputTokens = chatResult.usage?.outputTokens ?? 0;
+      const modelId = chatResult.model || 'gemini-2.5-flash';
+      const { cogCents, chargedCents } = chargedCentsForAi(modelId, inputTokens, outputTokens);
+      if (chargedCents > 0) {
+        await recordMeterEvent({
+          organizationId: id,
+          projectId,
+          eventType: 'ai_tokens',
+          provider: 'google',
+          feature: 'dependency_usage_analysis',
+          quantity: inputTokens,
+          outputQuantity: outputTokens > 0 ? outputTokens : undefined,
+          unit: 'mixed_tokens',
+          cogCents,
+          chargedCents,
+          modelId,
+          attribution: { userId },
+          idempotencyKey: `dep-usage:${projectDependencyId}:${Date.now()}`,
+        });
+      }
+    } catch (meterErr) {
+      console.warn('[analyze-usage] recordMeterEvent failed', meterErr);
     }
 
     res.json({
@@ -7610,8 +7647,10 @@ async function canDeleteOtherMemberNote(
 
   if (!actorMembership) return false;
 
-  const isOrgOwnerOrAdmin = actorMembership.role === 'owner' || actorMembership.role === 'admin';
-  let hasKickPermission = isOrgOwnerOrAdmin;
+  // `owner` is the only structural role — any other role (including one named
+  // "admin") must carry the kick_members permission key in its bundle.
+  const isOrgOwner = actorMembership.role === 'owner';
+  let hasKickPermission = isOrgOwner;
   if (!hasKickPermission) {
     const { data: orgRole } = await supabase
       .from('organization_roles')
@@ -7699,6 +7738,27 @@ async function canDeleteOtherMemberNote(
   return authorTeamRank > actorTeamRank;
 }
 
+/**
+ * Verify that the URL-supplied `:projectDependencyId` actually belongs to
+ * `:projectId`. checkProjectAccess only authorizes the (org, project) pair —
+ * it never inspects the dependency id, and the service-role key means there
+ * is no RLS backstop. Without this bind, a member of org A could read/write
+ * notes and reactions on org B's dependencies by forging the UUID.
+ * Returns false on miss (callers respond 404 as an anti-enumeration guard).
+ */
+async function projectDependencyBelongsToProject(
+  projectDependencyId: string,
+  projectId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('project_dependencies')
+    .select('id')
+    .eq('id', projectDependencyId)
+    .eq('project_id', projectId)
+    .maybeSingle();
+  return !error && !!data;
+}
+
 // GET notes for a dependency
 router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', async (req: AuthRequest, res) => {
   try {
@@ -7709,6 +7769,10 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', a
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
     }
 
     const cacheKey = getDependencyNotesCacheKey(id, projectId, projectDependencyId, userId);
@@ -7844,6 +7908,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       return res.status(400).json({ error: 'Note content is required' });
     }
@@ -7901,6 +7969,10 @@ router.delete('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     // Fetch the note to verify ownership
     const { data: note, error: fetchError } = await supabase
       .from('dependency_notes')
@@ -7950,6 +8022,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/:n
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
       return res.status(400).json({ error: 'Emoji is required' });
     }
@@ -7994,6 +8070,23 @@ router.delete('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
+
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
+    // Bind the full chain reactionId→noteId→projectDependencyId→projectId: the
+    // reaction lookup below only ties reactionId to noteId, so without this
+    // note→dependency bind a forged noteId from another tenant would pass.
+    const { data: parentNote, error: noteFetchError } = await supabase
+      .from('dependency_notes')
+      .select('id')
+      .eq('id', noteId)
+      .eq('project_dependency_id', projectDependencyId)
+      .maybeSingle();
+
+    if (noteFetchError) throw noteFetchError;
+    if (!parentNote) return res.status(404).json({ error: 'Note not found' });
 
     const { data: reaction, error: fetchError } = await supabase
       .from('dependency_note_reactions')
@@ -8494,54 +8587,72 @@ router.delete('/:id/ban-version/:banId', async (req: AuthRequest, res) => {
 
     const hasOrgManage = (await checkOrgManagePermission(userId, organizationId)).hasPermission;
 
-    const { data: orgDeleted, error: orgError } = await supabase
+    // Authorization-before-mutation: look the org ban up with a SELECT first and
+    // only DELETE once the caller's org-manage permission is verified. The previous
+    // shape executed the DELETE and then returned 403 — by which point the row was
+    // already gone for unprivileged callers.
+    const { data: orgBan } = await supabase
       .from('banned_versions')
-      .delete()
+      .select('id, dependency_id, banned_version')
       .eq('id', banId)
       .eq('organization_id', organizationId)
-      .select('id, dependency_id, banned_version')
-      .single();
+      .maybeSingle();
 
-    if (!orgError && orgDeleted) {
+    if (orgBan) {
       if (!hasOrgManage) {
         return res.status(403).json({ error: 'You do not have permission to remove organization-level bans' });
       }
-      const orgDepId = (orgDeleted as any)?.dependency_id;
-      if (orgDepId) {
-        await invalidateLatestSafeVersionCacheByDependencyId(orgDepId).catch((err: any) => {
-          console.warn(`[Cache] Failed to invalidate cache after removing ban:`, err.message);
-        });
-        await invalidateDependencyVersionsCacheByDependencyId(orgDepId).catch((err: any) => {
-          console.warn(`[Cache] Failed to invalidate dependency versions cache after removing ban:`, err.message);
-        });
-      }
-      const unbannedVersion = (orgDeleted as any)?.banned_version as string | undefined;
-      if (unbannedVersion && orgDepId) {
-        const { data: watchlistRow } = await supabase
-          .from('organization_watchlist')
-          .select('id, latest_allowed_version')
-          .eq('organization_id', organizationId)
-          .eq('dependency_id', orgDepId)
-          .maybeSingle();
-        if (watchlistRow && (watchlistRow as any).id) {
-          const currentAllowed = (watchlistRow as any).latest_allowed_version as string | null;
-          const unbannedCoerced = semver.valid(semver.coerce(unbannedVersion));
-          const currentCoerced = currentAllowed ? semver.valid(semver.coerce(currentAllowed)) : null;
-          const shouldUpdate =
-            currentAllowed == null ||
-            (unbannedCoerced && currentCoerced && semver.gt(unbannedCoerced, currentCoerced));
-          if (shouldUpdate) {
-            await supabase
-              .from('organization_watchlist')
-              .update({ latest_allowed_version: unbannedVersion })
-              .eq('id', (watchlistRow as any).id);
+
+      const { data: orgDeleted, error: orgDeleteError } = await supabase
+        .from('banned_versions')
+        .delete()
+        .eq('id', banId)
+        .eq('organization_id', organizationId)
+        .select('id, dependency_id, banned_version')
+        .maybeSingle();
+
+      if (orgDeleteError) throw orgDeleteError;
+
+      if (orgDeleted) {
+        const orgDepId = (orgDeleted as any)?.dependency_id;
+        if (orgDepId) {
+          await invalidateLatestSafeVersionCacheByDependencyId(orgDepId).catch((err: any) => {
+            console.warn(`[Cache] Failed to invalidate cache after removing ban:`, err.message);
+          });
+          await invalidateDependencyVersionsCacheByDependencyId(orgDepId).catch((err: any) => {
+            console.warn(`[Cache] Failed to invalidate dependency versions cache after removing ban:`, err.message);
+          });
+        }
+        const unbannedVersion = (orgDeleted as any)?.banned_version as string | undefined;
+        if (unbannedVersion && orgDepId) {
+          const { data: watchlistRow } = await supabase
+            .from('organization_watchlist')
+            .select('id, latest_allowed_version')
+            .eq('organization_id', organizationId)
+            .eq('dependency_id', orgDepId)
+            .maybeSingle();
+          if (watchlistRow && (watchlistRow as any).id) {
+            const currentAllowed = (watchlistRow as any).latest_allowed_version as string | null;
+            const unbannedCoerced = semver.valid(semver.coerce(unbannedVersion));
+            const currentCoerced = currentAllowed ? semver.valid(semver.coerce(currentAllowed)) : null;
+            const shouldUpdate =
+              currentAllowed == null ||
+              (unbannedCoerced && currentCoerced && semver.gt(unbannedCoerced, currentCoerced));
+            if (shouldUpdate) {
+              await supabase
+                .from('organization_watchlist')
+                .update({ latest_allowed_version: unbannedVersion })
+                .eq('id', (watchlistRow as any).id);
+            }
           }
         }
+        await invalidateAllProjectCachesInOrg(organizationId, { depsOnly: true }).catch((err: any) => {
+          console.warn(`[Cache] Failed to invalidate dependencies cache after removing org ban:`, err?.message);
+        });
+        return res.json({ message: 'Ban removed', id: orgDeleted.id });
       }
-      await invalidateAllProjectCachesInOrg(organizationId, { depsOnly: true }).catch((err: any) => {
-        console.warn(`[Cache] Failed to invalidate dependencies cache after removing org ban:`, err?.message);
-      });
-      return res.json({ message: 'Ban removed', id: orgDeleted.id });
+      // Row vanished between the SELECT and the DELETE (concurrent removal) —
+      // fall through to the team-ban path, matching the previous miss behavior.
     }
 
     const { data: teamBan } = await supabase
@@ -9051,7 +9162,7 @@ router.post('/:id/projects/:projectId/policy-changes', async (req: AuthRequest, 
 
     // Check if user has manage_compliance (auto-accept)
     let hasCompliance = false;
-    if (access.orgMembership?.role === 'owner' || access.orgMembership?.role === 'admin') {
+    if (access.orgMembership?.role === 'owner') {
       hasCompliance = true;
     } else if (access.orgRole?.permissions?.manage_compliance) {
       hasCompliance = true;
@@ -9137,7 +9248,7 @@ router.put('/:id/policy-changes/:changeId', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    let hasCompliance = membership.role === 'owner' || membership.role === 'admin';
+    let hasCompliance = membership.role === 'owner';
     if (!hasCompliance) {
       const { data: roleData } = await supabase
         .from('organization_roles')
@@ -9681,8 +9792,7 @@ Return ONLY the full packagePolicy function code, no explanation, no markdown.`;
 
     const hasManageCompliance = access.orgRole?.permissions?.manage_policies === true
       || access.orgRole?.permissions?.manage_compliance === true
-      || access.orgMembership?.role === 'owner'
-      || access.orgMembership?.role === 'admin';
+      || access.orgMembership?.role === 'owner';
 
     const changeStatus = hasManageCompliance ? 'accepted' : 'pending';
 
