@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AlertCircle, AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardList, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus, type VulnerabilityDetail } from '../../lib/api';
@@ -253,12 +253,41 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
     }
   }, [fixId]);
 
-  if (!plan && (loading || status === 'planning')) return <FixPanelSkeleton />;
+  const hasSiblings = fixes.length > 1;
+
+  // While this plan is still generating, keep the sibling switcher reachable —
+  // a multi-plan turn would otherwise trap the user on the skeleton until the
+  // focused plan resolves.
+  if (!plan && (loading || status === 'planning')) {
+    return (
+      <FixPanelSkeleton
+        header={
+          hasSiblings ? (
+            <PlanSwitcher
+              fixes={fixes}
+              activeFixId={fixId}
+              onSelect={openFix}
+              label={<div className="h-5 w-48 max-w-full rounded bg-muted/50 animate-pulse" />}
+            />
+          ) : undefined
+        }
+      />
+    );
+  }
   if (!plan) {
     if (status === 'failed') {
       return (
         <div className="px-6 pt-5 pb-6">
-          <div className="text-lg font-semibold text-foreground leading-snug">Plan generation failed</div>
+          {hasSiblings ? (
+            <PlanSwitcher
+              fixes={fixes}
+              activeFixId={fixId}
+              onSelect={openFix}
+              label={<span className="truncate">Plan generation failed</span>}
+            />
+          ) : (
+            <div className="text-lg font-semibold text-foreground leading-snug">Plan generation failed</div>
+          )}
           <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
             <div className="flex gap-2.5 items-start">
               <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
@@ -275,8 +304,6 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
 
   const refusal = plan.refusal;
 
-  const hasSiblings = fixes.length > 1;
-
   const showInlineAction = !refusal && status === 'awaiting_approval';
 
   return (
@@ -286,39 +313,12 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
           than dropping to a second row beneath it. */}
       <div className="flex items-center justify-between gap-3">
         {hasSiblings ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="group flex items-center gap-1.5 text-lg font-semibold text-foreground leading-snug min-w-0 max-w-full text-left rounded-sm hover:opacity-80 transition-opacity focus:outline-none"
-              >
-                <span className="truncate">{plan.summary}</span>
-                <ChevronDown className="h-4 w-4 shrink-0 text-foreground-secondary" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-3rem)]"
-            >
-              {fixes.map((f) => {
-                const isActive = f.id === fixId;
-                return (
-                  <DropdownMenuItem
-                    key={f.id}
-                    onSelect={() => { if (!isActive) openFix(f.id); }}
-                    className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
-                  >
-                    <FixStatusIcon status={f.status} />
-                    {f.plan?.summary ? (
-                      <span className="flex-1 truncate text-sm">{f.plan.summary}</span>
-                    ) : (
-                      <div className="h-3.5 rounded bg-foreground/[0.12] animate-pulse flex-1 min-w-0 max-w-[14rem]" />
-                    )}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <PlanSwitcher
+            fixes={fixes}
+            activeFixId={fixId}
+            onSelect={openFix}
+            label={<span className="truncate">{plan.summary}</span>}
+          />
         ) : (
           <div className="text-lg font-semibold text-foreground leading-snug min-w-0 truncate">
             {plan.summary}
@@ -540,6 +540,54 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   );
 }
 
+// Title-row dropdown for switching between the turn's sibling fix plans.
+// Rendered in every detail state — loaded, skeleton (plan still generating),
+// and failed — so switching is never gated on the focused plan resolving.
+interface PlanSwitcherProps {
+  fixes: FixRecord[];
+  activeFixId: string;
+  onSelect: (fixId: string) => void;
+  label: ReactNode;
+}
+
+function PlanSwitcher({ fixes, activeFixId, onSelect, label }: PlanSwitcherProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="group flex items-center gap-1.5 text-lg font-semibold text-foreground leading-snug min-w-0 max-w-full text-left rounded-sm hover:opacity-80 transition-opacity focus:outline-none"
+        >
+          {label}
+          <ChevronDown className="h-4 w-4 shrink-0 text-foreground-secondary" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-3rem)]"
+      >
+        {fixes.map((f) => {
+          const isActive = f.id === activeFixId;
+          return (
+            <DropdownMenuItem
+              key={f.id}
+              onSelect={() => { if (!isActive) onSelect(f.id); }}
+              className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
+            >
+              <FixStatusIcon status={f.status} />
+              {f.plan?.summary ? (
+                <span className="flex-1 truncate text-sm">{f.plan.summary}</span>
+              ) : (
+                <div className="h-3.5 rounded bg-foreground/[0.12] animate-pulse flex-1 min-w-0 max-w-[14rem]" />
+              )}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function FixListBody() {
   const { fixes, openFix } = useFixPanel();
 
@@ -620,7 +668,7 @@ function FixStatusIcon({ status }: { status: FixStatus }) {
 // Skeleton mirror of the real plan panel layout — title, Issue (label +
 // prose + code block), Plan (label + prose), To-dos card, Verification
 // card. Mirrors the real DOM 1:1 so when the plan resolves nothing shifts.
-function FixPanelSkeleton() {
+function FixPanelSkeleton({ header }: { header?: ReactNode } = {}) {
   const ISSUE_PROSE_WIDTHS = ['w-11/12', 'w-10/12', 'w-9/12'];
   const PLAN_PROSE_WIDTHS = ['w-11/12', 'w-7/12'];
   const CODE_LINE_WIDTHS = ['w-2/3', 'w-1/2'];
@@ -634,8 +682,8 @@ function FixPanelSkeleton() {
   ];
   return (
     <div className="px-6 pt-5 pb-6">
-      {/* Title bar */}
-      <div className="h-5 w-2/3 rounded bg-muted/50 animate-pulse" />
+      {/* Title bar — or the live plan switcher when sibling plans exist */}
+      {header ?? <div className="h-5 w-2/3 rounded bg-muted/50 animate-pulse" />}
 
       <div className="mt-6 space-y-6">
         {/* Issue section */}
