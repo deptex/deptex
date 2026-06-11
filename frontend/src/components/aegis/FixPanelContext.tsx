@@ -63,6 +63,12 @@ export function FixPanelProvider({ children, threadId }: FixPanelProviderProps) 
   // Becomes true after the first fetch resolves for the current thread.
   // Auto-open logic only fires once per thread, gated on this flag.
   const autoOpenedRef = useRef(false);
+  // Fix ids registerFix has already refetched for. Some rendered pills are
+  // legitimately NEVER in the by-thread list (the backend filters out
+  // failed-no-plan crash rows; deep-link pills can point outside the thread).
+  // Without this guard each refresh() produces a new `fixes` array, which
+  // re-fires every pill's registerFix effect, which refetches, forever.
+  const registerRequestedRef = useRef<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     if (!threadId) return;
@@ -85,6 +91,7 @@ export function FixPanelProvider({ children, threadId }: FixPanelProviderProps) 
     setSelectedIds(new Set());
     setUserDismissed(false);
     autoOpenedRef.current = false;
+    registerRequestedRef.current = new Set();
     if (!threadId) {
       setLoading(false);
       return;
@@ -186,6 +193,10 @@ export function FixPanelProvider({ children, threadId }: FixPanelProviderProps) 
     if (!threadId) return;
     // If we already have it, nothing to do — realtime will keep us fresh.
     if (fixes.some((f) => f.id === fixId)) return;
+    // One refetch attempt per unknown fix id. Pills whose fix the backend
+    // intentionally omits from by-thread would otherwise loop refreshes.
+    if (registerRequestedRef.current.has(fixId)) return;
+    registerRequestedRef.current.add(fixId);
     void refresh();
   }, [threadId, fixes, refresh]);
 

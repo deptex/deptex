@@ -51,7 +51,10 @@ export function FixPanel({ fixId, onClose }: FixPanelProps) {
         {showListView ? (
           <FixListBody />
         ) : (
-          <FixDetailBody fixId={fixId} />
+          // Keyed remount per fix: without it the first frame after a sibling
+          // switch renders the PREVIOUS fix's plan under the new fixId until
+          // the re-seed effect runs.
+          <FixDetailBody key={fixId} fixId={fixId} />
         )}
       </div>
     </div>
@@ -74,6 +77,9 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const [fix, setFix] = useState<FixRecord | null>(() => seedFor(fixId));
   const [plan, setPlan] = useState<FixPlan | null>(() => seedFor(fixId)?.plan ?? null);
   const [loading, setLoading] = useState(() => seedFor(fixId) == null);
+  // Seed missed AND getFix failed — without this the gate below shows the
+  // skeleton forever (fix=null defaults status to 'planning').
+  const [loadFailed, setLoadFailed] = useState(false);
   const fixesRef = useRef(fixes);
   fixesRef.current = fixes;
   const [busy, setBusy] = useState<'approve' | 'regenerate' | null>(null);
@@ -89,6 +95,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const refresh = useCallback(async () => {
     try {
       const { fix: refreshed } = await api.getFix(fixId);
+      setLoadFailed(false);
       // Mid-revise / mid-regenerate suppression: when the row flips back to
       // 'planning' but a plan already exists locally, hold the old view.
       // Otherwise the sidebar would hide the Start button and surface a
@@ -104,7 +111,9 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
         return refreshed.plan ?? prev;
       });
     } catch {
-      // ignore — realtime will fill in eventually
+      // Realtime usually fills in eventually, but flag the failure so a
+      // seed-miss doesn't strand the panel on the skeleton.
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -279,7 +288,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   // focused plan resolves. Also hold the skeleton while the issue card's
   // scanner detail is in flight so plan + card land in a single paint
   // instead of the card popping in after the plan.
-  if ((!plan && (loading || status === 'planning')) || (plan && cardPending)) {
+  if ((!plan && (loading || (status === 'planning' && !(loadFailed && !fix)))) || (plan && cardPending)) {
     return (
       <FixPanelSkeleton
         header={
