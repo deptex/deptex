@@ -1,22 +1,20 @@
 /**
- * Landing page — composition shell for the section components in
- * components/landing/ (landing-page-redesign.plan.md §3, narrative order §2):
- * claim → instant artifact proof → consequence → mechanism → depth → receipts
- * → breadth → action → trust → momentum → close.
+ * Landing page — composition shell (founder-directed lineup, 2026-06-11):
+ * hero → finding journey (flagship) → noise number (receipts, near the top)
+ * → mid-page CTA → numbers + breadth → Aegis → open code → stack →
+ * changelog → close.
  *
- * Scaffold state: DOM artifacts carry labeled sample data; recordings render
- * as PlaceholderCanvas slots (assets A1–A11, plan §7).
+ * Cut from the original plan lineup: policy-as-code section (engine exists
+ * in code but is not used in the app currently — founder call), honesty
+ * split + pipeline + evidence ladder (absorbed into FindingJourney).
  */
 import HeroSection from "../../components/landing/HeroSection";
-import ProofStrip from "../../components/landing/ProofStrip";
-import HonestySplit from "../../components/landing/HonestySplit";
-import PipelineWalkthrough from "../../components/landing/PipelineWalkthrough";
-import EvidenceLadder from "../../components/landing/EvidenceLadder";
+import FindingJourney from "../../components/landing/FindingJourney";
 import BenchmarkSection from "../../components/landing/BenchmarkSection";
 import InlineCTA from "../../components/landing/InlineCTA";
+import ProofStrip from "../../components/landing/ProofStrip";
 import BreadthWall from "../../components/landing/BreadthWall";
 import AegisSection from "../../components/landing/AegisSection";
-import PolicySection from "../../components/landing/PolicySection";
 import OpenCodeSection from "../../components/landing/OpenCodeSection";
 import StackBand from "../../components/landing/StackBand";
 import ChangelogBand from "../../components/landing/ChangelogBand";
@@ -26,15 +24,12 @@ export default function HomePage() {
   return (
     <div className="bg-[#050505] text-foreground">
       <HeroSection />
-      <ProofStrip />
-      <HonestySplit />
-      <PipelineWalkthrough />
-      <EvidenceLadder />
+      <FindingJourney />
       <BenchmarkSection />
       <InlineCTA />
+      <ProofStrip />
       <BreadthWall />
       <AegisSection />
-      <PolicySection />
       <OpenCodeSection />
       <StackBand />
       <ChangelogBand />
