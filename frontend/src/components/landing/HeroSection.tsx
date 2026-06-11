@@ -60,6 +60,7 @@ export default function HeroSection() {
             overlap card = Aegis fixing ("Aegis writes the fix").
             Real app screenshots replace the canvases (capture specs in plan §7). */}
         <div className="relative mx-auto mb-10 mt-16 max-w-[880px]">
+          <div className="hero-dots" aria-hidden />
           <div
             className="glow-green left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-40"
             aria-hidden

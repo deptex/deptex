@@ -761,3 +761,16 @@ table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]):no
   }
 }
 
+
+/* Dot-matrix field behind the hero collage (Snyk-style, in green).
+   Extends past the screenshots so dots peek out around the edges;
+   radial mask fades it before it reaches the headline above. */
+.hero-dots {
+  position: absolute;
+  inset: -90px -70px -110px -70px;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(52, 208, 138, 0.28) 1.5px, transparent 1.5px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 70% at 50% 48%, black 25%, transparent 74%);
+  mask-image: radial-gradient(ellipse 75% 70% at 50% 48%, black 25%, transparent 74%);
+}
