@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardList, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus } from '../../lib/api';
+import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus, type VulnerabilityDetail } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModelPicker } from './ModelPicker';
@@ -14,6 +14,8 @@ import {
 } from '../ui/dropdown-menu';
 import { FixStatusPill } from './FixStatusPill';
 import { FixIssueCard } from './FixIssueCard';
+import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
+import { VulnOrgSidebarExpandedSkeleton } from '../security/VulnerabilityOrgSidebarExpandedContent';
 import { useFixPanel } from './FixPanelContext';
 
 interface StalenessState {
@@ -135,6 +137,35 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const token = fix?.approvalToken ?? null;
   const orgIdForState = fix?.organizationId ?? '';
   const modelStorageKey = orgIdForState ? `aegis:fix-model:${orgIdForState}` : null;
+
+  // Full scanner detail for vulnerability fixes — drives the same expanded
+  // issue card the findings table shows. Lazy + best-effort: a failed fetch
+  // (finding reaped by a rescan) falls back to the compact FixIssueCard.
+  const findingType = fix?.finding?.type;
+  const findingId = fix?.finding?.id;
+  const [vulnDetail, setVulnDetail] = useState<{
+    loading: boolean;
+    data: VulnerabilityDetail | null;
+  }>({ loading: false, data: null });
+  useEffect(() => {
+    if (findingType !== 'vulnerability' || !findingId || !orgIdForState || !fix?.projectId) {
+      setVulnDetail({ loading: false, data: null });
+      return;
+    }
+    let cancelled = false;
+    setVulnDetail({ loading: true, data: null });
+    api
+      .getVulnerabilityDetail(orgIdForState, fix.projectId, findingId)
+      .then((d) => {
+        if (!cancelled) setVulnDetail({ loading: false, data: d });
+      })
+      .catch(() => {
+        if (!cancelled) setVulnDetail({ loading: false, data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [findingType, findingId, orgIdForState, fix?.projectId]);
 
   // Model picker fetch + persist. Per-fix execution model picker; defaults
   // to the org's default model and persists per-org in localStorage.
@@ -375,7 +406,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
       )}
 
       <div className="mt-6 space-y-6">
-              {(plan.issue || fix?.findingDetail) && (
+              {(plan.issue || fix?.findingDetail || vulnDetail.loading || vulnDetail.data) && (
                 <div>
                   <div className="text-sm font-semibold text-foreground mb-2">
                     Issue
@@ -385,7 +416,23 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                       <MarkdownRenderer content={plan.issue} />
                     </div>
                   )}
-                  {fix?.findingDetail && (
+                  {/* Vulnerability fixes show the same expanded issue card as
+                      the findings table; semgrep/secret fixes (and vulns whose
+                      finding row was reaped) fall back to the compact card. */}
+                  {vulnDetail.data && fix ? (
+                    <div className={cn('rounded-md border border-border bg-background-subtle/30 px-4 py-3.5', plan.issue && 'mt-3')}>
+                      <VulnerabilityExpandedCard
+                        vuln={vulnDetail.data.vulnerability}
+                        detail={vulnDetail.data}
+                        organizationId={fix.organizationId}
+                        projectId={fix.projectId}
+                      />
+                    </div>
+                  ) : vulnDetail.loading ? (
+                    <div className={cn('rounded-md border border-border bg-background-subtle/30 px-4 py-3.5', plan.issue && 'mt-3')}>
+                      <VulnOrgSidebarExpandedSkeleton />
+                    </div>
+                  ) : fix?.findingDetail ? (
                     <div className={cn(plan.issue && 'mt-3')}>
                       <FixIssueCard
                         organizationId={fix.organizationId}
@@ -393,7 +440,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                         detail={fix.findingDetail}
                       />
                     </div>
-                  )}
+                  ) : null}
                 </div>
               )}
               {plan.description && (
