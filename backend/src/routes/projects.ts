@@ -10588,7 +10588,9 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
         ignored_count: Number(c?.ignored_count ?? 0),
         repo_provider: repo?.provider ?? null,
         repo_full_name: repo?.repo_full_name ?? null,
-        last_scan_at: c?.last_scan_at ?? repo?.last_extracted_at ?? null,
+        // Latest COMPLETED scan only — NOT project_repositories.last_extracted_at, which is bumped
+        // on every extraction attempt (incl. failed/incomplete) and reads stale. No completed scan → null ("Never").
+        last_scan_at: c?.last_scan_at ?? null,
         infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
         has_container: !!c?.has_container,
         has_dast: !!c?.has_dast,

@@ -64,7 +64,7 @@ export function TeamEmbedCard({ organizationId, teamId }: TeamEmbedCardProps) {
       search: new URLSearchParams({
         sidebar: 'team',
         teamId,
-        tab: 'issues',
+        tab: 'findings',
       }).toString(),
     }),
     [organizationId, teamId],

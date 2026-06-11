@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, Bell, Grid3x3, List, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -67,14 +67,12 @@ import { SyncDetailSidebar } from '../../components/SyncDetailSidebar';
 import { DependencyNode } from '../../components/supply-chain/DependencyNode';
 import { FrameworkIcon } from '../../components/framework-icon';
 import { FindingTypeIcon } from '../../components/security/FindingTypeIcon';
-import { filterAndSortOrgProjects } from '../../lib/orgSidebarProjects';
 import { SeverityPills } from '../../components/SeverityPills';
 import { ProjectsAssetTable } from '../../components/ProjectsAssetTable';
 import { formatDate, formatRelativeTime, prettyFramework, PROVIDER_LOGOS } from '../../lib/projectDisplay';
 import { TeamIcon } from '../../components/TeamIcon';
 import { RoleBadge } from '../../components/RoleBadge';
 import { RoleDropdown } from '../../components/RoleDropdown';
-import NotificationRulesSection from './NotificationRulesSection';
 import { TeamPermissionEditor } from '../../components/TeamPermissionEditor';
 import type { NodeTypes } from '@xyflow/react';
 import { ProjectDependenciesContent } from './ProjectDependenciesContent';
@@ -338,15 +336,12 @@ export default function OrganizationOverviewPage() {
   const [teamSidebarDataLoading, setTeamSidebarDataLoading] = useState(false);
   const [teamSidebarAddingMember, setTeamSidebarAddingMember] = useState(false);
   const [teamSidebarAddMemberOpen, setTeamSidebarAddMemberOpen] = useState(false);
-  const [teamSidebarAddMemberVisible, setTeamSidebarAddMemberVisible] = useState(false);
   const [addMemberSearchQuery, setAddMemberSearchQuery] = useState('');
   const [addMemberSelectedUserIds, setAddMemberSelectedUserIds] = useState<string[]>([]);
   const [addMemberSelectedRoleId, setAddMemberSelectedRoleId] = useState<string>('member');
   const [addMemberAdding, setAddMemberAdding] = useState(false);
   const [syncDetailProjectId, setSyncDetailProjectId] = useState<string | null>(null);
-  const [teamSidebarTab, setTeamSidebarTab] = useState<'projects' | 'issues' | 'members' | 'settings'>('issues');
-  const [teamSidebarProjectsSearch, setTeamSidebarProjectsSearch] = useState('');
-  const [teamSidebarProjectsViewMode, setTeamSidebarProjectsViewMode] = useState<'grid' | 'list'>('grid');
+  const [teamSidebarTab, setTeamSidebarTab] = useState<'projects' | 'findings' | 'members' | 'settings'>('findings');
   const [teamSidebarMembersSearch, setTeamSidebarMembersSearch] = useState('');
   const [teamSidebarPermissions, setTeamSidebarPermissions] = useState<TeamPermissions | null>(null);
   const [teamSidebarTeamData, setTeamSidebarTeamData] = useState<TeamWithRole | null>(null);
@@ -364,18 +359,10 @@ export default function OrganizationOverviewPage() {
   // Team sidebar settings state
   const [teamSettingsSubTab, setTeamSettingsSubTab] = useState<'general' | 'roles'>('general');
   const [teamSettingsName, setTeamSettingsName] = useState('');
-  const [teamSettingsDescription, setTeamSettingsDescription] = useState('');
   const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
   const [teamSettingsShowDeleteConfirm, setTeamSettingsShowDeleteConfirm] = useState(false);
   const [teamSettingsDeleteConfirmText, setTeamSettingsDeleteConfirmText] = useState('');
   const [teamSettingsDeleting, setTeamSettingsDeleting] = useState(false);
-  // Team sidebar notifications settings state
-  const [teamSettingsConnections, setTeamSettingsConnections] = useState<{ inherited: CiCdConnection[]; team: CiCdConnection[] }>({ inherited: [], team: [] });
-  const [teamSettingsConnectionsLoading, setTeamSettingsConnectionsLoading] = useState(false);
-  const [teamSettingsNotifActiveTab, setTeamSettingsNotifActiveTab] = useState<'notifications' | 'destinations'>('notifications');
-  const [teamSettingsNotifPausedUntil, setTeamSettingsNotifPausedUntil] = useState<string | null>(null);
-  const [teamSettingsNotifPauseLoading, setTeamSettingsNotifPauseLoading] = useState(false);
-  const teamSettingsNotificationCreateRef = useRef<(() => void) | null>(null);
   // Team sidebar roles settings state
   const [teamSettingsLoadingRoles, setTeamSettingsLoadingRoles] = useState(false);
   const [teamSettingsShowAddRoleSidepanel, setTeamSettingsShowAddRoleSidepanel] = useState(false);
@@ -492,8 +479,9 @@ export default function OrganizationOverviewPage() {
     } else if (sidebarParam === 'team') {
       const tid = searchParams.get('teamId');
       const tabRaw = searchParams.get('tab');
-      const validTeamTabs = new Set(['projects', 'issues', 'members', 'settings']);
-      const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'issues') as 'projects' | 'issues' | 'members' | 'settings';
+      // Legacy `tab=issues` URLs fail validation and fall back to 'findings' — its successor.
+      const validTeamTabs = new Set(['projects', 'findings', 'members', 'settings']);
+      const tab = (tabRaw && validTeamTabs.has(tabRaw) ? tabRaw : 'findings') as 'projects' | 'findings' | 'members' | 'settings';
       const subtabRaw = searchParams.get('subtab');
       const validTeamSubtabs = new Set(['general', 'roles']);
       const subtab = (subtabRaw && validTeamSubtabs.has(subtabRaw) ? subtabRaw : 'general') as 'general' | 'roles';
@@ -1329,10 +1317,7 @@ export default function OrganizationOverviewPage() {
       setSelectedTeamId(null);
       setSelectedTeamName(null);
       setTeamSidebarAddMemberOpen(false);
-      setTeamSidebarAddMemberVisible(false);
-      setTeamSidebarTab('issues');
-      setTeamSidebarProjectsSearch('');
-      setTeamSidebarProjectsViewMode('grid');
+      setTeamSidebarTab('findings');
       setTeamSidebarMembersSearch('');
       setTeamSidebarPermissions(null);
       setTeamSidebarTeamData(null);
@@ -1343,11 +1328,8 @@ export default function OrganizationOverviewPage() {
       // Reset settings state
       setTeamSettingsSubTab('general');
       setTeamSettingsName('');
-      setTeamSettingsDescription('');
       setTeamSettingsShowDeleteConfirm(false);
       setTeamSettingsDeleteConfirmText('');
-      setTeamSettingsConnections({ inherited: [], team: [] });
-      setTeamSettingsNotifActiveTab('notifications');
       setTeamSettingsShowAddRoleSidepanel(false);
       setTeamSettingsAddRolePanelVisible(false);
       setTeamSettingsShowRoleSettingsModal(false);
@@ -1357,7 +1339,6 @@ export default function OrganizationOverviewPage() {
 
   const closeTeamSidebarAddMember = useCallback(() => {
     setTeamSidebarAddMemberOpen(false);
-    setTeamSidebarAddMemberVisible(false);
     setAddMemberSearchQuery('');
     setAddMemberSelectedUserIds([]);
     setAddMemberSelectedRoleId('member');
@@ -1471,15 +1452,6 @@ export default function OrganizationOverviewPage() {
     }
   }, [orgId, selectedTeamId, teamSidebarMemberToRemove, user?.id, toast, closeTeamSidebar]);
 
-  useEffect(() => {
-    if (teamSidebarAddMemberOpen) {
-      setTeamSidebarAddMemberVisible(false);
-      requestAnimationFrame(() => requestAnimationFrame(() => setTeamSidebarAddMemberVisible(true)));
-    } else {
-      setTeamSidebarAddMemberVisible(false);
-    }
-  }, [teamSidebarAddMemberOpen]);
-
   const closeProjectSidebar = useCallback(() => {
     setProjectSidebarVisible(false);
     setSidebarParams({ sidebar: null, teamId: null, tab: null, subtab: null, projectId: null });
@@ -1509,10 +1481,7 @@ export default function OrganizationOverviewPage() {
     setSelectedTeamId(null);
     setSelectedTeamName(null);
     setTeamSidebarAddMemberOpen(false);
-    setTeamSidebarAddMemberVisible(false);
-    setTeamSidebarTab('issues');
-    setTeamSidebarProjectsSearch('');
-    setTeamSidebarProjectsViewMode('grid');
+    setTeamSidebarTab('findings');
     setTeamSidebarMembersSearch('');
     setTeamSidebarPermissions(null);
     setTeamSidebarTeamData(null);
@@ -1522,11 +1491,8 @@ export default function OrganizationOverviewPage() {
     setTeamSidebarMemberToRemove(null);
     setTeamSettingsSubTab('general');
     setTeamSettingsName('');
-    setTeamSettingsDescription('');
     setTeamSettingsShowDeleteConfirm(false);
     setTeamSettingsDeleteConfirmText('');
-    setTeamSettingsConnections({ inherited: [], team: [] });
-    setTeamSettingsNotifActiveTab('notifications');
     setTeamSettingsShowAddRoleSidepanel(false);
     setTeamSettingsAddRolePanelVisible(false);
     setTeamSettingsShowRoleSettingsModal(false);
@@ -1614,7 +1580,7 @@ export default function OrganizationOverviewPage() {
           const openNewTeam = () => {
             setSelectedTeamId(teamData.teamId!);
             setSelectedTeamName(teamData.teamName ?? null);
-            setSidebarParams({ sidebar: 'team', teamId: teamData.teamId!, tab: 'issues', subtab: null, projectId: null });
+            setSidebarParams({ sidebar: 'team', teamId: teamData.teamId!, tab: 'findings', subtab: null, projectId: null });
             setTeamSidebarOpen(true);
             requestAnimationFrame(() => setTeamSidebarVisible(true));
           };
@@ -1668,7 +1634,7 @@ export default function OrganizationOverviewPage() {
         const openNewTeam = () => {
           setSelectedTeamId(d.projectId!);
           setSelectedTeamName((d.projectName as string) ?? null);
-          setSidebarParams({ sidebar: 'team', teamId: d.projectId!, tab: 'issues', subtab: null, projectId: null });
+          setSidebarParams({ sidebar: 'team', teamId: d.projectId!, tab: 'findings', subtab: null, projectId: null });
           setTeamSidebarOpen(true);
           requestAnimationFrame(() => setTeamSidebarVisible(true));
         };
@@ -2216,20 +2182,21 @@ export default function OrganizationOverviewPage() {
     setTeamSidebarVulns([]);
     setTeamSidebarVulnsTotal(0);
     setTeamSidebarDataLoading(true);
+    // Note: getOrganizationMembers is NOT loaded here — it only feeds the Add-Member dialog, so it's
+    // deferred to when the Members tab opens (see the effect below). Most sidebar opens land on the
+    // Findings tab and never need it, and it's the heaviest call (per-user auth lookups).
     Promise.all([
       api.getTeamStats(orgId, selectedTeamId),
       api.getTeamMembers(orgId, selectedTeamId),
       api.getProjects(orgId),
-      api.getOrganizationMembers(orgId),
       api.getTeamRoles(orgId, selectedTeamId),
       api.getTeam(orgId, selectedTeamId),
       api.getTeamSecuritySummary(orgId, selectedTeamId).catch(() => ({ projects: [] })),
     ])
-      .then(([stats, members, allProjects, orgMembers, roles, teamData, securitySummary]) => {
+      .then(([stats, members, allProjects, roles, teamData, securitySummary]) => {
         if (cancelled) return;
         setTeamSidebarStats(stats);
         setTeamSidebarMembers(members);
-        setTeamSidebarOrgMembers(orgMembers);
         setTeamSidebarRoles(roles);
         setTeamSidebarTeamData(teamData);
         setTeamSidebarPermissions(teamData.permissions || null);
@@ -2257,7 +2224,24 @@ export default function OrganizationOverviewPage() {
     return () => { cancelled = true; };
   }, [orgId, selectedTeamId, teamSidebarOpen]);
 
-  // Load team security findings (vulns + secrets + semgrep + license) for the issues tab
+  // Org members feed only the Add-Member dialog's "available people" list — load them lazily when
+  // the Members tab is opened (the default Findings tab never needs them). By the time the user
+  // clicks Add Member they're ready, and the heaviest call is off the common-case critical path.
+  // The ref makes the load once-per-team-per-open: swapping tabs away and back must not refetch.
+  const teamOrgMembersLoadedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!teamSidebarOpen) { teamOrgMembersLoadedForRef.current = null; return; }
+    if (teamSidebarTab !== 'members' || !orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    if (teamOrgMembersLoadedForRef.current === selectedTeamId) return;
+    teamOrgMembersLoadedForRef.current = selectedTeamId;
+    let cancelled = false;
+    api.getOrganizationMembers(orgId)
+      .then((m) => { if (!cancelled) setTeamSidebarOrgMembers(m); })
+      .catch(() => { /* dialog falls back to an empty available list */ });
+    return () => { cancelled = true; };
+  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId]);
+
+  // Load team security findings (vulns + secrets + semgrep + license) for the Findings tab
   const loadTeamVulns = useCallback(async (p: number) => {
     if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
     setTeamSidebarVulnsLoading(true);
@@ -2295,10 +2279,16 @@ export default function OrganizationOverviewPage() {
     }
   }, [orgId, selectedTeamId]);
 
+  // Findings load once per team per sidebar-open. Without the ref, swapping to another tab and
+  // back re-fires the effect (teamSidebarTab is a dep) and loadTeamVulns blanks the lists before
+  // refetching — the tab visibly "reloads". Pagination + status changes call loadTeamVulns directly.
+  const teamFindingsLoadedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (teamSidebarTab === 'issues' && teamSidebarOpen && selectedTeamId && selectedTeamId !== UNGROUPED_TEAM_ID) {
-      void loadTeamVulns(1);
-    }
+    if (!teamSidebarOpen) { teamFindingsLoadedForRef.current = null; return; }
+    if (teamSidebarTab !== 'findings' || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    if (teamFindingsLoadedForRef.current === selectedTeamId) return;
+    teamFindingsLoadedForRef.current = selectedTeamId;
+    void loadTeamVulns(1);
   }, [teamSidebarTab, teamSidebarOpen, selectedTeamId, loadTeamVulns]);
 
   // When a project is created that belongs to the currently open team sidebar, add it to the sidebar's project list
@@ -2322,42 +2312,22 @@ export default function OrganizationOverviewPage() {
   useEffect(() => {
     if (teamSidebarTeamData) {
       setTeamSettingsName(teamSidebarTeamData.name || '');
-      setTeamSettingsDescription(teamSidebarTeamData.description || '');
-      setTeamSettingsNotifPausedUntil((teamSidebarTeamData as { notifications_paused_until?: string | null }).notifications_paused_until ?? null);
     }
   }, [teamSidebarTeamData]);
-
-  // Load team connections when settings/notifications tab is selected
-  const loadTeamConnections = useCallback(async () => {
-    if (!orgId || !selectedTeamId) return;
-    setTeamSettingsConnectionsLoading(true);
-    try {
-      const [orgConns, teamConns] = await Promise.all([
-        api.getOrganizationConnections(orgId) as Promise<CiCdConnection[]>,
-        api.getTeamConnections(orgId, selectedTeamId).catch(() => []) as Promise<CiCdConnection[]>,
-      ]);
-      const notifProviders = ['slack', 'discord', 'email', 'jira', 'linear', 'pagerduty', 'custom_notification', 'custom_ticketing', 'asana'];
-      setTeamSettingsConnections({
-        inherited: (orgConns || []).filter((c) => notifProviders.includes(c.provider)),
-        team: (teamConns || []).filter((c) => notifProviders.includes(c.provider)),
-      });
-    } catch {
-      setTeamSettingsConnections({ inherited: [], team: [] });
-    } finally {
-      setTeamSettingsConnectionsLoading(false);
-    }
-  }, [orgId, selectedTeamId]);
 
   // Team settings handlers
   const handleTeamSettingsSave = async () => {
     if (!orgId || !selectedTeamId || !teamSidebarTeamData) return;
     setTeamSettingsSaving(true);
     try {
-      await api.updateTeam(orgId, selectedTeamId, { name: teamSettingsName, description: teamSettingsDescription });
+      await api.updateTeam(orgId, selectedTeamId, { name: teamSettingsName });
       toast({ title: 'Saved', description: 'Team settings saved.' });
       setSelectedTeamName(teamSettingsName);
-      setTeamSidebarTeamData(prev => prev ? { ...prev, name: teamSettingsName, description: teamSettingsDescription } : prev);
-      setGraphRefreshTrigger((t) => t + 1);
+      setTeamSidebarTeamData(prev => prev ? { ...prev, name: teamSettingsName } : prev);
+      // Rename the team node in place — the graph derives from these stores, so patching them
+      // updates the label without the wipe-and-refetch a graphRefreshTrigger bump causes.
+      setTeamsById(prev => prev[selectedTeamId] ? { ...prev, [selectedTeamId]: { ...prev[selectedTeamId], name: teamSettingsName } } : prev);
+      setRawTeamsWithProjects(prev => prev.map(t => t.teamId === selectedTeamId ? { ...t, teamName: teamSettingsName } : t));
     } catch (err: unknown) {
       toast({ title: 'Error', description: (err as Error).message || 'Failed to save settings.', variant: 'destructive' });
     } finally {
@@ -3007,7 +2977,6 @@ export default function OrganizationOverviewPage() {
             {/* Header */}
             <div className="flex-shrink-0 flex items-center justify-between gap-4 px-5 pt-5 pb-5">
               <div className="flex items-center gap-3 min-w-0">
-                <Users className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <h2 className="text-lg font-semibold text-foreground truncate">{selectedTeamName ?? 'Team'}</h2>
               </div>
               <button
@@ -3022,7 +2991,7 @@ export default function OrganizationOverviewPage() {
             {/* Tabs */}
             <div className="flex-shrink-0 px-5 border-b border-border">
               <div className="flex items-center gap-6">
-                {(['issues', 'projects', 'members', 'settings'] as const).map((tab) => (
+                {(['findings', 'projects', 'members', 'settings'] as const).map((tab) => (
                   <button
                     key={tab}
                     type="button"
@@ -3071,8 +3040,8 @@ export default function OrganizationOverviewPage() {
                 />
               )}
 
-              {/* Issues Tab */}
-              {teamSidebarTab === 'issues' && (() => {
+              {/* Findings Tab */}
+              {teamSidebarTab === 'findings' && (() => {
                 const securityRows: SecurityTableRow[] = [
                   ...teamSidebarVulns.map(v => ({ type: 'vulnerability' as const, data: v })),
                   ...teamSidebarSecrets.map(s => ({ type: 'secret' as const, data: s })),
@@ -3089,11 +3058,11 @@ export default function OrganizationOverviewPage() {
                         <div className="h-12 w-12 rounded-lg border border-border bg-background-subtle/50 flex items-center justify-center mb-4">
                           <Shield className="h-6 w-6 text-foreground-secondary" />
                         </div>
-                        <h3 className="text-base font-medium text-foreground mb-1">No issues</h3>
+                        <h3 className="text-base font-medium text-foreground mb-1">No findings</h3>
                         <p className="text-sm text-foreground-secondary max-w-[240px]">
                           {teamSidebarProjects.length === 0
                             ? "This team doesn't have any projects yet."
-                            : "All projects in this team are clean — no vulnerabilities, secrets, code issues, or license violations."}
+                            : "All projects in this team are clean — no vulnerabilities, secrets, code findings, or license violations."}
                         </p>
                       </div>
                     ) : (
@@ -3167,10 +3136,7 @@ export default function OrganizationOverviewPage() {
                     {(teamSidebarCanAddMembers || teamSidebarHasOrgManagePermission) && (
                     <Button
                       variant="green"
-                      onClick={() => {
-                        setTeamSidebarAddMemberOpen(true);
-                        requestAnimationFrame(() => setTeamSidebarAddMemberVisible(true));
-                      }}
+                      onClick={() => setTeamSidebarAddMemberOpen(true)}
                       className="shrink-0"
                     >
                       Add Member
@@ -3187,16 +3153,19 @@ export default function OrganizationOverviewPage() {
                         WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
                       }}
                     >
+                      {/* animate-pulse on the placeholder blocks, NOT the row — the divide-y borders
+                          belong to the rows, so pulsing the row makes the borders flash in and out. */}
                       {[1, 2, 3, 4, 5, 6].map((i) => (
-                        <div key={i} className="px-4 py-3 grid grid-cols-[1fr_auto] gap-4 items-center animate-pulse">
+                        <div key={i} className="px-4 py-3 grid grid-cols-[1fr_auto_32px] gap-4 items-center">
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="h-10 w-10 bg-muted rounded-full flex-shrink-0" />
+                            <div className="h-10 w-10 bg-muted rounded-full flex-shrink-0 animate-pulse" />
                             <div className="min-w-0">
-                              <div className="h-4 bg-muted rounded w-24 mb-1" />
-                              <div className="h-3 bg-muted rounded w-32" />
+                              <div className="h-4 bg-muted rounded w-24 mb-1 animate-pulse" />
+                              <div className="h-3 bg-muted rounded w-32 animate-pulse" />
                             </div>
                           </div>
-                          <div className="h-6 bg-muted rounded w-20" />
+                          <div className="h-6 bg-muted rounded w-20 animate-pulse" />
+                          <div className="h-4 w-4 bg-muted rounded justify-self-end animate-pulse" />
                         </div>
                       ))}
                     </div>
@@ -3322,9 +3291,9 @@ export default function OrganizationOverviewPage() {
                 </div>
               )}
               {teamSidebarTab === 'settings' && teamSidebarTeamData && (
-                <div className="flex gap pr-12">
-                  {/* Settings Sidebar */}
-                  <aside className="w-48 flex-shrink-0 pt-6">
+                <div className="flex gap-6">
+                  {/* Settings Sidebar — two short items; keep the column tight so content gets the width */}
+                  <aside className="w-32 flex-shrink-0">
                     <nav className="space-y-1">
                       <button
                         type="button"
@@ -3376,17 +3345,6 @@ export default function OrganizationOverviewPage() {
                                   className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
                                 />
                               </div>
-                              <div>
-                                <label className="block text-sm font-medium text-foreground mb-1.5">Description</label>
-                                <textarea
-                                  value={teamSettingsDescription}
-                                  onChange={(e) => teamSettingsCanManageSettings && setTeamSettingsDescription(e.target.value)}
-                                  readOnly={!teamSettingsCanManageSettings}
-                                  placeholder="Describe the team's purpose…"
-                                  rows={3}
-                                  className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors resize-none", !teamSettingsCanManageSettings && "opacity-60 cursor-not-allowed")}
-                                />
-                              </div>
                             </div>
                           </div>
                           {teamSettingsCanManageSettings ? (
@@ -3394,7 +3352,7 @@ export default function OrganizationOverviewPage() {
                               <Button
                                 variant="green"
                                 onClick={handleTeamSettingsSave}
-                                disabled={teamSettingsSaving || (teamSettingsName === teamSidebarTeamData.name && teamSettingsDescription === (teamSidebarTeamData.description || ''))}
+                                disabled={teamSettingsSaving || teamSettingsName === teamSidebarTeamData.name}
                                 className="relative"
                               >
                                 <span className={teamSettingsSaving ? 'invisible' : undefined}>Save</span>
@@ -3528,7 +3486,7 @@ export default function OrganizationOverviewPage() {
                               return (
                                 <div
                                   key={role.id || role.name}
-                                  className={cn('px-4 py-3 flex items-center justify-between group transition-all', isDragging ? 'opacity-50 bg-primary/10 scale-[0.98]' : 'hover:bg-table-hover')}
+                                  className={cn('px-4 py-3 flex items-center justify-between group transition-all', isDragging ? 'opacity-50 bg-foreground/10 scale-[0.98]' : 'hover:bg-table-hover')}
                                   draggable={canDrag}
                                   onDragStart={(e) => { if (!canDrag) return; setTeamSettingsDraggedRoleId(role.id); setTeamSettingsDragPreviewRoles([...teamSidebarRoles]); e.dataTransfer.effectAllowed = 'move'; }}
                                   onDragEnd={() => { if (teamSettingsDragPreviewRoles) setTeamSettingsDragPreviewRoles(null); setTeamSettingsDraggedRoleId(null); }}
@@ -3559,30 +3517,38 @@ export default function OrganizationOverviewPage() {
                                     </div>
                                     {teamSettingsCanManageSettings && (
                                       <div className="absolute inset-0 flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          onClick={() => handleTeamSettingsEditRolePermissions(role, canEditRole)}
-                                          className="h-7 w-7 text-foreground-secondary hover:text-foreground"
-                                          title={canEditRole ? 'Settings' : 'View Settings (read-only)'}
-                                        >
-                                          <Settings className="h-4 w-4" />
-                                        </Button>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              onClick={() => handleTeamSettingsEditRolePermissions(role, canEditRole)}
+                                              className="h-7 w-7 text-foreground-secondary hover:text-foreground"
+                                            >
+                                              <Settings className="h-4 w-4" />
+                                            </Button>
+                                          </TooltipTrigger>
+                                          <TooltipContent>{canEditRole ? 'Settings' : 'View settings (read-only)'}</TooltipContent>
+                                        </Tooltip>
                                         {canDeleteRole && (
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            onClick={() => handleTeamSettingsDeleteRole(role)}
-                                            disabled={teamSettingsDeletingRoleId === role.id}
-                                            className="h-7 w-7 text-foreground-secondary hover:text-destructive disabled:opacity-100"
-                                            title="Delete"
-                                          >
-                                            {teamSettingsDeletingRoleId === role.id ? (
-                                              <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                                            ) : (
-                                              <Trash2 className="h-4 w-4" />
-                                            )}
-                                          </Button>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleTeamSettingsDeleteRole(role)}
+                                                disabled={teamSettingsDeletingRoleId === role.id}
+                                                className="h-7 w-7 text-foreground-secondary hover:text-destructive disabled:opacity-100"
+                                              >
+                                                {teamSettingsDeletingRoleId === role.id ? (
+                                                  <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
+                                                ) : (
+                                                  <Trash2 className="h-4 w-4" />
+                                                )}
+                                              </Button>
+                                            </TooltipTrigger>
+                                            <TooltipContent>Delete</TooltipContent>
+                                          </Tooltip>
                                         )}
                                         {canDrag && (
                                           <div className="cursor-grab active:cursor-grabbing text-foreground-secondary hover:text-foreground transition-colors">
@@ -4177,31 +4143,38 @@ export default function OrganizationOverviewPage() {
                       { color: '#22c55e', name: 'Green' }, { color: '#14b8a6', name: 'Teal' }, { color: '#3b82f6', name: 'Blue' },
                       { color: '#8b5cf6', name: 'Purple' }, { color: '#ec4899', name: 'Pink' },
                     ].map(({ color, name }) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => setTeamSettingsNewRoleColor(color)}
-                        disabled={teamSettingsIsCreatingRole}
-                        title={name}
-                        className={cn(
-                          'h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center',
-                          teamSettingsNewRoleColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
-                        )}
-                        style={{ backgroundColor: color }}
-                      >
-                        {teamSettingsNewRoleColor === color && <Check className="h-4 w-4 text-white drop-shadow-md" />}
-                      </button>
+                      <Tooltip key={color}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => setTeamSettingsNewRoleColor(color)}
+                            disabled={teamSettingsIsCreatingRole}
+                            className={cn(
+                              'h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center',
+                              teamSettingsNewRoleColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
+                            )}
+                            style={{ backgroundColor: color }}
+                          >
+                            {teamSettingsNewRoleColor === color && <Check className="h-4 w-4 text-white drop-shadow-md" />}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{name}</TooltipContent>
+                      </Tooltip>
                     ))}
                     {teamSettingsNewRoleColor && (
-                      <button
-                        type="button"
-                        onClick={() => setTeamSettingsNewRoleColor('')}
-                        disabled={teamSettingsIsCreatingRole}
-                        className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
-                        title="Clear color"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => setTeamSettingsNewRoleColor('')}
+                            disabled={teamSettingsIsCreatingRole}
+                            className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>Clear color</TooltipContent>
+                      </Tooltip>
                     )}
                   </div>
                   {teamSettingsNewRoleNameInput && (
@@ -4295,31 +4268,38 @@ export default function OrganizationOverviewPage() {
                       { color: '#22c55e', name: 'Green' }, { color: '#14b8a6', name: 'Teal' }, { color: '#3b82f6', name: 'Blue' },
                       { color: '#8b5cf6', name: 'Purple' }, { color: '#ec4899', name: 'Pink' },
                     ].map(({ color, name }) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => setTeamSettingsEditingRoleColor(color)}
-                        disabled={!teamSettingsCanEditSelectedRole || teamSettingsIsSavingRole}
-                        title={name}
-                        className={cn(
-                          'h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center disabled:opacity-60',
-                          teamSettingsEditingRoleColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
-                        )}
-                        style={{ backgroundColor: color }}
-                      >
-                        {teamSettingsEditingRoleColor === color && <Check className="h-4 w-4 text-white drop-shadow-md" />}
-                      </button>
+                      <Tooltip key={color}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => setTeamSettingsEditingRoleColor(color)}
+                            disabled={!teamSettingsCanEditSelectedRole || teamSettingsIsSavingRole}
+                            className={cn(
+                              'h-8 w-8 rounded-lg border-2 transition-all flex items-center justify-center disabled:opacity-60',
+                              teamSettingsEditingRoleColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
+                            )}
+                            style={{ backgroundColor: color }}
+                          >
+                            {teamSettingsEditingRoleColor === color && <Check className="h-4 w-4 text-white drop-shadow-md" />}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{name}</TooltipContent>
+                      </Tooltip>
                     ))}
                     {teamSettingsEditingRoleColor && teamSettingsCanEditSelectedRole && (
-                      <button
-                        type="button"
-                        onClick={() => setTeamSettingsEditingRoleColor('')}
-                        disabled={teamSettingsIsSavingRole}
-                        className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
-                        title="Clear color"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => setTeamSettingsEditingRoleColor('')}
+                            disabled={teamSettingsIsSavingRole}
+                            className="h-8 w-8 rounded-lg border border-border text-foreground-secondary hover:text-foreground hover:border-foreground-secondary/50 transition-all flex items-center justify-center"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>Clear color</TooltipContent>
+                      </Tooltip>
                     )}
                   </div>
                   {teamSettingsEditingRoleName && (

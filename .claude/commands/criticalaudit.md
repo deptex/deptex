@@ -203,6 +203,18 @@ Output strict JSON (no prose):
   - Verify supporting indexes exist in `backend/database/`
   - Flag N+1 patterns, unbounded result sets (`.select()` without pagination), missing LIMIT, client-side filtering of large sets
   - Flag real-data-dependent slow queries: P0 if user-facing and >1s, P1 if background and >30s
+- **query-efficiency-auditor** — Latency from how the data is fetched, independent of table size. For every route/page-load handler in scope, trace the actual call sequence and flag:
+  - **Sequential awaits that are independent** — `await a(); await b();` where `b` doesn't depend on `a` (should be `Promise.all`). The single most common waste; pin each `file:line` pair.
+  - **Per-row external calls** — `await thing(x)` inside a `.map`/loop, especially `supabase.auth.admin.getUserById` per member, registry/GitHub/LLM calls per item. Recommend a batch query (`.in(ids)`) or a single RPC.
+  - **Two-query lookups that should be a JOIN** — fetch ids from table A, then `.in('id', ids)` on table B, when a join/RPC returns both in one round-trip.
+  - **Count-then-fetch / count-in-JS** — selecting all rows to count or band them in Node instead of aggregating in SQL (`count(*) FILTER (...)`), or PostgREST's 1000-row cap silently truncating counts.
+  - **Eager-load-all-tabs** — a sidebar/page firing every tab's data on open regardless of the active tab. Ask: which calls serve only a non-default tab or a dialog, and could defer to tab-select / dialog-open? Quantify calls-on-open vs calls-actually-needed.
+  - Severity: P1 for anything on a user-facing critical path (sidebar/page open), P2 for background. Every finding cites `file:line` + the concrete fix (parallelize / batch / join / move-to-RPC / defer).
+- **loading-skeleton-fidelity-auditor** — Loading states that lie. For every skeleton / loading placeholder in scope, compare it against the REAL loaded component it stands in for, and flag:
+  - **Layout mismatch** — wrong column set, missing/extra columns, a control row (filter bar / search / toggle) that the loaded view has but the skeleton doesn't (or vice versa), wrong row shape. A skeleton showing two dropdowns when the real view has a pill-toggle + one dropdown is a lie that causes a visible jump on load.
+  - **Not a real skeleton** — a bare spinner or "Loading…" where the rest of the app uses a shimmer that mirrors the content; or a shimmer that doesn't match the app's house pattern (e.g. the Vercel-style **downward fade**, `maskImage` gradient, that the other tables use).
+  - **No hover/interaction guard** — skeleton rows that accept hover/click while loading (missing `pointer-events-none`).
+  - Flag layout mismatches as P2, bare-spinner-where-shimmer-expected as P3. Cite the skeleton file:line + the loaded component it should mirror.
 - **stale-feature-flag-detector** — Grep for feature flags, env-gated branches, `if (process.env.X === 'true')` in scope. For each:
   - Is the flag still actively toggled, or is it vestigial?
   - Is the disabled branch dead code now?

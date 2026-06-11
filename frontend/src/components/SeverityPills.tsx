@@ -2,7 +2,7 @@ import { cn } from '../lib/utils';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 /**
- * Depscore-band issue counts, rendered as soft pills in the same visual language as the
+ * Depscore-band finding counts, rendered as soft pills in the same visual language as the
  * Depscore column in the Findings table (`DepscoreValue`): rounded-full, faint tinted fill,
  * matching colored border, tabular numerals. The band each count falls into comes from the
  * finding's reachability-aware Depscore (>=90 C / >=70 H / >=40 M / <40 L) — NOT raw CVSS
@@ -35,7 +35,7 @@ export function SeverityPills({ critical = 0, high = 0, medium = 0, low = 0, cla
   const total = critical + high + medium + low;
 
   if (total === 0 && hideZeros) {
-    return <span className={cn('text-xs text-foreground-secondary', className)}>No issues</span>;
+    return <span className={cn('text-xs text-foreground-secondary', className)}>No findings</span>;
   }
 
   return (

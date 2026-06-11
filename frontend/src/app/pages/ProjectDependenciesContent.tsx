@@ -817,7 +817,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
                       />
                       <label htmlFor="filter-license" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        License issue
+                        License violation
                       </label>
                       <button
                         type="button"
