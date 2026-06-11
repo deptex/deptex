@@ -30,7 +30,10 @@ export default function HeroSection() {
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
             Your repo sets the score.
             <span className="block">
-              <span className="text-accent-text">Aegis</span> writes the fix.
+              <span className="bg-gradient-to-r from-[#34d08a] via-[#22d3ee] to-[#a78bfa] bg-clip-text text-transparent">
+                Aegis
+              </span>{" "}
+              writes the fix.
             </span>
           </h1>
           <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground sm:text-[17px]">
@@ -43,10 +46,11 @@ export default function HeroSection() {
             <Button variant="green" asChild className="w-full sm:w-auto">
               <Link to="/login">Try for free</Link>
             </Button>
+            {/* Same pill geometry as the green primary (settings-cancel pattern) */}
             <Button
               variant="outline"
               asChild
-              className="w-full border border-border bg-background-card text-foreground hover:bg-background-subtle sm:w-auto"
+              className="w-full !h-8 !rounded-lg !px-3 text-foreground sm:w-auto"
             >
               <Link to="/get-demo">Book a demo</Link>
             </Button>
