@@ -105,13 +105,36 @@ interface RunOpts {
   maxCostUsd: number;
 }
 
+// Supabase flaps (observed 2026-06-09: intermittent Cloudflare 522s) kill an
+// entire multi-case run if the per-case bootstrap fetch happens to land in a
+// bad window. Retry the cheap read-only bootstrap calls with a flat backoff;
+// mid-turn failures stay un-retried on purpose — they surface as tool errors,
+// which is itself realistic agent input (and found a real prompt bug once).
+async function withRetries<T>(label: string, fn: () => Promise<T>, attempts = 4, delayMs = 15000): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts) {
+        console.log(`    (bootstrap ${label} failed attempt ${i}/${attempts}; retrying in ${delayMs / 1000}s)`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
   const { scenario, case: sc, runDir, maxCostUsd } = opts;
   const threadId = randomUUID();
   const transcriptPath = path.join(runDir, `${sc.id}.jsonl`);
   fs.writeFileSync(transcriptPath, '');
 
-  const providerInfo = await getProviderInfoForOrg(scenario.orgId, sc.modelId ?? scenario.defaultModelId);
+  const providerInfo = await withRetries('getProviderInfoForOrg', () =>
+    getProviderInfoForOrg(scenario.orgId, sc.modelId ?? scenario.defaultModelId),
+  );
   console.log(`\n--- case ${sc.id} ---`);
   if (sc.description) console.log(`    ${sc.description}`);
   console.log(`    thread: ${threadId}`);
@@ -120,7 +143,9 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
   // Bootstrap thread row + participant entry. Same code path /v3/stream uses,
   // so the harness exercises the real persistence + RBAC surface (modulo the
   // permission middleware itself, which we skip here).
-  await getOrCreateThread(scenario.orgId, scenario.userId, threadId, sc.turns[0]?.user ?? '', sc.context);
+  await withRetries('getOrCreateThread', () =>
+    getOrCreateThread(scenario.orgId, scenario.userId, threadId, sc.turns[0]?.user ?? '', sc.context),
+  );
 
   let costUsd = 0;
   let passedCt = 0;
@@ -141,18 +166,22 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
 
       // Persist user message + load history exactly like /v3/stream does, so the
       // model sees the same messages array on turn N+1 that production would.
-      await saveUserMessage({ threadId, userId: scenario.userId, content: turn.user });
-      const history = await loadThreadHistory(threadId);
+      await withRetries('saveUserMessage', () =>
+        saveUserMessage({ threadId, userId: scenario.userId, content: turn.user }),
+      );
+      const history = await withRetries('loadThreadHistory', () => loadThreadHistory(threadId));
 
-      const agent = await createAegisAgent({
-        orgId: scenario.orgId,
-        userId: scenario.userId,
-        threadId,
-        userMessage: turn.user,
-        priorMessageCount: history.length - 1, // -1 because saveUserMessage already inserted
-        context: sc.context,
-        modelId: sc.modelId ?? scenario.defaultModelId,
-      });
+      const agent = await withRetries('createAegisAgent', () =>
+        createAegisAgent({
+          orgId: scenario.orgId,
+          userId: scenario.userId,
+          threadId,
+          userMessage: turn.user,
+          priorMessageCount: history.length - 1, // -1 because saveUserMessage already inserted
+          context: sc.context,
+          modelId: sc.modelId ?? scenario.defaultModelId,
+        }),
+      );
 
       const messages: ModelMessage[] = history; // already includes the user turn we just saved
 

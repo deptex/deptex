@@ -77,7 +77,7 @@
     },
     {
       "id": "05-duplicate-revise-stress",
-      "description": "Duplicate-revise stress — agent should call revise_fix once with combined instructions, OR twice with the second hitting the dedup guard.",
+      "description": "Duplicate-revise stress — agent should call revise_fix once with combined instructions, OR twice with the second hitting the dedup guard. (Fixture: dogfood-express; top CVE is lodash CVE-2021-23337.)",
       "turns": [
         {
           "user": "Open a fix for the highest-severity reachable CVE in my org.",
@@ -86,7 +86,7 @@
           }
         },
         {
-          "user": "Revise the Log4j plan to add tests, and also revise the Log4j plan to mention the CVSS score.",
+          "user": "Revise the lodash plan to add tests, and also revise the lodash plan to mention the CVSS score.",
           "expect": {
             "tools_called": ["revise_fix"]
           }
@@ -95,17 +95,17 @@
     },
     {
       "id": "06-cross-finding-mismatch",
-      "description": "Stable-id matcher — even when summary has drifted, substring 'commons-text' should match because the matcher checks fileChanges paths + osv_id.",
+      "description": "Stable-id matcher — revise by package substring ('express'), which must match via summary/osv_id/fileChanges even if the plan title drifted. (Fixture: dogfood-express, CVE-2024-29041.)",
       "turns": [
         {
-          "user": "Open a fix plan for CVE-2022-42889 (commons-text) in deptex-test-java.",
+          "user": "Open a fix plan for CVE-2024-29041 (the express vulnerability) in dogfood-express.",
           "expect": {
             "tools_called": ["request_fix"],
             "tools_called_count": { "request_fix": 1 }
           }
         },
         {
-          "user": "Revise the commons-text plan to add unit tests.",
+          "user": "Revise the express plan to add unit tests.",
           "expect": {
             "tools_called": ["revise_fix"],
             "tools_called_count": { "revise_fix": 1 }
