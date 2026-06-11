@@ -1,5 +1,6 @@
 import type { Storage } from '../storage';
 import type { ExtractedFile } from '../tree-sitter-extractor/languages/types';
+import { canonicalizeParams } from '../param-harvest/types';
 
 /**
  * Persist extractor-side entry points to `project_entry_points`.
@@ -33,6 +34,10 @@ export async function storeEntryPoints(
           auth_mechanism: ep.authMechanism,
           middleware_chain: ep.middlewareChain,
           metadata: ep.metadata,
+          // Canonicalized again at the write boundary (defense in depth — the
+          // detectors already canonicalize, but determinism is load-bearing
+          // for the snapshot suite).
+          request_params: canonicalizeParams(ep.requestParams ?? null),
         });
       }
     }

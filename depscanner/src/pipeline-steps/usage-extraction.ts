@@ -18,6 +18,7 @@ import { extractUsage, type SupportedEcosystem } from '../tree-sitter-extractor'
 import { storeUsageExtractionResults } from '../tree-sitter-extractor/storage';
 import { getDetectorErrorSummary, resetDetectorErrors } from '../tree-sitter-extractor/detector-errors';
 import { storeEntryPoints } from '../framework-rules/storage';
+import { resolveMountPrefixes } from '../param-harvest/mount-prefix';
 import { updateStep } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -137,6 +138,11 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
       // ExtractedFile.entryPoints); here we just persist them. The step
       // is logged separately so users see the attribution in CLI output.
       await updateStep(supabase, projectId, 'framework_detection');
+      // Compose express router mount prefixes onto served paths
+      // (app.use('/api', router) → router.get('/x') becomes '/api/x'), in
+      // memory before persistence, so the DAST synthesizer points ZAP at the
+      // real URL. Pure mutation of result.files[*].entryPoints; no I/O.
+      resolveMountPrefixes(result.files);
       const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files);
       if (!entryResult.success && entryResult.error) {
         await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);

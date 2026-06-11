@@ -13,7 +13,8 @@
     "middleware_chain": null,
     "metadata": {
       "method": "GET"
-    }
+    },
+    "request_params": null
   },
   {
     "file_path": "/workspace/main.go",
@@ -29,6 +30,7 @@
     "middleware_chain": null,
     "metadata": {
       "method": "POST"
-    }
+    },
+    "request_params": null
   }
 ]
