@@ -4,6 +4,7 @@ import {
   clearTableRegistry,
   clearRpcRegistry,
   supabase,
+  queryBuilder,
 } from '../test/mocks/supabaseSingleton';
 
 import { ALL_AEGIS_TOOLS } from '../lib/aegis-v3/tools';
@@ -46,9 +47,18 @@ jest.mock('../lib/latest-safe-version', () => ({
 }));
 import { calculateLatestSafeVersion } from '../lib/latest-safe-version';
 
+jest.mock('../lib/aegis-v3/fix-planner', () => ({
+  generateFixPlan: jest.fn(),
+}));
+import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
+
 jest.mock('../lib/active-extraction', () => ({
   NO_ACTIVE_RUN: '__no_active_run__',
   getActiveExtractionId: jest.fn().mockResolvedValue(null),
+  // Org-wide tools (posture, vuln detail, KEV/EPSS) batch-resolve active runs;
+  // returning a non-empty list keeps their `.in('extraction_run_id', ...)`
+  // filter from being the no-rows `[]` case in tests.
+  getActiveExtractionIds: jest.fn().mockResolvedValue(['00000000-0000-0000-0000-0000000007aa']),
 }));
 
 beforeEach(() => {
@@ -402,6 +412,21 @@ describe('get_project_vulnerabilities', () => {
     expect(out.vulnerabilities[0].id).toBeUndefined();
     expect(out.vulnerabilities[0].dependency.id).toBeUndefined();
   });
+
+  it('filters to the active extraction run and excludes suppressed rows', async () => {
+    // Without these filters the same CVE comes back once per historical run
+    // (the "top 3 CVEs are all the same CVE" dogfood bug).
+    mockProjectResolverHit('Web');
+    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    queryBuilder.eq.mockClear();
+    await tool('get_project_vulnerabilities').execute({ projectName: 'Web' }, makeCtx());
+    expect(queryBuilder.eq.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['extraction_run_id', '__no_active_run__'],
+        ['suppressed', false],
+      ]),
+    );
+  });
 });
 
 describe('get_security_posture', () => {
@@ -663,5 +688,157 @@ describe('list_policies', () => {
     expect(out.packagePolicy.preview).toContain('openssf_score');
     expect(out.availableStatuses).toHaveLength(2);
     expect(out.availableStatuses[0].isPassing).toBe(true);
+  });
+});
+
+describe('request_fix set-aside guard', () => {
+  // The PDV row request_fix consults: project_dependency_vulnerabilities
+  // maybeSingle. Dedup pre-checks need a project_security_fixes maybeSingle
+  // miss; resolveProject needs a projects hit.
+  function seedRequestFixPath(pdvRow: Record<string, any> | null) {
+    mockProjectResolverHit('Web');
+    setTableResponse('project_security_fixes', 'maybeSingle', { data: null, error: null });
+    setTableResponse('project_dependency_vulnerabilities', 'maybeSingle', {
+      data: pdvRow,
+      error: null,
+    });
+  }
+
+  it('refuses an auto-ignored (unreachable) vulnerability and teaches the override', async () => {
+    seedRequestFixPath({
+      suppressed: false,
+      risk_accepted: false,
+      reachability_level: 'unreachable',
+      is_reachable: false,
+      runtime_confirmed_at: null,
+    });
+    const out = (await tool('request_fix').execute(
+      { findingType: 'vulnerability', findingHandle: 'CVE-2024-45590', projectName: 'Web' },
+      makeCtx(),
+    )) as any;
+    expect(out.error).toContain('auto-ignored');
+    expect(out.error).toContain('allowIgnored');
+    expect(out.fixId).toBeUndefined();
+  });
+
+  it('refuses a user-suppressed vulnerability', async () => {
+    seedRequestFixPath({
+      suppressed: true,
+      risk_accepted: false,
+      reachability_level: 'confirmed',
+      is_reachable: true,
+      runtime_confirmed_at: null,
+    });
+    const out = (await tool('request_fix').execute(
+      { findingType: 'vulnerability', findingHandle: 'CVE-2021-23337', projectName: 'Web' },
+      makeCtx(),
+    )) as any;
+    expect(out.error).toContain('suppressed');
+    expect(out.fixId).toBeUndefined();
+  });
+
+  it('does not guard reachable, non-suppressed findings', async () => {
+    seedRequestFixPath({
+      suppressed: false,
+      risk_accepted: false,
+      reachability_level: 'confirmed',
+      is_reachable: true,
+      runtime_confirmed_at: null,
+    });
+    setTableResponse('project_security_fixes', 'single', { data: { id: 'fix-1' }, error: null });
+    (generateFixPlan as jest.Mock).mockResolvedValue({
+      plan: { refusal: { reason: 'planner stubbed in test' } },
+      baseSha: 'sha',
+      baseBranch: 'main',
+    });
+    const out = (await tool('request_fix').execute(
+      { findingType: 'vulnerability', findingHandle: 'CVE-2021-23337', projectName: 'Web' },
+      makeCtx(),
+    )) as any;
+    expect(out.fixId).toBe('fix-1');
+  });
+
+  it('allowIgnored bypasses the guard after explicit user confirmation', async () => {
+    seedRequestFixPath({
+      suppressed: false,
+      risk_accepted: false,
+      reachability_level: 'unreachable',
+      is_reachable: false,
+      runtime_confirmed_at: null,
+    });
+    setTableResponse('project_security_fixes', 'single', { data: { id: 'fix-2' }, error: null });
+    (generateFixPlan as jest.Mock).mockResolvedValue({
+      plan: { refusal: { reason: 'planner stubbed in test' } },
+      baseSha: 'sha',
+      baseBranch: 'main',
+    });
+    const out = (await tool('request_fix').execute(
+      {
+        findingType: 'vulnerability',
+        findingHandle: 'CVE-2024-45590',
+        projectName: 'Web',
+        allowIgnored: true,
+      },
+      makeCtx(),
+    )) as any;
+    expect(out.fixId).toBe('fix-2');
+  });
+});
+
+describe('list_project_issues auto-ignore triage', () => {
+  const REACHABLE_ROW = {
+    osv_id: 'CVE-2021-23337',
+    severity: 'high',
+    summary: 'Command Injection in lodash',
+    depscore: 51,
+    status: 'open',
+    project_dependency_id: PD_ID,
+    reachability_level: 'confirmed',
+    is_reachable: true,
+    runtime_confirmed_at: null,
+  };
+  const UNREACHABLE_ROW = {
+    osv_id: 'CVE-2024-45590',
+    severity: 'high',
+    summary: 'body-parser DoS',
+    depscore: 30,
+    status: 'open',
+    project_dependency_id: PD_ID,
+    reachability_level: 'unreachable',
+    is_reachable: false,
+    runtime_confirmed_at: null,
+  };
+
+  function seedIssues() {
+    mockProjectResolverHit('Web');
+    setTableResponse('project_dependency_vulnerabilities', 'then', {
+      data: [REACHABLE_ROW, UNREACHABLE_ROW],
+      error: null,
+    });
+    setTableResponse('project_dependencies', 'then', {
+      data: [{ id: PD_ID, name: 'lodash', version: '4.17.20' }],
+      error: null,
+    });
+  }
+
+  it('excludes auto-ignored vulnerabilities by default (mirrors the findings table)', async () => {
+    seedIssues();
+    const out = (await tool('list_project_issues').execute(
+      { projectName: 'Web', types: ['vulnerability'] },
+      makeCtx(),
+    )) as any;
+    expect(out.issues.map((i: any) => i.handle)).toEqual(['CVE-2021-23337']);
+  });
+
+  it('includeAutoIgnored returns them with status auto_ignored', async () => {
+    seedIssues();
+    const out = (await tool('list_project_issues').execute(
+      { projectName: 'Web', types: ['vulnerability'], includeAutoIgnored: true },
+      makeCtx(),
+    )) as any;
+    const byHandle: Record<string, any> = {};
+    for (const i of out.issues) byHandle[i.handle] = i;
+    expect(byHandle['CVE-2021-23337'].status).toBe('open');
+    expect(byHandle['CVE-2024-45590'].status).toBe('auto_ignored');
   });
 });

@@ -1,6 +1,9 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AegisToolEntry } from '../tool-types';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 import { generateFixPlan } from '../fix-planner';
+import { autoIgnoreReasonText, vulnAutoIgnoreReason } from '../finding-triage';
 import { signApprovalToken, verifyApprovalToken } from '../approval-token';
 import { resolveProject } from './resolvers';
 import {
@@ -73,6 +76,7 @@ const requestFix: AegisToolEntry<{
   findingType: FindingType;
   findingHandle: string;
   projectName: string;
+  allowIgnored?: boolean;
 }, {
   fixId?: string;
   status?: FixStatus;
@@ -82,7 +86,7 @@ const requestFix: AegisToolEntry<{
 }> = {
   name: 'request_fix',
   description:
-    "Generate a fix plan for a security issue (vulnerability / Semgrep / secret). Pass `projectName` exactly as the user said it (the resolver fuzzy-matches), `findingType` ('vulnerability' | 'semgrep' | 'secret'), and `findingHandle` exactly as returned in the `handle` field by `list_project_issues`. Always call `list_project_issues` first to obtain the right handle; never invent one. The plan must be approved (via `approve_fix`) before execution. Returns the plan, status (awaiting_approval | failed on refusal), and a fix id. Does not open a PR.",
+    "Generate a fix plan for a security issue (vulnerability / Semgrep / secret). Pass `projectName` exactly as the user said it (the resolver fuzzy-matches), `findingType` ('vulnerability' | 'semgrep' | 'secret'), and `findingHandle` exactly as returned in the `handle` field by `list_project_issues`. Always call `list_project_issues` first to obtain the right handle; never invent one. Findings the platform has ignored / auto-ignored (suppressed, risk-accepted, or triaged not-reachable) are refused unless `allowIgnored: true` — only pass that after the user explicitly confirms. The plan must be approved (via `approve_fix`) before execution. Returns the plan, status (awaiting_approval | failed on refusal), and a fix id. Does not open a PR.",
   permission: 'trigger_fix',
   danger: 'medium',
   inputSchema: jsonSchema({
@@ -91,11 +95,21 @@ const requestFix: AegisToolEntry<{
       findingType: { type: 'string', enum: [...FINDING_TYPES] },
       findingHandle: { type: 'string', minLength: 1, description: 'The `handle` from list_project_issues. Opaque — never paraphrase to the user.' },
       projectName: { type: 'string', minLength: 1, description: 'Project name as the user said it.' },
+      allowIgnored: {
+        type: 'boolean',
+        description:
+          'Set true ONLY after the user explicitly confirms they want a fix for a finding the platform has ignored / auto-ignored (suppressed, risk-accepted, or triaged as not reachable).',
+      },
     },
     required: ['findingType', 'findingHandle', 'projectName'],
     additionalProperties: false,
   }),
-  execute: async ({ findingType, findingHandle, projectName }, ctx) => {
+  execute: async ({ findingType, findingHandle, projectName, allowIgnored }, ctx) => {
+    // Synchronous ordinal — captured BEFORE any await so parallel calls each
+    // get a unique number. Used by the fan-out guard below (Set-based dedup
+    // updates after async work, which leaks the race).
+    const callOrdinal = ++ctx.turnState.requestCallCount;
+
     const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
     if ('error' in resolved) return { error: resolved.error };
     const projectId = resolved.id;
@@ -104,22 +118,88 @@ const requestFix: AegisToolEntry<{
     if ('error' in handleResolution) return { error: handleResolution.error };
     const findingId = handleResolution.rowId;
 
+    const findingKey = `${findingType}:${projectId}:${findingId}`;
+
+    // Cross-turn dedup. If this thread already has an awaiting_approval plan
+    // for the same finding, hand it back instead of creating a duplicate.
+    // Without this, a "do it again" prompt in turn N+1 spawns a second row
+    // for the same CVE — then revise_fix's planMatch hits both and fails
+    // with "matched 2 plans" until the agent gives up. Observed in dogfood
+    // 2026-05-07: 8 revise_fix attempts in one turn, 5 of them ambiguity
+    // errors, all caused by duplicate (thread, CVE) rows from turn 2.
+    if (ctx.threadId) {
+      const { data: existing } = await ctx.supabase
+        .from('project_security_fixes')
+        .select('id, status')
+        .eq('thread_id', ctx.threadId)
+        .eq(fixTypeColumn(findingType), findingId)
+        .eq('status', 'awaiting_approval')
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        ctx.turnState.requestedFindings.add(findingKey);
+        return {
+          fixId: existing.id as string,
+          status: existing.status as FixStatus,
+          error:
+            `A plan for ${findingType} ${findingHandle} on '${projectName}' already exists in this thread (awaiting approval). Call revise_fix with planMatch '${findingHandle}' to modify it, or approve_fix to proceed. Don't re-create.`,
+        };
+      }
+    }
+
     // In-turn dedup. The agent occasionally requests a fix for a finding it
     // already requested earlier in the same turn (after a tool failure or
     // mid-stream confusion). Each plan-generation costs ~45-80s of model
     // time, so refusing is much cheaper than letting the model burn through
     // a duplicate.
-    const findingKey = `${findingType}:${projectId}:${findingId}`;
     if (ctx.turnState.requestedFindings.has(findingKey)) {
       return {
-        error: `A fix for ${findingType} ${findingHandle} on project '${projectName}' was already requested in this turn — the plan is already on screen.`,
+        error: `A fix for ${findingType} ${findingHandle} on project '${projectName}' was already requested in this turn — the plan is already on screen. (This guard is scoped to the current user message only; it resets on the next one. Never refuse a future request or revision because of it.)`,
       };
     }
 
-    // Fan-out guard: if this is the 2nd+ request_fix in the turn AND no
-    // set_todos has been emitted, refuse. Multi-CVE / multi-finding fix
-    // requests are exactly the workstream rule 10 is for.
-    if (ctx.turnState.requestedFindings.size >= 1 && !ctx.turnState.setTodosCalled) {
+    // Set-aside guard. Findings the platform has ignored — user-suppressed,
+    // risk-accepted, or auto-triaged (the findings table shows them as
+    // "Auto Ignored": not reachable / no path to the vulnerable function) —
+    // shouldn't get fix plans by default; the user has already decided (or
+    // the scanner has determined) they don't matter. Overridable only after
+    // the user explicitly confirms.
+    if (findingType === 'vulnerability' && !allowIgnored) {
+      const activeRunId =
+        (await getActiveExtractionId(ctx.supabase as SupabaseClient, projectId)) ?? NO_ACTIVE_RUN;
+      const { data: pdvRow } = await ctx.supabase
+        .from('project_dependency_vulnerabilities')
+        .select('suppressed, risk_accepted, reachability_level, is_reachable, runtime_confirmed_at')
+        .eq('project_id', projectId)
+        .eq('osv_id', findingId)
+        .eq('extraction_run_id', activeRunId)
+        .limit(1)
+        .maybeSingle();
+      if (pdvRow) {
+        const triage = vulnAutoIgnoreReason(pdvRow as any);
+        const setAside = (pdvRow as any).suppressed
+          ? 'ignored (suppressed by a user)'
+          : (pdvRow as any).risk_accepted
+            ? 'risk-accepted by a user'
+            : triage
+              ? `auto-ignored: ${autoIgnoreReasonText(triage)}`
+              : null;
+        if (setAside) {
+          return {
+            error:
+              `Not creating a plan: ${findingHandle} on '${projectName}' is ${setAside}. ` +
+              `The findings table shows it as Ignored/Auto Ignored, so fixing it is usually wasted effort. ` +
+              `Explain this to the user; only if they explicitly confirm they still want it fixed, call request_fix again with allowIgnored: true.`,
+          };
+        }
+      }
+    }
+
+    // Fan-out guard: 2nd+ request_fix in the turn AND no set_todos = refuse.
+    // Uses the sync ordinal captured at function entry so parallel calls are
+    // caught reliably (Set-based size check would race for ~60s while the
+    // first planner runs). Rule 10 is exactly for multi-finding fix work.
+    if (callOrdinal >= 2 && !ctx.turnState.setTodosCalled) {
       return {
         error:
           "You're requesting fixes for multiple findings in this turn. Call `set_todos` first with one item per finding (rule 10), then resume calling request_fix. The user needs progress UI for fan-out work.",
@@ -233,7 +313,7 @@ const reviseFix: AegisToolEntry<{
   description:
     "Revise the plan for an EXISTING fix in this chat thread, incorporating user feedback as binding direction. Use this when the user pushes back on a plan you already produced (e.g. 'add more tests', 'use a different library', 'skip the rollback step'). Do NOT use this to start a new fix — call `request_fix` for that. " +
     "Resolves the target fix automatically; if the thread has multiple revisable plans, pass `planMatch` to disambiguate. `planMatch` matches case-insensitively against the plan summary AND against the underlying finding identifier (CVE / OSV id for vulnerabilities, file:line for Semgrep / secrets), so a CVE id like 'CVE-2022-42889' always works even after the plan title is rewritten. " +
-    "When the user asks to revise N≥2 plans, call `set_todos` first (rule 10) — `revise_fix` will refuse the 2nd plan in a turn otherwise. Each plan can only be revised once per turn — a duplicate `revise_fix` returns an error. Replaces the existing plan and re-arms the approval flow.",
+    "When the user asks to revise N≥2 plans, call `set_todos` first (rule 10) — `revise_fix` will refuse the 2nd plan in a turn otherwise. Each plan can only be revised once per turn — a duplicate `revise_fix` returns an error. IMPORTANT: that once-per-turn limit resets on every new user message. A plan revised in an earlier turn can ALWAYS be revised again in the current one — never refuse a revision request because the plan was revised before, and NEVER answer that a new revision is done without actually calling this tool in the current turn (revising a plan moments ago does not satisfy a fresh request). Replaces the existing plan and re-arms the approval flow.",
   permission: 'trigger_fix',
   danger: 'medium',
   inputSchema: jsonSchema({
@@ -256,6 +336,9 @@ const reviseFix: AegisToolEntry<{
     additionalProperties: false,
   }),
   execute: async ({ instructions, planMatch }, ctx) => {
+    // Sync ordinal for the fan-out guard (see request_fix for rationale).
+    const callOrdinal = ++ctx.turnState.reviseCallCount;
+
     if (!ctx.threadId) {
       return { error: 'revise_fix can only be used inside a chat thread.' };
     }
@@ -342,15 +425,14 @@ const reviseFix: AegisToolEntry<{
     if (ctx.turnState.revisedFixIds.has(target.id)) {
       const summary = target.plan?.summary ?? '(unnamed plan)';
       return {
-        error: `Plan '${summary}' was already revised in this turn — the latest revision is already on screen. Move on to the next plan or finalize.`,
+        error: `Plan '${summary}' was already revised in this turn — the latest revision is already on screen. Move on to the next plan or finalize. (This guard is scoped to the current user message only; it resets on the next one. When the user asks for another revision in a later message, call revise_fix again — never refuse based on this turn's dedup.)`,
       };
     }
 
-    // Fan-out guard: if this is the 2nd+ revise_fix in the turn AND no
-    // set_todos has been emitted, refuse and direct the model to declare
-    // the plan first. Rule 10 in the system prompt teaches this; the runtime
-    // guard catches the cases where the prompt didn't stick.
-    if (ctx.turnState.revisedFixIds.size >= 1 && !ctx.turnState.setTodosCalled) {
+    // Fan-out guard via sync ordinal — catches parallel calls that would
+    // otherwise both pass a Set.size check before either added to the Set
+    // (observed in dogfood: 2 parallel revise_fix sneaking past).
+    if (callOrdinal >= 2 && !ctx.turnState.setTodosCalled) {
       return {
         error:
           "You're operating on multiple plans in this turn. Call `set_todos` first with one item per plan you intend to revise (rule 10), then resume revising. The user needs progress UI for fan-out work.",

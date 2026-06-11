@@ -9887,165 +9887,34 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
+
+    // This endpoint gates first paint of both the findings-table expanded row
+    // and the Aegis fix panel's issue card. The entire read (active run, PDV,
+    // deps + files + scores, version candidates, events, advisory with
+    // CVE↔GHSA alias fallback, flows + per-flow suppression — see phase49
+    // migration) is a single Postgres function so it costs one DB round trip,
+    // and the access check runs concurrently with it — both are reads, and
+    // nothing is shaped or returned until the check passes. Wall time is
+    // max(access, rpc) instead of a ~10-query waterfall.
+    const [accessCheck, bundleRes] = await Promise.all([
+      checkProjectAccess(userId, id, projectId),
+      supabase.rpc('get_vulnerability_detail_bundle', {
+        p_project_id: projectId,
+        p_osv_id: osvId,
+      }),
+    ]);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
+    if (bundleRes.error) throw bundleRes.error;
+    const bundle = (bundleRes.data ?? {}) as any;
 
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    const { data: vulns, error: vulnError } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('osv_id', osvId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-
-    if (vulnError) throw vulnError;
-    if (!vulns || vulns.length === 0) {
+    const vulns: any[] = bundle.vulnerabilities ?? [];
+    if (vulns.length === 0) {
       return res.status(404).json({ error: 'Vulnerability not found in this project' });
     }
-
     const vuln = vulns[0];
-
-    const pdIds = vulns.map((v: any) => v.project_dependency_id).filter(Boolean);
-    let affectedDeps: any[] = [];
-    if (pdIds.length > 0) {
-      const { data: deps } = await supabase
-        .from('project_dependencies')
-        .select('id, name, version, is_direct, dependency_id, files_importing_count, environment')
-        .in('id', pdIds)
-        .is('removed_at', null);
-      affectedDeps = deps ?? [];
-    }
-
-    // Project importance for depscore breakdown
-    const { data: project } = await supabase
-      .from('projects')
-      .select('importance')
-      .eq('id', projectId)
-      .single();
-    const projectImportance: number = typeof project?.importance === 'number' ? project.importance : 1.0;
-
-    // Package reputation scores for affected dependencies (for depscore breakdown)
-    const depIdsForScore = [...new Set((affectedDeps as any[]).map((d: any) => d.dependency_id).filter(Boolean))];
-    let scoreByDependencyId: Record<string, number> = {};
-    if (depIdsForScore.length > 0) {
-      const { data: depRows } = await supabase
-        .from('dependencies')
-        .select('id, score')
-        .in('id', depIdsForScore);
-      for (const row of depRows ?? []) {
-        scoreByDependencyId[row.id] = row.score ?? 0;
-      }
-    }
-
-    const depIds = affectedDeps.map((d: any) => d.id);
-    let filesByDep: Record<string, any[]> = {};
-    if (depIds.length > 0) {
-      const { data: files } = await supabase
-        .from('project_dependency_files')
-        .select('project_dependency_id, file_path')
-        .in('project_dependency_id', depIds)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-      for (const f of files ?? []) {
-        if (!filesByDep[f.project_dependency_id]) filesByDep[f.project_dependency_id] = [];
-        filesByDep[f.project_dependency_id].push(f.file_path);
-      }
-    }
-
-    const depName = affectedDeps[0]?.name;
-    let versionCandidates: any[] = [];
-    if (depName) {
-      const { data: candidates } = await supabase
-        .from('project_version_candidates')
-        .select('*')
-        .eq('project_id', projectId)
-        .eq('package_name', depName);
-      versionCandidates = candidates ?? [];
-    }
-
-    const { data: events } = await supabase
-      .from('project_vulnerability_events')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('osv_id', osvId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    // Resolve the global advisory by osv_id, then fall back to an alias match.
-    // The project may reference a CVE while the advisory is stored under its
-    // GHSA id (or vice-versa) — e.g. CVE-2021-23337 ↔ GHSA-35jh-r3h4-6jhm — so
-    // an exact osv_id match alone misses the summary/details/fix metadata. The
-    // `aliases` text[] carries the cross-ids.
-    const GLOBAL_VULN_COLS = 'summary, details, aliases, affected_versions, fixed_versions, published_at, modified_at';
-    let { data: globalVuln } = await supabase
-      .from('dependency_vulnerabilities')
-      .select(GLOBAL_VULN_COLS)
-      .eq('osv_id', osvId)
-      .limit(1)
-      .maybeSingle();
-    if (!globalVuln) {
-      const { data: aliasMatch } = await supabase
-        .from('dependency_vulnerabilities')
-        .select(GLOBAL_VULN_COLS)
-        .contains('aliases', [osvId])
-        .limit(1)
-        .maybeSingle();
-      globalVuln = aliasMatch ?? null;
-    }
-
-    // fetch reachable flows for THIS vulnerability. Flows are tagged with the
-    // osv_id of the CVE whose taint rule produced them
-    // (project_reachable_flows.osv_id), so filter on it — not just dependency_id.
-    // Two CVEs on one package that share a sink (e.g. lodash CVE-2021-23337 +
-    // CVE-2026-4800, both hitting `_.template`) each own their own flow rows; a
-    // dependency-only filter leaked every CVE's flows into every CVE's detail
-    // panel (the "4 flows = 2 paths shown twice" bug). Match the requested osv_id
-    // plus its aliases so a CVE↔GHSA mismatch between the advisory and the
-    // engine-written flow still resolves.
-    const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);
-    const flowOsvIds = [...new Set([
-      osvId,
-      ...(((vuln.aliases as string[] | null) ?? [])),
-      ...((((globalVuln as any)?.aliases as string[] | null) ?? [])),
-    ].filter(Boolean))];
-    let reachableFlows: any[] = [];
-    if (affectedDepIds.length > 0) {
-      const { data: flows } = await supabase
-        .from('project_reachable_flows')
-        .select('*')
-        .eq('project_id', projectId)
-        .in('dependency_id', affectedDepIds)
-        .in('osv_id', flowOsvIds)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-        .order('flow_length', { ascending: true })
-        .limit(20);
-      reachableFlows = flows ?? [];
-
-      // Phase 6.5 — surface per-flow suppression state. The suppression table
-      // is keyed by flow_signature_hash (Option B / OD-4) so user-state
-      // survives writeFlows wipe-and-rewrite. Resolve to a boolean per flow
-      // here so the UI doesn't need a second round-trip. Graceful no-op if
-      // the table doesn't exist yet (pre-phase27a deploy / fresh local PGLite).
-      const hashes: string[] = (reachableFlows as any[])
-        .map((f: any) => f.flow_signature_hash)
-        .filter((h: any): h is string => typeof h === 'string' && h.length > 0);
-      if (hashes.length > 0) {
-        const { data: suppressionRows, error: suppressionError } = await supabase
-          .from('project_reachable_flow_suppressions')
-          .select('flow_signature_hash')
-          .eq('project_id', projectId)
-          .in('flow_signature_hash', hashes);
-        if (!suppressionError && suppressionRows) {
-          const suppressedSet = new Set<string>(suppressionRows.map((r: any) => r.flow_signature_hash));
-          reachableFlows = (reachableFlows as any[]).map((f: any) => ({
-            ...f,
-            is_suppressed: f.flow_signature_hash ? suppressedSet.has(f.flow_signature_hash) : false,
-          }));
-        }
-      }
-    }
+    const globalVuln = bundle.advisory ?? null;
 
     res.json({
       vulnerability: {
@@ -10057,15 +9926,12 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         fixed_versions: globalVuln?.fixed_versions ?? vuln.fixed_versions ?? [],
         published_at: globalVuln?.published_at ?? vuln.published_at ?? null,
       },
-      affected_dependencies: affectedDeps.map((d: any) => ({
-        ...d,
-        files: filesByDep[d.id] ?? [],
-        package_score: d.dependency_id != null ? (scoreByDependencyId[d.dependency_id] ?? null) : null,
-      })),
-      version_candidates: versionCandidates,
-      timeline_events: events ?? [],
-      reachable_flows: reachableFlows,
-      project_importance: projectImportance,
+      affected_dependencies: bundle.affected_dependencies ?? [],
+      version_candidates: bundle.version_candidates ?? [],
+      timeline_events: bundle.timeline_events ?? [],
+      reachable_flows: bundle.reachable_flows ?? [],
+      project_importance:
+        typeof bundle.importance === 'number' ? bundle.importance : 1.0,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);

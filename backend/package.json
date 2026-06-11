@@ -19,7 +19,9 @@
     "reconcile:billing": "tsx scripts/reconcile-billing.ts",
     "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts",
     "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts",
-    "e2e:sentry": "tsx scripts/e2e-sentry.ts"
+    "e2e:sentry": "tsx scripts/e2e-sentry.ts",
+    "aegis:iterate": "cross-env NODE_PATH=node_modules tsx scripts/aegis-iterate/cli.ts",
+    "aegis:gate-test": "cross-env NODE_PATH=node_modules tsx scripts/aegis-iterate/language-gate-test.ts"
   },
   "keywords": [
     "dependency-tracking",

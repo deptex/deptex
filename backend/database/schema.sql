@@ -4403,6 +4403,111 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_vulnerability_detail_bundle(p_project_id uuid, p_osv_id text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+WITH proj AS (
+  SELECT organization_id, active_extraction_run_id, importance
+  FROM projects
+  WHERE id = p_project_id
+),
+pdv AS (
+  SELECT *
+  FROM project_dependency_vulnerabilities v
+  WHERE v.project_id = p_project_id
+    AND v.osv_id = p_osv_id
+    AND v.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+),
+deps AS (
+  SELECT pd.id, pd.name, pd.version, pd.is_direct, pd.dependency_id,
+         pd.files_importing_count, pd.environment
+  FROM project_dependencies pd
+  WHERE pd.id IN (SELECT v.project_dependency_id FROM pdv v WHERE v.project_dependency_id IS NOT NULL)
+    AND pd.removed_at IS NULL
+),
+advisory AS (
+  SELECT dv.summary, dv.details, dv.aliases, dv.affected_versions,
+         dv.fixed_versions, dv.published_at, dv.modified_at
+  FROM dependency_vulnerabilities dv
+  WHERE dv.osv_id = p_osv_id OR dv.aliases @> ARRAY[p_osv_id]
+  ORDER BY (dv.osv_id = p_osv_id) DESC
+  LIMIT 1
+),
+flow_osv_ids AS (
+  SELECT p_osv_id AS osv_id
+  UNION
+  SELECT unnest(COALESCE((SELECT v.aliases FROM pdv v LIMIT 1), '{}'::text[]))
+  UNION
+  SELECT unnest(COALESCE((SELECT a.aliases FROM advisory a), '{}'::text[]))
+),
+flows AS (
+  SELECT f.*
+  FROM project_reachable_flows f
+  WHERE f.project_id = p_project_id
+    AND f.dependency_id IN (SELECT d.dependency_id FROM deps d WHERE d.dependency_id IS NOT NULL)
+    AND f.osv_id IN (SELECT osv_id FROM flow_osv_ids)
+    AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+  ORDER BY f.flow_length ASC
+  LIMIT 20
+)
+SELECT jsonb_build_object(
+  'importance', (SELECT importance FROM proj),
+  'vulnerabilities', COALESCE((SELECT jsonb_agg(to_jsonb(v)) FROM pdv v), '[]'::jsonb),
+  'affected_dependencies', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(d) || jsonb_build_object(
+        'files', COALESCE((
+          SELECT jsonb_agg(f.file_path)
+          FROM project_dependency_files f
+          WHERE f.project_dependency_id = d.id
+            AND f.extraction_run_id = (SELECT active_extraction_run_id FROM proj)
+        ), '[]'::jsonb),
+        'package_score', (SELECT COALESCE(dd.score, 0) FROM dependencies dd WHERE dd.id = d.dependency_id)
+      )
+    )
+    FROM deps d
+  ), '[]'::jsonb),
+  'version_candidates', COALESCE((
+    SELECT jsonb_agg(to_jsonb(c))
+    FROM project_version_candidates c
+    WHERE c.project_id = p_project_id
+      AND c.package_name = (SELECT d.name FROM deps d LIMIT 1)
+  ), '[]'::jsonb),
+  'timeline_events', COALESCE((
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.created_at DESC)
+    FROM (
+      SELECT *
+      FROM project_vulnerability_events ev
+      WHERE ev.project_id = p_project_id
+        AND ev.osv_id = p_osv_id
+      ORDER BY ev.created_at DESC
+      LIMIT 50
+    ) e
+  ), '[]'::jsonb),
+  'advisory', (SELECT to_jsonb(a) FROM advisory a),
+  'reachable_flows', COALESCE((
+    SELECT jsonb_agg(
+      to_jsonb(fl) || jsonb_build_object(
+        'is_suppressed',
+        CASE
+          WHEN fl.flow_signature_hash IS NULL THEN false
+          ELSE EXISTS (
+            SELECT 1 FROM project_reachable_flow_suppressions s
+            WHERE s.project_id = p_project_id
+              AND s.flow_signature_hash = fl.flow_signature_hash
+          )
+        END
+      )
+      ORDER BY fl.flow_length ASC
+    )
+    FROM flows fl
+  ), '[]'::jsonb)
+);
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_watchtower_commits_by_anomaly(p_watched_package_id uuid, p_since_created_at timestamp with time zone, p_cleared_shas text[], p_limit integer, p_offset integer)
  RETURNS SETOF package_commits
  LANGUAGE sql

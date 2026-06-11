@@ -13,6 +13,15 @@ const AI_MODELS_TTL_MS = 60 * 1000;
 const aiModelsCache = new Map<string, { value: AIModelsResponse; expires: number }>();
 const aiModelsInflight = new Map<string, Promise<AIModelsResponse>>();
 
+// Short-TTL cache + inflight dedup for the vulnerability-detail bundle. The
+// Aegis fix panel re-requests it on every sibling switch / panel reopen and
+// the findings table on every row expand — within the TTL window those are
+// the same data, and the fetch gates first paint. Suppression mutations bust
+// the whole cache (suppression state is embedded in reachable_flows).
+const VULN_DETAIL_TTL_MS = 30 * 1000;
+const vulnDetailCache = new Map<string, { value: VulnerabilityDetail; expires: number }>();
+const vulnDetailInflight = new Map<string, Promise<VulnerabilityDetail>>();
+
 // Cross-tab sync for the AI model catalog. When the settings page (in any
 // tab) updates the catalog, every other open tab updates its cache and
 // notifies subscribers — so a new chat in another tab picks the new default
@@ -248,6 +257,21 @@ export interface FixPlan {
   refusal?: { reason: string; manualSuggestion?: string };
 }
 
+/** Scanner-truth details for the finding a fix targets — drives the issue
+ * card in the fix panel. Null when the finding row no longer exists (e.g.
+ * reaped by a rescan after the fix was created). */
+export interface FixFindingDetail {
+  kind: 'vulnerability' | 'semgrep' | 'secret';
+  title: string;
+  severity: string | null;
+  depscore: number | null;
+  reachabilityLevel: string | null;
+  packageName: string | null;
+  packageVersion: string | null;
+  filePath: string | null;
+  line: number | null;
+}
+
 export interface FixRecord {
   threadId?: string | null;
   id: string;
@@ -255,6 +279,7 @@ export interface FixRecord {
   projectId: string;
   status: FixStatus;
   finding: { type: FindingType; id: string };
+  findingDetail?: FixFindingDetail | null;
   plan: FixPlan | null;
   planGeneratedAt: string | null;
   planBaseSha: string | null;
@@ -2749,7 +2774,25 @@ export const api = {
     projectId: string,
     osvId: string
   ): Promise<VulnerabilityDetail> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/detail`);
+    const key = `${organizationId}:${projectId}:${osvId}`;
+    const cached = vulnDetailCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    const inflight = vulnDetailInflight.get(key);
+    if (inflight) return inflight;
+    const promise = (
+      fetchWithAuth(
+        `/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/detail`
+      ) as Promise<VulnerabilityDetail>
+    )
+      .then((value) => {
+        vulnDetailCache.set(key, { value, expires: Date.now() + VULN_DETAIL_TTL_MS });
+        return value;
+      })
+      .finally(() => {
+        vulnDetailInflight.delete(key);
+      });
+    vulnDetailInflight.set(key, promise);
+    return promise;
   },
 
   async suppressVulnerability(
@@ -2757,9 +2800,11 @@ export const api = {
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/suppress`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/suppress`, {
       method: 'PATCH',
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   async unsuppressVulnerability(
@@ -2767,9 +2812,11 @@ export const api = {
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unsuppress`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unsuppress`, {
       method: 'PATCH',
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   // Phase 6.5 — per-flow suppression. Hash-keyed (Option B / OD-4) so
@@ -2780,10 +2827,12 @@ export const api = {
     flowSignatureHash: string,
     suppressedReason?: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions`, {
       method: 'POST',
       body: JSON.stringify({ flow_signature_hash: flowSignatureHash, suppressed_reason: suppressedReason }),
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   async deleteFlowSuppression(
@@ -2791,9 +2840,11 @@ export const api = {
     projectId: string,
     flowSignatureHash: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions/${encodeURIComponent(flowSignatureHash)}`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/flow-suppressions/${encodeURIComponent(flowSignatureHash)}`, {
       method: 'DELETE',
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   async acceptVulnerabilityRisk(
@@ -2802,10 +2853,12 @@ export const api = {
     osvId: string,
     reason?: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/accept-risk`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/accept-risk`, {
       method: 'PATCH',
       body: JSON.stringify({ reason }),
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   async unacceptVulnerabilityRisk(
@@ -2813,9 +2866,11 @@ export const api = {
     projectId: string,
     osvId: string
   ): Promise<{ success: boolean }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unaccept-risk`, {
+    const res = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities/${encodeURIComponent(osvId)}/unaccept-risk`, {
       method: 'PATCH',
     });
+    vulnDetailCache.clear();
+    return res;
   },
 
   async getDependencySecuritySummary(
