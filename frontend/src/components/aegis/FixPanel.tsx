@@ -15,7 +15,6 @@ import {
 import { FixStatusPill } from './FixStatusPill';
 import { FixIssueCard } from './FixIssueCard';
 import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
-import { VulnOrgSidebarExpandedSkeleton } from '../security/VulnerabilityOrgSidebarExpandedContent';
 import { useFixPanel } from './FixPanelContext';
 
 interface StalenessState {
@@ -139,33 +138,41 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const modelStorageKey = orgIdForState ? `aegis:fix-model:${orgIdForState}` : null;
 
   // Full scanner detail for vulnerability fixes — drives the same expanded
-  // issue card the findings table shows. Lazy + best-effort: a failed fetch
-  // (finding reaped by a rescan) falls back to the compact FixIssueCard.
+  // issue card the findings table shows. Best-effort: a failed fetch (finding
+  // reaped by a rescan) falls back to the compact FixIssueCard.
   const findingType = fix?.finding?.type;
   const findingId = fix?.finding?.id;
+  // Which finding the fetched detail belongs to. The pending flag below
+  // derives from this key rather than a loading boolean so the panel knows a
+  // card is still owed even on render frames before the fetch effect fires —
+  // plan and card then paint together instead of the card popping in late.
+  const detailKey =
+    findingType === 'vulnerability' && findingId && orgIdForState && fix?.projectId
+      ? `${fix.projectId}:${findingId}`
+      : null;
   const [vulnDetail, setVulnDetail] = useState<{
-    loading: boolean;
+    key: string | null;
+    status: 'loading' | 'loaded' | 'failed';
     data: VulnerabilityDetail | null;
-  }>({ loading: false, data: null });
+  }>({ key: null, status: 'failed', data: null });
   useEffect(() => {
-    if (findingType !== 'vulnerability' || !findingId || !orgIdForState || !fix?.projectId) {
-      setVulnDetail({ loading: false, data: null });
-      return;
-    }
+    if (!detailKey) return;
     let cancelled = false;
-    setVulnDetail({ loading: true, data: null });
+    setVulnDetail({ key: detailKey, status: 'loading', data: null });
     api
-      .getVulnerabilityDetail(orgIdForState, fix.projectId, findingId)
+      .getVulnerabilityDetail(orgIdForState, fix!.projectId, findingId!)
       .then((d) => {
-        if (!cancelled) setVulnDetail({ loading: false, data: d });
+        if (!cancelled) setVulnDetail({ key: detailKey, status: 'loaded', data: d });
       })
       .catch(() => {
-        if (!cancelled) setVulnDetail({ loading: false, data: null });
+        if (!cancelled) setVulnDetail({ key: detailKey, status: 'failed', data: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [findingType, findingId, orgIdForState, fix?.projectId]);
+  }, [detailKey, orgIdForState, findingId, fix?.projectId]);
+  const cardPending =
+    detailKey != null && (vulnDetail.key !== detailKey || vulnDetail.status === 'loading');
 
   // Model picker fetch + persist. Per-fix execution model picker; defaults
   // to the org's default model and persists per-org in localStorage.
@@ -257,8 +264,10 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
 
   // While this plan is still generating, keep the sibling switcher reachable —
   // a multi-plan turn would otherwise trap the user on the skeleton until the
-  // focused plan resolves.
-  if (!plan && (loading || status === 'planning')) {
+  // focused plan resolves. Also hold the skeleton while the issue card's
+  // scanner detail is in flight so plan + card land in a single paint
+  // instead of the card popping in after the plan.
+  if ((!plan && (loading || status === 'planning')) || (plan && cardPending)) {
     return (
       <FixPanelSkeleton
         header={
@@ -406,7 +415,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
       )}
 
       <div className="mt-6 space-y-6">
-              {(plan.issue || fix?.findingDetail || vulnDetail.loading || vulnDetail.data) && (
+              {(plan.issue || fix?.findingDetail || vulnDetail.data) && (
                 <div>
                   <div className="text-sm font-semibold text-foreground mb-2">
                     Issue
@@ -418,7 +427,9 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                   )}
                   {/* Vulnerability fixes show the same expanded issue card as
                       the findings table; semgrep/secret fixes (and vulns whose
-                      finding row was reaped) fall back to the compact card. */}
+                      finding row was reaped) fall back to the compact card.
+                      No in-card loading state — the whole panel stays on the
+                      skeleton until the detail settles. */}
                   {vulnDetail.data && fix ? (
                     <div className={cn('rounded-md border border-border bg-background-subtle/30 px-4 py-3.5', plan.issue && 'mt-3')}>
                       <VulnerabilityExpandedCard
@@ -427,10 +438,6 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                         organizationId={fix.organizationId}
                         projectId={fix.projectId}
                       />
-                    </div>
-                  ) : vulnDetail.loading ? (
-                    <div className={cn('rounded-md border border-border bg-background-subtle/30 px-4 py-3.5', plan.issue && 'mt-3')}>
-                      <VulnOrgSidebarExpandedSkeleton />
                     </div>
                   ) : fix?.findingDetail ? (
                     <div className={cn(plan.issue && 'mt-3')}>
