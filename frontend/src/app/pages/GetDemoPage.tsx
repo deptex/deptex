@@ -133,10 +133,10 @@ export default function GetDemoPage() {
         <div className="flex flex-col px-6 lg:pl-16 lg:pr-12 pt-24 lg:pt-28 pb-8">
           <div className="flex-shrink-0">
             <h1 className="text-4xl md:text-5xl font-bold text-foreground leading-tight mb-4">
-              Talk to our Sales team
+              Talk to the founders
             </h1>
             <p className="text-base text-foreground-secondary max-w-md">
-              Book a demo and set up a trial Enterprise account to see how Deptex features work and can help manage your organization's security.
+              Book a demo and we'll walk you through how Deptex finds, proves, and fixes vulnerabilities across your organization.
             </p>
           </div>
           <div className="mt-8 lg:mt-12">

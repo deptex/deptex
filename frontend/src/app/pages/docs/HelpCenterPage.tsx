@@ -54,7 +54,7 @@ const quickLinks = [
   {
     icon: Bot,
     title: "Aegis",
-    description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review.",
+    description: "Autonomous security agent: chat, tasks, automations, and Slack.",
     to: "/docs/aegis",
   },
 ];
@@ -76,7 +76,7 @@ const faqItems: FaqItem[] = [
     category: "Getting Started",
     question: "What ecosystems are supported?",
     answer:
-      "Deptex supports npm, pip, Go modules, Maven, Cargo, Bundler, NuGet, and many more through cdxgen. If your ecosystem produces a lockfile or manifest, chances are Deptex can parse it.",
+      "Deptex scans npm, PyPI, Maven, Go, Cargo, RubyGems, Composer, and NuGet end to end. Other ecosystems with a lockfile or manifest may parse via cdxgen, but aren't officially supported yet.",
   },
   {
     category: "Getting Started",
@@ -88,7 +88,7 @@ const faqItems: FaqItem[] = [
     category: "Security",
     question: "How does Depscore work?",
     answer:
-      "Depscore is a composite risk score that combines CVSS severity, EPSS exploit probability, KEV (Known Exploited Vulnerabilities) status, reachability analysis, and your asset tier into a single prioritized number. Higher scores indicate more urgent action.",
+      "Depscore is a composite risk score that combines CVSS severity, EPSS exploit probability, KEV (Known Exploited Vulnerabilities) status, reachability analysis, and your project's importance setting into a single prioritized number. Higher scores indicate more urgent action.",
   },
   {
     category: "Security",
@@ -136,13 +136,13 @@ const faqItems: FaqItem[] = [
     category: "Account",
     question: "What roles are available?",
     answer:
-      "Deptex ships with four built-in roles: Admin, Member, Viewer, and Billing. Admins can also create custom roles with granular permissions tailored to your team structure.",
+      "Every organization starts with two roles: owner and member. You can create additional custom roles with granular permissions tailored to your team structure.",
   },
   {
     category: "General",
     question: "Is Deptex open source?",
     answer:
-      "The core platform is open source under the MIT license. Enterprise features\u2014such as advanced RBAC, SSO, and audit logging\u2014are available as a commercial add-on.",
+      "Deptex is source-available under the Functional Source License (FSL-1.1-ALv2). The entire platform lives in one public repository, and each release converts to Apache 2.0 two years after publication. There is no enterprise edition and no withheld code.",
   },
   {
     category: "General",

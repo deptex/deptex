@@ -6,8 +6,8 @@ import PipelineShowcaseSection from "../../components/PipelineShowcaseSection";
 const ROTATING_WORDS = ["easy.", "customizable.", "for you."];
 const TYPE_MS = 80;
 
-const ECOSYSTEMS = ["npm", "PyPI", "Maven", "Go", "Cargo", "RubyGems", "Composer", "NuGet", "Hex", "Pub", "Swift PM"];
-/** One row of items with · between them; trailing · so loop has · between Swift PM and npm. */
+const ECOSYSTEMS = ["npm", "PyPI", "Maven", "Go", "Cargo", "RubyGems", "Composer", "NuGet"];
+/** One row of items with · between them; trailing · so loop has · between NuGet and npm. */
 const MARQUEE_ROW = [...ECOSYSTEMS.flatMap((name, i) => (i === 0 ? [name] : ["·", name])), "·"];
 /** Repeat 4× so content is always wider than viewport; we scroll by 25% (one set) for seamless loop. */
 const MARQUEE_FULL = [...MARQUEE_ROW, ...MARQUEE_ROW, ...MARQUEE_ROW, ...MARQUEE_ROW];
@@ -69,7 +69,7 @@ export default function HomePage() {
               </span>
             </h1>
             <p className="text-lg md:text-xl text-foreground mb-10 max-w-2xl mx-auto leading-relaxed">
-              An open-source, customizable ASPM platform.
+              A source-available, customizable ASPM platform.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button

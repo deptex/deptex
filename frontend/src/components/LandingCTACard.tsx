@@ -38,7 +38,7 @@ export default function LandingCTACard() {
               See Deptex in action
             </h3>
             <p className="text-foreground text-sm sm:text-base leading-relaxed mb-6">
-              See why teams choose Deptex for dependency security — and what it can do for yours.
+              Book a demo and see exactly which of your vulnerabilities are reachable, and which aren't.
             </p>
             <Link
               to="/get-demo"

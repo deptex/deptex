@@ -52,11 +52,6 @@ export default function Footer() {
                   Customizable Notifications
                 </Link>
               </li>
-              <li>
-                <Link to="/platform-features/advanced-upstream-insights" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Advanced Upstream Insights
-                </Link>
-              </li>
             </ul>
           </div>
 
@@ -71,7 +66,7 @@ export default function Footer() {
               </li>
               <li>
                 <Link to="/open-source" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Open Source
+                  Open code
                 </Link>
               </li>
               <li>

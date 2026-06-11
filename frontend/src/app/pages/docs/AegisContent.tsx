@@ -7,9 +7,9 @@ export default function AegisContent() {
         <div className="space-y-3 text-foreground/90 leading-relaxed">
           <p>
             <strong className="text-foreground">Aegis</strong> is Deptex&apos;s autonomous security agent. It can chat about your security posture,
-            run tasks (trigger fixes, generate reports), execute scheduled automations, and integrate with Slack. Aegis uses your
-            organization&apos;s AI provider (OpenAI, Anthropic, or Google) and has access to tools for projects, vulnerabilities,
-            policies, compliance, and reporting.
+            run tasks (trigger fixes, generate reports), execute scheduled automations, and integrate with Slack. Aegis runs on
+            Deptex-managed platform AI keys — you pick which models (OpenAI, Anthropic, Google) are enabled for your org — and has
+            access to tools for projects, vulnerabilities, policies, compliance, and reporting.
           </p>
           <p>
             Access Aegis from the organization sidebar or from context panels in the Security tab. You need{" "}
@@ -34,8 +34,8 @@ export default function AegisContent() {
         <h2 className="text-lg font-semibold text-foreground mb-3">Tasks and Approvals</h2>
         <p className="text-foreground/90 leading-relaxed">
           For high-impact actions, Aegis may create an <strong className="text-foreground">approval request</strong>. Users with the right
-          permissions can approve or reject from the Management Console. Long-running <strong className="text-foreground">tasks</strong> (e.g. security
-          sprints with multiple fix steps) are broken into steps; you can pause, cancel, or approve as needed.{" "}
+          permissions can approve or reject from the Management Console. Multi-step <strong className="text-foreground">fix plans</strong> are
+          proposed before anything runs; you can approve, revise, or reject each one.{" "}
           <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">trigger_fix</code> controls who can create fix tasks.
         </p>
       </div>
@@ -68,21 +68,13 @@ export default function AegisContent() {
         </p>
       </div>
 
-      {/* PR Security Review */}
-      <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">PR Security Review</h2>
-        <p className="text-foreground/90 leading-relaxed">
-          Aegis can perform <strong className="text-foreground">security reviews</strong> on pull requests — risk assessment, policy checks,
-          and a structured comment on the PR. Configure auto-review or on-demand from the management console.
-        </p>
-      </div>
 
       {/* AI Configuration */}
       <div>
         <h2 className="text-lg font-semibold text-foreground mb-3">AI Configuration</h2>
         <p className="text-foreground/90 leading-relaxed">
           Aegis runs on Deptex-managed platform AI keys. Pick which models are enabled for your org under <strong className="text-foreground">Settings &rarr; AI &amp; Automation &rarr; AI Configuration</strong>.
-          Usage is logged; per-org monthly cost caps help control spend.
+          Usage is logged and metered against your organization's prepaid balance.
         </p>
       </div>
 
@@ -112,7 +104,7 @@ export default function AegisContent() {
             <tbody className="divide-y divide-border">
               <tr><td className="py-2 font-mono text-xs text-foreground">interact_with_aegis</td><td className="py-2 text-foreground/90">Chat, copilot, Fix with AI / Explain with Aegis buttons</td></tr>
               <tr><td className="py-2 font-mono text-xs text-foreground">manage_aegis</td><td className="py-2 text-foreground/90">Management Console, AI Configuration, budgets, tool overrides, memory, automations</td></tr>
-              <tr><td className="py-2 font-mono text-xs text-foreground">trigger_fix</td><td className="py-2 text-foreground/90">Create security sprints and approve fix tasks</td></tr>
+              <tr><td className="py-2 font-mono text-xs text-foreground">trigger_fix</td><td className="py-2 text-foreground/90">Request AI fixes and approve fix tasks</td></tr>
               <tr><td className="py-2 font-mono text-xs text-foreground">view_ai_spending</td><td className="py-2 text-foreground/90">View usage and cost (read-only)</td></tr>
               <tr><td className="py-2 font-mono text-xs text-foreground">manage_incidents</td><td className="py-2 text-foreground/90">Declare and resolve incidents</td></tr>
             </tbody>

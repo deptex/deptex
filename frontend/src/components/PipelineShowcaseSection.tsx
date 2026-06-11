@@ -37,12 +37,11 @@ const STEPS: Array<{
     id: "connect",
     category: "Connect and sync",
     title: "Connect your repositories",
-    image: "/images/connectrepos.png",
     description:
       "Link GitHub, GitLab, or Bitbucket in minutes. Deptex ingests your repos and builds SBOMs so you can secure every dependency across your stack.",
     bullets: [
       { icon: Webhook, text: "Webhooks trigger extraction on every push", description: "Connect once and stay in sync. Push events automatically queue full SBOM and dependency analysis." },
-      { icon: Layers, text: "11 ecosystems — npm, PyPI, Maven, Go, Cargo, and more", description: "From JavaScript to Rust, Python to Java. One platform for your entire stack." },
+      { icon: Layers, text: "8 ecosystems — npm, PyPI, Maven, Go, Cargo, and more", description: "From JavaScript to Rust, Python to Java. One platform for your entire stack." },
       { icon: FileCode, text: "Full SBOM generation with CycloneDX", description: "Industry-standard SBOMs ready for compliance, audit, and supply chain visibility." },
     ],
   },
@@ -78,14 +77,13 @@ const STEPS: Array<{
     id: "fix",
     category: "Remediation",
     title: "Fix and automate with AI",
-    image: "/images/aiassistant.png",
     description:
       "Aegis suggests fixes, creates bump PRs, and learns from outcomes. Automate remediation so your team can focus on building.",
-    learnMore: "/autonomous-agent",
+    learnMore: "/platform-features/ai-security-agent",
     bullets: [
-      { icon: Zap, text: "Aegis: 50+ tools, memory, tasks, and automations", description: "Chat, automate, and fix. Your autonomous security engineer." },
-      { icon: Wand2, text: "AI-powered fixes with 7 strategies across all ecosystems", description: "Version bumps, patches, and removals. Aider-powered." },
-      { icon: TrendingUp, text: "Outcome-based learning — gets smarter over time", description: "Tracks fix outcomes and recommends the best strategy per org." },
+      { icon: Zap, text: "Aegis: 24 tools, memory, tasks, and automations", description: "Chat, automate, and fix. Your AI security engineer." },
+      { icon: Wand2, text: "AI fixes that run your tests and land as draft PRs", description: "Version bumps, patches, and removals. JavaScript, TypeScript, Python, and Go today." },
+      { icon: TrendingUp, text: "Outcome-based learning — gets smarter over time", description: "Tracks fix outcomes across your org so future fixes start smarter." },
     ],
   },
 ];
@@ -174,7 +172,7 @@ export default function PipelineShowcaseSection() {
             ref={(el) => { stepRefs.current[index] = el; }}
             className={`min-h-[65vh] flex items-center justify-center py-6 px-4 sm:px-6 lg:px-8 ${animateClass} ${visibleClass(visibleSteps.has(index))}`}
           >
-            <div className="w-full max-w-6xl mx-auto grid gap-8 lg:gap-12 items-center lg:grid-cols-[1fr,minmax(420px,1fr)]">
+            <div className={`w-full max-w-6xl mx-auto ${step.image ? "grid gap-8 lg:gap-12 items-center lg:grid-cols-[1fr,minmax(420px,1fr)]" : "max-w-3xl"}`}>
               {/* Left: badge, title, description, learn more, bullets with vertical accents */}
               <div>
                 <span className="inline-flex items-center rounded-md border border-[#2eb37c]/40 bg-[#2eb37c]/10 px-3 py-1 text-xs font-medium uppercase tracking-wider text-[#2eb37c] mb-4">
@@ -211,26 +209,21 @@ export default function PipelineShowcaseSection() {
                 </ul>
               </div>
 
-              {/* Right: card — screenshot when step.image set, else placeholder */}
-              <div
-                className="relative rounded-xl overflow-hidden"
-                style={{
-                  background: step.image
-                    ? "transparent"
-                    : "linear-gradient(180deg, rgba(28, 31, 36, 0.95) 0%, rgba(22, 25, 29, 0.98) 100%)",
-                  boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 8px 32px -8px rgba(0,0,0,0.5)",
-                }}
-              >
-                {step.image ? (
+              {/* Right: screenshot card (only when the step has one) */}
+              {step.image && (
+                <div
+                  className="relative rounded-xl overflow-hidden"
+                  style={{
+                    boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 8px 32px -8px rgba(0,0,0,0.5)",
+                  }}
+                >
                   <img
                     src={step.image}
-                    alt={step.id === "connect" ? "New Project modal — choose a repository to connect" : step.id === "intelligence" ? "Security graph: project dependencies and vulnerabilities with Depscore, CVE, EPSS" : step.id === "compliance" ? "Policy-as-code: project status function with blocked deps and reachable critical vulns" : step.id === "fix" ? "Policy assistant panel: define policies in natural language, view generated code" : step.title}
+                    alt={step.id === "intelligence" ? "Security graph: project dependencies and vulnerabilities with Depscore, CVE, EPSS" : "Policy-as-code: project status function with blocked deps and reachable critical vulns"}
                     className="w-full h-auto min-h-[280px] sm:min-h-[360px] lg:min-h-[400px] object-cover object-top"
                   />
-                ) : (
-                  <div className="min-h-[280px] sm:min-h-[360px] lg:min-h-[400px]" />
-                )}
-              </div>
+                </div>
+              )}
               </div>
             </div>
         ))}

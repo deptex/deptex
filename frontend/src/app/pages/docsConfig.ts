@@ -34,7 +34,7 @@ export const docNavGroups: DocNavGroup[] = [
     title: "Features",
     icon: "Zap",
     items: [
-      { label: "Aegis", slug: "aegis", description: "Autonomous security agent: chat, tasks, automations, Slack, and PR review." },
+      { label: "Aegis", slug: "aegis", description: "Autonomous security agent: chat, tasks, automations, and Slack." },
     ],
   },
   {

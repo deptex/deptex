@@ -202,7 +202,7 @@ const STAGE_DESCRIPTIONS: Record<string, string> = {
   'Exploitable':
     'CVEs that are KEV-listed (CISA’s known-exploited list) or have an EPSS probability ≥ 0.5 — actively weaponized in the wild or highly likely to be.',
   'Depscore':
-    'EPD reweighting + asset tier multiplier applied to the Exploitable set. Same findings, ranked by contextual depscore — the apex bucket (≥ 80) is your fix-this-week list.',
+    'EPD reweighting + project-importance multiplier applied to the Exploitable set. Same findings, ranked by contextual depscore — the apex bucket (≥ 80) is your fix-this-week list.',
 };
 
 // Label used by the synthetic tail point so its hover renders the Depscore

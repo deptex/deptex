@@ -1,10 +1,9 @@
 import { Link } from "react-router-dom";
 
 const rolePermissions = [
-  { role: "Admin", scope: "All teams and projects", access: "Full access" },
-  { role: "Member", scope: "Projects in assigned teams only", access: "View & manage" },
-  { role: "Viewer", scope: "Projects in assigned teams only", access: "Read-only" },
-  { role: "Billing", scope: "No project access", access: "Billing only" },
+  { role: "owner", scope: "All teams and projects", access: "Every permission — cannot be removed" },
+  { role: "member", scope: "Projects in assigned teams", access: "Permission bundle set by your org" },
+  { role: "Custom roles", scope: "Projects in assigned teams", access: "Any permission bundle you define" },
 ];
 
 export default function TeamsContent() {
@@ -33,7 +32,7 @@ export default function TeamsContent() {
         <p className="text-foreground/90 leading-relaxed">
           Go to the <strong className="text-foreground">Teams</strong> page from your organization sidebar and click{" "}
           <strong className="text-foreground">Create Team</strong>. Enter a name and optional description. Requires{" "}
-          <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">manage_teams</code>.
+          <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">manage_teams_and_projects</code>.
         </p>
       </div>
 

@@ -6,8 +6,8 @@ export default function EnterpriseSecurityContent() {
         <h2 className="text-lg font-semibold text-foreground mb-3">Overview</h2>
         <p className="text-foreground/90 leading-relaxed">
           <strong className="text-foreground">Enterprise Security</strong> adds MFA (multi-factor authentication), SSO (SAML 2.0),
-          session management, IP allowlisting, API tokens, a security audit log, and optional SCIM provisioning. Available on Team+ or
-          Enterprise plans. Configuration: <strong className="text-foreground">Organization Settings → Security</strong> and{" "}
+          session management, IP allowlisting, API tokens, a security audit log, and optional SCIM provisioning — included for every
+          organization. Configuration: <strong className="text-foreground">Organization Settings → Security</strong> and{" "}
           <strong className="text-foreground">Settings → Security</strong> (user-level).
         </p>
       </div>

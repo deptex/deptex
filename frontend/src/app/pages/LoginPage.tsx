@@ -165,7 +165,7 @@ export default function LoginPage() {
           <LoginTypewriterBlock />
         </div>
         <p className="text-sm text-white/60">
-          Trusted by engineering and security teams
+          Source-available. Self-hostable. One repo.
         </p>
       </div>
 

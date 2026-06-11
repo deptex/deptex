@@ -33,7 +33,7 @@ export default function PricingPage() {
             cost-plus pricing.
           </p>
           <div className="mt-8 flex justify-center gap-3">
-            <Button variant="green" size="lg" onClick={() => navigate('/auth/sign-up')}>
+            <Button variant="green" size="lg" onClick={() => navigate('/login')}>
               Start free
             </Button>
             <Button variant="outline" size="lg" onClick={() => navigate('/docs')}>
@@ -72,10 +72,10 @@ export default function PricingPage() {
 
         <section className="mt-16 text-center text-sm text-foreground-secondary">
           <p>
-            Need an enterprise contract, SOC 2 paperwork, or self-host?{' '}
+            Need an enterprise contract or help self-hosting?{' '}
             <button
               type="button"
-              onClick={() => navigate('/enterprise')}
+              onClick={() => navigate('/contact-enterprise')}
               className="text-foreground underline"
             >
               Get in touch
