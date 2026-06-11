@@ -118,7 +118,7 @@ export function DastFindingsSection({ organizationId, projectId }: DastFindingsS
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Severity</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Engine</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Endpoint</th>
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Issue</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Finding</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Linked</th>
               </tr>
             </thead>

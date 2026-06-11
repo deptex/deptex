@@ -4,7 +4,7 @@ import type { ProjectSecuritySummary } from './api';
 // OrganizationOverviewPage so the search / team-filter / scanner-filter / sort behaviour can be
 // unit-tested without mounting the (very large) overview page.
 
-export type OrgProjectSortKey = 'project' | 'team' | 'issues' | 'ignored' | 'lastScan';
+export type OrgProjectSortKey = 'project' | 'team' | 'findings' | 'ignored' | 'lastScan';
 export type OrgProjectSort = { key: OrgProjectSortKey; dir: 'asc' | 'desc' };
 // Scanner-filter tokens: the reserved 'infra' (container / IaC) and 'dast', PLUS any framework id
 // (e.g. 'express', 'django') — selecting a framework filters to projects of that type. Framework ids
@@ -20,8 +20,8 @@ export interface OrgProjectQuery {
   sort: OrgProjectSort;
 }
 
-/** Risk-weighted "issues" magnitude — severity first, then count (1 critical > 50 lows). */
-export function issuesRank(s: ProjectSecuritySummary): number {
+/** Risk-weighted "findings" magnitude — severity first, then count (1 critical > 50 lows). */
+export function findingsRank(s: ProjectSecuritySummary): number {
   return (s.band_critical ?? 0) * 1e9 + (s.band_high ?? 0) * 1e6 + (s.band_medium ?? 0) * 1e3 + (s.band_low ?? 0);
 }
 
@@ -49,8 +49,8 @@ export function filterAndSortOrgProjects(
       case 'team': return teamOf(s).toLowerCase();
       case 'ignored': return s.ignored_count ?? 0;
       case 'lastScan': return s.last_scan_at ? new Date(s.last_scan_at).getTime() : 0;
-      case 'issues':
-      default: return issuesRank(s);
+      case 'findings':
+      default: return findingsRank(s);
     }
   };
 

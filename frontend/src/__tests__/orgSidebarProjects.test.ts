@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   filterAndSortOrgProjects,
-  issuesRank,
+  findingsRank,
   projectHasInfra,
   type OrgProjectQuery,
 } from '../lib/orgSidebarProjects';
@@ -26,15 +26,15 @@ const base: OrgProjectQuery = {
   search: '',
   teamFilter: [],
   scannerFilter: [],
-  sort: { key: 'issues', dir: 'desc' },
+  sort: { key: 'findings', dir: 'desc' },
 };
 
 const ids = (rows: ProjectSecuritySummary[]) => rows.map((r) => r.project_id);
 
-describe('issuesRank', () => {
+describe('findingsRank', () => {
   it('weights severity over raw count (1 critical beats 50 lows)', () => {
-    expect(issuesRank(p({ project_id: 'a', project_name: 'a', band_critical: 1 }))).toBeGreaterThan(
-      issuesRank(p({ project_id: 'b', project_name: 'b', band_low: 50 })),
+    expect(findingsRank(p({ project_id: 'a', project_name: 'a', band_critical: 1 }))).toBeGreaterThan(
+      findingsRank(p({ project_id: 'b', project_name: 'b', band_low: 50 })),
     );
   });
 });
@@ -59,7 +59,7 @@ describe('filterAndSortOrgProjects', () => {
     ['3', 'Platform'],
   ]);
 
-  it('default sort = issues desc (riskiest first, severity-weighted)', () => {
+  it('default sort = findings desc (riskiest first, severity-weighted)', () => {
     expect(ids(filterAndSortOrgProjects(projects, teamNameById, base))).toEqual(['2', '1', '3']);
   });
 

@@ -12,9 +12,9 @@ import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
-// Polished org-style projects "asset" table — depscore-band issue pills, scanner badges, Type filter.
+// Polished org-style projects "asset" table — depscore-band finding pills, scanner badges, Type filter.
 // Shared by the org-overview sidebar (showTeamColumn) and the team sidebar Projects tab (single team,
-// so the Team column + Teams filter are hidden). Always sorted by issues, worst first.
+// so the Team column + Teams filter are hidden). Always sorted by findings, worst first.
 
 const TH = 'text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider';
 
@@ -43,7 +43,7 @@ function AssetHeader({ showTeamColumn }: { showTeamColumn: boolean }) {
         <th className={TH}>Project name</th>
         {showTeamColumn && <th className={TH}>Team</th>}
         <th className={TH}>Repository</th>
-        <th className={TH}>Issues</th>
+        <th className={TH}>Findings</th>
         <th className={TH}>Ignored</th>
         <th className={TH}>Last scan</th>
       </tr>
@@ -222,15 +222,17 @@ export function ProjectsAssetTable({
             <AssetColgroup showTeamColumn={showTeamColumn} />
             <AssetHeader showTeamColumn={showTeamColumn} />
             <tbody className="divide-y divide-border">
+              {/* animate-pulse lives on the placeholder blocks, NOT the <tr> — the divide-y borders
+                  belong to the rows, so pulsing the row makes the borders flash in and out. */}
               {[1, 2, 3, 4, 5].map((i) => (
-                <tr key={i} className="animate-pulse">
-                  <td className="px-4 py-3"><div className="h-5 w-5 rounded bg-muted" /></td>
-                  <td className="px-4 py-3"><div className="h-4 w-28 rounded bg-muted" /></td>
-                  {showTeamColumn && <td className="px-4 py-3"><div className="h-4 w-20 rounded bg-muted" /></td>}
-                  <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-4 w-4 rounded-sm bg-muted" /><div className="h-4 w-24 rounded bg-muted" /></div></td>
-                  <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted" />))}</div></td>
-                  <td className="px-4 py-3"><div className="h-4 w-8 rounded bg-muted" /></td>
-                  <td className="px-4 py-3"><div className="h-4 w-14 rounded bg-muted" /></td>
+                <tr key={i}>
+                  <td className="px-4 py-3"><div className="h-5 w-5 rounded bg-muted animate-pulse" /></td>
+                  <td className="px-4 py-3"><div className="h-4 w-28 rounded bg-muted animate-pulse" /></td>
+                  {showTeamColumn && <td className="px-4 py-3"><div className="h-4 w-20 rounded bg-muted animate-pulse" /></td>}
+                  <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="h-4 w-4 rounded-sm bg-muted animate-pulse" /><div className="h-4 w-24 rounded bg-muted animate-pulse" /></div></td>
+                  <td className="px-4 py-3"><div className="flex items-center gap-1.5">{[0, 1, 2, 3].map((j) => (<div key={j} className="h-7 w-8 rounded-full bg-muted animate-pulse" />))}</div></td>
+                  <td className="px-4 py-3"><div className="h-4 w-8 rounded bg-muted animate-pulse" /></td>
+                  <td className="px-4 py-3"><div className="h-4 w-14 rounded bg-muted animate-pulse" /></td>
                 </tr>
               ))}
             </tbody>
@@ -261,13 +263,13 @@ export function ProjectsAssetTable({
           projects.map((p) => [p.id, p.framework]),
         );
         const filtersActive = search.trim().length > 0 || teamFilter.length > 0 || scannerFilter.length > 0;
-        // Always sorted by issues, worst first — no interactive sort.
+        // Always sorted by findings, worst first — no interactive sort.
         const rows = filterAndSortOrgProjects(summaries, teamNameById, {
           search,
           teamFilter,
           scannerFilter,
           frameworkById,
-          sort: { key: 'issues', dir: 'desc' },
+          sort: { key: 'findings', dir: 'desc' },
         });
         if (rows.length === 0) {
           return (
@@ -358,7 +360,7 @@ export function ProjectsAssetTable({
                           <span className="text-sm text-foreground-secondary/40">—</span>
                         )}
                       </td>
-                      {/* Issues — depscore-band pills */}
+                      {/* Findings — depscore-band pills */}
                       <td className="px-4 py-3">
                         <SeverityPills critical={s.band_critical} high={s.band_high} medium={s.band_medium} low={s.band_low} />
                       </td>

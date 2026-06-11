@@ -111,7 +111,7 @@ const TYPE_COLORS: Record<TypeKey, string> = {
 const TYPE_LABELS: Record<TypeKey, string> = {
   vulnerability: 'CVEs',
   secret: 'Secrets',
-  semgrep: 'Code issues',
+  semgrep: 'Code findings',
   license: 'License',
   iac: 'IaC',
   container: 'Container',
@@ -138,7 +138,7 @@ const TYPE_DESCRIPTIONS: Record<TypeKey, { source: string; description: string }
   semgrep: {
     source: 'Semgrep SAST',
     description:
-      'Code-level issues — SQL injection, XSS, insecure deserialization, weak crypto. Semgrep across 8 languages.',
+      'Code-level findings — SQL injection, XSS, insecure deserialization, weak crypto. Semgrep across 8 languages.',
   },
   license: {
     source: 'cdxgen + policy engine',

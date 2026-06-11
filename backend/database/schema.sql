@@ -5576,26 +5576,43 @@ AS $function$
   LEFT JOIN LATERAL (
     SELECT
       count(*) AS vuln_count,
-      count(*) FILTER (WHERE pdv.severity = 'critical') AS critical_count,
-      count(*) FILTER (WHERE pdv.is_reachable) AS reachable_count,
-      max(pdv.depscore) AS worst_depscore,
-      count(*) FILTER (WHERE COALESCE(pdv.contextual_depscore, pdv.depscore, 0) >= 90) AS band_critical,
-      count(*) FILTER (WHERE COALESCE(pdv.contextual_depscore, pdv.depscore, 0) >= 70
-                         AND COALESCE(pdv.contextual_depscore, pdv.depscore, 0) < 90) AS band_high,
-      count(*) FILTER (WHERE COALESCE(pdv.contextual_depscore, pdv.depscore, 0) >= 40
-                         AND COALESCE(pdv.contextual_depscore, pdv.depscore, 0) < 70) AS band_medium,
-      count(*) FILTER (WHERE COALESCE(pdv.contextual_depscore, pdv.depscore, 0) < 40) AS band_low
-    FROM project_dependency_vulnerabilities pdv
-    WHERE pdv.project_id = p.id
-      AND pdv.extraction_run_id = ANY(p_active_run_ids)
-      AND pdv.suppressed = false
+      count(*) FILTER (WHERE r.severity = 'critical') AS critical_count,
+      count(*) FILTER (WHERE r.is_reachable) AS reachable_count,
+      max(r.depscore) FILTER (WHERE r.is_open) AS worst_depscore,
+      count(*) FILTER (WHERE r.is_open AND r.eff_score >= 90) AS band_critical,
+      count(*) FILTER (WHERE r.is_open AND r.eff_score >= 70 AND r.eff_score < 90) AS band_high,
+      count(*) FILTER (WHERE r.is_open AND r.eff_score >= 40 AND r.eff_score < 70) AS band_medium,
+      count(*) FILTER (WHERE r.is_open AND r.eff_score < 40) AS band_low
+    FROM (
+      SELECT
+        pdv.severity,
+        pdv.is_reachable,
+        pdv.depscore,
+        COALESCE(pdv.contextual_depscore, pdv.depscore, 0) AS eff_score,
+        NOT (
+          pdv.runtime_confirmed_at IS NULL
+          AND lower(COALESCE(pdv.reachability_level, '')) NOT IN ('confirmed', 'data_flow')
+          AND (lower(COALESCE(pdv.reachability_level, '')) IN ('unreachable', 'module') OR pdv.is_reachable = false)
+        ) AS is_open
+      FROM project_dependency_vulnerabilities pdv
+      WHERE pdv.project_id = p.id
+        AND pdv.extraction_run_id = ANY(p_active_run_ids)
+        AND pdv.suppressed = false
+    ) r
   ) v ON true
   LEFT JOIN LATERAL (
     SELECT count(*) AS ignored_count
     FROM project_dependency_vulnerabilities pdv
     WHERE pdv.project_id = p.id
       AND pdv.extraction_run_id = ANY(p_active_run_ids)
-      AND pdv.suppressed = true
+      AND (
+        pdv.suppressed = true
+        OR (
+          pdv.runtime_confirmed_at IS NULL
+          AND lower(COALESCE(pdv.reachability_level, '')) NOT IN ('confirmed', 'data_flow')
+          AND (lower(COALESCE(pdv.reachability_level, '')) IN ('unreachable', 'module') OR pdv.is_reachable = false)
+        )
+      )
   ) ig ON true
   LEFT JOIN LATERAL (
     SELECT count(*) AS semgrep_count
