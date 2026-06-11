@@ -25,21 +25,21 @@
           "user": "Open fix plans for the top 3 highest-severity reachable CVEs in my org.",
           "expect": {
             "tools_called": ["set_todos", "request_fix"],
-            "tools_called_count": { "request_fix": 3 }
+            "tools_succeeded_count": { "request_fix": 3 }
           }
         },
         {
           "user": "Revise all three plans to add unit tests.",
           "expect": {
             "tools_called": ["set_todos", "revise_fix"],
-            "tools_called_count": { "revise_fix": 3 }
+            "tools_succeeded_count": { "revise_fix": 3 }
           }
         },
         {
           "user": "Now revise each of them to add longer issue descriptions.",
           "expect": {
             "tools_called": ["set_todos", "revise_fix"],
-            "tools_called_count": { "revise_fix": 3 }
+            "tools_succeeded_count": { "revise_fix": 3 }
           }
         }
       ]
@@ -101,14 +101,14 @@
           "user": "Open a fix plan for CVE-2024-29041 (the express vulnerability) in dogfood-express.",
           "expect": {
             "tools_called": ["request_fix"],
-            "tools_called_count": { "request_fix": 1 }
+            "tools_succeeded_count": { "request_fix": 1 }
           }
         },
         {
           "user": "Revise the express plan to add unit tests.",
           "expect": {
             "tools_called": ["revise_fix"],
-            "tools_called_count": { "revise_fix": 1 }
+            "tools_succeeded_count": { "revise_fix": 1 }
           }
         }
       ]

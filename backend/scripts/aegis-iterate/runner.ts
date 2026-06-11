@@ -13,6 +13,11 @@ export interface ScenarioTurn {
   expect?: {
     tools_called?: string[];
     tools_called_count?: Record<string, number>;
+    // Exact number of SUCCESSFUL (non-error) results per tool. Prefer this
+    // over tools_called_count for fan-out work: a guard refusal followed by
+    // a corrected retry is designed behavior and shouldn't fail the case,
+    // but extra *successes* (duplicate plans/revisions) are real bugs.
+    tools_succeeded_count?: Record<string, number>;
     tools_not_called?: string[];
     tools_with_error?: string[];
     // Tool must have NO successful (non-error) result this turn. Use for
@@ -194,6 +199,7 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
       const calledCounts: Record<string, number> = {};
       const erroredTools: string[] = [];
       const succeededTools: string[] = [];
+      const succeededCounts: Record<string, number> = {};
       let assistantText = '';
 
       const result = await agent.stream({ messages });
@@ -226,7 +232,10 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
             const output = (p as { output?: unknown }).output ?? (p as { result?: unknown }).result;
             const isError = isErrorResult(output);
             if (isError) erroredTools.push(toolName);
-            else succeededTools.push(toolName);
+            else {
+              succeededTools.push(toolName);
+              succeededCounts[toolName] = (succeededCounts[toolName] ?? 0) + 1;
+            }
             console.log(`    [tool→] ${toolName} ${isError ? '(ERROR) ' : ''}${summarizeResult(output)}`);
             appendEvent(transcriptPath, {
               t: Date.now(),
@@ -298,6 +307,11 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
         for (const [t, ct] of Object.entries(expect.tools_called_count ?? {})) {
           if ((calledCounts[t] ?? 0) !== ct) {
             wrongCount.push(`${t} expected ${ct}, got ${calledCounts[t] ?? 0}`);
+          }
+        }
+        for (const [t, ct] of Object.entries(expect.tools_succeeded_count ?? {})) {
+          if ((succeededCounts[t] ?? 0) !== ct) {
+            wrongCount.push(`${t} expected ${ct} successes, got ${succeededCounts[t] ?? 0}`);
           }
         }
         for (const t of expect.tools_with_error ?? []) {
