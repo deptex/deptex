@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../lib/active-extraction';
 import { supabase } from '../lib/supabase';
 import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
 import { signApprovalToken } from '../lib/aegis-v3/approval-token';
@@ -140,6 +141,8 @@ export interface FixFindingDetail {
 async function loadFindingDetail(row: FixRow): Promise<FixFindingDetail | null> {
   try {
     if (row.fix_type === 'vulnerability' && row.osv_id) {
+      const activeRunId =
+        (await getActiveExtractionId(supabase, row.project_id)) ?? NO_ACTIVE_RUN;
       const { data } = await supabase
         .from('project_dependency_vulnerabilities')
         .select(
@@ -147,6 +150,7 @@ async function loadFindingDetail(row: FixRow): Promise<FixFindingDetail | null> 
         )
         .eq('project_id', row.project_id)
         .eq('osv_id', row.osv_id)
+        .eq('extraction_run_id', activeRunId)
         .order('depscore', { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle();

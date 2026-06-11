@@ -1,5 +1,6 @@
 import { generateObject, NoObjectGeneratedError } from 'ai';
 import { supabase } from '../../lib/supabase';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../active-extraction';
 import { getLanguageModelForOrg } from '../aegis/llm-provider';
 import { createInstallationToken, getBranchSha } from '../github';
 import {
@@ -97,11 +98,14 @@ async function gatherFindingContext(
     // empty and made the planner refuse with "no patched version available").
     // Prefer the direct dependency when the same CVE hits a direct and a
     // transitive copy of the package.
+    const activeRunId =
+      (await getActiveExtractionId(supabase, input.projectId)) ?? NO_ACTIVE_RUN;
     const { data: pdvLinks, error } = await supabase
       .from('project_dependency_vulnerabilities')
       .select('project_dependency_id, project_dependencies!inner(id, dependency_id, is_direct)')
       .eq('project_id', input.projectId)
       .eq('osv_id', input.findingId)
+      .eq('extraction_run_id', activeRunId)
       .limit(20);
     if (error) throw new Error(`Failed to load project vulnerability links: ${error.message}`);
 

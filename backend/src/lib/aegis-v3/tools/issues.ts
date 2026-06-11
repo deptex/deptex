@@ -1,4 +1,6 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
 import { resolveProject } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
@@ -62,6 +64,12 @@ const listProjectIssues: AegisToolEntry<{
     const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
     if ('error' in resolved) return resolved;
 
+    // Findings tables hold one generation of rows per extraction run — filter
+    // to the active run or every historical scan's rows come back as
+    // apparent duplicates.
+    const activeRunId =
+      (await getActiveExtractionId(ctx.supabase as SupabaseClient, resolved.id)) ?? NO_ACTIVE_RUN;
+
     const cap = limit ?? 50;
     const wanted = new Set<IssueType>(
       Array.isArray(types) && types.length > 0 ? types : [...ISSUE_TYPES],
@@ -75,6 +83,8 @@ const listProjectIssues: AegisToolEntry<{
           'osv_id, severity, summary, depscore, status, project_dependency_id',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
+        .eq('suppressed', false)
         .eq('status', 'open')
         .order('depscore', { ascending: false, nullsFirst: false })
         .limit(cap);
@@ -130,6 +140,7 @@ const listProjectIssues: AegisToolEntry<{
           'id, rule_id, severity, message, file_path, start_line, cwe_ids, depscore, status',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
         .eq('status', 'open')
         .order('depscore', { ascending: false, nullsFirst: false })
         .limit(cap);
@@ -173,6 +184,7 @@ const listProjectIssues: AegisToolEntry<{
           'id, detector_type, file_path, start_line, description, depscore, status, is_verified',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
         .eq('status', 'open')
         .eq('is_current', true)
         .order('depscore', { ascending: false, nullsFirst: false })

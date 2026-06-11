@@ -4,6 +4,7 @@ import {
   clearTableRegistry,
   clearRpcRegistry,
   supabase,
+  queryBuilder,
 } from '../test/mocks/supabaseSingleton';
 
 import { ALL_AEGIS_TOOLS } from '../lib/aegis-v3/tools';
@@ -49,6 +50,10 @@ import { calculateLatestSafeVersion } from '../lib/latest-safe-version';
 jest.mock('../lib/active-extraction', () => ({
   NO_ACTIVE_RUN: '__no_active_run__',
   getActiveExtractionId: jest.fn().mockResolvedValue(null),
+  // Org-wide tools (posture, vuln detail, KEV/EPSS) batch-resolve active runs;
+  // returning a non-empty list keeps their `.in('extraction_run_id', ...)`
+  // filter from being the no-rows `[]` case in tests.
+  getActiveExtractionIds: jest.fn().mockResolvedValue(['00000000-0000-0000-0000-0000000007aa']),
 }));
 
 beforeEach(() => {
@@ -401,6 +406,21 @@ describe('get_project_vulnerabilities', () => {
     });
     expect(out.vulnerabilities[0].id).toBeUndefined();
     expect(out.vulnerabilities[0].dependency.id).toBeUndefined();
+  });
+
+  it('filters to the active extraction run and excludes suppressed rows', async () => {
+    // Without these filters the same CVE comes back once per historical run
+    // (the "top 3 CVEs are all the same CVE" dogfood bug).
+    mockProjectResolverHit('Web');
+    setTableResponse('project_dependency_vulnerabilities', 'then', { data: [], error: null });
+    queryBuilder.eq.mockClear();
+    await tool('get_project_vulnerabilities').execute({ projectName: 'Web' }, makeCtx());
+    expect(queryBuilder.eq.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['extraction_run_id', '__no_active_run__'],
+        ['suppressed', false],
+      ]),
+    );
   });
 });
 
