@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardList, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus, type VulnerabilityDetail } from '../../lib/api';
@@ -64,9 +64,18 @@ interface FixDetailBodyProps {
 
 function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const { fixes, openFix } = useFixPanel();
-  const [fix, setFix] = useState<FixRecord | null>(null);
-  const [plan, setPlan] = useState<FixPlan | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Seed from the thread-scoped list the context already fetched — those rows
+  // come from the same backend shaping as getFix, so a plan the user clicked
+  // (pill, list row, sibling switcher) renders immediately. getFix in
+  // refresh() then revalidates in the background instead of gating first
+  // paint on a round trip. It also unblocks the issue-card detail fetch,
+  // which keys off fields of `fix` and now fires in parallel.
+  const seedFor = (id: string) => fixes.find((f) => f.id === id) ?? null;
+  const [fix, setFix] = useState<FixRecord | null>(() => seedFor(fixId));
+  const [plan, setPlan] = useState<FixPlan | null>(() => seedFor(fixId)?.plan ?? null);
+  const [loading, setLoading] = useState(() => seedFor(fixId) == null);
+  const fixesRef = useRef(fixes);
+  fixesRef.current = fixes;
   const [busy, setBusy] = useState<'approve' | 'regenerate' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [staleness, setStaleness] = useState<StalenessState>({
@@ -102,13 +111,16 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   }, [fixId]);
 
   useEffect(() => {
-    setLoading(true);
-    setFix(null);
-    setPlan(null);
+    // Re-seed (not wipe) on focus change so switching siblings paints the
+    // already-known plan instantly; refresh() revalidates behind it.
+    const seeded = fixesRef.current.find((f) => f.id === fixId) ?? null;
+    setFix(seeded);
+    setPlan(seeded?.plan ?? null);
+    setLoading(seeded == null);
     setError(null);
     setStaleness({ isStale: false, currentHeadSha: null, loaded: false });
     void refresh();
-  }, [refresh]);
+  }, [fixId, refresh]);
 
   useEffect(() => {
     let cancelled = false;
