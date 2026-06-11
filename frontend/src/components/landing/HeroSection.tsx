@@ -45,7 +45,9 @@ function AtmosphereLayer({ variant }: { variant: Atmosphere }) {
 }
 
 export default function HeroSection() {
-  const [atmosphere, setAtmosphere] = useState<Atmosphere>("graph");
+  // Founder pick (2026-06-11): the wave. Graph/video variants stay reachable
+  // via the dev switcher for future experiments.
+  const [atmosphere, setAtmosphere] = useState<Atmosphere>("wave");
 
   // Dev-only variant switcher: 1 = graph, 2 = wave, 3 = video loop.
   useEffect(() => {
