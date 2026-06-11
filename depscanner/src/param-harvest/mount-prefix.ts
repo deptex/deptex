@@ -32,14 +32,22 @@ function dirOf(p: string): string {
 
 /** Posix-normalize `dir + '/' + rel`, collapsing `.`/`..` segments. */
 function joinPath(dir: string, rel: string): string {
-  const parts = (dir ? dir.split('/') : []).concat(rel.split('/'));
+  // Preserve a leading slash: on the worker every cloned file path is absolute
+  // (`/tmp/deptex-extract-XXX/...`), and the leading '' segment from splitting
+  // an absolute path would otherwise be dropped as `seg === ''`, yielding a
+  // relative result that never matches the absolute byPath keys → cross-file
+  // mount resolution silently no-ops and the `/api` prefix is lost.
+  const nd = norm(dir);
+  const absolute = nd.startsWith('/');
+  const parts = (nd ? nd.split('/') : []).concat(rel.split('/'));
   const out: string[] = [];
   for (const seg of parts) {
     if (seg === '' || seg === '.') continue;
     if (seg === '..') out.pop();
     else out.push(seg);
   }
-  return out.join('/');
+  const joined = out.join('/');
+  return absolute ? '/' + joined : joined;
 }
 
 function joinRoute(prefix: string, route: string): string {
