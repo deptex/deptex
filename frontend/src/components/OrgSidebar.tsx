@@ -583,8 +583,10 @@ export default function OrgSidebar({
         </div>
 
         {/* custom-scrollbar: scrollbars are hidden app-wide (Main.css base layer);
-            the sidebar scrolls once the Aegis thread list grows, so make it visible. */}
-        <SidebarContent className="relative custom-scrollbar">
+            the sidebar scrolls once the Aegis thread list grows, so make it
+            visible — vertical only (the base component's overflow-auto would
+            otherwise surface a horizontal bar too). */}
+        <SidebarContent className="relative custom-scrollbar overflow-x-hidden overflow-y-auto">
           {/* Main nav — fades out left when entering any drilldown */}
           <div className={cn(
             'transition-[opacity,transform] duration-150 ease-out',
