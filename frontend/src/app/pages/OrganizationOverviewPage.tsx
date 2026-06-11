@@ -364,6 +364,9 @@ export default function OrganizationOverviewPage() {
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
   const [rawTeamsWithProjects, setRawTeamsWithProjects] = useState<OverviewTeamWithProjects[]>([]);
+  // Per-project depscore-band counts (phase48 security-summary RPC) — drives the mini
+  // SeverityPills under each project tile. Keyed by project id.
+  const [securitySummaryByProject, setSecuritySummaryByProject] = useState<Map<string, ProjectSecuritySummary>>(new Map());
   const [compactTeams, setCompactTeams] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [silentRefreshTrigger, setSilentRefreshTrigger] = useState(0);
@@ -865,15 +868,21 @@ export default function OrganizationOverviewPage() {
     // prior org's nodes/teams in the new org's graph.
     setRawTeamsWithProjects([]);
     setTeamsById({});
+    setSecuritySummaryByProject(new Map());
 
     Promise.all([
       api.getTeams(organization.id),
       api.getProjects(organization.id),
       api.getOrganizationStatuses(organization.id).catch(() => []),
+      // Band counts are tile decoration — soft-fail to "no pills" rather than failing the graph.
+      api.getOrgSecuritySummary(organization.id).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -982,10 +991,14 @@ export default function OrganizationOverviewPage() {
       api.getTeams(orgId),
       api.getProjects(orgId),
       api.getOrganizationStatuses(orgId).catch(() => []),
+      api.getOrgSecuritySummary(orgId).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -1063,7 +1076,27 @@ export default function OrganizationOverviewPage() {
   // The status-filter dropdown was removed (no compliant/non-compliant statuses yet) — the graph
   // renders the unfiltered team/project list directly.
   const teamsWithProjects = rawTeamsWithProjects;
-  const teamsWithProjectsForGraph = teamsWithProjects;
+  // Graph copy with depscore-band counts merged in — project tiles render mini SeverityPills
+  // once the security summary lands (undefined bandCounts = no pills, not fake zeros).
+  const teamsWithProjectsForGraph = useMemo(() => {
+    if (securitySummaryByProject.size === 0) return teamsWithProjects;
+    return teamsWithProjects.map((t) => ({
+      ...t,
+      projects: t.projects.map((p) => {
+        const s = securitySummaryByProject.get(p.projectId);
+        if (!s) return p;
+        return {
+          ...p,
+          bandCounts: {
+            critical: s.band_critical ?? 0,
+            high: s.band_high ?? 0,
+            medium: s.band_medium ?? 0,
+            low: s.band_low ?? 0,
+          },
+        };
+      }),
+    }));
+  }, [teamsWithProjects, securitySummaryByProject]);
 
   const orgStatusRollup = useMemo(
     () => computeOverviewStatusRollup(teamsWithProjectsForGraph.flatMap((t) => t.projects), statuses),
@@ -2205,6 +2238,10 @@ export default function OrganizationOverviewPage() {
         if (cancelled) return;
         setOrgSidebarSecuritySummary(summary.projects || []);
         setOrgSidebarProjects(projects);
+        // Keep the graph tiles' band pills in sync with the fresher sidebar fetch.
+        if (summary.projects?.length) {
+          setSecuritySummaryByProject(new Map(summary.projects.map((s) => [s.project_id, s])));
+        }
       })
       .catch(() => {
         if (cancelled) return;

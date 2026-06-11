@@ -302,6 +302,11 @@ export interface OverviewProjectItem {
   statusId?: string | null;
   /** Per-project importance multiplier in [0.5, 2.0]; the number IS the depscore multiplier. */
   importance?: number | null;
+  /**
+   * Open finding counts by depscore band (org security-summary RPC). Undefined until the
+   * summary fetch lands — tiles render no pills rather than lying with zeros.
+   */
+  bandCounts?: { critical: number; high: number; medium: number; low: number } | null;
   /** When true, extraction pipeline is running (sync button spins, etc.). */
   isExtracting?: boolean;
   /** When true, this is the first-ever extraction — block UI with ExtractionProgressCard / grey node. */
@@ -643,8 +648,7 @@ export function useOrganizationOverviewGraphLayout(
                 : proj.isInitialExtractionFailed
                   ? { isInitialExtractionFailed: true }
                   : {
-                      statusBadge: proj.statusName ?? undefined,
-                      statusBadgeColor: proj.statusColor ?? undefined,
+                      bandCounts: proj.bandCounts ?? undefined,
                       dependenciesCount: proj.dependenciesCount ?? undefined,
                       importance: proj.importance ?? undefined,
                       ...(proj.isExtracting ? { isExtracting: true } : {}),
@@ -695,8 +699,7 @@ export function useOrganizationOverviewGraphLayout(
             : proj.isInitialExtractionFailed
               ? { isInitialExtractionFailed: true }
               : {
-                  statusBadge: proj.statusName ?? undefined,
-                  statusBadgeColor: proj.statusColor ?? undefined,
+                  bandCounts: proj.bandCounts ?? undefined,
                   importance: proj.importance ?? undefined,
                   ...(proj.isExtracting ? { isExtracting: true } : {}),
                 }),

@@ -20,6 +20,8 @@ export interface SeverityPillsProps {
   className?: string;
   /** Drop bands with a zero count instead of rendering them muted. */
   hideZeros?: boolean;
+  /** `xs` shrinks the pills for tight surfaces (e.g. under graph project tiles). */
+  size?: 'default' | 'xs';
 }
 
 // Aikido-style band ramp: red → yellow → blue → green (critical → high → medium → low).
@@ -30,16 +32,17 @@ const BANDS = [
   { key: 'low', label: 'Low', active: 'bg-green-500/10 text-green-400 border-green-500/20', title: 'Low — depscore < 40' },
 ] as const;
 
-export function SeverityPills({ critical = 0, high = 0, medium = 0, low = 0, className, hideZeros }: SeverityPillsProps) {
+export function SeverityPills({ critical = 0, high = 0, medium = 0, low = 0, className, hideZeros, size = 'default' }: SeverityPillsProps) {
   const counts: Record<string, number> = { critical, high, medium, low };
   const total = critical + high + medium + low;
+  const isXs = size === 'xs';
 
   if (total === 0 && hideZeros) {
-    return <span className={cn('text-xs text-foreground-secondary', className)}>No findings</span>;
+    return <span className={cn(isXs ? 'text-[10px]' : 'text-xs', 'text-foreground-secondary', className)}>No findings</span>;
   }
 
   return (
-    <div className={cn('flex items-center gap-1.5', className)}>
+    <div className={cn('flex items-center', isXs ? 'gap-[3px]' : 'gap-1.5', className)}>
       {BANDS.map((band) => {
         const count = counts[band.key];
         if (hideZeros && count === 0) return null;
@@ -49,7 +52,8 @@ export function SeverityPills({ critical = 0, high = 0, medium = 0, low = 0, cla
             <TooltipTrigger asChild>
               <span
                 className={cn(
-                  'inline-flex h-7 min-w-[1.875rem] items-center justify-center rounded-full border px-2.5 text-[13px] font-semibold tabular-nums',
+                  'inline-flex items-center justify-center rounded-full border font-semibold tabular-nums',
+                  isXs ? 'h-[15px] min-w-[1.125rem] px-1 text-[9px]' : 'h-7 min-w-[1.875rem] px-2.5 text-[13px]',
                   isActive ? band.active : 'border-transparent bg-background-subtle/40 text-foreground-secondary/30',
                 )}
               >
