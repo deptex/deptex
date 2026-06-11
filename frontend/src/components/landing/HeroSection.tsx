@@ -18,12 +18,12 @@ export default function HeroSection() {
         <div className="mx-auto max-w-[800px] text-center">
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
             Your repo sets the score.
-            <span className="block">Aegis writes the fix.</span>
+            <span className="block">
+              <span className="text-accent-text">Aegis</span> writes the fix.
+            </span>
           </h1>
           <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground-secondary sm:text-[17px]">
-            Depscore reranks every CVE by what's true in your repository: reachability,
-            exploit signals, project importance. Then Aegis plans the fix, you approve,
-            and a draft PR lands.
+            Every CVE scored in your repo's context. Every fix a draft PR you approve.
           </p>
 
           {/* CTAs — mobile: stack full-width, green first */}
