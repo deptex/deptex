@@ -23,7 +23,9 @@ export default function HeroSection() {
             </span>
           </h1>
           <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground-secondary sm:text-[17px]">
-            Every CVE scored in your repo's context. Every fix a draft PR you approve.
+            Every finding gets a contextual risk score built from your code, not just its
+            CVSS number. Aegis works as your org's own security engineer: it investigates,
+            writes the fix, and opens a draft PR for your review.
           </p>
 
           {/* CTAs — mobile: stack full-width, green first */}
