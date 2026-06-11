@@ -1470,7 +1470,16 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       }
     }
 
-    const scanPayload = { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine };
+    // The worker reads scan_profile from the payload JSONB (pipeline.ts
+    // `payload.scan_profile ?? 'auto'`), NOT the scan_jobs.scan_profile column —
+    // so without this the configured profile never reaches the engine and every
+    // scan ran passive-only ('auto'). Carry it in the payload too.
+    const scanPayload = {
+      source: 'manual_dast_scan',
+      detected_runtime: detectedRuntime,
+      engine,
+      scan_profile: scanProfile,
+    };
     // v2.1d /criticalreview RH-1: defense-in-depth payload validation at
     // queue time. The hard-coded literal above is safe today; the validator
     // catches any future caller (cron, Aegis tool, webhook) that constructs
