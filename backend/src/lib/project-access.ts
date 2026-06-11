@@ -87,7 +87,22 @@ export async function checkProjectAccess(
   organizationId: string,
   projectId: string
 ): Promise<ProjectAccessResult> {
-  if (!(await projectBelongsToOrg(organizationId, projectId))) {
+  // The project-in-org guard and the membership lookup are independent reads
+  // — run them concurrently (this helper sits on nearly every project route,
+  // so each serialized round trip here is paid app-wide). The belongs-check
+  // verdict still takes precedence below; a membership row fetched for an
+  // out-of-org project is simply discarded.
+  const [belongs, orgMembershipRes] = await Promise.all([
+    projectBelongsToOrg(organizationId, projectId),
+    supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single(),
+  ]);
+
+  if (!belongs) {
     return {
       hasAccess: false,
       orgMembership: null,
@@ -98,12 +113,7 @@ export async function checkProjectAccess(
     };
   }
 
-  const { data: orgMembership, error: orgMembershipError } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', organizationId)
-    .eq('user_id', userId)
-    .single();
+  const { data: orgMembership, error: orgMembershipError } = orgMembershipRes;
 
   if (orgMembershipError || !orgMembership) {
     return {
@@ -202,15 +212,20 @@ export async function checkProjectManagePermission(
   organizationId: string,
   projectId: string
 ): Promise<boolean> {
-  if (!(await projectBelongsToOrg(organizationId, projectId))) return false;
+  // Same concurrency note as checkProjectAccess — the belongs-check verdict
+  // still takes precedence.
+  const [belongs, membershipRes] = await Promise.all([
+    projectBelongsToOrg(organizationId, projectId),
+    supabase
+      .from('organization_members')
+      .select('role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .single(),
+  ]);
+  if (!belongs) return false;
 
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('organization_id', organizationId)
-    .eq('user_id', userId)
-    .single();
-
+  const membership = membershipRes.data;
   if (!membership) return false;
 
   if (membership.role === 'owner' || membership.role === 'admin') return true;
