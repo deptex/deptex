@@ -72,7 +72,7 @@ export default function HeroSection() {
               className="w-full rounded-xl border border-border shadow-[0_8px_40px_-8px_rgba(0,0,0,0.7)]"
             />
             {/* HERO-2: the Aegis fix plan — "Aegis writes the fix" */}
-            <div className="relative mx-6 -mt-8 overflow-hidden rounded-xl border border-[#333] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)] sm:absolute sm:-bottom-10 sm:-right-8 sm:mx-0 sm:mt-0 sm:w-[300px]">
+            <div className="relative mx-6 -mt-8 overflow-hidden rounded-xl border border-[#333] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)] sm:absolute sm:-bottom-12 sm:-right-10 sm:mx-0 sm:mt-0 sm:w-[380px]">
               <img
                 src="/images/landing/hero-aegis-plan.png"
                 alt="Aegis fix plan: patch CVE-2021-23337 by bumping lodash — issue, plan, to-dos, and verification steps"
