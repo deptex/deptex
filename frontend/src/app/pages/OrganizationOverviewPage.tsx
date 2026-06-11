@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -3719,51 +3719,16 @@ export default function OrganizationOverviewPage() {
                     <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
                       Failed
                     </span>
-                  ) : selectedProjectRealtime.isLoading || projectSidebarProjectLoading ? (
-                    <span className="h-5 w-20 rounded bg-foreground/10 animate-pulse flex-shrink-0 inline-block" />
-                  ) : projectSidebarProject?.status_name ? (
-                    <span
-                      className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0"
-                      style={{
-                        backgroundColor: `${projectSidebarProject.status_color ?? '#6b7280'}20`,
-                        color: projectSidebarProject.status_color ?? '#6b7280',
-                        borderColor: `${projectSidebarProject.status_color ?? '#6b7280'}40`,
-                      }}
-                    >
-                      {projectSidebarProject.status_name}
-                    </span>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {!selectedProjectEffectiveIsInitialExtracting && !selectedProjectExtractionFailed && projectSidebarProject?.permissions?.edit_settings && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs gap-1"
-                      disabled={selectedProjectEffectiveIsExtracting}
-                      onClick={async () => {
-                        if (!orgId || !selectedProjectId) return;
-                        try {
-                          await api.triggerProjectSync(orgId, selectedProjectId);
-                          setSelectedProjectIsExtracting(true);
-                        } catch (err: any) {
-                          toast({ title: 'Sync failed', description: err?.message || 'Could not trigger sync', variant: 'destructive' });
-                        }
-                      }}
-                    >
-                      <RotateCw className={cn('h-3 w-3', selectedProjectEffectiveIsExtracting && 'animate-spin')} />
-                      Sync
-                    </Button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={closeProjectSidebar}
-                    className="p-1 text-foreground-secondary hover:text-foreground transition-colors"
-                    aria-label="Close"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={closeProjectSidebar}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+                  aria-label="Close"
+                >
+                  <PanelRight className="h-4 w-4" />
+                </button>
               </div>
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">

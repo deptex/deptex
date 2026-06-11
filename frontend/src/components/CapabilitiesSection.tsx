@@ -61,80 +61,76 @@ const TONE_BY_SIGNAL: Record<Signal, string> = {
   low: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20',
 };
 
-function formatScannedAt(iso: string): string {
+/** Resolved capability-fetch result — lets callers load capabilities alongside their own data. */
+export type CapabilitiesState =
+  | { kind: 'loaded'; data: PackageCapabilities }
+  | { kind: 'missing' }
+  | { kind: 'error'; message: string };
+
+/**
+ * Fetch + classify the capability scan for a package version. Never throws:
+ * 404 (not yet scanned) → 'missing', anything else → 'error'.
+ */
+export async function fetchCapabilitiesState(
+  organizationId: string,
+  ecosystem: string | null | undefined,
+  packageName: string,
+  version: string,
+): Promise<CapabilitiesState> {
+  if (!ecosystem) return { kind: 'missing' };
   try {
-    return new Date(iso).toLocaleDateString();
-  } catch {
-    return iso;
+    const data = await api.capabilities.fetch(organizationId, ecosystem, packageName, version);
+    return { kind: 'loaded', data };
+  } catch (err: any) {
+    const msg = String(err?.message ?? '');
+    // The route returns 404 when the package hasn't been scanned yet.
+    if (msg.includes('404') || /not available|not found/i.test(msg)) {
+      return { kind: 'missing' };
+    }
+    return { kind: 'error', message: msg || 'Capability scan unavailable' };
   }
 }
 
+/** Presentational chips for a pre-fetched state (overview panel loads this with the rest of its data). */
+export function CapabilitiesChips({ state }: { state: CapabilitiesState }) {
+  if (state.kind === 'missing') {
+    return <div className="text-xs text-foreground-muted">Capability scan pending</div>;
+  }
+  if (state.kind === 'error') {
+    return <div className="text-xs text-foreground-muted">Capability scan unavailable</div>;
+  }
+  return <CapabilityTagCloud data={state.data} />;
+}
+
+/** Self-fetching wrapper — used where capabilities load standalone (e.g. MaliciousPackageDrawer). */
 export function CapabilitiesSection({
   organizationId,
   ecosystem,
   packageName,
   version,
 }: CapabilitiesSectionProps) {
-  const [state, setState] = useState<
-    | { kind: 'loading' }
-    | { kind: 'loaded'; data: PackageCapabilities }
-    | { kind: 'missing' }
-    | { kind: 'error'; message: string }
-  >({ kind: 'loading' });
+  const [state, setState] = useState<{ kind: 'loading' } | CapabilitiesState>({ kind: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
-    if (!ecosystem) {
-      setState({ kind: 'missing' });
-      return;
-    }
     setState({ kind: 'loading' });
-    api.capabilities
-      .fetch(organizationId, ecosystem, packageName, version)
-      .then((data) => {
-        if (!cancelled) setState({ kind: 'loaded', data });
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        const msg = String(err?.message ?? '');
-        // The route returns 404 when the package hasn't been scanned yet.
-        if (msg.includes('404') || /not available|not found/i.test(msg)) {
-          setState({ kind: 'missing' });
-        } else {
-          setState({ kind: 'error', message: msg || 'Capability scan unavailable' });
-        }
-      });
+    fetchCapabilitiesState(organizationId, ecosystem, packageName, version).then((s) => {
+      if (!cancelled) setState(s);
+    });
     return () => {
       cancelled = true;
     };
   }, [organizationId, ecosystem, packageName, version]);
 
-  return (
-    <div className="space-y-2">
-      <div className="text-[10px] uppercase tracking-wider font-semibold text-foreground-secondary">
-        Capabilities
+  if (state.kind === 'loading') {
+    return (
+      <div className="text-xs text-foreground-secondary inline-flex items-center gap-1.5">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Loading capability scan...
       </div>
-
-      {state.kind === 'loading' && (
-        <div className="text-xs text-foreground-secondary inline-flex items-center gap-1.5">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading capability scan...
-        </div>
-      )}
-
-      {state.kind === 'missing' && (
-        <div className="text-xs text-foreground-muted">Capability scan pending</div>
-      )}
-
-      {state.kind === 'error' && (
-        <div className="text-xs text-foreground-muted" title={state.message}>
-          Capability scan unavailable
-        </div>
-      )}
-
-      {state.kind === 'loaded' && <CapabilityTagCloud data={state.data} />}
-    </div>
-  );
+    );
+  }
+  return <CapabilitiesChips state={state} />;
 }
 
 function CapabilityTagCloud({ data }: { data: PackageCapabilities }) {
@@ -152,44 +148,28 @@ function CapabilityTagCloud({ data }: { data: PackageCapabilities }) {
   }
 
   if (enabled.length === 0) {
-    return (
-      <div className="space-y-1">
-        <div className="text-xs text-foreground-muted">No notable capabilities detected</div>
-        <CapabilityScannerCaption data={data} />
-      </div>
-    );
+    return <div className="text-xs text-foreground-muted">No notable capabilities detected</div>;
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
-        {enabled.map((k) => {
-          const meta = CAPABILITY_META[k];
-          const tone = TONE_BY_SIGNAL[meta.signal];
-          const Icon = meta.Icon;
-          return (
-            <span
-              key={k}
-              className={cn(
-                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border',
-                tone,
-              )}
-            >
-              <Icon className="h-3 w-3 mr-1" />
-              {meta.label}
-            </span>
-          );
-        })}
-      </div>
-      <CapabilityScannerCaption data={data} />
-    </div>
-  );
-}
-
-function CapabilityScannerCaption({ data }: { data: PackageCapabilities }) {
-  return (
-    <div className="text-[10px] text-foreground-muted">
-      Scanner: {data.scanner_version} • Scanned {formatScannedAt(data.scanned_at)}
+    <div className="flex flex-wrap gap-1.5">
+      {enabled.map((k) => {
+        const meta = CAPABILITY_META[k];
+        const tone = TONE_BY_SIGNAL[meta.signal];
+        const Icon = meta.Icon;
+        return (
+          <span
+            key={k}
+            className={cn(
+              'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border',
+              tone,
+            )}
+          >
+            <Icon className="h-3 w-3 mr-1" />
+            {meta.label}
+          </span>
+        );
+      })}
     </div>
   );
 }

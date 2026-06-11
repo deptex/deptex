@@ -1907,10 +1907,13 @@ export const api = {
   async analyzeDependencyUsage(
     organizationId: string,
     projectId: string,
-    projectDependencyId: string
+    projectDependencyId: string,
+    refresh?: boolean
   ): Promise<{ ai_usage_summary: string; ai_usage_analyzed_at: string }> {
+    // Without `refresh`, the backend serves the stored summary (no LLM call);
+    // `refresh=true` forces a fresh, metered re-analysis.
     return fetchWithAuth(
-      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${projectDependencyId}/analyze-usage`,
+      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${projectDependencyId}/analyze-usage${refresh ? '?refresh=true' : ''}`,
       { method: 'POST' }
     );
   },

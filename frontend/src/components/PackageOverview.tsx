@@ -3,7 +3,6 @@ import {
   Scale,
   Download,
   Package,
-  XCircle,
   Info,
   FileCode,
   GitFork,
@@ -11,9 +10,7 @@ import {
   Loader2,
   RefreshCw,
   Ghost,
-  AlertTriangle,
-  Ban,
-  Sparkles,
+  Atom,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -22,8 +19,7 @@ import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 import { ProjectDependency, ProjectEffectivePolicies, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 
-import { DeprecateSidebar } from './DeprecateSidebar';
-import { CapabilitiesSection } from './CapabilitiesSection';
+import { CapabilitiesChips, type CapabilitiesState } from './CapabilitiesSection';
 
 interface PackageOverviewProps {
   dependency: ProjectDependency;
@@ -33,14 +29,8 @@ interface PackageOverviewProps {
   latestVersion?: string | null;
   /** Project/org effective policies for license compliance. When provided, License card shows policy-based status. */
   policies?: ProjectEffectivePolicies | null;
-  /** Org or team deprecation info for this dependency, if any. */
-  deprecation?: { recommended_alternative: string; deprecated_by: string | null; created_at: string; scope?: 'organization' | 'team'; team_id?: string } | null;
-  /** Whether the current user has permission to manage deprecations (org or team manage). Only affects visibility of Deprecate/Remove Deprecation actions; the deprecated card is always shown when deprecation is set. */
-  canManageDeprecations?: boolean;
-  /** Callback to deprecate this dependency (org or team scope). */
-  onDeprecate?: (alternativeName: string) => Promise<void>;
-  /** Callback to remove the deprecation for this dependency. */
-  onRemoveDeprecation?: () => Promise<void>;
+  /** Pre-fetched capability scan state — loaded by the parent alongside the overview so everything paints at once. */
+  capabilities?: CapabilitiesState | null;
   /** When true, show a "Dev dependency" badge (package is in devDependencies, not used at runtime in production). */
   isDevDependency?: boolean;
 }
@@ -253,7 +243,7 @@ function AiSummaryRenderer({ content }: { content: string }) {
   );
 }
 
-export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, deprecation, canManageDeprecations, onDeprecate, onRemoveDeprecation, isDevDependency = false }: PackageOverviewProps) {
+export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, capabilities, isDevDependency = false }: PackageOverviewProps) {
 
   const [aiSummary, setAiSummary] = useState<string | null>(dependency.ai_usage_summary ?? null);
   const [aiAnalyzedAt, setAiAnalyzedAt] = useState<string | null>(dependency.ai_usage_analyzed_at ?? null);
@@ -264,16 +254,13 @@ export default function PackageOverview({ dependency, organizationId, projectId,
     setAiSummary(dependency.ai_usage_summary ?? null);
     setAiAnalyzedAt(dependency.ai_usage_analyzed_at ?? null);
   }, [dependency.id]);
-  const [deprecateSidebarOpen, setDeprecateSidebarOpen] = useState(false);
-  const [deprecating, setDeprecating] = useState(false);
-  const [removingDeprecation, setRemovingDeprecation] = useState(false);
   const { toast } = useToast();
 
 
-  const handleAnalyzeUsage = useCallback(async () => {
+  const handleAnalyzeUsage = useCallback(async (refresh?: boolean) => {
     setAnalyzing(true);
     try {
-      const result = await api.analyzeDependencyUsage(organizationId, projectId, dependency.id);
+      const result = await api.analyzeDependencyUsage(organizationId, projectId, dependency.id, refresh);
       setAiSummary(result.ai_usage_summary);
       setAiAnalyzedAt(result.ai_usage_analyzed_at);
     } catch {
@@ -282,33 +269,6 @@ export default function PackageOverview({ dependency, organizationId, projectId,
       setAnalyzing(false);
     }
   }, [organizationId, projectId, dependency.id, toast]);
-
-  const handleDeprecateSubmit = useCallback(async (alternativeName: string) => {
-    if (!onDeprecate) return;
-    setDeprecating(true);
-    try {
-      await onDeprecate(alternativeName);
-      toast({ title: 'Deprecated', description: `${dependency.name} has been deprecated.` });
-    } catch {
-      toast({ title: 'Error', description: 'Failed to deprecate package. Please try again.' });
-    } finally {
-      setDeprecating(false);
-    }
-  }, [onDeprecate, dependency.name, toast]);
-
-  const handleRemoveDeprecation = useCallback(async () => {
-    if (!onRemoveDeprecation) return;
-    setRemovingDeprecation(true);
-    try {
-      await onRemoveDeprecation();
-      toast({ title: 'Deprecation removed', description: `${dependency.name} is no longer deprecated.` });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to remove deprecation. Please try again.';
-      toast({ title: 'Error', description: message });
-    } finally {
-      setRemovingDeprecation(false);
-    }
-  }, [onRemoveDeprecation, dependency.name, toast]);
 
   const analysis = dependency.analysis;
   const score = analysis?.score ?? null;
@@ -429,40 +389,11 @@ export default function PackageOverview({ dependency, organizationId, projectId,
             </p>
           </div>
         )}
-      </div>
 
-      {/* Deprecation Banner – shown when deprecated (org or team); Remove button gated by canManageDeprecations */}
-      {deprecation && (
-        <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-warning shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-warning">
-                {deprecation.scope === 'team' ? 'Deprecated by your team' : 'Deprecated by your organization'}
-              </p>
-              <p className="text-sm text-foreground-secondary mt-1">
-                Use <span className="font-semibold text-foreground">{deprecation.recommended_alternative}</span> instead
-              </p>
-            </div>
-            {canManageDeprecations && onRemoveDeprecation && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRemoveDeprecation}
-                disabled={removingDeprecation}
-                className="shrink-0 border-warning/30 text-warning hover:bg-warning/10 hover:text-warning"
-              >
-                {removingDeprecation ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                ) : (
-                  <XCircle className="h-3.5 w-3.5 mr-1.5" />
-                )}
-                Remove Deprecation
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
+        {/* Capability chips — top of the overview, under the package identity. Pre-fetched
+            with the overview data so the whole panel paints at once (no late pop-in). */}
+        {capabilities && <CapabilitiesChips state={capabilities} />}
+      </div>
 
       {/* Usage Card — lighter card on dark background; header strip + code block for hierarchy */}
       <Card>
@@ -512,7 +443,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                             <p className="text-xs font-medium text-foreground mb-1.5">Imported in:</p>
                             <ul className="text-xs text-foreground-secondary space-y-0.5 max-h-48 overflow-y-auto list-none pl-0">
                               {showPaths.map((fp) => (
-                                <li key={fp} className="truncate font-mono" title={fp}>{fp}</li>
+                                <li key={fp} className="truncate font-mono">{fp}</li>
                               ))}
                               {remaining > 0 && (
                                 <li className="text-foreground-secondary/80">… and {remaining} more</li>
@@ -532,39 +463,23 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                 )}
               </div>
 
-              {/* Right side: Deprecate + Analyze buttons */}
-              {(dependency.is_direct || canManageDeprecations) && (
+              {/* Right side: Analyze usage */}
+              {dependency.is_direct && !aiSummary && (
                 <div className="flex items-center gap-2 shrink-0">
-                  {/* Deprecate button */}
-                  {canManageDeprecations && !deprecation && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setDeprecateSidebarOpen(true)}
-                      className="h-8 text-xs border-warning/20 bg-warning/5 text-warning hover:bg-warning/10 hover:border-warning/30"
-                    >
-                      <Ban className="h-3.5 w-3.5 mr-1.5" />
-                      Deprecate
-                    </Button>
-                  )}
-
-                  {/* Analyze usage button */}
-                  {dependency.is_direct && !aiSummary && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAnalyzeUsage}
-                      disabled={analyzing}
-                      className="h-8 text-xs"
-                    >
-                      {analyzing ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                      )}
-                      Analyze usage
-                    </Button>
-                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleAnalyzeUsage()}
+                    disabled={analyzing}
+                    className="h-8 text-xs"
+                  >
+                    {analyzing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                    ) : (
+                      <Atom className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    Analyze usage
+                  </Button>
                 </div>
               )}
             </div>
@@ -576,7 +491,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
               <div className="pt-3 border-t border-border space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-foreground-secondary" />
+                    <Atom className="h-4 w-4 text-foreground-secondary" />
                     <span className="text-sm font-medium text-foreground">AI Usage Analysis</span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -585,61 +500,32 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                         {formatRelativeTime(aiAnalyzedAt)}
                       </span>
                     )}
-                    <button
-                      onClick={handleAnalyzeUsage}
-                      disabled={analyzing}
-                      className="p-1 rounded hover:bg-background-subtle text-foreground-secondary hover:text-foreground transition-colors disabled:opacity-50"
-                      title="Re-analyze usage"
-                    >
-                      {analyzing ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => handleAnalyzeUsage(true)}
+                          disabled={analyzing}
+                          className="p-1 rounded hover:bg-background-subtle text-foreground-secondary hover:text-foreground transition-colors disabled:opacity-50"
+                          aria-label="Re-analyze usage"
+                        >
+                          {analyzing ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Re-analyze usage</TooltipContent>
+                    </Tooltip>
                   </div>
                 </div>
                 <AiSummaryRenderer content={aiSummary} />
               </div>
             )}
 
-            {/* Deprecation info if already deprecated */}
-            {deprecation && (
-              <div className="pt-3 border-t border-border">
-                <div className="flex items-center gap-2">
-                  <Ban className="h-4 w-4 text-warning" />
-                  <span className="text-sm font-medium text-warning">
-                    {deprecation.scope === 'team' ? 'Deprecated team-wide' : 'Deprecated org-wide'}
-                  </span>
-                  <span className="text-xs text-foreground-secondary ml-auto">
-                    Use <span className="font-medium text-foreground">{deprecation.recommended_alternative}</span>
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardContent className="p-4">
-          <CapabilitiesSection
-            organizationId={organizationId}
-            ecosystem={dependency.ecosystem}
-            packageName={dependency.name}
-            version={dependency.version}
-          />
-        </CardContent>
-      </Card>
-
-
-      {deprecateSidebarOpen && (
-        <DeprecateSidebar
-          dependencyName={dependency.name}
-          onClose={() => setDeprecateSidebarOpen(false)}
-          onDeprecate={handleDeprecateSubmit}
-        />
-      )}
 
     </div >
   );

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Search, SlidersHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, MessageSquareText, RefreshCw } from 'lucide-react';
+import { Search, SlidersHorizontal, Loader2, PanelLeftClose, PanelLeftOpen, Package, LayoutDashboard, GitBranch, RefreshCw } from 'lucide-react';
 import { useRealtimeStatus } from '../../hooks/useRealtimeStatus';
 import { isExtractionOngoing as checkExtractionOngoing, isInitialExtraction as checkInitialExtraction } from '../../lib/extractionStatus';
 import { ExtractionProgressCard } from '../../components/ExtractionProgressCard';
@@ -17,7 +17,7 @@ import { cn } from '../../lib/utils';
 import PackageOverview from '../../components/PackageOverview';
 import { PackageOverviewSkeleton } from '../../components/PackageOverviewSkeleton';
 import { SupplyChainContent } from './SupplyChainContent';
-import DependencyNotesSidebar from '../../components/DependencyNotesSidebar';
+import { fetchCapabilitiesState, type CapabilitiesState } from '../../components/CapabilitiesSection';
 
 interface ProjectContextType {
   project: ProjectWithRole | null;
@@ -243,15 +243,14 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const isInitialExtractionFailed = realtime.status === 'error' && !realtime.isLoading && !realtime.lastExtractedAt;
 
   const urlTab = tabFromPathname(location.pathname);
-  const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain' | 'notes'>('overview');
-  const selectedSubTab: 'overview' | 'supply-chain' | 'notes' = embedInSidebar ? sidebarSubTab : urlTab;
+  const [sidebarSubTab, setSidebarSubTab] = useState<'overview' | 'supply-chain'>('overview');
+  const selectedSubTab: 'overview' | 'supply-chain' = embedInSidebar ? sidebarSubTab : urlTab;
 
   const depsBase = organizationId && projectId ? `/organizations/${organizationId}/projects/${projectId}/dependencies` : '';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterVulnerability, setFilterVulnerability] = useState(false);
   const [filterLicenseIssue, setFilterLicenseIssue] = useState(false);
-  const [filterDeprecated, setFilterDeprecated] = useState(false);
   const [permissionsChecked, setPermissionsChecked] = useState(false);
   const [dependencies, setDependencies] = useState<ProjectDependency[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(false);
@@ -263,26 +262,16 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const prefetchTabTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const prefetchRowTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const hasUserRefreshedRef = useRef(false);
-
-  // Notes sidebar state (persists across tab switches when a dependency is selected)
-  const [notesSidebarOpen, setNotesSidebarOpen] = useState(false);
-  const [notesCount, setNotesCount] = useState(0);
-  const handleNotesCountChange = useCallback((count: number) => setNotesCount(count), []);
+  // Mirror of `dependencies` for effects that need a row lookup without re-firing on list refreshes.
+  const dependenciesRef = useRef<ProjectDependency[]>([]);
 
   // Right panel overview (when a dependency is selected and sub-tab is Overview)
   const [panelOverview, setPanelOverview] = useState<DependencyOverviewResponse | null>(null);
   const [panelOverviewDepId, setPanelOverviewDepId] = useState<string | null>(null);
   const [panelOverviewLoading, setPanelOverviewLoading] = useState(false);
   const [panelOverviewError, setPanelOverviewError] = useState<string | null>(null);
-  const [panelDeprecation, setPanelDeprecation] = useState<{
-    recommended_alternative: string;
-    deprecated_by: string | null;
-    created_at: string;
-    scope?: 'organization' | 'team';
-    team_id?: string;
-  } | null>(null);
-  const [panelBumpScope, setPanelBumpScope] = useState<'org' | 'team' | 'project'>('project');
-  const [panelBumpTeamId, setPanelBumpTeamId] = useState<string | undefined>(undefined);
+  // Capability scan for the selected dep — fetched WITH the overview so the panel paints once.
+  const [panelCapabilities, setPanelCapabilities] = useState<CapabilitiesState | null>(null);
 
   // Resizable sidebar: width state (persisted), drag refs
   const SIDEBAR_MIN = 200;
@@ -369,7 +358,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         const overview = await api.getDependencyOverview(organizationId, projectId, selectedDepId, { bypassCache: true });
         setPanelOverview(overview);
         setPanelOverviewDepId(selectedDepId);
-        setPanelDeprecation(overview.deprecation ?? null);
       }
     } catch (error: any) {
       setDependenciesError(error.message || 'Failed to load dependencies');
@@ -427,6 +415,10 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     return () => { cancelled = true; };
   }, [project?.id, projectId, organizationId, userPermissions?.view_dependencies, permissionsChecked]);
 
+  useEffect(() => {
+    dependenciesRef.current = dependencies;
+  }, [dependencies]);
+
   // Redirect to list when URL dependencyId is not in the loaded list (or clear sidebar selection)
   useEffect(() => {
     if (!selectedDepId || dependencies.length === 0 || dependenciesLoading) return;
@@ -445,12 +437,13 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   }, [importStatus?.status, organizationId, projectId, loadImportStatus]);
 
 
-  // Fetch overview for right panel when a dependency is selected and sub-tab is Overview (use prefetched if available)
+  // Fetch overview for right panel when a dependency is selected and sub-tab is Overview (use prefetched if available).
+  // Capabilities load in parallel and the panel paints only when BOTH are ready — no late chip pop-in.
   useEffect(() => {
     if (!organizationId || !projectId || !selectedDepId || selectedSubTab !== 'overview') {
       setPanelOverview(null);
       setPanelOverviewError(null);
-      setPanelDeprecation(null);
+      setPanelCapabilities(null);
       return;
     }
     let cancelled = false;
@@ -458,113 +451,46 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     setPanelOverviewDepId(null);
     setPanelOverviewLoading(true);
     setPanelOverviewError(null);
+    setPanelCapabilities(null);
     const depIdForFetch = selectedDepId;
     const prefetched = api.consumePrefetchedOverview(organizationId, projectId, selectedDepId);
     const overviewPromise = prefetched
       ? prefetched.then(([res]) => res).catch(() => null)
       : api.getDependencyOverview(organizationId, projectId, selectedDepId);
-    overviewPromise
-      .then((res) => {
+    // Package identity from the list row lets capabilities fetch in parallel with the overview.
+    const listDep = dependenciesRef.current.find((d) => d.id === depIdForFetch);
+    const capabilitiesPromise = listDep
+      ? fetchCapabilitiesState(organizationId, listDep.ecosystem, listDep.name, listDep.version)
+      : null;
+    (async () => {
+      try {
+        const res = await overviewPromise;
         if (cancelled) return;
-        if (res) {
-          setPanelOverview(res);
-          setPanelOverviewDepId(depIdForFetch);
-          setPanelDeprecation(res.deprecation ?? null);
-        } else {
+        if (!res) {
           setPanelOverviewError('Failed to load dependency');
+          return;
         }
-      })
-      .catch((err) => {
+        // Deep-link fallback: list row not loaded yet — derive identity from the overview itself.
+        const caps = await (capabilitiesPromise
+          ?? fetchCapabilitiesState(organizationId, res.ecosystem, res.name ?? '', res.version ?? ''));
+        if (cancelled) return;
+        setPanelCapabilities(caps);
+        setPanelOverview(res);
+        setPanelOverviewDepId(depIdForFetch);
+      } catch (err: any) {
         if (!cancelled) setPanelOverviewError(err?.message ?? 'Failed to load dependency');
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setPanelOverviewLoading(false);
-      });
+      }
+    })();
     return () => { cancelled = true; };
   }, [organizationId, projectId, selectedDepId, selectedSubTab]);
-
-  // Pre-fetch notes count when a dependency is selected (try prefetched first)
-  useEffect(() => {
-    if (!organizationId || !projectId || !selectedDepId) {
-      setNotesCount(0);
-      return;
-    }
-    let cancelled = false;
-    const prefetched = api.consumePrefetchedNotes(organizationId, projectId, selectedDepId);
-    if (prefetched) {
-      prefetched.then((res) => {
-        if (!cancelled) setNotesCount(res.notes.length);
-      }).catch(() => {});
-      return;
-    }
-    api.getDependencyNotes(organizationId, projectId, selectedDepId)
-      .then((res) => { if (!cancelled) setNotesCount(res.notes.length); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [organizationId, projectId, selectedDepId]);
 
   // Prefetch supply chain when a package is selected so that tab opens instantly
   useEffect(() => {
     if (!organizationId || !projectId || !selectedDepId) return;
     api.prefetchDependencySupplyChain(organizationId, projectId, selectedDepId);
   }, [organizationId, projectId, selectedDepId]);
-
-  // Bump scope for deprecation actions in panel
-  useEffect(() => {
-    if (!organizationId || !projectId || !selectedDepId || selectedSubTab !== 'overview') return;
-    api.getBumpScope(organizationId, projectId)
-      .then((res) => {
-        setPanelBumpScope(res.scope);
-        if (res.team_id) setPanelBumpTeamId(res.team_id);
-      })
-      .catch(() => setPanelBumpScope('project'));
-  }, [organizationId, projectId, selectedDepId, selectedSubTab]);
-
-  const panelCanManageDeprecations = panelBumpScope === 'org' || panelBumpScope === 'team';
-
-  const handlePanelDeprecate = useCallback(async (alternativeName: string) => {
-    if (!organizationId || !panelOverview?.dependency_id) return;
-    if (panelBumpScope === 'org') {
-      await api.deprecateDependency(organizationId, panelOverview.dependency_id, alternativeName);
-      const newDeprecation = {
-        recommended_alternative: alternativeName,
-        deprecated_by: null,
-        created_at: new Date().toISOString(),
-        scope: 'organization' as const,
-      };
-      setPanelDeprecation(newDeprecation);
-      setDependencies((prev) =>
-        prev.map((d) => (d.id === selectedDepId ? { ...d, deprecation: newDeprecation } : d))
-      );
-    } else if (panelBumpScope === 'team' && panelBumpTeamId) {
-      await api.deprecateDependencyTeam(organizationId, panelBumpTeamId, panelOverview.dependency_id, alternativeName);
-      const newDeprecation = {
-        recommended_alternative: alternativeName,
-        deprecated_by: null,
-        created_at: new Date().toISOString(),
-        scope: 'team' as const,
-        team_id: panelBumpTeamId,
-      };
-      setPanelDeprecation(newDeprecation);
-      setDependencies((prev) =>
-        prev.map((d) => (d.id === selectedDepId ? { ...d, deprecation: newDeprecation } : d))
-      );
-    }
-  }, [organizationId, panelOverview?.dependency_id, panelBumpScope, panelBumpTeamId, selectedDepId]);
-
-  const handlePanelRemoveDeprecation = useCallback(async () => {
-    if (!organizationId || !panelOverview?.dependency_id) return;
-    if (panelDeprecation?.scope === 'team' && panelDeprecation?.team_id) {
-      await api.removeDeprecationTeam(organizationId, panelDeprecation.team_id, panelOverview.dependency_id);
-    } else {
-      await api.removeDeprecation(organizationId, panelOverview.dependency_id);
-    }
-    setPanelDeprecation(null);
-    setDependencies((prev) =>
-      prev.map((d) => (d.id === selectedDepId ? { ...d, deprecation: undefined } : d))
-    );
-  }, [organizationId, panelOverview?.dependency_id, panelDeprecation?.scope, panelDeprecation?.team_id, selectedDepId]);
-
 
   const selectedDepFromList = selectedDepId ? dependencies.find((d) => d.id === selectedDepId) : null;
 
@@ -589,8 +515,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
         api.prefetchDependencyOverview(organizationId, projectId, selectedDepId);
       } else if (tabId === 'supply-chain') {
         api.prefetchDependencySupplyChain(organizationId, projectId, selectedDepId);
-      } else if (tabId === 'notes') {
-        api.prefetchDependencyNotes(organizationId, projectId, selectedDepId);
       }
       prefetchTabTimeoutsRef.current.delete(tabId);
     }, 100);
@@ -605,14 +529,13 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     }
   }, []);
 
-  // Prefetch overview + notes when hovering a package row (100ms debounce)
+  // Prefetch overview when hovering a package row (100ms debounce)
   const handleRowHover = useCallback((depId: string) => {
     if (!organizationId || !projectId) return;
     const existing = prefetchRowTimeoutsRef.current.get(depId);
     if (existing) clearTimeout(existing);
     const timeout = setTimeout(() => {
       api.prefetchDependencyOverview(organizationId, projectId, depId);
-      api.prefetchDependencyNotes(organizationId, projectId, depId);
       prefetchRowTimeoutsRef.current.delete(depId);
     }, 100);
     prefetchRowTimeoutsRef.current.set(depId, timeout);
@@ -647,7 +570,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
   const dependencySubNavItems = [
     { id: 'overview', label: 'Overview', path: 'overview', icon: LayoutDashboard },
     { id: 'supply-chain', label: 'Supply chain', path: 'supply-chain', icon: GitBranch },
-    { id: 'notes', label: 'Notes', path: 'notes', icon: MessageSquareText },
   ] as const;
 
   const effectiveSidebarWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
@@ -709,7 +631,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       // When policy_result is null (policy not evaluated yet), don't show/filter as license issue.
       const hasLicenseIssue = dep.policy_result != null && dep.policy_result.allowed === false;
       if (filterLicenseIssue && !hasLicenseIssue) return false;
-      if (filterDeprecated && !dep.deprecation) return false;
       return true;
     })
     .sort((a, b) => (b.files_importing_count || 0) - (a.files_importing_count || 0));
@@ -797,7 +718,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterLicenseIssue(false); setFilterDeprecated(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterVulnerability(true); setFilterLicenseIssue(false); }}
                       >
                         Select only
                       </button>
@@ -822,32 +743,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       <button
                         type="button"
                         className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterVulnerability(false); setFilterDeprecated(false); }}
-                      >
-                        Select only
-                      </button>
-                    </div>
-                    <div
-                      className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                      onClick={() => setFilterDeprecated((v) => !v)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilterDeprecated((v) => !v); } }}
-                      role="option"
-                      aria-selected={filterDeprecated}
-                      tabIndex={0}
-                    >
-                      <Checkbox
-                        id="filter-deprecated"
-                        checked={filterDeprecated}
-                        onCheckedChange={(checked) => setFilterDeprecated(checked === true)}
-                        className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                      />
-                      <label htmlFor="filter-deprecated" className="text-sm font-normal cursor-pointer flex-1 text-foreground">
-                        Deprecated
-                      </label>
-                      <button
-                        type="button"
-                        className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                        onClick={(e) => { e.stopPropagation(); setFilterDeprecated(true); setFilterVulnerability(false); setFilterLicenseIssue(false); }}
+                        onClick={(e) => { e.stopPropagation(); setFilterLicenseIssue(true); setFilterVulnerability(false); }}
                       >
                         Select only
                       </button>
@@ -929,7 +825,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               <p className="text-sm text-foreground-secondary mt-1">
                 {searchQuery.trim()
                   ? `Your search for "${searchQuery.trim()}" did not return any results`
-                  : filterVulnerability || filterLicenseIssue || filterDeprecated
+                  : filterVulnerability || filterLicenseIssue
                     ? 'Your filters did not return any results'
                     : 'No dependencies found yet.'}
               </p>
@@ -989,7 +885,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                       {hasLicenseIssue && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
+                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-destructive/10 text-destructive border border-destructive/30 cursor-default">
                               License
                             </span>
                           </TooltipTrigger>
@@ -997,7 +893,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         </Tooltip>
                       )}
                       {dep.source === 'devDependencies' && (
-                        <span className="shrink-0 inline-flex items-center rounded px-1 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
+                        <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-foreground/5 text-foreground-secondary border border-foreground/10 cursor-default">
                           Dev
                         </span>
                       )}
@@ -1014,16 +910,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                             </span>
                           </TooltipTrigger>
                           <TooltipContent side="right">Not imported in any file</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {dep.deprecation && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-warning/15 text-warning border border-warning/30 cursor-default">
-                              Deprecated
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">Package is deprecated</TooltipContent>
                         </Tooltip>
                       )}
                       {dep.is_current_version_banned && (
@@ -1051,7 +937,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         </Tooltip>
                       )}
                     </div>
-                    {/* Expandable sub-nav: Overview, Supply chain, Notes (tab selection only) */}
+                    {/* Expandable sub-nav: Overview, Supply chain (tab selection only) */}
                     <div
                       className="grid transition-[grid-template-rows] duration-200 ease-out"
                       style={{ gridTemplateRows: isSelected ? '1fr' : '0fr' }}
@@ -1060,16 +946,14 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                         <div className="pb-1.5 pt-0.5 space-y-0.5 ml-2 pr-4 min-w-0">
                           {dependencySubNavItems.map((item) => {
                             const Icon = item.icon;
-                            const isSubTabActive = item.id !== 'notes' && selectedSubTab === item.id;
+                            const isSubTabActive = selectedSubTab === item.id;
                             return (
                               <button
                                 key={item.id}
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (item.id === 'notes') {
-                                    setNotesSidebarOpen(true);
-                                  } else if (embedInSidebar) {
+                                  if (embedInSidebar) {
                                     setSidebarSubTab(item.id);
                                   } else if (depsBase && selectedDepId) {
                                     navigate(`${depsBase}/${selectedDepId}/${item.id}`, { replace: true });
@@ -1086,11 +970,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
                               >
                                 <Icon className="h-4 w-4 shrink-0" aria-hidden />
                                 <span className="truncate">{item.label}</span>
-                                {item.id === 'notes' && notesCount > 0 && (
-                                  <span className="shrink-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-white">
-                                    {notesCount > 99 ? '99+' : notesCount}
-                                  </span>
-                                )}
                               </button>
                             );
                           })}
@@ -1189,10 +1068,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
               projectId={projectId}
               latestVersion={panelOverview?.latest_version ?? null}
               policies={policies}
-              deprecation={panelDeprecation}
-              canManageDeprecations={panelCanManageDeprecations}
-              onDeprecate={handlePanelDeprecate}
-              onRemoveDeprecation={handlePanelRemoveDeprecation}
+              capabilities={panelCapabilities}
               isDevDependency={selectedDepFromList?.source === 'devDependencies'}
             />
             </div>
@@ -1203,18 +1079,6 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
           </div>
         )}
       </div>
-      {/* Notes sidebar — only when a dependency is selected */}
-      {organizationId && projectId && selectedDepId && (
-        <DependencyNotesSidebar
-          open={notesSidebarOpen}
-          onOpenChange={setNotesSidebarOpen}
-          organizationId={organizationId}
-          projectId={projectId}
-          projectDependencyId={selectedDepId}
-          packageName={selectedDepFromList?.name ?? 'Package'}
-          onNotesCountChange={handleNotesCountChange}
-        />
-      )}
     </main>
   );
 }
