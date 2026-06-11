@@ -8,8 +8,7 @@
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
-import { RepoLink, SpecimenFrame } from "./primitives";
-import TraceSpecimen from "./TraceSpecimen";
+import { PlaceholderCanvas } from "./primitives";
 
 export default function HeroSection() {
   return (
@@ -57,19 +56,30 @@ export default function HeroSection() {
           </div>
         </div>
 
-        {/* The trace specimen — the page's focal artifact, one glow */}
-        <div className="mx-auto mt-14 max-w-[720px]">
-          <SpecimenFrame glow>
-            <TraceSpecimen />
-          </SpecimenFrame>
-          <div className="mt-3 flex flex-col items-center gap-1 text-center">
-            <p className="font-mono text-xs text-foreground-secondary">
-              ▸ Real scan output from our open dogfood corpus —{" "}
-              <RepoLink path="depscanner/test-repos" />
-            </p>
-            <p className="font-mono text-[11px] text-foreground-muted">
-              sample data — real scan output replaces this (asset A1)
-            </p>
+        {/* Hero collage — two receipts for the two-beat headline:
+            main window = findings table ("your repo sets the score"),
+            overlap card = Aegis fixing ("Aegis writes the fix").
+            Real app screenshots replace the canvases (capture specs in plan §7). */}
+        <div className="relative mx-auto mb-10 mt-16 max-w-[880px]">
+          <div
+            className="glow-green left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-40"
+            aria-hidden
+          />
+          <div className="relative">
+            <PlaceholderCanvas
+              assetId="HERO-1"
+              description="Findings table — real app screenshot: depscore pills, reachability verdicts, statuses"
+              aspect="16/9"
+              className="shadow-[0_8px_40px_-8px_rgba(0,0,0,0.7)]"
+            />
+            <div className="relative mx-6 -mt-8 sm:absolute sm:-bottom-10 sm:-right-8 sm:mx-0 sm:mt-0 sm:w-[320px]">
+              <PlaceholderCanvas
+                assetId="HERO-2"
+                description="Aegis fix card — plan → diff → draft PR"
+                aspect="4/3"
+                className="!bg-[#0d0d0d] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)]"
+              />
+            </div>
           </div>
         </div>
       </div>
