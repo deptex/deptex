@@ -2094,15 +2094,27 @@ export async function runDastPipeline(
     };
   });
 
-  // Dedupe non-cross-linked findings against the partial unique index.
+  // Dedupe the batch against the partial unique index
+  // `project_dast_findings_target_resolved`
+  //   (target_id, dast_run_id, rule_id, handler_file_path,
+  //    handler_function_name, vulnerability_type) WHERE handler_file_path IS NOT NULL.
+  // Cross-linked rows (handler_file_path !== null) MUST be keyed exactly as the
+  // index — an active scan emits many instances of the same vuln class on one
+  // handler (e.g. several SQLi/XSS payloads against /api/render?tpl), all of
+  // which the OpenAPI sidecar attributes to the same handler, so they collapse
+  // to one index key and a raw batch insert violates the constraint. Previously
+  // only the NON-cross-linked branch was deduped (keyed on endpoint/param, which
+  // the index doesn't cover) while cross-linked rows passed through unfiltered —
+  // exactly backwards. target_id + dast_run_id are constant across this batch,
+  // so they're omitted from the key. The `H|`/`U|` prefixes keep the two key
+  // spaces disjoint.
   const seen = new Set<string>();
   const dedupedInserts: DastFindingInsert[] = [];
   for (const row of inserts) {
-    if (row.handler_file_path !== null) {
-      dedupedInserts.push(row);
-      continue;
-    }
-    const key = `${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
+    const key =
+      row.handler_file_path !== null
+        ? `H|${row.rule_id ?? ''}|${row.handler_file_path}|${row.handler_function_name ?? ''}|${row.vulnerability_type}`
+        : `U|${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
     if (seen.has(key)) continue;
     seen.add(key);
     dedupedInserts.push(row);
