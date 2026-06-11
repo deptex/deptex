@@ -20,7 +20,7 @@ export default function FinalCTA() {
         </p>
         <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
           <Button variant="green" asChild>
-            <Link to="/login">Scan a repo</Link>
+            <Link to="/login">Try for free</Link>
           </Button>
           <Button variant="white" asChild>
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer">

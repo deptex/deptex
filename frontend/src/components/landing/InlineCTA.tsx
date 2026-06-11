@@ -12,7 +12,7 @@ export default function InlineCTA() {
     <section className="w-full border-y border-white/[0.08]">
       <div className="mx-auto flex max-w-[1200px] flex-col items-center justify-center gap-3 px-6 py-10 sm:flex-row sm:gap-5">
         <Button variant="green" asChild>
-          <Link to="/login">Scan a repo</Link>
+          <Link to="/login">Try for free</Link>
         </Button>
         <span className="text-sm text-foreground-secondary">
           Free $5 credit · no credit card

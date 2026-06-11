@@ -761,24 +761,3 @@ table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]):no
   }
 }
 
-/* ============================================================
-   Hero atmosphere — node-graph constellation (HeroGraphBackground)
-   ============================================================ */
-.hero-graph {
-  pointer-events: none;
-}
-@keyframes hero-node-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.9; }
-}
-.hero-graph .node-pulse {
-  animation: hero-node-pulse 5s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .hero-graph .node-pulse {
-    animation: none;
-  }
-  .hero-graph .graph-packet {
-    display: none;
-  }
-}
