@@ -22,7 +22,7 @@ export default function HeroSection() {
               <span className="text-accent-text">Aegis</span> writes the fix.
             </span>
           </h1>
-          <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground-secondary sm:text-[17px]">
+          <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground sm:text-[17px]">
             Every finding gets a contextual risk score based on your code, not just CVSS.
             Aegis, your org's own security engineer, investigates and writes the fix.
           </p>
