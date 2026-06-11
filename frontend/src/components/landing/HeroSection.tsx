@@ -43,7 +43,11 @@ export default function HeroSection() {
             <Button variant="green" asChild className="w-full sm:w-auto">
               <Link to="/login">Try for free</Link>
             </Button>
-            <Button variant="white" asChild className="w-full sm:w-auto">
+            <Button
+              variant="outline"
+              asChild
+              className="w-full border border-border bg-background-card text-foreground hover:bg-background-subtle sm:w-auto"
+            >
               <Link to="/get-demo">Book a demo</Link>
             </Button>
           </div>
