@@ -28,9 +28,6 @@ export default function FinalCTA() {
             </a>
           </Button>
         </div>
-        <p className="mt-3 text-xs text-foreground-secondary">
-          Free $5 credit · no credit card
-        </p>
         <Link
           to="/get-demo"
           className="mt-7 text-sm text-foreground-secondary transition-colors hover:text-foreground"

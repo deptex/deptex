@@ -14,9 +14,6 @@ export default function InlineCTA() {
         <Button variant="green" asChild>
           <Link to="/login">Try for free</Link>
         </Button>
-        <span className="text-sm text-foreground-secondary">
-          Free $5 credit · no credit card
-        </span>
       </div>
     </section>
   );

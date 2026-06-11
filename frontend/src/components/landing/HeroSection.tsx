@@ -30,7 +30,7 @@ export default function HeroSection() {
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
             Your repo sets the score.
             <span className="block">
-              <span className="bg-gradient-to-r from-[#34d08a] via-[#22d3ee] to-[#a78bfa] bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-[#2dd4bf] via-[#34d08a] to-[#86efac] bg-clip-text text-transparent">
                 Aegis
               </span>{" "}
               writes the fix.
@@ -55,9 +55,6 @@ export default function HeroSection() {
               <Link to="/get-demo">Book a demo</Link>
             </Button>
           </div>
-          <p className="mt-3 text-xs text-foreground-secondary">
-            Free $5 credit · no credit card
-          </p>
         </div>
 
         {/* The trace specimen — the page's focal artifact, one glow */}
