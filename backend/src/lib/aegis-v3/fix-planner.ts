@@ -82,13 +82,6 @@ async function gatherFindingContext(
   input: PlannerInput,
 ): Promise<Record<string, any>> {
   if (input.findingType === 'vulnerability') {
-    const { data: link, error } = await supabase
-      .from('project_dependencies')
-      .select('id, dependency_id')
-      .eq('project_id', input.projectId)
-      .limit(50);
-    if (error) throw new Error(`Failed to load project dependencies: ${error.message}`);
-
     const fixReq: FixRequest = {
       projectId: input.projectId,
       organizationId: input.organizationId,
@@ -97,16 +90,47 @@ async function gatherFindingContext(
       vulnerabilityOsvId: input.findingId,
     };
 
-    if (link && link.length > 0) {
-      const { data: vulnLinks } = await supabase
-        .from('dependency_vulnerabilities')
-        .select('dependency_id')
-        .eq('osv_id', input.findingId);
-      const vulnDepIds = new Set((vulnLinks ?? []).map((v: any) => v.dependency_id));
-      const matchedPd = link.find((l: any) => vulnDepIds.has(l.dependency_id));
-      if (matchedPd) {
-        fixReq.projectDependencyId = matchedPd.id;
-        fixReq.dependencyId = matchedPd.dependency_id;
+    // Resolve which project dependency carries this CVE via the project's own
+    // PDV rows — authoritative since the findings-pipeline rework writes them
+    // directly from scan results (the org-global dependency_vulnerabilities
+    // table is no longer populated for new scans, which left this resolution
+    // empty and made the planner refuse with "no patched version available").
+    // Prefer the direct dependency when the same CVE hits a direct and a
+    // transitive copy of the package.
+    const { data: pdvLinks, error } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .select('project_dependency_id, project_dependencies!inner(id, dependency_id, is_direct)')
+      .eq('project_id', input.projectId)
+      .eq('osv_id', input.findingId)
+      .limit(20);
+    if (error) throw new Error(`Failed to load project vulnerability links: ${error.message}`);
+
+    const linkedDeps = (pdvLinks ?? [])
+      .map((r: any) => r.project_dependencies)
+      .filter(Boolean);
+    const chosen = linkedDeps.find((l: any) => l.is_direct) ?? linkedDeps[0];
+    if (chosen) {
+      fixReq.projectDependencyId = chosen.id;
+      fixReq.dependencyId = chosen.dependency_id;
+    } else {
+      // Legacy fallback for rows that predate the pipeline rework, where the
+      // CVE→dependency link only exists in dependency_vulnerabilities.
+      const { data: link } = await supabase
+        .from('project_dependencies')
+        .select('id, dependency_id')
+        .eq('project_id', input.projectId)
+        .limit(50);
+      if (link && link.length > 0) {
+        const { data: vulnLinks } = await supabase
+          .from('dependency_vulnerabilities')
+          .select('dependency_id')
+          .eq('osv_id', input.findingId);
+        const vulnDepIds = new Set((vulnLinks ?? []).map((v: any) => v.dependency_id));
+        const matchedPd = link.find((l: any) => vulnDepIds.has(l.dependency_id));
+        if (matchedPd) {
+          fixReq.projectDependencyId = matchedPd.id;
+          fixReq.dependencyId = matchedPd.dependency_id;
+        }
       }
     }
     return gatherVulnerabilityContext(fixReq);

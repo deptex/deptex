@@ -15,6 +15,11 @@ export interface ScenarioTurn {
     tools_called_count?: Record<string, number>;
     tools_not_called?: string[];
     tools_with_error?: string[];
+    // Tool must have NO successful (non-error) result this turn. Use for
+    // dedup assertions where both "tool called and refused by a guard" and
+    // "model answered from memory without calling" are acceptable, but a
+    // second successful execution would be the bug.
+    tools_without_success?: string[];
     text_includes?: string[];
     text_excludes?: string[];
   };
@@ -188,6 +193,7 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
       const calledTools: string[] = [];
       const calledCounts: Record<string, number> = {};
       const erroredTools: string[] = [];
+      const succeededTools: string[] = [];
       let assistantText = '';
 
       const result = await agent.stream({ messages });
@@ -220,6 +226,7 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
             const output = (p as { output?: unknown }).output ?? (p as { result?: unknown }).result;
             const isError = isErrorResult(output);
             if (isError) erroredTools.push(toolName);
+            else succeededTools.push(toolName);
             console.log(`    [tool→] ${toolName} ${isError ? '(ERROR) ' : ''}${summarizeResult(output)}`);
             appendEvent(transcriptPath, {
               t: Date.now(),
@@ -296,6 +303,10 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
         for (const t of expect.tools_with_error ?? []) {
           if (!erroredTools.includes(t)) missingErrors.push(t);
         }
+        const unexpectedSuccesses: string[] = [];
+        for (const t of expect.tools_without_success ?? []) {
+          if (succeededTools.includes(t)) unexpectedSuccesses.push(t);
+        }
         for (const s of expect.text_includes ?? []) {
           if (!assistantText.includes(s)) missingText.push(s);
         }
@@ -308,6 +319,7 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
         if (unexpected.length) failures.push(`unexpected tools: ${unexpected.join(', ')}`);
         if (wrongCount.length) failures.push(`wrong counts: ${wrongCount.join('; ')}`);
         if (missingErrors.length) failures.push(`expected error from: ${missingErrors.join(', ')}`);
+        if (unexpectedSuccesses.length) failures.push(`tool succeeded but should not have: ${unexpectedSuccesses.join(', ')}`);
         if (missingText.length) failures.push(`text missing: ${missingText.join(', ')}`);
         if (unwantedText.length) failures.push(`text included unwanted: ${unwantedText.join(', ')}`);
 
@@ -327,6 +339,7 @@ export async function runScenarioCase(opts: RunOpts): Promise<CaseResult> {
           calledTools,
           calledCounts,
           erroredTools,
+          succeededTools,
         });
       }
 

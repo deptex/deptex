@@ -70,7 +70,7 @@
         {
           "user": "Do that same one again.",
           "expect": {
-            "tools_with_error": ["request_fix"]
+            "tools_without_success": ["request_fix"]
           }
         }
       ]

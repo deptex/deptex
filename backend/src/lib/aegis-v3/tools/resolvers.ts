@@ -201,22 +201,25 @@ export async function resolveProjectVulnerability(
   const trimmed = (cveOrOsvId ?? '').trim();
   if (!trimmed) return { error: 'CVE or OSV id is required.' };
 
-  let query = supabase
-    .from('project_dependency_vulnerabilities')
-    .select('id, osv_id')
-    .eq('project_id', project.id)
-    .limit(2);
+  const isCve = trimmed.toUpperCase().startsWith('CVE-');
+  const normalized = isCve ? trimmed.toUpperCase() : trimmed;
 
-  if (trimmed.toUpperCase().startsWith('CVE-')) {
-    query = (query as { contains: (col: string, val: unknown) => typeof query }).contains(
-      'aliases',
-      [trimmed.toUpperCase()],
-    );
-  } else {
-    query = query.eq('osv_id', trimmed);
+  const baseQuery = () =>
+    supabase
+      .from('project_dependency_vulnerabilities')
+      .select('id, osv_id')
+      .eq('project_id', project.id)
+      .limit(2);
+
+  // osv_id is often the CVE id itself — the scan pipeline keys PDV rows by
+  // CVE when no GHSA alias exists, leaving `aliases` empty. So always try
+  // the direct osv_id match first; for CVE-shaped input, fall back to the
+  // aliases array to still catch GHSA-keyed rows that carry the CVE only as
+  // an alias.
+  let { data: rows } = await baseQuery().eq('osv_id', normalized);
+  if ((!rows || rows.length === 0) && isCve) {
+    ({ data: rows } = await baseQuery().contains('aliases', [normalized]));
   }
-
-  const { data: rows } = await query;
   if (!rows || rows.length === 0) {
     return {
       error: `Vulnerability "${trimmed}" not found in project "${project.name}". Pass a CVE/OSV id from get_project_vulnerabilities.`,
