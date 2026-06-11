@@ -2134,7 +2134,7 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
           check_summary: 'No dependency changes', provider: 'github', provider_url: pr?.html_url,
           base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
           opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-        }, { onConflict: 'project_id,pr_number,provider' }).catch(() => {});
+        }, { onConflict: 'project_id,pr_number,provider' }).then(() => {}, () => {});
         continue;
       }
 

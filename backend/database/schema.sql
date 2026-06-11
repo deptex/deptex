@@ -1247,7 +1247,8 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   auth_mechanism text,
   middleware_chain text[],
   metadata jsonb,
-  created_at timestamp with time zone DEFAULT now()
+  created_at timestamp with time zone DEFAULT now(),
+  request_params jsonb
 );
 CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

@@ -9,6 +9,7 @@
 import type { Storage } from '../storage';
 import { matchRoute } from './route-matcher';
 import type { DastFindingRaw } from './runner';
+import type { RequestParam } from '../param-harvest/types';
 
 export interface EntryPointRow {
   framework: string;
@@ -26,6 +27,9 @@ export interface EntryPointRow {
   auth_mechanism?: string | null;
   middleware_chain?: string[] | null;
   metadata?: Record<string, unknown> | null;
+  // Phase 48: deterministically-harvested query/header/cookie params the
+  // handler reads; the synthesizer emits these as OpenAPI `query` parameters.
+  request_params?: RequestParam[] | null;
 }
 
 export interface ReachableFlowRow {
@@ -275,7 +279,7 @@ export async function loadEntryPoints(
   const { data, error } = await supabase
     .from('project_entry_points')
     .select(
-      'framework, http_method, route_pattern, handler_name, file_path, line_number, entry_point_type, classification, auth_mechanism, middleware_chain, metadata',
+      'framework, http_method, route_pattern, handler_name, file_path, line_number, entry_point_type, classification, auth_mechanism, middleware_chain, metadata, request_params',
     )
     .eq('project_id', projectId)
     .eq('extraction_run_id', extractionRunId);
