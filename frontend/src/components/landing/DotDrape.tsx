@@ -258,7 +258,12 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
     // dots stay full-bright, just tiny
     const t = Math.max(0, Math.min(1, d.bright));
     if (t < 0.018) continue;
-    const rad = Math.min(d.rad, (PITCH * 0.46 * FOCAL) / d.zc) * (0.28 + 0.72 * Math.pow(m, 0.6));
+    // Toward the artwork's bottom-right the taper tightens further
+    // (founder): lower size floor + steeper falloff in that direction
+    const brT = Math.max(0, Math.min(1, (d.sx / DESIGN_W + d.sy / hLog - 0.55) / 0.9));
+    const rad =
+      Math.min(d.rad, (PITCH * 0.46 * FOCAL) / d.zc) *
+      (0.28 - 0.16 * brT + 0.72 * Math.pow(m, 0.6 + 0.5 * brT));
     if (rad < 0.3) continue;
     ctx.fillStyle = colorFor(t);
     ctx.beginPath();
