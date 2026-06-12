@@ -15,7 +15,23 @@ import { useEffect, useRef } from "react";
  * Etiquette: ~30fps clamp, pauses offscreen + on tab hide,
  * prefers-reduced-motion renders one static frame, DPR capped at 2.
  */
-export default function DotSheet({ className = "" }: { className?: string }) {
+export default function DotSheet({
+  className = "",
+  fadeTop = 0.34,
+  fadeBottom = 0.16,
+  fadeSides = 0.13,
+  clearCenter,
+}: {
+  className?: string;
+  /** Edge dissolve lengths as fractions of the canvas (top default is long
+   * for the under-panel mount, where the chapter rail needs legibility). */
+  fadeTop?: number;
+  fadeBottom?: number;
+  fadeSides?: number;
+  /** Elliptical clearance pocket (all values are fractions of the canvas) —
+   * used when text sits on top of the sheet, e.g. the hero headline. */
+  clearCenter?: { cx: number; cy: number; rx: number; ry: number };
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -68,18 +84,27 @@ export default function DotSheet({ className = "" }: { className?: string }) {
           const b = Math.max(0, 0.5 + 0.55 * z);
           const r = (0.3 + 1.1 * b) * 3.6 * s;
           if (r < 0.35) continue;
-          // Edge dissolves: sides, the emergence line under the panel, bottom
+          // Edge dissolves: sides / top emergence line / bottom
           const yn = y / h;
-          const fadeX = Math.min(1, (0.5 - Math.abs(u)) / 0.13);
-          // Long top fade: the chapter-rail text lives in the sheet's first
-          // ~third, so density blooms only below it
-          const fadeT = Math.min(1, yn / 0.34);
-          const fadeB = Math.min(1, (1 - yn) / 0.16);
+          const fadeX = Math.min(1, (0.5 - Math.abs(u)) / fadeSides);
+          const fadeT = Math.min(1, yn / fadeTop);
+          const fadeB = Math.min(1, (1 - yn) / fadeBottom);
+          // Clearance pocket for overlaid text: fade to zero inside the
+          // ellipse, ramp back to full just past its rim
+          let fadeC = 1;
+          if (clearCenter) {
+            const d = Math.hypot(
+              (x / w - clearCenter.cx) / clearCenter.rx,
+              (yn - clearCenter.cy) / clearCenter.ry
+            );
+            fadeC = Math.max(0, Math.min(1, (d - 1) / 0.35));
+          }
           const a =
             (0.06 + 0.6 * b) *
             Math.max(0, fadeX) *
             Math.max(0, fadeT) *
-            Math.max(0, Math.min(1, fadeB));
+            Math.max(0, Math.min(1, fadeB)) *
+            fadeC;
           if (a < 0.02) continue;
           ctx.globalAlpha = Math.min(0.75, a);
           ctx.beginPath();
@@ -145,7 +170,8 @@ export default function DotSheet({ className = "" }: { className?: string }) {
       ro?.disconnect();
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadeTop, fadeBottom, fadeSides, clearCenter?.cx, clearCenter?.cy, clearCenter?.rx, clearCenter?.ry]);
 
   return <canvas ref={canvasRef} className={className} aria-hidden />;
 }
