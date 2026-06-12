@@ -86,10 +86,10 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
   L = L.map((v) => v / Ll);
 
   // ---------- grid + horizon-buffer occlusion ----------
-  const PITCH = 12; // finer net + smaller dots (founder: closer to the reference)
-  const DOTR = 2.7;
-  const COLS = 240;
-  const ROWS = 280;
+  const PITCH = 9.5; // tighter net + smaller dots (founder 2026-06-12)
+  const DOTR = 2.0;
+  const COLS = 300; // keep world coverage at the tighter pitch
+  const ROWS = 185; // rows past the far-dissolve are fully dropped — don't sample them
   const X0 = -950;
   const Y0 = -60;
 
