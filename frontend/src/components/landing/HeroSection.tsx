@@ -9,6 +9,7 @@
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
+import HalftoneField from "./HalftoneField";
 
 export default function HeroSection() {
   return (
@@ -24,6 +25,9 @@ export default function HeroSection() {
           <div className="wave-node node-4" />
           <div className="wave-node node-5" />
         </div>
+        {/* Halftone dot lobes sweeping in from the top corners — structured
+            geometry over the soft wave glow (Snyk-style, in green) */}
+        <HalftoneField className="absolute inset-0 h-full w-full" />
       </div>
 
       <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-6 pt-28 sm:pb-8 sm:pt-36">
