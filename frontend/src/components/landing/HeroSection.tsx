@@ -3,8 +3,9 @@
  *
  * Motion: H1 + subhead + CTAs render INSTANTLY (LCP candidates — zero
  * entrance animation, no Reveal). Atmosphere = the wave-gradient node
- * chain (founder pick, 2026-06-11). Visual = two-piece collage:
- * findings table + Aegis fix card (one receipt per headline beat).
+ * chain (founder pick, 2026-06-11). Type-only: the screenshot collage was
+ * cut 2026-06-11 (founder) — the FindingJourney film panel directly below
+ * is the page's first and only hero-scale product visual.
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
@@ -23,7 +24,7 @@ export default function HeroSection() {
         </div>
       </div>
 
-      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pb-24 sm:pt-36">
+      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-6 pt-28 sm:pb-8 sm:pt-36">
         <div className="mx-auto max-w-[800px] text-center">
           <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
             Your repo sets the score.
@@ -55,33 +56,6 @@ export default function HeroSection() {
           </div>
         </div>
 
-        {/* Hero collage — two receipts for the two-beat headline:
-            main window = findings table ("your repo sets the score"),
-            overlap card = Aegis fixing ("Aegis writes the fix").
-            Real app screenshots replace the canvases (capture specs in plan §7). */}
-        <div className="relative mx-auto mb-10 mt-16 max-w-[880px]">
-          <div className="hero-dots" aria-hidden />
-          <div
-            className="glow-green left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-40"
-            aria-hidden
-          />
-          <div className="relative">
-            {/* HERO-1: the findings dashboard — "your repo sets the score" */}
-            <img
-              src="/images/landing/hero-findings.png"
-              alt="Deptex findings dashboard: vulnerability prioritization funnel, findings by type, and the findings table with contextual depscores"
-              className="w-full rounded-xl border border-border shadow-[0_8px_40px_-8px_rgba(0,0,0,0.7)]"
-            />
-            {/* HERO-2: the Aegis fix plan — "Aegis writes the fix" */}
-            <div className="relative mx-6 -mt-8 overflow-hidden rounded-xl border border-[#333] shadow-[0_16px_48px_-4px_rgba(0,0,0,0.9)] sm:absolute sm:-bottom-12 sm:-right-10 sm:mx-0 sm:mt-0 sm:w-[380px]">
-              <img
-                src="/images/landing/hero-aegis-plan.png"
-                alt="Aegis fix plan: patch CVE-2021-23337 by bumping lodash — issue, plan, to-dos, and verification steps"
-                className="aspect-[3/4] w-full object-cover object-top"
-              />
-            </div>
-          </div>
-        </div>
       </div>
     </section>
   );

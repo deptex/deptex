@@ -63,10 +63,13 @@ export default function FindingJourney() {
 
   return (
     <section className="w-full bg-[#050505]">
-      <div className="mx-auto max-w-[1200px] px-6 py-24 sm:py-32">
+      {/* Tight top padding + compact header: this section is the page's first
+          visual, so it sits close under the hero and its h2 stays a clear step
+          below the H1 instead of competing with it. */}
+      <div className="mx-auto max-w-[1200px] px-6 pb-24 pt-10 sm:pb-32 sm:pt-14">
         <Reveal>
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <h2 className="max-w-[18ch] text-3xl font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[40px]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <h2 className="text-2xl font-semibold leading-[1.15] tracking-[-0.02em] text-foreground sm:text-[30px]">
               Follow a finding from alert to fix.
             </h2>
             <p className="max-w-[42ch] text-[15px] leading-relaxed text-foreground lg:text-right">
@@ -76,9 +79,11 @@ export default function FindingJourney() {
           </div>
         </Reveal>
 
-        <Reveal className="mt-12 sm:mt-14">
-          {/* Film panel — keyline + faint glow, video bleeds to the frame edge */}
+        <Reveal className="mt-8 sm:mt-10">
+          {/* Film panel — keyline + faint glow + the dot field inherited from
+              the cut hero collage (the atmosphere follows the product visual) */}
           <div className="relative">
+            <div className="hero-dots" aria-hidden />
             <div
               className="glow-green pointer-events-none absolute -inset-16 opacity-40"
               aria-hidden
