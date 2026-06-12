@@ -23,11 +23,10 @@ const DESIGN_W = 1700;
 const DESIGN_H = 850;
 
 function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number) {
-  // Fit the full 1700×850 composition by HEIGHT — the hero is much shorter
-  // than the design space, so the whole artwork shrinks into the corner
-  // (the way the approved bake-off render is framed) instead of showing a
-  // blown-up crop of its top band.
-  const scale = Math.min(w / DESIGN_W, (h / DESIGN_H) * 0.97);
+  // Scale: larger than strict height-fit so the cloth stretches further
+  // right and down (founder 2026-06-12); the vertical-aware mask keeps the
+  // headline band clear and the bottom edge fades by dot size.
+  const scale = Math.min(w / DESIGN_W, (h / DESIGN_H) * 1.18);
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
   ctx.clearRect(0, 0, w / scale + 50, h / scale + 50);
   const hLog = h / scale; // canvas height in design units
@@ -87,10 +86,10 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
   L = L.map((v) => v / Ll);
 
   // ---------- grid + horizon-buffer occlusion ----------
-  const PITCH = 13;
-  const DOTR = 4.3;
-  const COLS = 220;
-  const ROWS = 260;
+  const PITCH = 12; // finer net + smaller dots (founder: closer to the reference)
+  const DOTR = 3.4;
+  const COLS = 240;
+  const ROWS = 280;
   const X0 = -950;
   const Y0 = -60;
 
@@ -196,23 +195,28 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
   const FLIPY = syMax - 36;
   for (const d of dots) d.sy = FLIPY - d.syp;
 
-  // ---------- top-left anchor mask / dissolve ----------
-  // Extra bottom edge tied to the REAL canvas height so the cloth
-  // dissolves before the hero's lower boundary instead of hard-clipping.
+  // ---------- top-left anchor mask ----------
+  // Returns a 0..1 falloff that the draw loop applies mostly to DOT SIZE
+  // (the reference fades by dots shrinking to pinpricks, not by the image
+  // alpha-dissolving). Vertical-aware: the compressed top band is allowed
+  // to run far right (above the headline), the headline band is trimmed,
+  // and a canvas-height bottom edge shrinks the lower fan before the
+  // hero's boundary instead of hard-clipping.
   const maskAt = (x: number, y: number, seed: number) => {
     const tx = x / DESIGN_W;
     const ty = y / DESIGN_H;
     const t = tx * 1.0 + ty * 0.26;
-    const edge = (t - 0.42) / 0.4;
+    let edge = (t - 0.42) / 0.4;
+    if (ty < 0.13) edge -= (0.13 - ty) * 2.4; // top-band exemption: tail runs right, above the headline
     const yEdge = (ty - 0.66) / 0.28;
-    const bEdge = (y - hLog * 0.72) / (hLog * 0.24);
+    const bEdge = (y - hLog * 0.84) / (hLog * 0.14);
     const e = Math.max(edge, yEdge, bEdge);
     if (e <= 0) return 1;
     if (e >= 1.3) return 0;
     const ec = Math.min(1, e);
     const keepP = 1 - ec * ec * (3 - 2 * ec);
-    if (seed > keepP + 0.08) return 0;
-    return Math.max(0.05, Math.pow(1 - 0.85 * ec, 1.8));
+    if (seed > keepP + 0.25) return 0; // gentler dropout — size does the fading
+    return Math.max(0.04, Math.pow(1 - 0.8 * ec, 1.5));
   };
 
   // ---------- palette ----------
@@ -244,18 +248,22 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
   dots.sort((a, b) => b.zc - a.zc);
 
   for (const d of dots) {
-    if (d.sy < -25 || d.sy > hLog + 25 || d.sx < -20 || d.sx > DESIGN_W + 20) continue;
+    if (d.sy < -25 || d.sy > hLog + 25 || d.sx < -20 || d.sx > DESIGN_W * 1.5) continue;
     const m = maskAt(d.sx, d.sy, d.seed);
     if (m <= 0) continue;
-    const t = Math.max(0, Math.min(1, d.bright * m));
+    // Size carries the falloff; brightness only softens — edge dots stay
+    // visible as pinpricks instead of ghosting out
+    const t = Math.max(0, Math.min(1, d.bright * (0.35 + 0.65 * m)));
     if (t < 0.018) continue;
+    const rad = Math.min(d.rad, (PITCH * 0.46 * FOCAL) / d.zc) * (0.28 + 0.72 * Math.pow(m, 0.6));
+    if (rad < 0.3) continue;
     ctx.fillStyle = colorFor(t);
     ctx.beginPath();
     ctx.save();
     ctx.translate(d.sx, d.sy);
     ctx.rotate(d.ang);
     ctx.scale(d.squash, 1);
-    ctx.arc(0, 0, Math.min(d.rad, (PITCH * 0.46 * FOCAL) / d.zc), 0, Math.PI * 2);
+    ctx.arc(0, 0, rad, 0, Math.PI * 2);
     ctx.restore();
     ctx.fill();
   }
