@@ -91,13 +91,22 @@ export async function fetchCapabilitiesState(
   }
 }
 
-/** Presentational chips for a pre-fetched state (overview panel loads this with the rest of its data). */
-export function CapabilitiesChips({ state }: { state: CapabilitiesState }) {
+/**
+ * Presentational chips for a pre-fetched state (overview panel loads this with the rest of its data).
+ * `compact` renders chips only — pending/unavailable/empty states collapse to nothing, for inline
+ * placement in tight rows (e.g. the package meta/stats row).
+ */
+export function CapabilitiesChips({ state, compact }: { state: CapabilitiesState; compact?: boolean }) {
   if (state.kind === 'missing') {
-    return <div className="text-xs text-foreground-muted">Capability scan pending</div>;
+    return compact ? null : <div className="text-xs text-foreground-muted">Capability scan pending</div>;
   }
   if (state.kind === 'error') {
-    return <div className="text-xs text-foreground-muted">Capability scan unavailable</div>;
+    return compact ? null : <div className="text-xs text-foreground-muted">Capability scan unavailable</div>;
+  }
+  if (compact) {
+    const d = state.data;
+    const any = !d.scan_error && (Object.keys(CAPABILITY_META) as CapabilityKey[]).some((k) => d.capabilities[k]);
+    if (!any) return null;
   }
   return <CapabilityTagCloud data={state.data} />;
 }

@@ -529,9 +529,12 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
     }
   }, []);
 
-  // Prefetch overview when hovering a package row (100ms debounce)
+  // Prefetch overview when hovering a package row (100ms debounce). Never for the
+  // already-selected dep — its data is live in the panel, and re-arming a prefetch here
+  // would snapshot a stale copy into the module-level cache (e.g. without a fresh
+  // AI usage summary) that a later visit would consume.
   const handleRowHover = useCallback((depId: string) => {
-    if (!organizationId || !projectId) return;
+    if (!organizationId || !projectId || depId === selectedDepId) return;
     const existing = prefetchRowTimeoutsRef.current.get(depId);
     if (existing) clearTimeout(existing);
     const timeout = setTimeout(() => {
@@ -539,7 +542,7 @@ export function ProjectDependenciesContent(props: ProjectDependenciesContentProp
       prefetchRowTimeoutsRef.current.delete(depId);
     }, 100);
     prefetchRowTimeoutsRef.current.set(depId, timeout);
-  }, [organizationId, projectId]);
+  }, [organizationId, projectId, selectedDepId]);
 
   const handleRowHoverEnd = useCallback((depId: string) => {
     const timeout = prefetchRowTimeoutsRef.current.get(depId);
