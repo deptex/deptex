@@ -211,7 +211,7 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
     const yEdge = (ty - 0.66) / 0.28;
     // Wavy bottom boundary — columns finish at different heights instead
     // of a straight line across the canvas
-    const bLine = hLog * (0.74 + 0.12 * Math.sin(x * 0.0042 + 1.7) + 0.06 * Math.sin(x * 0.013 + 0.4));
+    const bLine = hLog * (0.49 + 0.12 * Math.sin(x * 0.0042 + 1.7) + 0.06 * Math.sin(x * 0.013 + 0.4));
     const bEdge = (y - bLine) / (hLog * 0.12);
     const e = Math.max(edge, yEdge, bEdge);
     if (e <= 0) return 1;
