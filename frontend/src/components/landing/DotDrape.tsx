@@ -87,7 +87,7 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
 
   // ---------- grid + horizon-buffer occlusion ----------
   const PITCH = 12; // finer net + smaller dots (founder: closer to the reference)
-  const DOTR = 3.4;
+  const DOTR = 2.7;
   const COLS = 240;
   const ROWS = 280;
   const X0 = -950;
@@ -155,7 +155,7 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
       const spec = Math.pow(Math.max(0, n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2]), 10);
 
       const distFade = Math.max(0.13, Math.min(1, 1.34 - dzc / 1300));
-      const nearBoost = 1 + 0.55 * Math.exp(-Math.max(0, dzc - 150) / 200);
+      const nearBoost = 1 + 0.3 * Math.exp(-Math.max(0, dzc - 150) / 200);
       // lit fold-edge slivers
       const rim = 0.55 * Math.pow(1 - Math.min(1, ndotv), 2.2) * Math.min(1, diff * 1.5);
       let bright = (0.1 + 0.8 * Math.pow(diff, 1.45) + 0.42 * spec + rim) * distFade * nearBoost;
@@ -209,7 +209,10 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
     let edge = (t - 0.42) / 0.4;
     if (ty < 0.13) edge -= (0.13 - ty) * 2.4; // top-band exemption: tail runs right, above the headline
     const yEdge = (ty - 0.66) / 0.28;
-    const bEdge = (y - hLog * 0.84) / (hLog * 0.14);
+    // Wavy bottom boundary — columns finish at different heights instead
+    // of a straight line across the canvas
+    const bLine = hLog * (0.74 + 0.12 * Math.sin(x * 0.0042 + 1.7) + 0.06 * Math.sin(x * 0.013 + 0.4));
+    const bEdge = (y - bLine) / (hLog * 0.12);
     const e = Math.max(edge, yEdge, bEdge);
     if (e <= 0) return 1;
     if (e >= 1.3) return 0;
@@ -251,9 +254,9 @@ function renderCloth(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: n
     if (d.sy < -25 || d.sy > hLog + 25 || d.sx < -20 || d.sx > DESIGN_W * 1.5) continue;
     const m = maskAt(d.sx, d.sy, d.seed);
     if (m <= 0) continue;
-    // Size carries the falloff; brightness only softens — edge dots stay
-    // visible as pinpricks instead of ghosting out
-    const t = Math.max(0, Math.min(1, d.bright * (0.35 + 0.65 * m)));
+    // Size carries ALL the falloff (founder: no brightness fade) — edge
+    // dots stay full-bright, just tiny
+    const t = Math.max(0, Math.min(1, d.bright));
     if (t < 0.018) continue;
     const rad = Math.min(d.rad, (PITCH * 0.46 * FOCAL) / d.zc) * (0.28 + 0.72 * Math.pow(m, 0.6));
     if (rad < 0.3) continue;
