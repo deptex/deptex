@@ -10,22 +10,16 @@
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
-import DotSheet from "./DotSheet";
+import DotDrape from "./DotDrape";
 
 export default function HeroSection() {
   return (
     <section className="relative w-full overflow-hidden bg-[#050505]">
-      {/* Atmosphere: the folded dot sheet drapes the hero, with an
-          elliptical clearance pocket so the headline/CTAs sit in clear
-          space. Same motif as under the film panel — one constant. */}
+      {/* Atmosphere: static halftone drapery in the top-left corner only
+          (founder call 2026-06-12 — one anchored statement piece, not a
+          symmetric wrap; no animation, like the reference) */}
       <div className="pointer-events-none absolute inset-0 hidden md:block" aria-hidden>
-        <DotSheet
-          className="h-full w-full"
-          fadeTop={0.1}
-          fadeBottom={0.15}
-          fadeSides={0.04}
-          clearCenter={{ cx: 0.5, cy: 0.42, rx: 0.27, ry: 0.46 }}
-        />
+        <DotDrape className="h-full w-full" />
       </div>
 
       <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-6 pt-28 sm:pb-8 sm:pt-36">

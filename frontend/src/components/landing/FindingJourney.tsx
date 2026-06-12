@@ -13,7 +13,6 @@
  * the Aegis dogfood thread is cleaned up. Poster renders if the file 404s.
  */
 import { useEffect, useRef, useState } from "react";
-import DotSheet from "./DotSheet";
 import { Reveal } from "./primitives";
 
 /** Chapter marks, in seconds of the current cut. Re-time when the real take lands. */
@@ -79,23 +78,14 @@ export default function FindingJourney() {
         </Reveal>
 
         <Reveal className="mt-8 sm:mt-10">
-          {/* Film panel — keyline + faint glow; the folded dot sheet recedes
-              under the panel like the card is floating on it (its horizon is
-              hidden behind the panel) */}
+          {/* Film panel — keyline + faint glow, video bleeds to the frame
+              edge. (The under-panel dot sheet was cut 2026-06-12 — the dot
+              motif is now a single statement piece in the hero corner.) */}
           <div className="relative">
             <div
               className="glow-green pointer-events-none absolute -inset-16 opacity-40"
               aria-hidden
             />
-            {/* canvas is a replaced element — inset alone won't stretch it,
-                so the wrapper carries the positioning. Top edge tucks 40px
-                under the panel so the sheet emerges from beneath the card. */}
-            <div
-              className="pointer-events-none absolute -inset-x-44 top-full -mt-10 hidden h-[280px] md:block"
-              aria-hidden
-            >
-              <DotSheet className="h-full w-full" />
-            </div>
             <div className="relative overflow-hidden rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_0_1px_#262626]">
               <video
                 ref={videoRef}
