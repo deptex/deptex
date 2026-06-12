@@ -209,6 +209,14 @@
     background-repeat: no-repeat;
   }
 
+  /* Fade the hero wave out before the section edge — the type-only hero is
+     shorter than the 700px wave canvas, so without this the glow band gets
+     clipped to a hard horizontal line where the next section starts. */
+  .hero-wave-clip {
+    -webkit-mask-image: linear-gradient(to bottom, black 38%, transparent 57%);
+    mask-image: linear-gradient(to bottom, black 38%, transparent 57%);
+  }
+
   /* Undulating wave: blurred chain of nodes, staggered animation-delay for ripple. (replaces 3 blobs, blur on container, different shift animations (fluid “shifting” effect) */
   .wave-gradient {
     position: absolute;
@@ -762,16 +770,5 @@ table tbody tr:hover:not([aria-expanded="true"]):not([data-expanded-content]):no
 }
 
 
-/* Dot-matrix field behind the FindingJourney film panel (Snyk-style, in
-   green) — its only user since the hero collage was cut 2026-06-11.
-   Wider halo than the collage version so the field reads around the big
-   frame; radial mask fades it before it reaches the text above/below. */
-.hero-dots {
-  position: absolute;
-  inset: -110px -130px -130px -130px;
-  pointer-events: none;
-  background-image: radial-gradient(rgba(52, 208, 138, 0.32) 1.5px, transparent 1.5px);
-  background-size: 22px 22px;
-  -webkit-mask-image: radial-gradient(ellipse 78% 74% at 50% 48%, black 30%, transparent 76%);
-  mask-image: radial-gradient(ellipse 78% 74% at 50% 48%, black 30%, transparent 76%);
-}
+/* (hero-dots field removed 2026-06-11 — founder: read as speckle noise at
+   film-panel scale. Git history has it if a dot field ever returns.) */

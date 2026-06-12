@@ -68,22 +68,18 @@ export default function FindingJourney() {
           below the H1 instead of competing with it. */}
       <div className="mx-auto max-w-[1200px] px-6 pb-24 pt-10 sm:pb-32 sm:pt-14">
         <Reveal>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <h2 className="text-2xl font-semibold leading-[1.15] tracking-[-0.02em] text-foreground sm:text-[30px]">
-              Follow a finding from alert to fix.
-            </h2>
-            <p className="max-w-[42ch] text-[15px] leading-relaxed text-foreground lg:text-right">
-              One finding, end to end, in the real product. Noise dies with
-              reasons. The one that matters gets traced, scored, and fixed.
-            </p>
-          </div>
+          <h2 className="text-2xl font-semibold leading-[1.15] tracking-[-0.02em] text-foreground sm:text-[30px]">
+            Follow a finding from alert to fix.
+          </h2>
+          <p className="mt-3 max-w-[60ch] text-[15px] leading-relaxed text-foreground">
+            One finding, end to end, in the real product. Noise dies with
+            reasons. The one that matters gets traced, scored, and fixed.
+          </p>
         </Reveal>
 
         <Reveal className="mt-8 sm:mt-10">
-          {/* Film panel — keyline + faint glow + the dot field inherited from
-              the cut hero collage (the atmosphere follows the product visual) */}
+          {/* Film panel — keyline + faint glow, video bleeds to the frame edge */}
           <div className="relative">
-            <div className="hero-dots" aria-hidden />
             <div
               className="glow-green pointer-events-none absolute -inset-16 opacity-40"
               aria-hidden

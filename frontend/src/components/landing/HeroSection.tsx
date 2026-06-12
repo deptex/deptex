@@ -13,8 +13,10 @@ import { Button } from "../ui/button";
 export default function HeroSection() {
   return (
     <section className="relative w-full overflow-hidden bg-[#050505]">
-      {/* Wave atmosphere, positioned behind the headline zone */}
-      <div className="absolute inset-x-0 top-0 h-[700px] pointer-events-none" aria-hidden>
+      {/* Wave atmosphere, positioned behind the headline zone; bottom-masked
+          so the glow dissolves into the page instead of clipping at the
+          section edge (the type-only hero is shorter than the wave canvas) */}
+      <div className="hero-wave-clip absolute inset-x-0 top-0 h-[700px] pointer-events-none" aria-hidden>
         <div className="wave-gradient">
           <div className="wave-node node-1" />
           <div className="wave-node node-2" />
