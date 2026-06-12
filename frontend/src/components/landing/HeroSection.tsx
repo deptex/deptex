@@ -23,7 +23,7 @@ export default function HeroSection() {
           className="h-full w-full"
           fadeTop={0.1}
           fadeBottom={0.15}
-          fadeSides={0.1}
+          fadeSides={0.04}
           clearCenter={{ cx: 0.5, cy: 0.42, rx: 0.27, ry: 0.46 }}
         />
       </div>

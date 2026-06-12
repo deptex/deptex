@@ -42,11 +42,14 @@ export default function DotSheet({
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const COLS = 130;
-    const ROWS = 30;
+    const COLS = 140;
+    const ROWS = 36; // row pitch vs LIFT is the fold ratio: amplitude ~1.5× the
+    // mid-field row gap folds the surface without occluding most of it
     const PERSP = 2.6; // perspective strength — row compression toward horizon
     const HORIZON = 0.0; // horizon at the canvas top (tucked under the panel edge)
-    const LIFT = 20; // fold height in px at the near edge
+    const LIFT = 34; // fold amplitude in px at the near edge — must exceed the
+    // local row gap to fold, but not by so much that the whole surface
+    // becomes silhouette (occluded/stretched = dark)
 
     let w = 0;
     let h = 0;
@@ -61,28 +64,54 @@ export default function DotSheet({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
+    // Per-row projection constants (no displacement): pv, scale, base y,
+    // nominal gap to the previous (farther) row, spread. Far → near order.
+    type Row = { pv: number; s: number; yBase: number; g0: number; spread: number };
+    const rows: Row[] = [];
+    for (let i = 0; i < ROWS; i++) {
+      const pv = 1 - i / (ROWS - 1); // i=0 far (horizon) → i=ROWS-1 near
+      const s = 1 / (1 + pv * PERSP);
+      const yBase = (HORIZON + (1 - HORIZON) * ((1 - pv) / (1 + pv * PERSP))) * 1; // ×h at draw
+      rows.push({ pv, s, yBase, g0: 0, spread: 0.6 + 0.4 * s });
+    }
+    for (let i = 1; i < ROWS; i++) rows[i].g0 = rows[i].yBase - rows[i - 1].yBase;
+    rows[0].g0 = rows[1]?.g0 ?? 0.01;
+
+    // The fold field — two big diagonal drape folds + finer ripple. Static
+    // phase offsets keep the composition asymmetric/organic; t only drifts
+    // it very slowly (the 3D reading must come from geometry, not motion).
+    const fold = (u: number, pv: number, t: number) =>
+      Math.sin(u * 3.1 + pv * 1.4 + 0.7 + t) +
+      0.55 * Math.sin(u * 7.3 - pv * 3.8 + 2.1 + t * 0.55) +
+      0.35 * Math.sin(u * 12.7 + pv * 8.5 + 4.2 - t * 0.35);
+
     const draw = (t: number) => {
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#34d08a";
       const cx = w / 2;
-      for (let row = 0; row < ROWS; row++) {
-        const pv = row / (ROWS - 1); // 0 = near (bottom), 1 = far (horizon)
-        const s = 1 / (1 + pv * PERSP); // perspective scale for this row
-        const yBase = (HORIZON + (1 - HORIZON) * ((1 - pv) / (1 + pv * PERSP))) * h;
-        const spread = 0.6 + 0.4 * s; // far rows narrow toward the panel width
-        for (let col = 0; col < COLS; col++) {
-          const u = col / (COLS - 1) - 0.5; // -0.5 .. 0.5 across the sheet
-          // The fold field: three slow interfering waves over the surface
-          const z =
-            0.5 * Math.sin(u * 6.5 + t) +
-            0.3 * Math.sin(u * 11.0 - pv * 7.0 + t * 0.55) +
-            0.35 * Math.sin(pv * 9.0 + u * 2.0 - t * 0.35);
-          const x = cx + u * w * spread;
-          const y = yBase - z * LIFT * s;
-          // Crest lighting: high z = big bright dots, troughs vanish entirely
-          // (the missing-dot gaps are what make it read as folded fabric)
-          const b = Math.max(0, 0.5 + 0.55 * z);
-          const r = (0.3 + 1.1 * b) * 3.6 * s;
+      // Column-major walk, far → near per column, so we can (a) shade by row
+      // COMPRESSION — the fabric cue: rows bunch into bright creases where a
+      // fold faces the camera, stretch dim where it falls away — and (b) hide
+      // dots tucked behind a fold front (the occlusion gaps).
+      for (let col = 0; col < COLS; col++) {
+        const u = col / (COLS - 1) - 0.5; // -0.5 .. 0.5 across the sheet
+        let prevY: number | null = null;
+        let maxY = -Infinity; // silhouette: the nearest surface drawn so far
+        for (let i = 0; i < ROWS; i++) {
+          const row = rows[i];
+          const z = fold(u, row.pv, t);
+          const x = cx + u * w * row.spread;
+          const y = row.yBase * h - z * LIFT * row.s;
+          // Row compression vs the undisplaced gap → slope shading
+          const comp = prevY === null ? 1 : (y - prevY) / Math.max(1, row.g0 * h);
+          prevY = y;
+          // Behind an already-drawn fold front → occluded (this gap IS the fold)
+          if (y < maxY - 1.5) continue;
+          maxY = Math.max(maxY, y);
+          // High dynamic range is what makes the creases pop: neutral rows
+          // stay small and dim, bunched rows blow up bright
+          const light = Math.max(0.06, Math.min(1.8, 1.6 - 1.1 * comp));
+          const r = (0.25 + 1.05 * light) * 3.8 * row.s;
           if (r < 0.35) continue;
           // Edge dissolves: sides / top emergence line / bottom
           const yn = y / h;
@@ -100,13 +129,13 @@ export default function DotSheet({
             fadeC = Math.max(0, Math.min(1, (d - 1) / 0.35));
           }
           const a =
-            (0.06 + 0.6 * b) *
+            (0.04 + 0.5 * light) *
             Math.max(0, fadeX) *
             Math.max(0, fadeT) *
             Math.max(0, Math.min(1, fadeB)) *
             fadeC;
           if (a < 0.02) continue;
-          ctx.globalAlpha = Math.min(0.75, a);
+          ctx.globalAlpha = Math.min(0.9, a);
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
           ctx.fill();
@@ -124,7 +153,7 @@ export default function DotSheet({
       raf = requestAnimationFrame(tick);
       if (now - last < FRAME_MS) return;
       last = now;
-      draw(now * 0.0004);
+      draw(now * 0.00022); // barely-drifting — Snyk's is static; ours just breathes
     };
 
     const start = () => {
