@@ -255,8 +255,8 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
           }
         }
 
-        // Org admins/owners OR users with manage_teams_and_projects permission get all permissions on teams
-        if (membership.role === 'owner' || membership.role === 'admin' || canViewAllTeams) {
+        // Org owners OR users with manage_teams_and_projects permission get all permissions on teams
+        if (membership.role === 'owner' || canViewAllTeams) {
           userPermissions = {
             view_overview: true,
             manage_projects: true,
@@ -402,7 +402,7 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     }
     const { orgMembership, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
 
     if (!isOrgAdmin) {
       // Check if user has view_settings permission on team (which implies edit for now).
@@ -645,7 +645,7 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     const canViewAllTeamsAndProjects = orgRole?.permissions?.view_all_teams_and_projects === true;
     const canManageTeamsAndProjects = orgRole?.permissions?.manage_teams_and_projects === true;
 
-    if (orgMembership?.role === 'owner' || orgMembership?.role === 'admin' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
+    if (orgMembership?.role === 'owner' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
       userPermissions = {
         view_overview: true,
         manage_projects: true,
@@ -736,7 +736,7 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
     }
     const { orgMembership, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userPermissions: any = null;
 
     if (!isOrgAdmin) {
@@ -839,7 +839,7 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
     }
     const { orgMembership, orgRole, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userRank = 0; // Org admins have rank 0 (highest)
     let userPermissions: any = null; // For checking permission granting
     // Org role + the caller's team role both ride along on checkTeamAccess — no extra reads.
@@ -1022,7 +1022,7 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
     }
     const { orgMembership, orgRole, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userRank = 0; // Org admins have rank 0 (highest)
     const hasOrgManagePermission = isOrgAdmin || orgRole?.permissions?.manage_teams_and_projects === true;
 
@@ -1240,7 +1240,7 @@ router.post('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1385,7 +1385,7 @@ router.put('/:id/teams/:teamId/members/:memberId/role', async (req: AuthRequest,
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1577,7 +1577,7 @@ router.delete('/:id/teams/:teamId/members/:memberId', async (req: AuthRequest, r
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1739,7 +1739,7 @@ router.post('/:id/teams/:teamId/transfer-ownership', async (req: AuthRequest, re
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if current user is team owner
     const { data: currentUserMembership } = await supabase

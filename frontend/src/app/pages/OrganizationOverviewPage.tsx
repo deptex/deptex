@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -359,11 +359,17 @@ export default function OrganizationOverviewPage() {
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
+  // osv_id to deep-open in the Findings tab — set when a finding is clicked from
+  // the dependencies supply-chain table; consumed by VulnerabilityExpandableTable.
+  const [projectFindingToOpen, setProjectFindingToOpen] = useState<string | null>(null);
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
   const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
   const [rawTeamsWithProjects, setRawTeamsWithProjects] = useState<OverviewTeamWithProjects[]>([]);
+  // Per-project depscore-band counts (phase48 security-summary RPC) — drives the mini
+  // SeverityPills under each project tile. Keyed by project id.
+  const [securitySummaryByProject, setSecuritySummaryByProject] = useState<Map<string, ProjectSecuritySummary>>(new Map());
   const [compactTeams, setCompactTeams] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [silentRefreshTrigger, setSilentRefreshTrigger] = useState(0);
@@ -865,15 +871,21 @@ export default function OrganizationOverviewPage() {
     // prior org's nodes/teams in the new org's graph.
     setRawTeamsWithProjects([]);
     setTeamsById({});
+    setSecuritySummaryByProject(new Map());
 
     Promise.all([
       api.getTeams(organization.id),
       api.getProjects(organization.id),
       api.getOrganizationStatuses(organization.id).catch(() => []),
+      // Band counts are tile decoration — soft-fail to "no pills" rather than failing the graph.
+      api.getOrgSecuritySummary(organization.id).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -982,10 +994,14 @@ export default function OrganizationOverviewPage() {
       api.getTeams(orgId),
       api.getProjects(orgId),
       api.getOrganizationStatuses(orgId).catch(() => []),
+      api.getOrgSecuritySummary(orgId).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -1063,7 +1079,27 @@ export default function OrganizationOverviewPage() {
   // The status-filter dropdown was removed (no compliant/non-compliant statuses yet) — the graph
   // renders the unfiltered team/project list directly.
   const teamsWithProjects = rawTeamsWithProjects;
-  const teamsWithProjectsForGraph = teamsWithProjects;
+  // Graph copy with depscore-band counts merged in — project tiles render mini SeverityPills
+  // once the security summary lands (undefined bandCounts = no pills, not fake zeros).
+  const teamsWithProjectsForGraph = useMemo(() => {
+    if (securitySummaryByProject.size === 0) return teamsWithProjects;
+    return teamsWithProjects.map((t) => ({
+      ...t,
+      projects: t.projects.map((p) => {
+        const s = securitySummaryByProject.get(p.projectId);
+        if (!s) return p;
+        return {
+          ...p,
+          bandCounts: {
+            critical: s.band_critical ?? 0,
+            high: s.band_high ?? 0,
+            medium: s.band_medium ?? 0,
+            low: s.band_low ?? 0,
+          },
+        };
+      }),
+    }));
+  }, [teamsWithProjects, securitySummaryByProject]);
 
   const orgStatusRollup = useMemo(
     () => computeOverviewStatusRollup(teamsWithProjectsForGraph.flatMap((t) => t.projects), statuses),
@@ -1522,7 +1558,16 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarProject(null);
       setProjectSidebarOrganization(null);
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
     }, 150);
+  }, [setSidebarParams]);
+
+  /** From the dependencies supply-chain table: switch to the Findings tab and
+   *  deep-open the clicked finding's card (one home for finding detail). */
+  const handleOpenProjectFinding = useCallback((osvId: string) => {
+    setProjectSidebarTab('vulnerabilities');
+    setSidebarParams({ tab: 'vulnerabilities', subtab: null });
+    setProjectFindingToOpen(osvId);
   }, [setSidebarParams]);
 
   const closeOrgSidebarImmediate = useCallback(() => {
@@ -1569,6 +1614,7 @@ export default function OrganizationOverviewPage() {
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
     setProjectSettingsSubTab('general');
+    setProjectFindingToOpen(null);
   }, []);
 
   /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
@@ -1586,6 +1632,7 @@ export default function OrganizationOverviewPage() {
       setProjectVulnDetailByRowId({});
       setProjectSidebarTab('vulnerabilities');
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
       setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'vulnerabilities', subtab: null, teamId: null });
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -1740,6 +1787,7 @@ export default function OrganizationOverviewPage() {
           setProjectVulnDetailByRowId({});
           setProjectSidebarTab('vulnerabilities');
           setProjectSettingsSubTab('general');
+          setProjectFindingToOpen(null);
           setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'vulnerabilities', subtab: null, teamId: null });
           setProjectSidebarOpen(true);
           requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -2205,6 +2253,10 @@ export default function OrganizationOverviewPage() {
         if (cancelled) return;
         setOrgSidebarSecuritySummary(summary.projects || []);
         setOrgSidebarProjects(projects);
+        // Keep the graph tiles' band pills in sync with the fresher sidebar fetch.
+        if (summary.projects?.length) {
+          setSecuritySummaryByProject(new Map(summary.projects.map((s) => [s.project_id, s])));
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -3682,51 +3734,16 @@ export default function OrganizationOverviewPage() {
                     <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
                       Failed
                     </span>
-                  ) : selectedProjectRealtime.isLoading || projectSidebarProjectLoading ? (
-                    <span className="h-5 w-20 rounded bg-foreground/10 animate-pulse flex-shrink-0 inline-block" />
-                  ) : projectSidebarProject?.status_name ? (
-                    <span
-                      className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0"
-                      style={{
-                        backgroundColor: `${projectSidebarProject.status_color ?? '#6b7280'}20`,
-                        color: projectSidebarProject.status_color ?? '#6b7280',
-                        borderColor: `${projectSidebarProject.status_color ?? '#6b7280'}40`,
-                      }}
-                    >
-                      {projectSidebarProject.status_name}
-                    </span>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {!selectedProjectEffectiveIsInitialExtracting && !selectedProjectExtractionFailed && projectSidebarProject?.permissions?.edit_settings && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs gap-1"
-                      disabled={selectedProjectEffectiveIsExtracting}
-                      onClick={async () => {
-                        if (!orgId || !selectedProjectId) return;
-                        try {
-                          await api.triggerProjectSync(orgId, selectedProjectId);
-                          setSelectedProjectIsExtracting(true);
-                        } catch (err: any) {
-                          toast({ title: 'Sync failed', description: err?.message || 'Could not trigger sync', variant: 'destructive' });
-                        }
-                      }}
-                    >
-                      <RotateCw className={cn('h-3 w-3', selectedProjectEffectiveIsExtracting && 'animate-spin')} />
-                      Sync
-                    </Button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={closeProjectSidebar}
-                    className="p-1 text-foreground-secondary hover:text-foreground transition-colors"
-                    aria-label="Close"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={closeProjectSidebar}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+                  aria-label="Close"
+                >
+                  <PanelRight className="h-4 w-4" />
+                </button>
               </div>
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">
@@ -3735,7 +3752,7 @@ export default function OrganizationOverviewPage() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); }}
+                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); setProjectFindingToOpen(null); }}
                       className={cn(
                         'relative pb-3 text-sm font-medium transition-colors',
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -3800,6 +3817,7 @@ export default function OrganizationOverviewPage() {
                         organizationId={orgId!}
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
+                        openFindingId={projectFindingToOpen}
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
                             void Promise.all([
@@ -3835,6 +3853,7 @@ export default function OrganizationOverviewPage() {
                       setProjectSidebarProject(p);
                     }}
                     embedInSidebar
+                    onOpenFinding={handleOpenProjectFinding}
                   />
                 )}
                 {projectSidebarTab === 'compliance' && projectSidebarProject && orgId && (

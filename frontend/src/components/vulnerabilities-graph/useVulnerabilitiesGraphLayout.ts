@@ -1,6 +1,27 @@
 import { useMemo } from 'react';
 import { type Node, type Edge, MarkerType } from '@xyflow/react';
-import type { DependencyNodeData, VulnerabilityNodeData } from '../supply-chain/useGraphLayout';
+import type { DependencyNodeData } from '../supply-chain/DependencyNode';
+
+/** Data shape for 'vulnerabilityNode' graph nodes (one card per finding). */
+export interface VulnerabilityNodeData {
+  osvId: string;
+  severity: string;
+  summary: string | null;
+  aliases: string[];
+  /** Depscore (0-100) when available for layout. */
+  depscore?: number;
+  epss_score?: number | null;
+  cvss_score?: number | null;
+  cisa_kev?: boolean | null;
+  is_reachable?: boolean | null;
+  reachability_level?: string | null;
+  fixed_versions?: string[] | null;
+  /** AI fix status for this vulnerability */
+  fixStatus?: 'queued' | 'running' | 'completed' | 'failed' | null;
+  /** SLA status for badge (warning = amber clock, breached = red clock) */
+  sla_status?: string | null;
+  sla_deadline_at?: string | null;
+}
 
 // Match supply-chain node dimensions for consistent layout (exported for skeleton position)
 export const VULN_CENTER_NODE_WIDTH = 260;

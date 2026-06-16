@@ -228,7 +228,10 @@ export async function checkProjectManagePermission(
   const membership = membershipRes.data;
   if (!membership) return false;
 
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  // `owner` is the only structural role. Never match other role *names* —
+  // a custom role literally named "admin" must earn access via its
+  // permissions JSONB (checked below), not via its name.
+  if (membership.role === 'owner') return true;
 
   const { data: orgRole } = await supabase
     .from('organization_roles')
@@ -288,7 +291,10 @@ export async function checkOrgManageIntegrationsPermission(
     .single();
 
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  // `owner` is the only structural role. Never match other role *names* —
+  // a custom role literally named "admin" must earn access via its
+  // permissions JSONB (checked below), not via its name.
+  if (membership.role === 'owner') return true;
 
   const { data: orgRole } = await supabase
     .from('organization_roles')

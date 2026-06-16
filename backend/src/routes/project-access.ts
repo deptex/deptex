@@ -115,7 +115,9 @@ export async function checkProjectManagePermission(
     .single();
   if (!membership) return false;
 
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  // `owner` is the only structural role — custom role names (including
+  // "admin") must carry the permission key in their bundle, checked below.
+  if (membership.role === 'owner') return true;
 
   const { data: orgRole } = await supabase
     .from('organization_roles')
