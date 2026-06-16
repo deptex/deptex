@@ -21,6 +21,7 @@ import {
   type IaCFinding,
   type ContainerFinding,
   type MaliciousFinding,
+  type DastFindingDTO,
 } from '../../lib/api';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
@@ -105,7 +106,10 @@ const TYPE_COLORS: Record<TypeKey, string> = {
   semgrep: '#22c55e', // green-500
   license: '#86efac', // green-300 — light
   iac: '#34d399', // emerald-400 — medium emerald
+  iac_group: '#34d399', // emerald-400 — same family as IaC
   container: '#2dd4bf', // teal-400 — medium teal
+  container_group: '#2dd4bf', // teal-400 — same family as container CVEs
+  dast: '#0d9488', // teal-600 — runtime
   malicious: '#047857', // emerald-700 — deepest
 };
 const TYPE_LABELS: Record<TypeKey, string> = {
@@ -114,7 +118,10 @@ const TYPE_LABELS: Record<TypeKey, string> = {
   semgrep: 'Code findings',
   license: 'License',
   iac: 'IaC',
+  iac_group: 'Container hardening',
   container: 'Container',
+  container_group: 'Base image',
+  dast: 'DAST',
   malicious: 'Malicious',
 };
 
@@ -154,6 +161,21 @@ const TYPE_DESCRIPTIONS: Record<TypeKey, { source: string; description: string }
     source: 'Trivy',
     description:
       'OS-package CVEs in container images — Dockerfile bases and connected registry images.',
+  },
+  iac_group: {
+    source: 'Checkov + Trivy',
+    description:
+      'The defense-in-depth k8s hardening tail (drop NET_RAW, restrict the SA token, seccomp, NetworkPolicy…) collapsed into one finding.',
+  },
+  container_group: {
+    source: 'Trivy',
+    description:
+      'An out-of-date base image, with all its OS-package CVEs collapsed into one finding — fixed by upgrading the image.',
+  },
+  dast: {
+    source: 'OWASP ZAP + Nuclei',
+    description:
+      'Runtime findings from actively scanning your live app — SQLi, XSS, SSTI. Cross-linked to the source handler and any reachable dependency.',
   },
   malicious: {
     source: 'OSV malicious feeds + GHSA',
@@ -407,6 +429,17 @@ export default function OrganizationFindingsPage() {
           projectId: p.id,
           data: r.data ?? [],
         })),
+        // DAST is per-target: resolve the latest scan's target, then load its
+        // findings. Most projects have no DAST target, so this short-circuits to
+        // an empty list after one cheap jobs request.
+        (async () => {
+          const jobs = await api.getDastJobs(p.id, { limit: 5 });
+          const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
+          const data = targetId
+            ? await api.getDastFindings(p.id, { limit: PER_PAGE_PER_TYPE, targetId })
+            : [];
+          return { kind: 'dast' as const, projectId: p.id, data };
+        })(),
       ]);
 
       const [vulnsResult, ...perProjectResults] = await Promise.allSettled([
@@ -437,6 +470,7 @@ export default function OrganizationFindingsPage() {
           | IaCFinding
           | ContainerFinding
           | MaliciousFinding
+          | DastFindingDTO
         )[]) {
           const stamped = { ...item, project_name: projectName };
           switch (kind) {
@@ -451,6 +485,9 @@ export default function OrganizationFindingsPage() {
               break;
             case 'container':
               rows.push({ type: 'container', data: stamped as ContainerFinding });
+              break;
+            case 'dast':
+              rows.push({ type: 'dast', data: stamped as DastFindingDTO & { project_name?: string } });
               break;
             case 'malicious':
               rows.push({ type: 'malicious', data: stamped as MaliciousFinding & { project_name?: string } });
@@ -622,7 +659,10 @@ export default function OrganizationFindingsPage() {
       semgrep: 0,
       license: 0,
       iac: 0,
+      iac_group: 0,
       container: 0,
+      container_group: 0,
+      dast: 0,
       malicious: 0,
     };
     for (const r of allRows) counts[r.type]++;

@@ -23,7 +23,7 @@ import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type LicenseViolation } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type LicenseViolation, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -83,7 +83,6 @@ import {
   VulnerabilityOrgSidebarExpandedContent,
 } from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
 import VulnerabilityExpandableTable, { type SecurityTableRow } from '../../components/security/VulnerabilityExpandableTable';
-import { DastFindingsSection } from '../../components/dast/DastFindingsSection';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 import { supabase } from '../../lib/supabase';
 
@@ -299,9 +298,18 @@ export default function OrganizationOverviewPage() {
   const [projectVulnerabilities, setProjectVulnerabilities] = useState<ProjectVulnerability[] | null>(null);
   const [projectSecrets, setProjectSecrets] = useState<SecretFinding[]>([]);
   const [projectSemgrep, setProjectSemgrep] = useState<SemgrepFinding[]>([]);
+  // The rest of the unified findings table: IaC misconfigs, container CVEs,
+  // malicious packages, and DAST runtime findings — fetched resiliently so one
+  // failing scanner endpoint never blanks the others (same pattern as the full
+  // org findings page).
+  const [projectIacFindings, setProjectIacFindings] = useState<IaCFinding[]>([]);
+  const [projectContainerFindings, setProjectContainerFindings] = useState<ContainerFinding[]>([]);
+  const [projectBaseImageRecs, setProjectBaseImageRecs] = useState<BaseImageRecommendation[]>([]);
+  const [projectMaliciousFindings, setProjectMaliciousFindings] = useState<MaliciousFinding[]>([]);
+  const [projectDastFindings, setProjectDastFindings] = useState<DastFindingDTO[]>([]);
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
-  const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
+  const [projectSidebarTab, setProjectSidebarTab] = useState<'findings' | 'dependencies' | 'compliance' | 'settings'>('findings');
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
   const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
@@ -496,8 +504,11 @@ export default function OrganizationOverviewPage() {
     } else if (sidebarParam === 'project') {
       const pid = searchParams.get('projectId');
       const tabRaw = searchParams.get('tab');
-      const validProjectTabs = new Set(['vulnerabilities', 'dependencies', 'settings']); // 'compliance' parked for MVP
-      const tab = (tabRaw && validProjectTabs.has(tabRaw) ? tabRaw : 'vulnerabilities') as 'vulnerabilities' | 'dependencies' | 'compliance' | 'settings';
+      // Accept the legacy 'vulnerabilities' tab key as an alias for 'findings' so
+      // old bookmarked URLs still resolve to the right tab.
+      const validProjectTabs = new Set(['findings', 'dependencies', 'settings']); // 'compliance' parked for MVP
+      const tabResolved = tabRaw === 'vulnerabilities' ? 'findings' : tabRaw;
+      const tab = (tabResolved && validProjectTabs.has(tabResolved) ? tabResolved : 'findings') as 'findings' | 'dependencies' | 'compliance' | 'settings';
       const subtab = searchParams.get('subtab') ?? 'general';
       if (pid) {
         const projectInfo = rawTeamsWithProjects.flatMap(t => t.projects).find(p => p.projectId === pid);
@@ -1529,9 +1540,9 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarProject(null);
       setExpandedProjectVulnRowId(null);
       setProjectVulnDetailByRowId({});
-      setProjectSidebarTab('vulnerabilities');
+      setProjectSidebarTab('findings');
       setProjectSettingsSubTab('general');
-      setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'vulnerabilities', subtab: null, teamId: null });
+      setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'findings', subtab: null, teamId: null });
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
     };
@@ -1683,9 +1694,9 @@ export default function OrganizationOverviewPage() {
           setProjectSidebarProject(null);
           setExpandedProjectVulnRowId(null);
           setProjectVulnDetailByRowId({});
-          setProjectSidebarTab('vulnerabilities');
+          setProjectSidebarTab('findings');
           setProjectSettingsSubTab('general');
-          setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'vulnerabilities', subtab: null, teamId: null });
+          setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'findings', subtab: null, teamId: null });
           setProjectSidebarOpen(true);
           requestAnimationFrame(() => setProjectSidebarVisible(true));
         };
@@ -2503,6 +2514,41 @@ export default function OrganizationOverviewPage() {
     return counts;
   }, [teamSidebarMembers]);
 
+  /**
+   * Load the non-SCA finding types for the project sidebar's unified findings
+   * table — IaC, container, malicious, and DAST. Resilient (allSettled) so a
+   * single failing scanner endpoint never blanks the others; DAST is per-target
+   * so we learn the latest scan's target before loading its findings. Shared by
+   * the open effect and the post-mutation refresh.
+   */
+  const loadProjectExtraFindings = useCallback(async (
+    oid: string,
+    pid: string,
+    isCancelled?: () => boolean,
+  ) => {
+    const [iac, container, malicious, baseImageRecs] = await Promise.allSettled([
+      api.getProjectIaCFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.getProjectContainerFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.maliciousFindings.list(oid, pid, 1, 100),
+      api.getBaseImageRecommendations(oid, pid),
+    ]);
+    if (isCancelled?.()) return;
+    setProjectIacFindings(iac.status === 'fulfilled' ? iac.value.data ?? [] : []);
+    setProjectContainerFindings(container.status === 'fulfilled' ? container.value.data ?? [] : []);
+    setProjectMaliciousFindings(malicious.status === 'fulfilled' ? malicious.value.data ?? [] : []);
+    setProjectBaseImageRecs(baseImageRecs.status === 'fulfilled' ? baseImageRecs.value.recommendations ?? [] : []);
+    try {
+      const jobs = await api.getDastJobs(pid, { limit: 5 });
+      if (isCancelled?.()) return;
+      const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
+      const dast = targetId ? await api.getDastFindings(pid, { limit: 200, targetId }) : [];
+      if (isCancelled?.()) return;
+      setProjectDastFindings(dast);
+    } catch {
+      if (!isCancelled?.()) setProjectDastFindings([]);
+    }
+  }, []);
+
   // Fetch project stats, vulnerabilities, full project and org when project sidebar opens
   useEffect(() => {
     if (!orgId || !selectedProjectId || !projectSidebarOpen) return;
@@ -2512,11 +2558,19 @@ export default function OrganizationOverviewPage() {
     setProjectVulnerabilities(null);
     setProjectSecrets([]);
     setProjectSemgrep([]);
+    setProjectIacFindings([]);
+    setProjectContainerFindings([]);
+    setProjectBaseImageRecs([]);
+    setProjectMaliciousFindings([]);
+    setProjectDastFindings([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
     setProjectSidebarProjectLoading(true);
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
+    // Non-SCA finding types load independently so they never block (or get
+    // blocked by) the core stats/vulns request.
+    void loadProjectExtraFindings(orgId, selectedProjectId, () => cancelled);
     Promise.all([
       api.getProjectStats(orgId, selectedProjectId),
       api.getProjectVulnerabilities(orgId, selectedProjectId),
@@ -2581,7 +2635,11 @@ export default function OrganizationOverviewPage() {
     ...dedupedProjectVulnerabilities.map((v) => ({ type: 'vulnerability' as const, data: v })),
     ...projectSecrets.map((s) => ({ type: 'secret' as const, data: s })),
     ...projectSemgrep.map((s) => ({ type: 'semgrep' as const, data: s })),
-  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep]);
+    ...projectIacFindings.map((f) => ({ type: 'iac' as const, data: f })),
+    ...projectContainerFindings.map((f) => ({ type: 'container' as const, data: f })),
+    ...projectDastFindings.map((f) => ({ type: 'dast' as const, data: f })),
+    ...projectMaliciousFindings.map((f) => ({ type: 'malicious' as const, data: f })),
+  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep, projectIacFindings, projectContainerFindings, projectDastFindings, projectMaliciousFindings]);
 
   const toggleProjectVulnerabilityRow = useCallback(async (rowId: string, osvId: string) => {
     setExpandedProjectVulnRowId((prev) => (prev === rowId ? null : rowId));
@@ -3660,7 +3718,7 @@ export default function OrganizationOverviewPage() {
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">
                   {/* MVP scope cut: 'compliance' tab parked (compliance feature shelved). */}
-                  {(['vulnerabilities', 'dependencies', 'settings'] as const).map((tab) => (
+                  {(['findings', 'dependencies', 'settings'] as const).map((tab) => (
                     <button
                       key={tab}
                       type="button"
@@ -3670,7 +3728,7 @@ export default function OrganizationOverviewPage() {
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
                       )}
                     >
-                      {tab === 'vulnerabilities' ? 'Findings' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
                       {projectSidebarTab === tab && (
                         <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground rounded-full" />
                       )}
@@ -3681,10 +3739,10 @@ export default function OrganizationOverviewPage() {
               <div
                 className={cn(
                   'flex-1 min-h-0 flex flex-col overflow-y-auto px-5',
-                  projectSidebarTab === 'vulnerabilities' ? 'py-5' : 'pb-5 pt-0'
+                  projectSidebarTab === 'findings' ? 'py-5' : 'pb-5 pt-0'
                 )}
               >
-{projectSidebarTab === 'vulnerabilities' && (
+{projectSidebarTab === 'findings' && (
                   <div className="space-y-4">
                     {projectStats?.malicious_packages?.scan_status === 'partial' && (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -3729,6 +3787,7 @@ export default function OrganizationOverviewPage() {
                         organizationId={orgId!}
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
+                        baseImageRecommendations={projectBaseImageRecs}
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
                             void Promise.all([
@@ -3742,14 +3801,13 @@ export default function OrganizationOverviewPage() {
                                 setProjectSemgrep(g?.data ?? []);
                               })
                               .catch(() => {});
+                            // Refresh IaC / container / malicious / DAST too so a
+                            // suppress / risk-accept on any of them reflects.
+                            void loadProjectExtraFindings(orgId, selectedProjectId);
                           }
                         }}
                         canManageFindings={Boolean(organization?.permissions?.manage_teams_and_projects)}
                       />
-                    )}
-
-                    {orgId && selectedProjectId && (
-                      <DastFindingsSection organizationId={orgId} projectId={selectedProjectId} />
                     )}
                   </div>
                 )}
@@ -3796,12 +3854,12 @@ export default function OrganizationOverviewPage() {
                     onSectionChange={(s) => { setProjectSettingsSubTab(s); setSidebarParams({ subtab: s }); }}
                   />
                 )}
-                {projectSidebarTab !== 'vulnerabilities' && projectSidebarProjectLoading && (
+                {projectSidebarTab !== 'findings' && projectSidebarProjectLoading && (
                   <div className="flex items-center justify-center py-12">
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                   </div>
                 )}
-                {projectSidebarTab !== 'vulnerabilities' && !projectSidebarProjectLoading && !projectSidebarProject && (
+                {projectSidebarTab !== 'findings' && !projectSidebarProjectLoading && !projectSidebarProject && (
                   <div className="py-8 text-center text-sm text-muted-foreground">Could not load project.</div>
                 )}
               </div>
