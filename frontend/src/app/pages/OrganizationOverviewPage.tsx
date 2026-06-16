@@ -359,6 +359,9 @@ export default function OrganizationOverviewPage() {
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
+  // osv_id to deep-open in the Findings tab — set when a finding is clicked from
+  // the dependencies supply-chain table; consumed by VulnerabilityExpandableTable.
+  const [projectFindingToOpen, setProjectFindingToOpen] = useState<string | null>(null);
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
   const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
@@ -1555,7 +1558,16 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarProject(null);
       setProjectSidebarOrganization(null);
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
     }, 150);
+  }, [setSidebarParams]);
+
+  /** From the dependencies supply-chain table: switch to the Findings tab and
+   *  deep-open the clicked finding's card (one home for finding detail). */
+  const handleOpenProjectFinding = useCallback((osvId: string) => {
+    setProjectSidebarTab('vulnerabilities');
+    setSidebarParams({ tab: 'vulnerabilities', subtab: null });
+    setProjectFindingToOpen(osvId);
   }, [setSidebarParams]);
 
   const closeOrgSidebarImmediate = useCallback(() => {
@@ -1602,6 +1614,7 @@ export default function OrganizationOverviewPage() {
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
     setProjectSettingsSubTab('general');
+    setProjectFindingToOpen(null);
   }, []);
 
   /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
@@ -1619,6 +1632,7 @@ export default function OrganizationOverviewPage() {
       setProjectVulnDetailByRowId({});
       setProjectSidebarTab('vulnerabilities');
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
       setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'vulnerabilities', subtab: null, teamId: null });
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -1773,6 +1787,7 @@ export default function OrganizationOverviewPage() {
           setProjectVulnDetailByRowId({});
           setProjectSidebarTab('vulnerabilities');
           setProjectSettingsSubTab('general');
+          setProjectFindingToOpen(null);
           setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'vulnerabilities', subtab: null, teamId: null });
           setProjectSidebarOpen(true);
           requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -3737,7 +3752,7 @@ export default function OrganizationOverviewPage() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); }}
+                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); setProjectFindingToOpen(null); }}
                       className={cn(
                         'relative pb-3 text-sm font-medium transition-colors',
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -3802,6 +3817,7 @@ export default function OrganizationOverviewPage() {
                         organizationId={orgId!}
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
+                        openFindingId={projectFindingToOpen}
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
                             void Promise.all([
@@ -3837,6 +3853,7 @@ export default function OrganizationOverviewPage() {
                       setProjectSidebarProject(p);
                     }}
                     embedInSidebar
+                    onOpenFinding={handleOpenProjectFinding}
                   />
                 )}
                 {projectSidebarTab === 'compliance' && projectSidebarProject && orgId && (

@@ -2980,6 +2980,18 @@ export const api = {
     );
   },
 
+  async createDependencyBumpPR(
+    organizationId: string,
+    projectId: string,
+    dependencyId: string,
+    targetVersion: string
+  ): Promise<{ pr_url: string; pr_number: number }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/dependencies/${dependencyId}/bump-pr`,
+      { method: 'POST', body: JSON.stringify({ target_version: targetVersion }) }
+    );
+  },
+
   // Banned Versions (org + team when projectId provided)
   async getBannedVersions(
     organizationId: string,
@@ -3999,6 +4011,24 @@ export interface DependencyVersionsResponse {
   total?: number;
 }
 
+/**
+ * A supply-chain vulnerability row. When the project has been scanned these carry the real
+ * reachability-assessed fields from project_dependency_vulnerabilities (depscore, reachability_level);
+ * for unscanned versions only the advisory fields (osv_id/severity/summary/aliases) are present.
+ */
+export interface SupplyChainVuln {
+  osv_id: string;
+  severity: string;
+  summary: string | null;
+  aliases: string[];
+  depscore?: number | null;
+  reachability_level?: string | null;
+  is_reachable?: boolean | null;
+  cvss_score?: number | null;
+  epss_score?: number | null;
+  cisa_kev?: boolean | null;
+}
+
 export interface SupplyChainChild {
   name: string;
   version: string;
@@ -4009,7 +4039,7 @@ export interface SupplyChainChild {
   high_vulns: number;
   medium_vulns: number;
   low_vulns: number;
-  vulnerabilities: Array<{ osv_id: string; severity: string; summary: string | null; aliases: string[]; is_reachable?: boolean }>;
+  vulnerabilities: SupplyChainVuln[];
 }
 
 export interface SupplyChainAncestorNode {
@@ -4051,15 +4081,8 @@ export interface SupplyChainResponse {
       affected_versions?: unknown;
       fixed_versions?: string[];
     }>;
-    /** For the graph only: vulns that affect the current version. */
-    vulnerabilities_affecting_current_version?: Array<{
-      osv_id: string;
-      severity: string;
-      summary: string | null;
-      aliases: string[];
-      affected_versions?: unknown;
-      fixed_versions?: string[];
-    }>;
+    /** The package's own findings for the current (installed) version — PDV-assessed when scanned. */
+    vulnerabilities_affecting_current_version?: SupplyChainVuln[];
     files_importing_count?: number;
     remove_pr_url?: string | null;
     remove_pr_number?: number | null;

@@ -6547,6 +6547,19 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const childVersionIds = (childEdges || []).map((e: any) => e.child_version_id);
 
     const BATCH_SIZE = 100;
+    /** Reachability-assessed vulnerability from project_dependency_vulnerabilities (the scan), not the raw advisory registry. */
+    type PdvVuln = {
+      osv_id: string;
+      severity: string;
+      summary: string | null;
+      aliases: string[];
+      depscore: number | null;
+      reachability_level: string | null;
+      is_reachable: boolean | null;
+      cvss_score: number | null;
+      epss_score: number | null;
+      cisa_kev: boolean | null;
+    };
     type ChildRow = {
       name: string;
       version: string;
@@ -6557,8 +6570,104 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       high_vulns: number;
       medium_vulns: number;
       low_vulns: number;
-      vulnerabilities: Array<{ osv_id: string; severity: string; summary: string | null; aliases: string[] }>;
+      vulnerabilities: Array<Record<string, unknown>>;
     };
+
+    // Counts feed the depscore-band SeverityPills (≥90 C / ≥70 H / ≥40 M / <40 L) — same banding the
+    // org tiles use. Reachability is baked into depscore, so an unreachable "critical" lands in low.
+    const bandOfDepscore = (score: number | null): 'critical' | 'high' | 'medium' | 'low' => {
+      if (score == null) return 'low';
+      if (score >= 90) return 'critical';
+      if (score >= 70) return 'high';
+      if (score >= 40) return 'medium';
+      return 'low';
+    };
+    const bandOfSeverity = (sev: string): 'critical' | 'high' | 'medium' | 'low' => {
+      const s = (sev || '').toLowerCase();
+      return s === 'critical' || s === 'high' || s === 'medium' ? s : 'low';
+    };
+    const countBands = (vulns: Array<{ depscore: number | null; severity: string }>) => {
+      let critical_vulns = 0, high_vulns = 0, medium_vulns = 0, low_vulns = 0;
+      for (const v of vulns) {
+        const band = v.depscore != null ? bandOfDepscore(v.depscore) : bandOfSeverity(v.severity);
+        if (band === 'critical') critical_vulns++;
+        else if (band === 'high') high_vulns++;
+        else if (band === 'medium') medium_vulns++;
+        else low_vulns++;
+      }
+      return { critical_vulns, high_vulns, medium_vulns, low_vulns };
+    };
+
+    /**
+     * Overlay the project's actual scan findings (project_dependency_vulnerabilities) onto the
+     * supply-chain view. Mirrors the findings route: when the active extraction run has PDV rows,
+     * PDV is the source of truth (reachability-assessed, depscore-scored, suppressed excluded);
+     * the raw advisory-by-version match stays as the fallback for versions this project hasn't
+     * scanned (e.g. nodes whose globally-declared child version differs from what's installed).
+     */
+    async function buildPdvOverlay(): Promise<{ usePdv: boolean; byDvId: Map<string, PdvVuln[]>; parentVulns: PdvVuln[] }> {
+      const empty = { usePdv: false, byDvId: new Map<string, PdvVuln[]>(), parentVulns: [] as PdvVuln[] };
+      const activeRunId = await getActiveExtractionId(supabase, projectId);
+      if (!activeRunId) return empty;
+      const { count: pdvCount } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('*', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId);
+      if (!pdvCount || pdvCount === 0) return empty;
+
+      // Map this project's current deps (dependency_version_id → project_dependency_id) so we can
+      // attach PDV (keyed by project_dependency_id) to the graph's child nodes (keyed by version).
+      const relevantDvIds = [...new Set([dependencyVersionId, ...childVersionIds])];
+      const dvIdToPdId = new Map<string, string>();
+      for (let i = 0; i < relevantDvIds.length; i += BATCH_SIZE) {
+        const batch = relevantDvIds.slice(i, i + BATCH_SIZE);
+        const { data: pdRows } = await supabase
+          .from('project_dependencies')
+          .select('id, dependency_version_id')
+          .eq('project_id', projectId)
+          .is('removed_at', null)
+          .in('dependency_version_id', batch);
+        for (const r of pdRows || []) {
+          const dvId = (r as any).dependency_version_id;
+          if (dvId) dvIdToPdId.set(dvId, (r as any).id);
+        }
+      }
+      const pdIds = [...new Set([...dvIdToPdId.values(), projectDependencyId])];
+      const pdIdToVulns = new Map<string, PdvVuln[]>();
+      for (let i = 0; i < pdIds.length; i += BATCH_SIZE) {
+        const batch = pdIds.slice(i, i + BATCH_SIZE);
+        const { data: pdvRows } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('project_dependency_id, osv_id, severity, summary, aliases, depscore, reachability_level, is_reachable, cvss_score, epss_score, cisa_kev')
+          .eq('project_id', projectId)
+          .eq('extraction_run_id', activeRunId)
+          .eq('suppressed', false)
+          .in('project_dependency_id', batch);
+        for (const v of pdvRows || []) {
+          const pid = (v as any).project_dependency_id;
+          if (!pdIdToVulns.has(pid)) pdIdToVulns.set(pid, []);
+          pdIdToVulns.get(pid)!.push({
+            osv_id: (v as any).osv_id,
+            severity: (v as any).severity ?? 'unknown',
+            summary: (v as any).summary ?? null,
+            aliases: (v as any).aliases ?? [],
+            depscore: (v as any).depscore ?? null,
+            reachability_level: (v as any).reachability_level ?? null,
+            is_reachable: (v as any).is_reachable ?? null,
+            cvss_score: (v as any).cvss_score ?? null,
+            epss_score: (v as any).epss_score ?? null,
+            cisa_kev: (v as any).cisa_kev ?? null,
+          });
+        }
+      }
+      const byDvId = new Map<string, PdvVuln[]>();
+      for (const [dvId, pdId] of dvIdToPdId.entries()) {
+        const vulns = pdIdToVulns.get(pdId);
+        if (vulns) byDvId.set(dvId, vulns);
+      }
+      return { usePdv: true, byDvId, parentVulns: pdIdToVulns.get(projectDependencyId) ?? [] };
+    }
 
     async function buildChildren(): Promise<ChildRow[]> {
       const children: ChildRow[] = [];
@@ -6679,11 +6788,33 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       return { currentDvRow, availableVersions };
     }
 
-    const [children, dvAndVersions, ancestors] = await Promise.all([
+    const [children, dvAndVersions, ancestors, pdvOverlay] = await Promise.all([
       buildChildren(),
       getCurrentDvAndAvailableVersions(),
       getAncestorPathsBatched(supabase, projectId, dependencyVersionId, parentName, parentVersion, isDirect),
+      buildPdvOverlay(),
     ]);
+
+    // Overlay the project's real scan findings (depscore + reachability) onto the graph's child
+    // nodes, where they were scanned. Unscanned versions keep the advisory-by-version match.
+    if (pdvOverlay.usePdv) {
+      for (const child of children) {
+        const pdvVulns = pdvOverlay.byDvId.get(child.dependency_version_id);
+        if (!pdvVulns) continue;
+        child.vulnerabilities = pdvVulns;
+        const bands = countBands(pdvVulns);
+        child.critical_vulns = bands.critical_vulns;
+        child.high_vulns = bands.high_vulns;
+        child.medium_vulns = bands.medium_vulns;
+        child.low_vulns = bands.low_vulns;
+      }
+      children.sort((a, b) => {
+        const at = a.critical_vulns + a.high_vulns + a.medium_vulns + a.low_vulns;
+        const bt = b.critical_vulns + b.high_vulns + b.medium_vulns + b.low_vulns;
+        if (at !== bt) return bt - at;
+        return a.name.localeCompare(b.name);
+      });
+    }
 
     const { currentDvRow, availableVersions } = dvAndVersions;
     const parentDepId = (currentDvRow as any)?.dependency_id ?? null;
@@ -6768,8 +6899,13 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const parentVulnerabilities = parentVulnRows;
     const bumpPrs = bumpPrRows;
 
-    let parentVulnerabilitiesAffectingCurrent: Array<{ osv_id: string; severity: string; summary: string | null; aliases: string[]; affected_versions: unknown; fixed_versions: string[] }> = [];
-    if (parentVulnerabilities.length > 0) {
+    // The package's own findings for the current (installed) version. When the project has been
+    // scanned, use the real PDV findings (depscore + reachability); otherwise fall back to the
+    // advisory-by-version match.
+    let parentVulnerabilitiesAffectingCurrent: Array<Record<string, unknown>> = [];
+    if (pdvOverlay.usePdv) {
+      parentVulnerabilitiesAffectingCurrent = pdvOverlay.parentVulns;
+    } else if (parentVulnerabilities.length > 0) {
       parentVulnerabilitiesAffectingCurrent = parentVulnerabilities.filter(
         (v) => isVersionAffected(parentVersion, v.affected_versions) && !isVersionFixed(parentVersion, v.fixed_versions)
       );
@@ -7283,6 +7419,67 @@ router.post('/:id/projects/:projectId/dependencies/:dependencyId/remove-pr', asy
   } catch (error: any) {
     console.error('Error creating remove PR:', error);
     res.status(500).json({ error: error.message || 'Failed to create remove PR' });
+  }
+});
+
+// POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/bump-pr - Create PR bumping this project's dependency to a target version
+router.post('/:id/projects/:projectId/dependencies/:dependencyId/bump-pr', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, dependencyId } = req.params;
+    const organizationId = id;
+    const targetVersion = typeof req.body?.target_version === 'string' ? req.body.target_version.trim() : '';
+
+    if (!targetVersion || targetVersion.length > 100) {
+      return res.status(400).json({ error: 'target_version is required' });
+    }
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    // Project-scoped lookup — binds the dependency to this project (no cross-project IDOR).
+    const { data: depDetails, error: detailsError } = await supabase
+      .from('project_dependencies')
+      .select('id, name, version, source')
+      .eq('id', dependencyId)
+      .eq('project_id', projectId)
+      .is('removed_at', null)
+      .single();
+
+    if (detailsError || !depDetails) {
+      if (detailsError?.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Dependency not found' });
+      }
+      throw detailsError;
+    }
+
+    const source = (depDetails as any).source;
+    if (source !== 'dependencies' && source !== 'devDependencies') {
+      return res.status(400).json({ error: 'Only direct dependencies can be bumped via PR.' });
+    }
+
+    if ((depDetails as any).version === targetVersion) {
+      return res.status(400).json({ error: 'Project is already on this version.' });
+    }
+
+    // Dedup of existing bump PRs for the same target version happens inside the helper.
+    const result = await createBumpPrForProject(
+      organizationId,
+      projectId,
+      (depDetails as any).name,
+      targetVersion,
+      (depDetails as any).version
+    );
+    if ('error' in result) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({ pr_url: result.pr_url, pr_number: result.pr_number });
+  } catch (error: any) {
+    console.error('Error creating bump PR:', error);
+    res.status(500).json({ error: error.message || 'Failed to create bump PR' });
   }
 });
 
