@@ -390,6 +390,49 @@ describe('Supply Chain Routes', () => {
   });
 
   describe('DELETE /api/organizations/:id/ban-version/:banId', () => {
+    it('returns 403 for an unprivileged member and never executes the delete', async () => {
+      (supabase.auth.getUser as jest.Mock).mockResolvedValue({
+        data: { user: mockUser },
+        error: null,
+      });
+      // Unprivileged: plain member whose role bundle lacks manage_teams_and_projects.
+      queryBuilder.single.mockImplementation(function (this: any) {
+        if (this._table === 'organization_members') {
+          return Promise.resolve({ data: { role: 'member' }, error: null });
+        }
+        if (this._table === 'organization_roles') {
+          return Promise.resolve({ data: { permissions: {} }, error: null });
+        }
+        return Promise.resolve({ data: {}, error: null });
+      });
+      // An org-level ban with this id exists (the SELECT-before-DELETE lookup).
+      queryBuilder.maybeSingle.mockImplementation(function (this: any) {
+        if (this._table === 'banned_versions') {
+          return Promise.resolve({
+            data: { id: 'ban-1', dependency_id: 'dep-1', banned_version: '1.0.0' },
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: {}, error: null });
+      });
+
+      const deletedTables: string[] = [];
+      queryBuilder.delete.mockImplementation(function (this: any) {
+        deletedTables.push(this._table);
+        return this;
+      });
+
+      const res = await request(app)
+        .delete(`/api/organizations/${orgId}/ban-version/ban-1`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      // Authorization must run BEFORE the mutation: 403 and the banned_versions
+      // row untouched (the old shape deleted the row, then returned 403).
+      expect(res.status).toBe(403);
+      expect(deletedTables).not.toContain('banned_versions');
+      expect(queryBuilder.delete).not.toHaveBeenCalled();
+    });
+
     it('should update watchlist latest_allowed_version when removing org ban and unbanned version is greater than current', async () => {
       mockOrgManagePermission();
       queryBuilder.single.mockResolvedValueOnce({
@@ -964,6 +1007,99 @@ describe('Supply Chain Routes', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.error).toMatch(/not a member|manage_projects/i);
+    });
+  });
+
+  describe('POST .../dependencies/:dependencyId/bump-pr', () => {
+    const bumpUrl = (depId: string) =>
+      `/api/organizations/${orgId}/projects/${projectId}/dependencies/${depId}/bump-pr`;
+
+    // This file's beforeEach resets queryBuilder.single to a flat default, so the
+    // table-aware setTableResponse registry doesn't apply to .single() here. Shape
+    // the project_dependencies lookup with a table-conditional implementation
+    // instead (call-order independent, unlike mockResolvedValueOnce chains).
+    function mockProjectDependencyRow(row: { data: any; error: any }) {
+      queryBuilder.single.mockImplementation(function (this: any) {
+        if (this._table === 'project_dependencies') return Promise.resolve(row);
+        return Promise.resolve({ data: {}, error: null });
+      });
+    }
+
+    it('creates a bump PR for a direct dependency', async () => {
+      mockOrgOwnerAccess();
+      mockProjectDependencyRow({
+        data: { id: 'pd-1', name: 'express', version: '4.18.2', source: 'dependencies' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .post(bumpUrl('pd-1'))
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ target_version: '5.2.1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.pr_url).toBe('https://github.com/org/repo/pull/99');
+      expect(res.body.pr_number).toBe(99);
+      const createBumpPrMock = require('../../lib/create-bump-pr').createBumpPrForProject;
+      expect(createBumpPrMock).toHaveBeenCalledWith(orgId, projectId, 'express', '5.2.1', '4.18.2');
+    });
+
+    it('returns 404 when the dependency does not belong to the project', async () => {
+      mockOrgOwnerAccess();
+      mockProjectDependencyRow({ data: null, error: { code: 'PGRST116' } });
+
+      const res = await request(app)
+        .post(bumpUrl('pd-other-project'))
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ target_version: '5.2.1' });
+
+      expect(res.status).toBe(404);
+      const createBumpPrMock = require('../../lib/create-bump-pr').createBumpPrForProject;
+      expect(createBumpPrMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects transitive dependencies', async () => {
+      mockOrgOwnerAccess();
+      mockProjectDependencyRow({
+        data: { id: 'pd-2', name: 'qs', version: '6.11.0', source: 'transitive' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .post(bumpUrl('pd-2'))
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ target_version: '6.12.0' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/direct dependencies/i);
+    });
+
+    it('rejects a missing target_version', async () => {
+      mockOrgOwnerAccess();
+
+      const res = await request(app)
+        .post(bumpUrl('pd-1'))
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/target_version/i);
+    });
+
+    it('rejects bumping to the version the project is already on', async () => {
+      mockOrgOwnerAccess();
+      mockProjectDependencyRow({
+        data: { id: 'pd-1', name: 'express', version: '4.18.2', source: 'dependencies' },
+        error: null,
+      });
+
+      const res = await request(app)
+        .post(bumpUrl('pd-1'))
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ target_version: '4.18.2' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/already on/i);
     });
   });
 });

@@ -137,10 +137,13 @@ function GroupCenterNodeComponent({ data }: NodeProps) {
             <AvatarOrIcon size={38} rounded="rounded-lg" />
             <div className="min-w-0 flex-1 flex flex-col gap-1">
               <p className="text-base font-semibold text-foreground truncate leading-tight tracking-tight">{title}</p>
-              {planDisplay && (
-                <span className="self-start inline-flex items-center rounded border border-border/70 bg-muted/40 px-1 py-0 text-[10px] font-medium text-muted-foreground leading-[14px]">
-                  {planDisplay}
-                </span>
+              {roleLabel && (
+                <RoleBadge
+                  role={(data as unknown as GroupCenterNodeData).organizationRole ?? roleLabel}
+                  roleDisplayName={roleLabel}
+                  roleColor={(data as unknown as GroupCenterNodeData).roleBadgeColor ?? null}
+                  className="self-start h-[18px] px-1.5 rounded-md text-[10px] leading-none"
+                />
               )}
             </div>
           </div>

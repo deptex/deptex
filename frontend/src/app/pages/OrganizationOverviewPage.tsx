@@ -8,18 +8,16 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Filter, Plus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, AlertTriangle, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, RotateCw, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { Checkbox } from '../../components/ui/checkbox';
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
@@ -170,6 +168,66 @@ function OrgProjectVulnerabilitiesTableColgroup() {
   );
 }
 
+/** Loading skeleton for the team Settings tab — mirrors the loaded layout (w-32 subnav with two
+ *  items, General heading, Team details card with name field + save footer, Danger Zone card) and
+ *  fades downward. animate-pulse lives on the placeholder blocks only, never on bordered elements. */
+function TeamSettingsSkeleton() {
+  return (
+    <div className="flex gap-6 pointer-events-none select-none" aria-busy="true" aria-label="Loading team settings">
+      <aside className="w-32 flex-shrink-0">
+        <div className="space-y-1">
+          {['w-16', 'w-12'].map((w, i) => (
+            <div key={i} className="flex items-center gap-3 px-3 py-2">
+              <div className="h-4 w-4 rounded bg-muted animate-pulse" />
+              <div className={`h-4 ${w} rounded bg-muted animate-pulse`} />
+            </div>
+          ))}
+        </div>
+      </aside>
+      <div
+        className="flex-1 min-w-0 space-y-6"
+        style={{
+          maskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%)',
+        }}
+      >
+        <div className="h-8 w-32 rounded-md bg-muted animate-pulse" />
+        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <div className="p-6 space-y-4">
+            <div className="h-5 w-28 rounded bg-muted animate-pulse" />
+            <div className="space-y-2 max-w-md">
+              <div className="h-4 w-12 rounded bg-muted/70 animate-pulse" />
+              <div className="h-10 w-full rounded-lg bg-muted/40 animate-pulse" />
+            </div>
+          </div>
+          <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+            <div className="h-8 w-16 rounded-lg bg-muted animate-pulse" />
+          </div>
+        </div>
+        <div className="bg-background-card border border-border rounded-lg p-6 space-y-3">
+          <div className="h-4 w-28 rounded bg-muted animate-pulse" />
+          <div className="h-4 w-2/3 rounded bg-muted/60 animate-pulse" />
+          <div className="h-8 w-28 rounded-lg bg-muted/70 animate-pulse" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** House error state for sidebar tab bodies — same shape as ProjectsAssetTable's error card
+ *  (title, context line, plain outline Try again — deliberately no icon). */
+function SidebarErrorState({ title, context, onRetry }: { title: string; context: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <h3 className="text-base font-medium text-foreground mb-1">{title}</h3>
+      <p className="text-sm text-foreground-secondary max-w-[260px] mb-4">Something went wrong fetching {context}.</p>
+      <Button variant="outline" onClick={onRetry} className="h-8 rounded-lg px-3">
+        Try again
+      </Button>
+    </div>
+  );
+}
+
 const ORG_PROJECT_VULN_TABLE_CLASS = 'w-full text-sm table-fixed';
 
 /** Skeleton for the project sidebar vulnerabilities table (matches loaded table chrome + columns). */
@@ -280,7 +338,6 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
   const [orgSidebarError, setOrgSidebarError] = useState(false);
-  const [orgSidebarErrorMsg, setOrgSidebarErrorMsg] = useState<string | null>(null);
   const [orgSidebarRefetch, setOrgSidebarRefetch] = useState(0);
   const [teamSidebarOpen, setTeamSidebarOpen] = useState(false);
   const [teamSidebarVisible, setTeamSidebarVisible] = useState(false);
@@ -310,12 +367,17 @@ export default function OrganizationOverviewPage() {
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'findings' | 'dependencies' | 'compliance' | 'settings'>('findings');
+  // osv_id to deep-open in the Findings tab — set when a finding is clicked from
+  // the dependencies supply-chain table; consumed by VulnerabilityExpandableTable.
+  const [projectFindingToOpen, setProjectFindingToOpen] = useState<string | null>(null);
   const [projectSidebarProject, setProjectSidebarProject] = useState<ProjectWithRole | null>(null);
   const [projectSidebarOrganization, setProjectSidebarOrganization] = useState<Organization | null>(null);
   const [projectSidebarProjectLoading, setProjectSidebarProjectLoading] = useState(false);
   const [statuses, setStatuses] = useState<OrganizationStatus[]>([]);
-  const [selectedStatusIds, setSelectedStatusIds] = useState<Set<string>>(new Set());
   const [rawTeamsWithProjects, setRawTeamsWithProjects] = useState<OverviewTeamWithProjects[]>([]);
+  // Per-project depscore-band counts (phase48 security-summary RPC) — drives the mini
+  // SeverityPills under each project tile. Keyed by project id.
+  const [securitySummaryByProject, setSecuritySummaryByProject] = useState<Map<string, ProjectSecuritySummary>>(new Map());
   const [compactTeams, setCompactTeams] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [silentRefreshTrigger, setSilentRefreshTrigger] = useState(0);
@@ -335,9 +397,15 @@ export default function OrganizationOverviewPage() {
   const [teamSidebarFindingRows, setTeamSidebarFindingRows] = useState<SecurityTableRow[]>([]);
   const [teamSidebarBaseImageRecs, setTeamSidebarBaseImageRecs] = useState<BaseImageRecommendation[]>([]);
   const [teamSidebarFindingsLoading, setTeamSidebarFindingsLoading] = useState(false);
+  // Surface load failures — a blank list with no error reads as "no findings", which is a lie.
+  const [teamSidebarFindingsError, setTeamSidebarFindingsError] = useState(false);
   const [teamSidebarOrgMembers, setTeamSidebarOrgMembers] = useState<OrganizationMember[]>([]);
   const [teamSidebarRoles, setTeamSidebarRoles] = useState<TeamRole[]>([]);
   const [teamSidebarDataLoading, setTeamSidebarDataLoading] = useState(false);
+  // Error triple mirroring the org sidebar (orgSidebarError/Msg/Refetch) — the eager team load
+  // previously swallowed failures into empty state, which reads as "team has no data".
+  const [teamSidebarError, setTeamSidebarError] = useState(false);
+  const [teamSidebarRefetch, setTeamSidebarRefetch] = useState(0);
   const [teamSidebarAddingMember, setTeamSidebarAddingMember] = useState(false);
   const [teamSidebarAddMemberOpen, setTeamSidebarAddMemberOpen] = useState(false);
   const [addMemberSearchQuery, setAddMemberSearchQuery] = useState('');
@@ -390,7 +458,9 @@ export default function OrganizationOverviewPage() {
   const [teamSettingsDraggedRoleId, setTeamSettingsDraggedRoleId] = useState<string | null>(null);
   const [teamSettingsDragPreviewRoles, setTeamSettingsDragPreviewRoles] = useState<TeamRole[] | null>(null);
   const reactFlowInstanceRef = useRef<{
-    fitView: (opts?: { nodes?: { id: string }[]; duration?: number }) => void;
+    fitView: (opts?: { nodes?: { id: string }[]; duration?: number; padding?: number; maxZoom?: number }) => void;
+    zoomIn: (opts?: { duration?: number }) => void;
+    zoomOut: (opts?: { duration?: number }) => void;
     getViewport: () => { x: number; y: number; zoom: number };
     setViewport: (viewport: { x: number; y: number; zoom: number }, options?: { duration?: number }) => void;
     getNode: (id: string) => Node | undefined;
@@ -809,15 +879,21 @@ export default function OrganizationOverviewPage() {
     // prior org's nodes/teams in the new org's graph.
     setRawTeamsWithProjects([]);
     setTeamsById({});
+    setSecuritySummaryByProject(new Map());
 
     Promise.all([
       api.getTeams(organization.id),
       api.getProjects(organization.id),
       api.getOrganizationStatuses(organization.id).catch(() => []),
+      // Band counts are tile decoration — soft-fail to "no pills" rather than failing the graph.
+      api.getOrgSecuritySummary(organization.id).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -926,10 +1002,14 @@ export default function OrganizationOverviewPage() {
       api.getTeams(orgId),
       api.getProjects(orgId),
       api.getOrganizationStatuses(orgId).catch(() => []),
+      api.getOrgSecuritySummary(orgId).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData]) => {
+      .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        if (securitySummary?.projects) {
+          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
+        }
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -1004,17 +1084,30 @@ export default function OrganizationOverviewPage() {
     return () => { cancelled = true; };
   }, [organization?.id, silentRefreshTrigger]);
 
-  const teamsWithProjects = useMemo(() => {
-    if (selectedStatusIds.size === 0) return rawTeamsWithProjects;
-    return rawTeamsWithProjects.map((t) => ({
+  // The status-filter dropdown was removed (no compliant/non-compliant statuses yet) — the graph
+  // renders the unfiltered team/project list directly.
+  const teamsWithProjects = rawTeamsWithProjects;
+  // Graph copy with depscore-band counts merged in — project tiles render mini SeverityPills
+  // once the security summary lands (undefined bandCounts = no pills, not fake zeros).
+  const teamsWithProjectsForGraph = useMemo(() => {
+    if (securitySummaryByProject.size === 0) return teamsWithProjects;
+    return teamsWithProjects.map((t) => ({
       ...t,
-      projects: t.projects.filter(
-        (proj) => proj.statusId != null && selectedStatusIds.has(proj.statusId)
-      ),
+      projects: t.projects.map((p) => {
+        const s = securitySummaryByProject.get(p.projectId);
+        if (!s) return p;
+        return {
+          ...p,
+          bandCounts: {
+            critical: s.band_critical ?? 0,
+            high: s.band_high ?? 0,
+            medium: s.band_medium ?? 0,
+            low: s.band_low ?? 0,
+          },
+        };
+      }),
     }));
-  }, [rawTeamsWithProjects, selectedStatusIds]);
-
-  const teamsWithProjectsForGraph = teamsWithProjects;
+  }, [teamsWithProjects, securitySummaryByProject]);
 
   const orgStatusRollup = useMemo(
     () => computeOverviewStatusRollup(teamsWithProjectsForGraph.flatMap((t) => t.projects), statuses),
@@ -1054,7 +1147,6 @@ export default function OrganizationOverviewPage() {
     organization?.role ?? null,
     orgStatusRollup,
     teamStatusRollups,
-    organization?.plan ?? null,
     compactTeams
   );
 
@@ -1474,7 +1566,16 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarProject(null);
       setProjectSidebarOrganization(null);
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
     }, 150);
+  }, [setSidebarParams]);
+
+  /** From the dependencies supply-chain table: switch to the Findings tab and
+   *  deep-open the clicked finding's card (one home for finding detail). */
+  const handleOpenProjectFinding = useCallback((osvId: string) => {
+    setProjectSidebarTab('findings');
+    setSidebarParams({ tab: 'findings', subtab: null });
+    setProjectFindingToOpen(osvId);
   }, [setSidebarParams]);
 
   const closeOrgSidebarImmediate = useCallback(() => {
@@ -1521,6 +1622,7 @@ export default function OrganizationOverviewPage() {
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
     setProjectSettingsSubTab('general');
+    setProjectFindingToOpen(null);
   }, []);
 
   /** Open the project sidebar for a project (e.g. clicked from team projects list). Closes all other sidebars. */
@@ -1538,6 +1640,7 @@ export default function OrganizationOverviewPage() {
       setProjectVulnDetailByRowId({});
       setProjectSidebarTab('findings');
       setProjectSettingsSubTab('general');
+      setProjectFindingToOpen(null);
       setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'findings', subtab: null, teamId: null });
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -1692,6 +1795,7 @@ export default function OrganizationOverviewPage() {
           setProjectVulnDetailByRowId({});
           setProjectSidebarTab('findings');
           setProjectSettingsSubTab('general');
+          setProjectFindingToOpen(null);
           setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'findings', subtab: null, teamId: null });
           setProjectSidebarOpen(true);
           requestAnimationFrame(() => setProjectSidebarVisible(true));
@@ -2124,6 +2228,8 @@ export default function OrganizationOverviewPage() {
         setExpandedProjectId(null);
         setExpandedNodes([]);
         setExpandedEdges([]);
+        // Without this the expand just silently collapses — say why, and that clicking retries.
+        toast({ title: 'Failed to load dependencies', description: 'Click the project again to retry.', variant: 'destructive' });
       } finally {
         setExpandingProjectId(null);
       }
@@ -2150,17 +2256,19 @@ export default function OrganizationOverviewPage() {
     let cancelled = false;
     setOrgSidebarLoading(true);
     setOrgSidebarError(false);
-    setOrgSidebarErrorMsg(null);
     Promise.all([api.getOrgSecuritySummary(orgId), api.getProjects(orgId)])
       .then(([summary, projects]) => {
         if (cancelled) return;
         setOrgSidebarSecuritySummary(summary.projects || []);
         setOrgSidebarProjects(projects);
+        // Keep the graph tiles' band pills in sync with the fresher sidebar fetch.
+        if (summary.projects?.length) {
+          setSecuritySummaryByProject(new Map(summary.projects.map((s) => [s.project_id, s])));
+        }
       })
-      .catch((err) => {
+      .catch(() => {
         if (cancelled) return;
         setOrgSidebarError(true);
-        setOrgSidebarErrorMsg(err instanceof Error ? err.message : String(err ?? ''));
       })
       .finally(() => {
         if (!cancelled) setOrgSidebarLoading(false);
@@ -2189,6 +2297,7 @@ export default function OrganizationOverviewPage() {
     setTeamSidebarFindingRows([]);
     setTeamSidebarBaseImageRecs([]);
     setTeamSidebarDataLoading(true);
+    setTeamSidebarError(false);
     // Note: getOrganizationMembers is NOT loaded here — it only feeds the Add-Member dialog, so it's
     // deferred to when the Members tab opens (see the effect below). Most sidebar opens land on the
     // Findings tab and never need it, and it's the heaviest call (per-user auth lookups).
@@ -2198,7 +2307,7 @@ export default function OrganizationOverviewPage() {
       api.getProjects(orgId),
       api.getTeamRoles(orgId, selectedTeamId),
       api.getTeam(orgId, selectedTeamId),
-      api.getTeamSecuritySummary(orgId, selectedTeamId).catch(() => ({ projects: [] })),
+      api.getTeamSecuritySummary(orgId, selectedTeamId),
     ])
       .then(([stats, members, allProjects, roles, teamData, securitySummary]) => {
         if (cancelled) return;
@@ -2223,13 +2332,15 @@ export default function OrganizationOverviewPage() {
           setTeamSidebarRoles([]);
           setTeamSidebarPermissions(null);
           setTeamSidebarTeamData(null);
+          // Surface the failure — empty state with no error reads as "this team has no data".
+          setTeamSidebarError(true);
         }
       })
       .finally(() => {
         if (!cancelled) setTeamSidebarDataLoading(false);
       });
     return () => { cancelled = true; };
-  }, [orgId, selectedTeamId, teamSidebarOpen]);
+  }, [orgId, selectedTeamId, teamSidebarOpen, teamSidebarRefetch]);
 
   // Org members feed only the Add-Member dialog's "available people" list — load them lazily when
   // the Members tab is opened (the default Findings tab never needs them). By the time the user
@@ -2244,9 +2355,15 @@ export default function OrganizationOverviewPage() {
     let cancelled = false;
     api.getOrganizationMembers(orgId)
       .then((m) => { if (!cancelled) setTeamSidebarOrgMembers(m); })
-      .catch(() => { /* dialog falls back to an empty available list */ });
+      .catch(() => {
+        if (cancelled) return;
+        // Explain the otherwise-mysterious empty "available people" list in the Add Member
+        // dialog, and let the next Members-tab visit retry instead of being blocked by the ref.
+        teamOrgMembersLoadedForRef.current = null;
+        toast({ title: 'Could not load organization members', description: 'The Add Member list may be empty — reopen the tab to retry.', variant: 'destructive' });
+      });
     return () => { cancelled = true; };
-  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId]);
+  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, toast]);
 
   // Load every finding type for ONE project into unified table rows — the exact
   // same set the project Findings tab assembles (SCA + secrets + semgrep + IaC +
@@ -2324,6 +2441,7 @@ export default function OrganizationOverviewPage() {
   const loadTeamFindings = useCallback(async () => {
     if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
     setTeamSidebarFindingsLoading(true);
+    setTeamSidebarFindingsError(false);
     setTeamSidebarFindingRows([]);
     setTeamSidebarBaseImageRecs([]);
     try {
@@ -2346,6 +2464,7 @@ export default function OrganizationOverviewPage() {
       setTeamSidebarFindingRows(rows);
       setTeamSidebarBaseImageRecs(recs);
     } catch {
+      setTeamSidebarFindingsError(true);
       setTeamSidebarFindingRows([]);
       setTeamSidebarBaseImageRecs([]);
     } finally {
@@ -2550,7 +2669,15 @@ export default function OrganizationOverviewPage() {
     setTeamSidebarRoles(finalRoles);
     setTeamSettingsDragPreviewRoles(null);
     Promise.all(updates.map(({ id: roleId, newOrder }) => api.updateTeamRole(orgId, selectedTeamId, roleId, { display_order: newOrder })))
-      .catch(() => { toast({ title: 'Failed to reorder roles', description: 'Please try again.', variant: 'destructive' }); });
+      .catch(async () => {
+        // The optimistic order is already on screen and the writes may have PARTIALLY landed —
+        // refetch server truth instead of leaving the UI lying about the saved order.
+        toast({ title: 'Failed to reorder roles', description: 'Restoring the saved order.', variant: 'destructive' });
+        try {
+          const roles = await api.getTeamRoles(orgId, selectedTeamId);
+          setTeamSidebarRoles(roles);
+        } catch { /* next sidebar open refetches */ }
+      });
   };
 
   // Team settings computed values
@@ -2756,8 +2883,15 @@ export default function OrganizationOverviewPage() {
     <main className="relative flex flex-col min-h-[100vh] w-full bg-background">
       {error && (
         <div className="flex-shrink-0 px-4 pt-3">
-          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive">
-            {error}
+          <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive flex items-center justify-between gap-3">
+            <span className="min-w-0 break-words">{error}</span>
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3 flex-shrink-0"
+              onClick={() => { setError(null); setGraphRefreshTrigger((t) => t + 1); }}
+            >
+              Try again
+            </Button>
           </div>
         </div>
       )}
@@ -2773,7 +2907,7 @@ export default function OrganizationOverviewPage() {
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    'h-8 w-8 p-0 hover:bg-white/5',
+                    'h-7 w-7 p-0 hover:bg-white/5',
                     compactTeams ? 'text-primary' : 'text-foreground-secondary hover:text-foreground'
                   )}
                   onClick={() => setCompactTeams((v) => !v)}
@@ -2790,10 +2924,11 @@ export default function OrganizationOverviewPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+                className="h-7 px-2 gap-1 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
                 aria-label="Add"
               >
                 <Plus className="h-3.5 w-3.5" />
+                <span className="text-xs font-medium">Add</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52 rounded-lg border-border bg-background-card shadow-lg">
@@ -2823,175 +2958,138 @@ export default function OrganizationOverviewPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  'h-8 w-8 p-0 hover:bg-white/5',
-                  canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor)
-                    ? 'text-foreground-secondary hover:text-foreground'
-                    : 'text-foreground-secondary/40 hover:text-foreground/60'
-                )}
-                aria-label="Live cursor settings"
-              >
-                {canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor) ? (
-                  <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.8} />
-                ) : (
-                  <MousePointer2 className="h-3.5 w-3.5" strokeWidth={1.8} />
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60 rounded-lg border-border bg-background-card shadow-lg">
-              <DropdownMenuLabel className="text-foreground font-semibold px-2 pt-2 pb-1">Live cursors</DropdownMenuLabel>
-              {!canvasCursorsOrgEnabled && organization?.role !== 'owner' && (
-                <p className="px-3 pb-1 text-xs text-muted-foreground">Disabled by org owner</p>
-              )}
-              <div className="pb-1">
-                {([
-                  { label: 'Show others\' cursors', value: showOthersCursors && canvasCursorsOrgEnabled, toggle: persistShowOthers, disabled: !canvasCursorsOrgEnabled },
-                  { label: 'Broadcast my cursor', value: broadcastOwnCursor && canvasCursorsOrgEnabled, toggle: persistBroadcastOwn, disabled: !canvasCursorsOrgEnabled },
-                ] as { label: string; value: boolean; toggle: (v: boolean) => void; disabled: boolean }[]).map(({ label, value, toggle, disabled }) => (
-                  <DropdownMenuCheckboxItem
-                    key={label}
-                    checked={value}
-                    disabled={disabled}
-                    onCheckedChange={(checked) => toggle(checked)}
-                    className={cn('gap-2', disabled && 'opacity-40 cursor-not-allowed')}
-                  >
-                    <span className="text-sm flex-1 text-foreground">{label}</span>
-                    <span
-                      className={cn(
-                        'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
-                        value
-                          ? 'border-foreground/60 bg-foreground/10 text-foreground'
-                          : 'border-border bg-transparent text-muted-foreground',
-                      )}
-                    >
-                      {value ? 'ON' : 'OFF'}
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </div>
-              {organization?.role === 'owner' && (
-                <>
-                  <DropdownMenuSeparator />
-                  <div className="pt-1 pb-1.5">
-                    <p className="text-[11px] text-muted-foreground mb-1 font-medium uppercase tracking-wide px-2">Org settings</p>
-                    <DropdownMenuCheckboxItem
-                      checked={canvasCursorsOrgEnabled}
-                      onCheckedChange={toggleOrgCursorsEnabled}
-                      className="gap-2"
-                    >
-                      <span className="text-sm flex-1 text-foreground">Enable for org</span>
-                      <span
-                        className={cn(
-                          'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
-                          canvasCursorsOrgEnabled
-                            ? 'border-foreground/60 bg-foreground/10 text-foreground'
-                            : 'border-border bg-transparent text-muted-foreground',
-                        )}
-                      >
-                        {canvasCursorsOrgEnabled ? 'ON' : 'OFF'}
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  </div>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
-                aria-label="Filter graph"
-              >
-                <Filter className="h-3.5 w-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 rounded-lg border-border bg-background-card shadow-lg">
-              <DropdownMenuLabel className="text-foreground font-semibold px-2 pt-2 pb-1">
-                Filter by
-              </DropdownMenuLabel>
-              <div className="px-2 space-y-0 max-h-[280px] overflow-y-auto">
-                {statuses.length === 0 ? (
-                  <p className="text-sm text-foreground-secondary py-2 px-0">No custom statuses</p>
-                ) : (
-                  [...statuses]
-                    .sort((a, b) => a.rank - b.rank)
-                    .map((status) => {
-                      const checked = selectedStatusIds.has(status.id);
-                      return (
-                        <div
-                          key={status.id}
-                          className="group flex items-center gap-2 py-1 px-0 rounded-md cursor-pointer"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setSelectedStatusIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(status.id)) next.delete(status.id);
-                              else next.add(status.id);
-                              return next;
-                            });
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              setSelectedStatusIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(status.id)) next.delete(status.id);
-                                else next.add(status.id);
-                                return next;
-                              });
-                            }
-                          }}
-                          role="option"
-                          aria-selected={checked}
-                          tabIndex={0}
-                        >
-                          <Checkbox
-                            id={`filter-status-${status.id}`}
-                            checked={checked}
-                            onCheckedChange={(c) => {
-                              setSelectedStatusIds((prev) => {
-                                const next = new Set(prev);
-                                if (c === true) next.add(status.id);
-                                else next.delete(status.id);
-                                return next;
-                              });
-                            }}
-                            className="data-[state=checked]:bg-foreground data-[state=checked]:text-background data-[state=checked]:border-foreground"
-                          />
-                          <label
-                            htmlFor={`filter-status-${status.id}`}
-                            className="text-sm font-normal cursor-pointer flex-1 text-foreground"
-                          >
-                            {status.name}
-                          </label>
-                          <button
-                            type="button"
-                            className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium px-2 py-1 rounded-md border border-foreground/40 bg-transparent text-foreground hover:bg-foreground/10 focus:opacity-100 focus:outline-none"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedStatusIds(new Set([status.id]));
-                            }}
-                          >
-                            Select only
-                          </button>
-                        </div>
-                      );
-                    })
-                )}
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
           </div>
         </div>
 )}
+        {/* Bottom-left canvas controls — Railway-style vertical rail: zoom/fit group + live cursors */}
+        {!stillShowingSkeleton && (
+          <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-2">
+            <div className="flex flex-col items-center gap-0.5 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+                    onClick={() => reactFlowInstanceRef.current?.zoomIn({ duration: 150 })}
+                    aria-label="Zoom in"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Zoom in</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+                    onClick={() => reactFlowInstanceRef.current?.zoomOut({ duration: 150 })}
+                    aria-label="Zoom out"
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Zoom out</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+                    onClick={() => reactFlowInstanceRef.current?.fitView({ padding: 0.38, maxZoom: 1.15, duration: 300 })}
+                    aria-label="Fit view"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Fit view</TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="flex flex-col items-center rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                      'h-8 w-8 p-0 hover:bg-white/5',
+                      canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor)
+                        ? 'text-foreground-secondary hover:text-foreground'
+                        : 'text-foreground-secondary/40 hover:text-foreground/60'
+                    )}
+                    aria-label="Live cursor settings"
+                  >
+                    {canvasCursorsOrgEnabled && (showOthersCursors || broadcastOwnCursor) ? (
+                      <MousePointerClick className="h-3.5 w-3.5" strokeWidth={1.8} />
+                    ) : (
+                      <MousePointer2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="start" className="w-60 rounded-lg border-border bg-background-card shadow-lg">
+                  <DropdownMenuLabel className="text-foreground font-semibold px-2 pt-2 pb-1">Live cursors</DropdownMenuLabel>
+                  {!canvasCursorsOrgEnabled && organization?.role !== 'owner' && (
+                    <p className="px-3 pb-1 text-xs text-muted-foreground">Disabled by org owner</p>
+                  )}
+                  <div className="pb-1">
+                    {([
+                      { label: 'Show others\' cursors', value: showOthersCursors && canvasCursorsOrgEnabled, toggle: persistShowOthers, disabled: !canvasCursorsOrgEnabled },
+                      { label: 'Broadcast my cursor', value: broadcastOwnCursor && canvasCursorsOrgEnabled, toggle: persistBroadcastOwn, disabled: !canvasCursorsOrgEnabled },
+                    ] as { label: string; value: boolean; toggle: (v: boolean) => void; disabled: boolean }[]).map(({ label, value, toggle, disabled }) => (
+                      // Plain item, not CheckboxItem — the ON/OFF pill is the single state indicator
+                      // (no redundant checkmark), and preventDefault keeps the menu open while toggling.
+                      <DropdownMenuItem
+                        key={label}
+                        disabled={disabled}
+                        onSelect={(e) => { e.preventDefault(); toggle(!value); }}
+                        className={cn('gap-2 cursor-pointer', disabled && 'opacity-40 cursor-not-allowed')}
+                      >
+                        <span className="text-sm flex-1 text-foreground">{label}</span>
+                        <span
+                          className={cn(
+                            'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
+                            value
+                              ? 'border-foreground/60 bg-foreground/10 text-foreground'
+                              : 'border-border bg-transparent text-muted-foreground',
+                          )}
+                        >
+                          {value ? 'ON' : 'OFF'}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </div>
+                  {organization?.role === 'owner' && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <div className="pt-1 pb-1.5">
+                        <p className="text-[11px] text-muted-foreground mb-1 font-medium uppercase tracking-wide px-2">Org settings</p>
+                        <DropdownMenuItem
+                          onSelect={(e) => { e.preventDefault(); toggleOrgCursorsEnabled(!canvasCursorsOrgEnabled); }}
+                          className="gap-2 cursor-pointer"
+                        >
+                          <span className="text-sm flex-1 text-foreground">Enable for org</span>
+                          <span
+                            className={cn(
+                              'ml-auto text-xs font-medium px-2 py-0.5 rounded-md border transition-colors min-w-[28px] text-center',
+                              canvasCursorsOrgEnabled
+                                ? 'border-foreground/60 bg-foreground/10 text-foreground'
+                                : 'border-border bg-transparent text-muted-foreground',
+                            )}
+                          >
+                            {canvasCursorsOrgEnabled ? 'ON' : 'OFF'}
+                          </span>
+                        </DropdownMenuItem>
+                      </div>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        )}
         <div className="absolute inset-0 flex min-h-0">
           {/* Graph */}
           <div className="flex-1 min-w-0 min-h-0 overflow-hidden bg-background relative">
@@ -3076,7 +3174,6 @@ export default function OrganizationOverviewPage() {
                 projects={orgSidebarProjects}
                 loading={orgSidebarLoading}
                 error={orgSidebarError}
-                errorMsg={orgSidebarErrorMsg}
                 onRetry={() => setOrgSidebarRefetch((n) => n + 1)}
                 onProjectClick={openProjectInSidebar}
                 showTeamColumn
@@ -3139,6 +3236,8 @@ export default function OrganizationOverviewPage() {
                   summaries={teamSidebarSecuritySummary}
                   projects={teamSidebarProjects}
                   loading={teamSidebarDataLoading}
+                  error={teamSidebarError}
+                  onRetry={() => setTeamSidebarRefetch((n) => n + 1)}
                   onProjectClick={openProjectInSidebar}
                   showTeamColumn={false}
                   searchPlaceholder="Search projects, repos…"
@@ -3166,7 +3265,13 @@ export default function OrganizationOverviewPage() {
                 const securityRows = teamSidebarFindingRows;
                 return (
                   <div className="space-y-4">
-                    {teamSidebarFindingsLoading && securityRows.length === 0 ? (
+                    {teamSidebarFindingsError ? (
+                      <SidebarErrorState
+                        title="Couldn't load findings"
+                        context="this team's findings"
+                        onRetry={() => void loadTeamFindings()}
+                      />
+                    ) : teamSidebarFindingsLoading && securityRows.length === 0 ? (
                       <OrganizationVulnerabilitiesTableSkeleton />
                     ) : securityRows.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -3230,7 +3335,13 @@ export default function OrganizationOverviewPage() {
                   </div>
 
                   {/* Members List */}
-                  {teamSidebarDataLoading ? (
+                  {teamSidebarError ? (
+                    <SidebarErrorState
+                      title="Couldn't load members"
+                      context="this team's members"
+                          onRetry={() => setTeamSidebarRefetch((n) => n + 1)}
+                    />
+                  ) : teamSidebarDataLoading ? (
                     <div
                       className="bg-background-card border border-border rounded-lg overflow-hidden divide-y divide-border pointer-events-none select-none"
                       style={{
@@ -3374,6 +3485,18 @@ export default function OrganizationOverviewPage() {
                     </div>
                   )}
                 </div>
+              )}
+              {/* Settings needs teamSidebarTeamData — skeleton while it loads, error card when the
+                  eager load failed; never a silent blank tab. */}
+              {teamSidebarTab === 'settings' && !teamSidebarTeamData && teamSidebarDataLoading && (
+                <TeamSettingsSkeleton />
+              )}
+              {teamSidebarTab === 'settings' && !teamSidebarTeamData && !teamSidebarDataLoading && teamSidebarError && (
+                <SidebarErrorState
+                  title="Couldn't load team settings"
+                  context="this team's settings"
+                  onRetry={() => setTeamSidebarRefetch((n) => n + 1)}
+                />
               )}
               {teamSidebarTab === 'settings' && teamSidebarTeamData && (
                 <div className="flex gap-6">
@@ -3696,51 +3819,16 @@ export default function OrganizationOverviewPage() {
                     <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
                       Failed
                     </span>
-                  ) : selectedProjectRealtime.isLoading || projectSidebarProjectLoading ? (
-                    <span className="h-5 w-20 rounded bg-foreground/10 animate-pulse flex-shrink-0 inline-block" />
-                  ) : projectSidebarProject?.status_name ? (
-                    <span
-                      className="px-2 py-0.5 rounded text-xs font-medium border flex-shrink-0"
-                      style={{
-                        backgroundColor: `${projectSidebarProject.status_color ?? '#6b7280'}20`,
-                        color: projectSidebarProject.status_color ?? '#6b7280',
-                        borderColor: `${projectSidebarProject.status_color ?? '#6b7280'}40`,
-                      }}
-                    >
-                      {projectSidebarProject.status_name}
-                    </span>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {!selectedProjectEffectiveIsInitialExtracting && !selectedProjectExtractionFailed && projectSidebarProject?.permissions?.edit_settings && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs gap-1"
-                      disabled={selectedProjectEffectiveIsExtracting}
-                      onClick={async () => {
-                        if (!orgId || !selectedProjectId) return;
-                        try {
-                          await api.triggerProjectSync(orgId, selectedProjectId);
-                          setSelectedProjectIsExtracting(true);
-                        } catch (err: any) {
-                          toast({ title: 'Sync failed', description: err?.message || 'Could not trigger sync', variant: 'destructive' });
-                        }
-                      }}
-                    >
-                      <RotateCw className={cn('h-3 w-3', selectedProjectEffectiveIsExtracting && 'animate-spin')} />
-                      Sync
-                    </Button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={closeProjectSidebar}
-                    className="p-1 text-foreground-secondary hover:text-foreground transition-colors"
-                    aria-label="Close"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={closeProjectSidebar}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+                  aria-label="Close"
+                >
+                  <PanelRight className="h-4 w-4" />
+                </button>
               </div>
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">
@@ -3749,7 +3837,7 @@ export default function OrganizationOverviewPage() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); }}
+                      onClick={() => { setProjectSidebarTab(tab); setSidebarParams({ tab, subtab: null }); setProjectFindingToOpen(null); }}
                       className={cn(
                         'relative pb-3 text-sm font-medium transition-colors',
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
@@ -3815,6 +3903,7 @@ export default function OrganizationOverviewPage() {
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
                         baseImageRecommendations={projectBaseImageRecs}
+                        openFindingId={projectFindingToOpen}
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
                             void Promise.all([
@@ -3849,6 +3938,7 @@ export default function OrganizationOverviewPage() {
                       setProjectSidebarProject(p);
                     }}
                     embedInSidebar
+                    onOpenFinding={handleOpenProjectFinding}
                   />
                 )}
                 {projectSidebarTab === 'compliance' && projectSidebarProject && orgId && (
@@ -4047,6 +4137,11 @@ export default function OrganizationOverviewPage() {
                       description: err?.message || 'Failed to add member',
                       variant: 'destructive',
                     });
+                    // A multi-add Promise.all can partially succeed server-side — reconcile the
+                    // list against server truth so successfully-added members still show up.
+                    api.getTeamMembers(orgId, selectedTeamId)
+                      .then((members) => setTeamSidebarMembers(members))
+                      .catch(() => { /* next sidebar open refetches */ });
                   } finally {
                     setAddMemberAdding(false);
                   }

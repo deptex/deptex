@@ -76,6 +76,24 @@ export async function gatherVulnerabilityContext(req: FixRequest): Promise<Recor
     }
     const { data: vuln } = await query.limit(1).maybeSingle();
     vulnerability = vuln;
+
+    // The current findings pipeline writes advisory data straight onto the
+    // project's PDV rows and no longer populates dependency_vulnerabilities.
+    // When the legacy row is missing, build the advisory from the PDV row so
+    // the planner still sees severity + fixed_versions instead of refusing
+    // with "no patched version available".
+    if (!vulnerability) {
+      let pdvQuery = supabase
+        .from('project_dependency_vulnerabilities')
+        .select('osv_id, severity, summary, fixed_versions, aliases, cvss_score')
+        .eq('project_id', req.projectId)
+        .eq('osv_id', req.vulnerabilityOsvId);
+      if (projectDependency?.id) {
+        pdvQuery = pdvQuery.eq('project_dependency_id', projectDependency.id);
+      }
+      const { data: pdvVuln } = await pdvQuery.limit(1).maybeSingle();
+      vulnerability = pdvVuln;
+    }
   }
 
   // Reachability evidence — what we know about whether the vulnerable

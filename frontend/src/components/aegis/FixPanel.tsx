@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardList, ExternalLink, ListChecks, Loader2, RefreshCw, ShieldOff } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus } from '../../lib/api';
+import { api, type AIModelMetadata, type FixPlan, type FixRecord, type FixStatus, type VulnerabilityDetail } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModelPicker } from './ModelPicker';
@@ -13,6 +13,8 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { FixStatusPill } from './FixStatusPill';
+import { FixIssueCard } from './FixIssueCard';
+import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
 import { useFixPanel } from './FixPanelContext';
 
 interface StalenessState {
@@ -45,11 +47,14 @@ export function FixPanel({ fixId, onClose }: FixPanelProps) {
 
   return (
     <div className="h-full flex flex-col bg-background overflow-hidden relative">
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
         {showListView ? (
           <FixListBody />
         ) : (
-          <FixDetailBody fixId={fixId} />
+          // Keyed remount per fix: without it the first frame after a sibling
+          // switch renders the PREVIOUS fix's plan under the new fixId until
+          // the re-seed effect runs.
+          <FixDetailBody key={fixId} fixId={fixId} />
         )}
       </div>
     </div>
@@ -62,9 +67,21 @@ interface FixDetailBodyProps {
 
 function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const { fixes, openFix } = useFixPanel();
-  const [fix, setFix] = useState<FixRecord | null>(null);
-  const [plan, setPlan] = useState<FixPlan | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Seed from the thread-scoped list the context already fetched — those rows
+  // come from the same backend shaping as getFix, so a plan the user clicked
+  // (pill, list row, sibling switcher) renders immediately. getFix in
+  // refresh() then revalidates in the background instead of gating first
+  // paint on a round trip. It also unblocks the issue-card detail fetch,
+  // which keys off fields of `fix` and now fires in parallel.
+  const seedFor = (id: string) => fixes.find((f) => f.id === id) ?? null;
+  const [fix, setFix] = useState<FixRecord | null>(() => seedFor(fixId));
+  const [plan, setPlan] = useState<FixPlan | null>(() => seedFor(fixId)?.plan ?? null);
+  const [loading, setLoading] = useState(() => seedFor(fixId) == null);
+  // Seed missed AND getFix failed — without this the gate below shows the
+  // skeleton forever (fix=null defaults status to 'planning').
+  const [loadFailed, setLoadFailed] = useState(false);
+  const fixesRef = useRef(fixes);
+  fixesRef.current = fixes;
   const [busy, setBusy] = useState<'approve' | 'regenerate' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [staleness, setStaleness] = useState<StalenessState>({
@@ -78,23 +95,41 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const refresh = useCallback(async () => {
     try {
       const { fix: refreshed } = await api.getFix(fixId);
-      setFix(refreshed);
-      if (refreshed.plan) setPlan(refreshed.plan);
+      setLoadFailed(false);
+      // Mid-revise / mid-regenerate suppression: when the row flips back to
+      // 'planning' but a plan already exists locally, hold the old view.
+      // Otherwise the sidebar would hide the Start button and surface a
+      // "Planning" pill for ~60s while the new plan generates — Henry
+      // explicitly wants the sidebar steady-state until the new plan lands
+      // and replaces the old one atomically.
+      setFix((prev) => {
+        if (refreshed.status === 'planning' && prev?.plan) return prev;
+        return refreshed;
+      });
+      setPlan((prev) => {
+        if (refreshed.status === 'planning' && prev != null) return prev;
+        return refreshed.plan ?? prev;
+      });
     } catch {
-      // ignore — realtime will fill in eventually
+      // Realtime usually fills in eventually, but flag the failure so a
+      // seed-miss doesn't strand the panel on the skeleton.
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
   }, [fixId]);
 
   useEffect(() => {
-    setLoading(true);
-    setFix(null);
-    setPlan(null);
+    // Re-seed (not wipe) on focus change so switching siblings paints the
+    // already-known plan instantly; refresh() revalidates behind it.
+    const seeded = fixesRef.current.find((f) => f.id === fixId) ?? null;
+    setFix(seeded);
+    setPlan(seeded?.plan ?? null);
+    setLoading(seeded == null);
     setError(null);
     setStaleness({ isStale: false, currentHeadSha: null, loaded: false });
     void refresh();
-  }, [refresh]);
+  }, [fixId, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +157,43 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   const token = fix?.approvalToken ?? null;
   const orgIdForState = fix?.organizationId ?? '';
   const modelStorageKey = orgIdForState ? `aegis:fix-model:${orgIdForState}` : null;
+
+  // Full scanner detail for vulnerability fixes — drives the same expanded
+  // issue card the findings table shows. Best-effort: a failed fetch (finding
+  // reaped by a rescan) falls back to the compact FixIssueCard.
+  const findingType = fix?.finding?.type;
+  const findingId = fix?.finding?.id;
+  // Which finding the fetched detail belongs to. The pending flag below
+  // derives from this key rather than a loading boolean so the panel knows a
+  // card is still owed even on render frames before the fetch effect fires —
+  // plan and card then paint together instead of the card popping in late.
+  const detailKey =
+    findingType === 'vulnerability' && findingId && orgIdForState && fix?.projectId
+      ? `${fix.projectId}:${findingId}`
+      : null;
+  const [vulnDetail, setVulnDetail] = useState<{
+    key: string | null;
+    status: 'loading' | 'loaded' | 'failed';
+    data: VulnerabilityDetail | null;
+  }>({ key: null, status: 'failed', data: null });
+  useEffect(() => {
+    if (!detailKey) return;
+    let cancelled = false;
+    setVulnDetail({ key: detailKey, status: 'loading', data: null });
+    api
+      .getVulnerabilityDetail(orgIdForState, fix!.projectId, findingId!)
+      .then((d) => {
+        if (!cancelled) setVulnDetail({ key: detailKey, status: 'loaded', data: d });
+      })
+      .catch(() => {
+        if (!cancelled) setVulnDetail({ key: detailKey, status: 'failed', data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailKey, orgIdForState, findingId, fix?.projectId]);
+  const cardPending =
+    detailKey != null && (vulnDetail.key !== detailKey || vulnDetail.status === 'loading');
 
   // Model picker fetch + persist. Per-fix execution model picker; defaults
   // to the org's default model and persists per-org in localStorage.
@@ -209,12 +281,58 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
     }
   }, [fixId]);
 
-  if (!plan && (loading || status === 'planning')) return <FixPanelSkeleton />;
-  if (!plan) return <div className="p-6 text-sm text-foreground-secondary">Plan unavailable.</div>;
+  const hasSiblings = fixes.length > 1;
+
+  // While this plan is still generating, keep the sibling switcher reachable —
+  // a multi-plan turn would otherwise trap the user on the skeleton until the
+  // focused plan resolves. Also hold the skeleton while the issue card's
+  // scanner detail is in flight so plan + card land in a single paint
+  // instead of the card popping in after the plan.
+  if ((!plan && (loading || (status === 'planning' && !(loadFailed && !fix)))) || (plan && cardPending)) {
+    return (
+      <FixPanelSkeleton
+        header={
+          hasSiblings ? (
+            <PlanSwitcher
+              fixes={fixes}
+              activeFixId={fixId}
+              onSelect={openFix}
+              label={<div className="h-5 w-48 max-w-full rounded bg-muted/50 animate-pulse" />}
+            />
+          ) : undefined
+        }
+      />
+    );
+  }
+  if (!plan) {
+    if (status === 'failed') {
+      return (
+        <div className="px-6 pt-5 pb-6">
+          {hasSiblings ? (
+            <PlanSwitcher
+              fixes={fixes}
+              activeFixId={fixId}
+              onSelect={openFix}
+              label={<span className="truncate">Plan generation failed</span>}
+            />
+          ) : (
+            <div className="text-lg font-semibold text-foreground leading-snug">Plan generation failed</div>
+          )}
+          <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
+            <div className="flex gap-2.5 items-start">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="min-w-0 flex-1 break-words">
+                {fix?.errorMessage ?? 'The fix engine could not produce a plan for this finding.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return <div className="p-6 text-sm text-foreground-secondary">Plan unavailable.</div>;
+  }
 
   const refusal = plan.refusal;
-
-  const hasSiblings = fixes.length > 1;
 
   const showInlineAction = !refusal && status === 'awaiting_approval';
 
@@ -225,39 +343,12 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
           than dropping to a second row beneath it. */}
       <div className="flex items-center justify-between gap-3">
         {hasSiblings ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="group flex items-center gap-1.5 text-lg font-semibold text-foreground leading-snug min-w-0 max-w-full text-left rounded-sm hover:opacity-80 transition-opacity focus:outline-none"
-              >
-                <span className="truncate">{plan.summary}</span>
-                <ChevronDown className="h-4 w-4 shrink-0 text-foreground-secondary" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-3rem)]"
-            >
-              {fixes.map((f) => {
-                const isActive = f.id === fixId;
-                return (
-                  <DropdownMenuItem
-                    key={f.id}
-                    onSelect={() => { if (!isActive) openFix(f.id); }}
-                    className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
-                  >
-                    <FixStatusIcon status={f.status} />
-                    {f.plan?.summary ? (
-                      <span className="flex-1 truncate text-sm">{f.plan.summary}</span>
-                    ) : (
-                      <div className="h-3.5 rounded bg-foreground/[0.12] animate-pulse flex-1 min-w-0 max-w-[14rem]" />
-                    )}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <PlanSwitcher
+            fixes={fixes}
+            activeFixId={fixId}
+            onSelect={openFix}
+            label={<span className="truncate">{plan.summary}</span>}
+          />
         ) : (
           <div className="text-lg font-semibold text-foreground leading-snug min-w-0 truncate">
             {plan.summary}
@@ -345,14 +436,39 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
       )}
 
       <div className="mt-6 space-y-6">
-              {plan.issue && (
+              {(plan.issue || fix?.findingDetail || vulnDetail.data) && (
                 <div>
                   <div className="text-sm font-semibold text-foreground mb-2">
                     Issue
                   </div>
-                  <div className="text-sm leading-relaxed text-foreground/80">
-                    <MarkdownRenderer content={plan.issue} />
-                  </div>
+                  {plan.issue && (
+                    <div className="text-sm leading-relaxed text-foreground/80">
+                      <MarkdownRenderer content={plan.issue} />
+                    </div>
+                  )}
+                  {/* Vulnerability fixes show the same expanded issue card as
+                      the findings table; semgrep/secret fixes (and vulns whose
+                      finding row was reaped) fall back to the compact card.
+                      No in-card loading state — the whole panel stays on the
+                      skeleton until the detail settles. */}
+                  {vulnDetail.data && fix ? (
+                    <div className={cn('rounded-md border border-border bg-background-subtle/30 px-4 py-3.5', plan.issue && 'mt-3')}>
+                      <VulnerabilityExpandedCard
+                        vuln={vulnDetail.data.vulnerability}
+                        detail={vulnDetail.data}
+                        organizationId={fix.organizationId}
+                        projectId={fix.projectId}
+                      />
+                    </div>
+                  ) : fix?.findingDetail ? (
+                    <div className={cn(plan.issue && 'mt-3')}>
+                      <FixIssueCard
+                        organizationId={fix.organizationId}
+                        projectId={fix.projectId}
+                        detail={fix.findingDetail}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               )}
               {plan.description && (
@@ -452,6 +568,54 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
   );
 }
 
+// Title-row dropdown for switching between the turn's sibling fix plans.
+// Rendered in every detail state — loaded, skeleton (plan still generating),
+// and failed — so switching is never gated on the focused plan resolving.
+interface PlanSwitcherProps {
+  fixes: FixRecord[];
+  activeFixId: string;
+  onSelect: (fixId: string) => void;
+  label: ReactNode;
+}
+
+function PlanSwitcher({ fixes, activeFixId, onSelect, label }: PlanSwitcherProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="group flex items-center gap-1.5 text-lg font-semibold text-foreground leading-snug min-w-0 max-w-full text-left rounded-sm hover:opacity-80 transition-opacity focus:outline-none"
+        >
+          {label}
+          <ChevronDown className="h-4 w-4 shrink-0 text-foreground-secondary" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-3rem)]"
+      >
+        {fixes.map((f) => {
+          const isActive = f.id === activeFixId;
+          return (
+            <DropdownMenuItem
+              key={f.id}
+              onSelect={() => { if (!isActive) onSelect(f.id); }}
+              className={cn('gap-2 items-center', isActive && 'bg-background-subtle')}
+            >
+              <FixStatusIcon status={f.status} />
+              {f.plan?.summary ? (
+                <span className="flex-1 truncate text-sm">{f.plan.summary}</span>
+              ) : (
+                <div className="h-3.5 rounded bg-foreground/[0.12] animate-pulse flex-1 min-w-0 max-w-[14rem]" />
+              )}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function FixListBody() {
   const { fixes, openFix } = useFixPanel();
 
@@ -532,7 +696,7 @@ function FixStatusIcon({ status }: { status: FixStatus }) {
 // Skeleton mirror of the real plan panel layout — title, Issue (label +
 // prose + code block), Plan (label + prose), To-dos card, Verification
 // card. Mirrors the real DOM 1:1 so when the plan resolves nothing shifts.
-function FixPanelSkeleton() {
+function FixPanelSkeleton({ header }: { header?: ReactNode } = {}) {
   const ISSUE_PROSE_WIDTHS = ['w-11/12', 'w-10/12', 'w-9/12'];
   const PLAN_PROSE_WIDTHS = ['w-11/12', 'w-7/12'];
   const CODE_LINE_WIDTHS = ['w-2/3', 'w-1/2'];
@@ -546,8 +710,8 @@ function FixPanelSkeleton() {
   ];
   return (
     <div className="px-6 pt-5 pb-6">
-      {/* Title bar */}
-      <div className="h-5 w-2/3 rounded bg-muted/50 animate-pulse" />
+      {/* Title bar — or the live plan switcher when sibling plans exist */}
+      {header ?? <div className="h-5 w-2/3 rounded bg-muted/50 animate-pulse" />}
 
       <div className="mt-6 space-y-6">
         {/* Issue section */}

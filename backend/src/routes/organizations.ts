@@ -2525,7 +2525,7 @@ async function canManageStatuses(organizationId: string, userId: string): Promis
     .single();
 
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  if (membership.role === 'owner') return true;
 
   const { data: role } = await supabase
     .from('organization_roles')
@@ -3847,7 +3847,7 @@ async function canManageNotificationRules(organizationId: string, userId: string
     .single();
 
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  if (membership.role === 'owner') return true;
 
   const { data: role } = await supabase
     .from('organization_roles')
@@ -4667,9 +4667,9 @@ router.post('/:id/policies/recommend', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    // Check permissions (owner, admin, or has manage_compliance)
-    // First check role directly
-    let hasPermission = membership.role === 'owner' || membership.role === 'admin';
+    // Check permissions (owner, or has manage_compliance). Never match
+    // non-structural role names — only `owner` is guaranteed by name.
+    let hasPermission = membership.role === 'owner';
 
     if (!hasPermission) {
       // Check custom role permissions
@@ -5376,7 +5376,7 @@ async function canManageTeamNotifications(orgId: string, teamId: string, userId:
     .eq('user_id', userId)
     .single();
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  if (membership.role === 'owner') return true;
 
   // Check org custom role permissions
   const { data: orgRole } = await supabase
@@ -6664,7 +6664,7 @@ async function checkSecurityPermission(orgId: string, userId: string): Promise<b
     .single();
 
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  if (membership.role === 'owner') return true;
 
   const { data: role } = await supabase
     .from('organization_roles')

@@ -18,10 +18,18 @@ export type AegisOperatingMode = 'propose' | 'announce' | 'autopilot';
 // across messages. Tools read AND mutate these fields to enforce in-turn
 // invariants like "don't revise the same plan twice" or "fan-out tools must
 // surface progress via set_todos."
+//
+// `requestCallCount` / `reviseCallCount` are SYNCHRONOUS ordinals — incremented
+// at the very top of each fan-out tool's execute() before any await. The Set
+// fields update only AFTER the planner returns (~60s later), so two parallel
+// calls would both see size 0 at the rule-10 guard and both pass. The sync
+// counter closes that race.
 export interface AegisTurnState {
   setTodosCalled: boolean;
   revisedFixIds: Set<string>;
   requestedFindings: Set<string>;
+  requestCallCount: number;
+  reviseCallCount: number;
 }
 
 export interface AegisToolContext {
@@ -38,6 +46,8 @@ export function newTurnState(): AegisTurnState {
     setTodosCalled: false,
     revisedFixIds: new Set<string>(),
     requestedFindings: new Set<string>(),
+    requestCallCount: 0,
+    reviseCallCount: 0,
   };
 }
 

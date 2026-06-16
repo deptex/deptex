@@ -167,20 +167,35 @@ export function splitAegisEmbedSegments(markdown: string): AegisMarkdownSegment[
       break;
     }
 
-    if (next > pos) {
-      segments.push({ type: 'text', value: markdown.slice(pos, next) });
-    }
-
     const chunk = markdown.slice(next);
     const parsed = tryParseEmbedFromChunk(chunk, kind);
     if (!parsed) {
+      if (next > pos) {
+        segments.push({ type: 'text', value: markdown.slice(pos, next) });
+      }
       segments.push({ type: 'text', value: markdown.slice(next, next + 1) });
       pos = next + 1;
       continue;
     }
 
+    // Models sometimes wrap an embed tag in inline formatting — e.g.
+    // `**Project:** \`<project>id</project>\`` — which leaves orphaned
+    // backtick/asterisk markers rendering literally on either side of the
+    // card. When the same wrapper run appears immediately before AND after
+    // the tag, consume both sides along with the embed.
+    let preText = markdown.slice(pos, next);
+    let afterEnd = next + parsed.len;
+    const wrapMatch = preText.match(/[`*_~]+$/);
+    if (wrapMatch && markdown.startsWith(wrapMatch[0], afterEnd)) {
+      preText = preText.slice(0, -wrapMatch[0].length);
+      afterEnd += wrapMatch[0].length;
+    }
+    if (preText) {
+      segments.push({ type: 'text', value: preText });
+    }
+
     segments.push(parsed.segment);
-    pos = next + parsed.len;
+    pos = afterEnd;
   }
 
   return groupAdjacentMembers(mergeAdjacentTextSegments(segments));

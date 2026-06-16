@@ -59,7 +59,9 @@ async function canManageFlow(
     .eq('user_id', userId)
     .single();
   if (!membership) return false;
-  if (membership.role === 'owner' || membership.role === 'admin') return true;
+  // `owner` is the only structural role — every other role name (including
+  // "admin") resolves through its permissions JSONB below.
+  if (membership.role === 'owner') return true;
 
   const { data: role } = await supabase
     .from('organization_roles')

@@ -23,6 +23,10 @@ function makeFakeSupabase(queues: Queue) {
     for (const m of passthrough) chain[m] = () => chain;
     chain.then = (resolve: any) =>
       resolve(queues[table]?.shift() ?? { data: [], error: null });
+    // getActiveExtractionId terminates with .single(); an empty queue resolves
+    // to data:null → NO_ACTIVE_RUN, which is what these tests want (the mock
+    // ignores filters anyway).
+    chain.single = () => Promise.resolve(queues[table]?.shift() ?? { data: null, error: null });
     return chain;
   };
   return { from: builder } as any;

@@ -31,7 +31,8 @@ Accept a feature name from the user (e.g. `flow-builder`, `aegis-v2`). If none p
 4. **Copy env files into the worktree**
    - `cp backend/.env .claude/worktrees/<name>/backend/.env`
    - `cp frontend/.env .claude/worktrees/<name>/frontend/.env` (if `frontend/.env` exists)
-   - These files are gitignored and contain the secrets (Supabase, Fly, Stripe, AI keys, etc.) required to run the dev servers.
+   - `cp backend/github-app-private-key.pem .claude/worktrees/<name>/backend/github-app-private-key.pem`
+   - The first two are gitignored and contain the secrets (Supabase, Fly, Stripe, AI keys, etc.) required to run the dev servers. The PEM is referenced by `GITHUB_APP_PRIVATE_KEY_PATH=./github-app-private-key.pem` in backend/.env, resolved relative to the worktree's own backend root — without it, every `request_fix` / Aegis Fix Agent call crashes with "GitHub App private key file not found at...".
    - Do NOT commit these from the worktree.
 
 5. **Install dependencies**

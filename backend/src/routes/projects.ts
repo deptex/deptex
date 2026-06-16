@@ -54,6 +54,8 @@ import {
   invalidateProjectCachesForTeam,
   CACHE_TTL_SECONDS,
 } from '../lib/cache';
+import { recordMeterEvent } from '../lib/billing/ledger';
+import { chargedCentsForAi } from '../lib/ai/pricing';
 
 /** True if version is a stable release (no canary/experimental/alpha/beta/rc). */
 function isStableVersion(version: string): boolean {
@@ -647,19 +649,14 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     });
 
     // Determine user's role for each project
-    // Org owners get 'owner', org admins get 'editor'
-    // For regular members, check project_members and team memberships
+    // Org owners get 'owner'; everyone else (including custom roles) is
+    // resolved via project_members and team memberships — never by role name.
     let projectRoles: Record<string, string> = {};
 
     if (membership.role === 'owner') {
       // Org owners are owners of all projects
       projectIds.forEach((pid: string) => {
         projectRoles[pid] = 'owner';
-      });
-    } else if (membership.role === 'admin') {
-      // Org admins are editors of all projects
-      projectIds.forEach((pid: string) => {
-        projectRoles[pid] = 'editor';
       });
     } else if (projectIds.length > 0) {
       // For regular members, check project memberships
@@ -716,7 +713,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
 
     // Get user's team memberships and their permissions for owner team checks
     let userTeamPermissions: Record<string, any> = {};
-    if (membership.role !== 'owner' && membership.role !== 'admin' && !hasOrgManagePermission) {
+    if (membership.role !== 'owner' && !hasOrgManagePermission) {
       // Get all teams user is a member of with their roles
       const { data: userTeamMemberships } = await supabase
         .from('team_members')
@@ -852,7 +849,7 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
           view_settings: true,
           edit_settings: true,
         };
-      } else if (membership.role === 'admin' || hasOrgManagePermission) {
+      } else if (hasOrgManagePermission) {
         permissions = {
           view_overview: true,
           view_dependencies: true,
@@ -2074,17 +2071,19 @@ router.get('/:id/projects/:projectId', async (req: AuthRequest, res) => {
     let userRole = null;
     let userPermissions = null;
 
-    // First check if user is an org owner/admin (they get full access)
-    if (membership.role === 'owner' || membership.role === 'admin') {
-      userRole = membership.role === 'owner' ? 'owner' : 'editor';
+    // First check if user is the org owner (full access). Any other role —
+    // including one literally named "admin" — is resolved via its permissions
+    // bundle below, never by role name.
+    if (membership.role === 'owner') {
+      userRole = 'owner';
       userPermissions = {
         view_overview: true,
         view_dependencies: true,
         view_watchlist: true,
         view_members: true,
-        manage_members: membership.role === 'owner',
+        manage_members: true,
         view_settings: true,
-        edit_settings: membership.role === 'owner',
+        edit_settings: true,
       };
     } else {
       // Check org-level manage_teams_and_projects permission
@@ -3171,7 +3170,6 @@ router.get('/:id/projects/:projectId/policies', async (req: AuthRequest, res) =>
     // Whether a policy change request from this user would be auto-accepted (owner/admin or manage_compliance)
     const requestWillAutoAccept =
       accessCheck.orgMembership?.role === 'owner' ||
-      accessCheck.orgMembership?.role === 'admin' ||
       accessCheck.orgRole?.permissions?.manage_compliance === true;
 
     // Verify project exists and belongs to org; include effective code columns
@@ -3628,7 +3626,6 @@ router.put('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, res) 
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     if (!canEditPolicies) {
@@ -3716,7 +3713,6 @@ router.put('/:id/policy-exceptions/:exceptionId/revoke', async (req: AuthRequest
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     if (!canEditPolicies) {
@@ -3799,7 +3795,6 @@ router.delete('/:id/policy-exceptions/:exceptionId', async (req: AuthRequest, re
       .single();
 
     const canEditPolicies = membership.role === 'owner' ||
-      membership.role === 'admin' ||
       roleData?.permissions?.manage_compliance === true;
 
     const { data: exception } = await supabase
@@ -5754,12 +5749,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    // 1. Fetch dependency info
+    // 1. Fetch dependency info (including any previously stored analysis)
     const { data: pd, error: pdError } = await supabase
       .from('project_dependencies')
-      .select('name, version, files_importing_count, is_direct')
+      .select('name, version, files_importing_count, is_direct, ai_usage_summary, ai_usage_analyzed_at')
       .eq('id', projectDependencyId)
       .eq('project_id', projectId)
       .is('removed_at', null)
@@ -5768,6 +5761,19 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/analyze-
     if (pdError || !pd) {
       return res.status(404).json({ error: 'Project dependency not found' });
     }
+
+    // Serve the stored summary unless the caller explicitly asks for a refresh.
+    // Every fresh analysis is a metered LLM call, so re-running it for identical
+    // output would burn platform AI spend on every click.
+    const refresh = req.query.refresh === 'true' || req.body?.refresh === true;
+    if (!refresh && (pd as any).ai_usage_summary) {
+      return res.json({
+        ai_usage_summary: (pd as any).ai_usage_summary,
+        ai_usage_analyzed_at: (pd as any).ai_usage_analyzed_at ?? null,
+      });
+    }
+
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     const depName = (pd as any).name;
     const depVersion = (pd as any).version;
@@ -5948,6 +5954,37 @@ ${allFilePaths.length > 0 ? allFilePaths.map((fp: string) => `- ${fp}`).join('\n
 
     if (updateError) {
       console.error('Failed to store AI usage summary:', updateError);
+    }
+
+    // 9. Meter the LLM call against the org's prepaid balance (same pattern as
+    // aegis-v3 agent.ts onFinish). recordMeterEvent handles the enforcement
+    // kill switch and idempotency internally. Errors are swallowed so a
+    // billing-DB blip can't fail an analysis that already completed — the
+    // daily drift cron reconciles.
+    try {
+      const inputTokens = chatResult.usage?.inputTokens ?? 0;
+      const outputTokens = chatResult.usage?.outputTokens ?? 0;
+      const modelId = chatResult.model || 'gemini-2.5-flash';
+      const { cogCents, chargedCents } = chargedCentsForAi(modelId, inputTokens, outputTokens);
+      if (chargedCents > 0) {
+        await recordMeterEvent({
+          organizationId: id,
+          projectId,
+          eventType: 'ai_tokens',
+          provider: 'google',
+          feature: 'dependency_usage_analysis',
+          quantity: inputTokens,
+          outputQuantity: outputTokens > 0 ? outputTokens : undefined,
+          unit: 'mixed_tokens',
+          cogCents,
+          chargedCents,
+          modelId,
+          attribution: { userId },
+          idempotencyKey: `dep-usage:${projectDependencyId}:${Date.now()}`,
+        });
+      }
+    } catch (meterErr) {
+      console.warn('[analyze-usage] recordMeterEvent failed', meterErr);
     }
 
     res.json({
@@ -6510,6 +6547,19 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const childVersionIds = (childEdges || []).map((e: any) => e.child_version_id);
 
     const BATCH_SIZE = 100;
+    /** Reachability-assessed vulnerability from project_dependency_vulnerabilities (the scan), not the raw advisory registry. */
+    type PdvVuln = {
+      osv_id: string;
+      severity: string;
+      summary: string | null;
+      aliases: string[];
+      depscore: number | null;
+      reachability_level: string | null;
+      is_reachable: boolean | null;
+      cvss_score: number | null;
+      epss_score: number | null;
+      cisa_kev: boolean | null;
+    };
     type ChildRow = {
       name: string;
       version: string;
@@ -6520,8 +6570,104 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       high_vulns: number;
       medium_vulns: number;
       low_vulns: number;
-      vulnerabilities: Array<{ osv_id: string; severity: string; summary: string | null; aliases: string[] }>;
+      vulnerabilities: Array<Record<string, unknown>>;
     };
+
+    // Counts feed the depscore-band SeverityPills (≥90 C / ≥70 H / ≥40 M / <40 L) — same banding the
+    // org tiles use. Reachability is baked into depscore, so an unreachable "critical" lands in low.
+    const bandOfDepscore = (score: number | null): 'critical' | 'high' | 'medium' | 'low' => {
+      if (score == null) return 'low';
+      if (score >= 90) return 'critical';
+      if (score >= 70) return 'high';
+      if (score >= 40) return 'medium';
+      return 'low';
+    };
+    const bandOfSeverity = (sev: string): 'critical' | 'high' | 'medium' | 'low' => {
+      const s = (sev || '').toLowerCase();
+      return s === 'critical' || s === 'high' || s === 'medium' ? s : 'low';
+    };
+    const countBands = (vulns: Array<{ depscore: number | null; severity: string }>) => {
+      let critical_vulns = 0, high_vulns = 0, medium_vulns = 0, low_vulns = 0;
+      for (const v of vulns) {
+        const band = v.depscore != null ? bandOfDepscore(v.depscore) : bandOfSeverity(v.severity);
+        if (band === 'critical') critical_vulns++;
+        else if (band === 'high') high_vulns++;
+        else if (band === 'medium') medium_vulns++;
+        else low_vulns++;
+      }
+      return { critical_vulns, high_vulns, medium_vulns, low_vulns };
+    };
+
+    /**
+     * Overlay the project's actual scan findings (project_dependency_vulnerabilities) onto the
+     * supply-chain view. Mirrors the findings route: when the active extraction run has PDV rows,
+     * PDV is the source of truth (reachability-assessed, depscore-scored, suppressed excluded);
+     * the raw advisory-by-version match stays as the fallback for versions this project hasn't
+     * scanned (e.g. nodes whose globally-declared child version differs from what's installed).
+     */
+    async function buildPdvOverlay(): Promise<{ usePdv: boolean; byDvId: Map<string, PdvVuln[]>; parentVulns: PdvVuln[] }> {
+      const empty = { usePdv: false, byDvId: new Map<string, PdvVuln[]>(), parentVulns: [] as PdvVuln[] };
+      const activeRunId = await getActiveExtractionId(supabase, projectId);
+      if (!activeRunId) return empty;
+      const { count: pdvCount } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('*', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId);
+      if (!pdvCount || pdvCount === 0) return empty;
+
+      // Map this project's current deps (dependency_version_id → project_dependency_id) so we can
+      // attach PDV (keyed by project_dependency_id) to the graph's child nodes (keyed by version).
+      const relevantDvIds = [...new Set([dependencyVersionId, ...childVersionIds])];
+      const dvIdToPdId = new Map<string, string>();
+      for (let i = 0; i < relevantDvIds.length; i += BATCH_SIZE) {
+        const batch = relevantDvIds.slice(i, i + BATCH_SIZE);
+        const { data: pdRows } = await supabase
+          .from('project_dependencies')
+          .select('id, dependency_version_id')
+          .eq('project_id', projectId)
+          .is('removed_at', null)
+          .in('dependency_version_id', batch);
+        for (const r of pdRows || []) {
+          const dvId = (r as any).dependency_version_id;
+          if (dvId) dvIdToPdId.set(dvId, (r as any).id);
+        }
+      }
+      const pdIds = [...new Set([...dvIdToPdId.values(), projectDependencyId])];
+      const pdIdToVulns = new Map<string, PdvVuln[]>();
+      for (let i = 0; i < pdIds.length; i += BATCH_SIZE) {
+        const batch = pdIds.slice(i, i + BATCH_SIZE);
+        const { data: pdvRows } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('project_dependency_id, osv_id, severity, summary, aliases, depscore, reachability_level, is_reachable, cvss_score, epss_score, cisa_kev')
+          .eq('project_id', projectId)
+          .eq('extraction_run_id', activeRunId)
+          .eq('suppressed', false)
+          .in('project_dependency_id', batch);
+        for (const v of pdvRows || []) {
+          const pid = (v as any).project_dependency_id;
+          if (!pdIdToVulns.has(pid)) pdIdToVulns.set(pid, []);
+          pdIdToVulns.get(pid)!.push({
+            osv_id: (v as any).osv_id,
+            severity: (v as any).severity ?? 'unknown',
+            summary: (v as any).summary ?? null,
+            aliases: (v as any).aliases ?? [],
+            depscore: (v as any).depscore ?? null,
+            reachability_level: (v as any).reachability_level ?? null,
+            is_reachable: (v as any).is_reachable ?? null,
+            cvss_score: (v as any).cvss_score ?? null,
+            epss_score: (v as any).epss_score ?? null,
+            cisa_kev: (v as any).cisa_kev ?? null,
+          });
+        }
+      }
+      const byDvId = new Map<string, PdvVuln[]>();
+      for (const [dvId, pdId] of dvIdToPdId.entries()) {
+        const vulns = pdIdToVulns.get(pdId);
+        if (vulns) byDvId.set(dvId, vulns);
+      }
+      return { usePdv: true, byDvId, parentVulns: pdIdToVulns.get(projectDependencyId) ?? [] };
+    }
 
     async function buildChildren(): Promise<ChildRow[]> {
       const children: ChildRow[] = [];
@@ -6642,11 +6788,33 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
       return { currentDvRow, availableVersions };
     }
 
-    const [children, dvAndVersions, ancestors] = await Promise.all([
+    const [children, dvAndVersions, ancestors, pdvOverlay] = await Promise.all([
       buildChildren(),
       getCurrentDvAndAvailableVersions(),
       getAncestorPathsBatched(supabase, projectId, dependencyVersionId, parentName, parentVersion, isDirect),
+      buildPdvOverlay(),
     ]);
+
+    // Overlay the project's real scan findings (depscore + reachability) onto the graph's child
+    // nodes, where they were scanned. Unscanned versions keep the advisory-by-version match.
+    if (pdvOverlay.usePdv) {
+      for (const child of children) {
+        const pdvVulns = pdvOverlay.byDvId.get(child.dependency_version_id);
+        if (!pdvVulns) continue;
+        child.vulnerabilities = pdvVulns;
+        const bands = countBands(pdvVulns);
+        child.critical_vulns = bands.critical_vulns;
+        child.high_vulns = bands.high_vulns;
+        child.medium_vulns = bands.medium_vulns;
+        child.low_vulns = bands.low_vulns;
+      }
+      children.sort((a, b) => {
+        const at = a.critical_vulns + a.high_vulns + a.medium_vulns + a.low_vulns;
+        const bt = b.critical_vulns + b.high_vulns + b.medium_vulns + b.low_vulns;
+        if (at !== bt) return bt - at;
+        return a.name.localeCompare(b.name);
+      });
+    }
 
     const { currentDvRow, availableVersions } = dvAndVersions;
     const parentDepId = (currentDvRow as any)?.dependency_id ?? null;
@@ -6731,8 +6899,13 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/supply-ch
     const parentVulnerabilities = parentVulnRows;
     const bumpPrs = bumpPrRows;
 
-    let parentVulnerabilitiesAffectingCurrent: Array<{ osv_id: string; severity: string; summary: string | null; aliases: string[]; affected_versions: unknown; fixed_versions: string[] }> = [];
-    if (parentVulnerabilities.length > 0) {
+    // The package's own findings for the current (installed) version. When the project has been
+    // scanned, use the real PDV findings (depscore + reachability); otherwise fall back to the
+    // advisory-by-version match.
+    let parentVulnerabilitiesAffectingCurrent: Array<Record<string, unknown>> = [];
+    if (pdvOverlay.usePdv) {
+      parentVulnerabilitiesAffectingCurrent = pdvOverlay.parentVulns;
+    } else if (parentVulnerabilities.length > 0) {
       parentVulnerabilitiesAffectingCurrent = parentVulnerabilities.filter(
         (v) => isVersionAffected(parentVersion, v.affected_versions) && !isVersionFixed(parentVersion, v.fixed_versions)
       );
@@ -7249,6 +7422,67 @@ router.post('/:id/projects/:projectId/dependencies/:dependencyId/remove-pr', asy
   }
 });
 
+// POST /api/organizations/:id/projects/:projectId/dependencies/:dependencyId/bump-pr - Create PR bumping this project's dependency to a target version
+router.post('/:id/projects/:projectId/dependencies/:dependencyId/bump-pr', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, dependencyId } = req.params;
+    const organizationId = id;
+    const targetVersion = typeof req.body?.target_version === 'string' ? req.body.target_version.trim() : '';
+
+    if (!targetVersion || targetVersion.length > 100) {
+      return res.status(400).json({ error: 'target_version is required' });
+    }
+
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    // Project-scoped lookup — binds the dependency to this project (no cross-project IDOR).
+    const { data: depDetails, error: detailsError } = await supabase
+      .from('project_dependencies')
+      .select('id, name, version, source')
+      .eq('id', dependencyId)
+      .eq('project_id', projectId)
+      .is('removed_at', null)
+      .single();
+
+    if (detailsError || !depDetails) {
+      if (detailsError?.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Dependency not found' });
+      }
+      throw detailsError;
+    }
+
+    const source = (depDetails as any).source;
+    if (source !== 'dependencies' && source !== 'devDependencies') {
+      return res.status(400).json({ error: 'Only direct dependencies can be bumped via PR.' });
+    }
+
+    if ((depDetails as any).version === targetVersion) {
+      return res.status(400).json({ error: 'Project is already on this version.' });
+    }
+
+    // Dedup of existing bump PRs for the same target version happens inside the helper.
+    const result = await createBumpPrForProject(
+      organizationId,
+      projectId,
+      (depDetails as any).name,
+      targetVersion,
+      (depDetails as any).version
+    );
+    if ('error' in result) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({ pr_url: result.pr_url, pr_number: result.pr_number });
+  } catch (error: any) {
+    console.error('Error creating bump PR:', error);
+    res.status(500).json({ error: error.message || 'Failed to create bump PR' });
+  }
+});
+
 
 // GET /api/organizations/:id/projects/:projectId/vulnerabilities - List all vulnerabilities for project dependencies
 router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, res) => {
@@ -7610,8 +7844,10 @@ async function canDeleteOtherMemberNote(
 
   if (!actorMembership) return false;
 
-  const isOrgOwnerOrAdmin = actorMembership.role === 'owner' || actorMembership.role === 'admin';
-  let hasKickPermission = isOrgOwnerOrAdmin;
+  // `owner` is the only structural role — any other role (including one named
+  // "admin") must carry the kick_members permission key in its bundle.
+  const isOrgOwner = actorMembership.role === 'owner';
+  let hasKickPermission = isOrgOwner;
   if (!hasKickPermission) {
     const { data: orgRole } = await supabase
       .from('organization_roles')
@@ -7699,6 +7935,27 @@ async function canDeleteOtherMemberNote(
   return authorTeamRank > actorTeamRank;
 }
 
+/**
+ * Verify that the URL-supplied `:projectDependencyId` actually belongs to
+ * `:projectId`. checkProjectAccess only authorizes the (org, project) pair —
+ * it never inspects the dependency id, and the service-role key means there
+ * is no RLS backstop. Without this bind, a member of org A could read/write
+ * notes and reactions on org B's dependencies by forging the UUID.
+ * Returns false on miss (callers respond 404 as an anti-enumeration guard).
+ */
+async function projectDependencyBelongsToProject(
+  projectDependencyId: string,
+  projectId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('project_dependencies')
+    .select('id')
+    .eq('id', projectDependencyId)
+    .eq('project_id', projectId)
+    .maybeSingle();
+  return !error && !!data;
+}
+
 // GET notes for a dependency
 router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', async (req: AuthRequest, res) => {
   try {
@@ -7709,6 +7966,10 @@ router.get('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', a
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
     }
 
     const cacheKey = getDependencyNotesCacheKey(id, projectId, projectDependencyId, userId);
@@ -7844,6 +8105,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/notes', 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       return res.status(400).json({ error: 'Note content is required' });
     }
@@ -7901,6 +8166,10 @@ router.delete('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     // Fetch the note to verify ownership
     const { data: note, error: fetchError } = await supabase
       .from('dependency_notes')
@@ -7950,6 +8219,10 @@ router.post('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/:n
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0) {
       return res.status(400).json({ error: 'Emoji is required' });
     }
@@ -7994,6 +8267,23 @@ router.delete('/:id/projects/:projectId/dependencies/:projectDependencyId/notes/
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
+
+    if (!(await projectDependencyBelongsToProject(projectDependencyId, projectId))) {
+      return res.status(404).json({ error: 'Dependency not found' });
+    }
+
+    // Bind the full chain reactionId→noteId→projectDependencyId→projectId: the
+    // reaction lookup below only ties reactionId to noteId, so without this
+    // note→dependency bind a forged noteId from another tenant would pass.
+    const { data: parentNote, error: noteFetchError } = await supabase
+      .from('dependency_notes')
+      .select('id')
+      .eq('id', noteId)
+      .eq('project_dependency_id', projectDependencyId)
+      .maybeSingle();
+
+    if (noteFetchError) throw noteFetchError;
+    if (!parentNote) return res.status(404).json({ error: 'Note not found' });
 
     const { data: reaction, error: fetchError } = await supabase
       .from('dependency_note_reactions')
@@ -8494,54 +8784,72 @@ router.delete('/:id/ban-version/:banId', async (req: AuthRequest, res) => {
 
     const hasOrgManage = (await checkOrgManagePermission(userId, organizationId)).hasPermission;
 
-    const { data: orgDeleted, error: orgError } = await supabase
+    // Authorization-before-mutation: look the org ban up with a SELECT first and
+    // only DELETE once the caller's org-manage permission is verified. The previous
+    // shape executed the DELETE and then returned 403 — by which point the row was
+    // already gone for unprivileged callers.
+    const { data: orgBan } = await supabase
       .from('banned_versions')
-      .delete()
+      .select('id, dependency_id, banned_version')
       .eq('id', banId)
       .eq('organization_id', organizationId)
-      .select('id, dependency_id, banned_version')
-      .single();
+      .maybeSingle();
 
-    if (!orgError && orgDeleted) {
+    if (orgBan) {
       if (!hasOrgManage) {
         return res.status(403).json({ error: 'You do not have permission to remove organization-level bans' });
       }
-      const orgDepId = (orgDeleted as any)?.dependency_id;
-      if (orgDepId) {
-        await invalidateLatestSafeVersionCacheByDependencyId(orgDepId).catch((err: any) => {
-          console.warn(`[Cache] Failed to invalidate cache after removing ban:`, err.message);
-        });
-        await invalidateDependencyVersionsCacheByDependencyId(orgDepId).catch((err: any) => {
-          console.warn(`[Cache] Failed to invalidate dependency versions cache after removing ban:`, err.message);
-        });
-      }
-      const unbannedVersion = (orgDeleted as any)?.banned_version as string | undefined;
-      if (unbannedVersion && orgDepId) {
-        const { data: watchlistRow } = await supabase
-          .from('organization_watchlist')
-          .select('id, latest_allowed_version')
-          .eq('organization_id', organizationId)
-          .eq('dependency_id', orgDepId)
-          .maybeSingle();
-        if (watchlistRow && (watchlistRow as any).id) {
-          const currentAllowed = (watchlistRow as any).latest_allowed_version as string | null;
-          const unbannedCoerced = semver.valid(semver.coerce(unbannedVersion));
-          const currentCoerced = currentAllowed ? semver.valid(semver.coerce(currentAllowed)) : null;
-          const shouldUpdate =
-            currentAllowed == null ||
-            (unbannedCoerced && currentCoerced && semver.gt(unbannedCoerced, currentCoerced));
-          if (shouldUpdate) {
-            await supabase
-              .from('organization_watchlist')
-              .update({ latest_allowed_version: unbannedVersion })
-              .eq('id', (watchlistRow as any).id);
+
+      const { data: orgDeleted, error: orgDeleteError } = await supabase
+        .from('banned_versions')
+        .delete()
+        .eq('id', banId)
+        .eq('organization_id', organizationId)
+        .select('id, dependency_id, banned_version')
+        .maybeSingle();
+
+      if (orgDeleteError) throw orgDeleteError;
+
+      if (orgDeleted) {
+        const orgDepId = (orgDeleted as any)?.dependency_id;
+        if (orgDepId) {
+          await invalidateLatestSafeVersionCacheByDependencyId(orgDepId).catch((err: any) => {
+            console.warn(`[Cache] Failed to invalidate cache after removing ban:`, err.message);
+          });
+          await invalidateDependencyVersionsCacheByDependencyId(orgDepId).catch((err: any) => {
+            console.warn(`[Cache] Failed to invalidate dependency versions cache after removing ban:`, err.message);
+          });
+        }
+        const unbannedVersion = (orgDeleted as any)?.banned_version as string | undefined;
+        if (unbannedVersion && orgDepId) {
+          const { data: watchlistRow } = await supabase
+            .from('organization_watchlist')
+            .select('id, latest_allowed_version')
+            .eq('organization_id', organizationId)
+            .eq('dependency_id', orgDepId)
+            .maybeSingle();
+          if (watchlistRow && (watchlistRow as any).id) {
+            const currentAllowed = (watchlistRow as any).latest_allowed_version as string | null;
+            const unbannedCoerced = semver.valid(semver.coerce(unbannedVersion));
+            const currentCoerced = currentAllowed ? semver.valid(semver.coerce(currentAllowed)) : null;
+            const shouldUpdate =
+              currentAllowed == null ||
+              (unbannedCoerced && currentCoerced && semver.gt(unbannedCoerced, currentCoerced));
+            if (shouldUpdate) {
+              await supabase
+                .from('organization_watchlist')
+                .update({ latest_allowed_version: unbannedVersion })
+                .eq('id', (watchlistRow as any).id);
+            }
           }
         }
+        await invalidateAllProjectCachesInOrg(organizationId, { depsOnly: true }).catch((err: any) => {
+          console.warn(`[Cache] Failed to invalidate dependencies cache after removing org ban:`, err?.message);
+        });
+        return res.json({ message: 'Ban removed', id: orgDeleted.id });
       }
-      await invalidateAllProjectCachesInOrg(organizationId, { depsOnly: true }).catch((err: any) => {
-        console.warn(`[Cache] Failed to invalidate dependencies cache after removing org ban:`, err?.message);
-      });
-      return res.json({ message: 'Ban removed', id: orgDeleted.id });
+      // Row vanished between the SELECT and the DELETE (concurrent removal) —
+      // fall through to the team-ban path, matching the previous miss behavior.
     }
 
     const { data: teamBan } = await supabase
@@ -9051,7 +9359,7 @@ router.post('/:id/projects/:projectId/policy-changes', async (req: AuthRequest, 
 
     // Check if user has manage_compliance (auto-accept)
     let hasCompliance = false;
-    if (access.orgMembership?.role === 'owner' || access.orgMembership?.role === 'admin') {
+    if (access.orgMembership?.role === 'owner') {
       hasCompliance = true;
     } else if (access.orgRole?.permissions?.manage_compliance) {
       hasCompliance = true;
@@ -9137,7 +9445,7 @@ router.put('/:id/policy-changes/:changeId', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    let hasCompliance = membership.role === 'owner' || membership.role === 'admin';
+    let hasCompliance = membership.role === 'owner';
     if (!hasCompliance) {
       const { data: roleData } = await supabase
         .from('organization_roles')
@@ -9681,8 +9989,7 @@ Return ONLY the full packagePolicy function code, no explanation, no markdown.`;
 
     const hasManageCompliance = access.orgRole?.permissions?.manage_policies === true
       || access.orgRole?.permissions?.manage_compliance === true
-      || access.orgMembership?.role === 'owner'
-      || access.orgMembership?.role === 'admin';
+      || access.orgMembership?.role === 'owner';
 
     const changeStatus = hasManageCompliance ? 'accepted' : 'pending';
 
@@ -9887,165 +10194,34 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
   try {
     const userId = req.user!.id;
     const { id, projectId, osvId } = req.params;
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
+
+    // This endpoint gates first paint of both the findings-table expanded row
+    // and the Aegis fix panel's issue card. The entire read (active run, PDV,
+    // deps + files + scores, version candidates, events, advisory with
+    // CVE↔GHSA alias fallback, flows + per-flow suppression — see phase49
+    // migration) is a single Postgres function so it costs one DB round trip,
+    // and the access check runs concurrently with it — both are reads, and
+    // nothing is shaped or returned until the check passes. Wall time is
+    // max(access, rpc) instead of a ~10-query waterfall.
+    const [accessCheck, bundleRes] = await Promise.all([
+      checkProjectAccess(userId, id, projectId),
+      supabase.rpc('get_vulnerability_detail_bundle', {
+        p_project_id: projectId,
+        p_osv_id: osvId,
+      }),
+    ]);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
+    if (bundleRes.error) throw bundleRes.error;
+    const bundle = (bundleRes.data ?? {}) as any;
 
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    const { data: vulns, error: vulnError } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('osv_id', osvId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-
-    if (vulnError) throw vulnError;
-    if (!vulns || vulns.length === 0) {
+    const vulns: any[] = bundle.vulnerabilities ?? [];
+    if (vulns.length === 0) {
       return res.status(404).json({ error: 'Vulnerability not found in this project' });
     }
-
     const vuln = vulns[0];
-
-    const pdIds = vulns.map((v: any) => v.project_dependency_id).filter(Boolean);
-    let affectedDeps: any[] = [];
-    if (pdIds.length > 0) {
-      const { data: deps } = await supabase
-        .from('project_dependencies')
-        .select('id, name, version, is_direct, dependency_id, files_importing_count, environment')
-        .in('id', pdIds)
-        .is('removed_at', null);
-      affectedDeps = deps ?? [];
-    }
-
-    // Project importance for depscore breakdown
-    const { data: project } = await supabase
-      .from('projects')
-      .select('importance')
-      .eq('id', projectId)
-      .single();
-    const projectImportance: number = typeof project?.importance === 'number' ? project.importance : 1.0;
-
-    // Package reputation scores for affected dependencies (for depscore breakdown)
-    const depIdsForScore = [...new Set((affectedDeps as any[]).map((d: any) => d.dependency_id).filter(Boolean))];
-    let scoreByDependencyId: Record<string, number> = {};
-    if (depIdsForScore.length > 0) {
-      const { data: depRows } = await supabase
-        .from('dependencies')
-        .select('id, score')
-        .in('id', depIdsForScore);
-      for (const row of depRows ?? []) {
-        scoreByDependencyId[row.id] = row.score ?? 0;
-      }
-    }
-
-    const depIds = affectedDeps.map((d: any) => d.id);
-    let filesByDep: Record<string, any[]> = {};
-    if (depIds.length > 0) {
-      const { data: files } = await supabase
-        .from('project_dependency_files')
-        .select('project_dependency_id, file_path')
-        .in('project_dependency_id', depIds)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-      for (const f of files ?? []) {
-        if (!filesByDep[f.project_dependency_id]) filesByDep[f.project_dependency_id] = [];
-        filesByDep[f.project_dependency_id].push(f.file_path);
-      }
-    }
-
-    const depName = affectedDeps[0]?.name;
-    let versionCandidates: any[] = [];
-    if (depName) {
-      const { data: candidates } = await supabase
-        .from('project_version_candidates')
-        .select('*')
-        .eq('project_id', projectId)
-        .eq('package_name', depName);
-      versionCandidates = candidates ?? [];
-    }
-
-    const { data: events } = await supabase
-      .from('project_vulnerability_events')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('osv_id', osvId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    // Resolve the global advisory by osv_id, then fall back to an alias match.
-    // The project may reference a CVE while the advisory is stored under its
-    // GHSA id (or vice-versa) — e.g. CVE-2021-23337 ↔ GHSA-35jh-r3h4-6jhm — so
-    // an exact osv_id match alone misses the summary/details/fix metadata. The
-    // `aliases` text[] carries the cross-ids.
-    const GLOBAL_VULN_COLS = 'summary, details, aliases, affected_versions, fixed_versions, published_at, modified_at';
-    let { data: globalVuln } = await supabase
-      .from('dependency_vulnerabilities')
-      .select(GLOBAL_VULN_COLS)
-      .eq('osv_id', osvId)
-      .limit(1)
-      .maybeSingle();
-    if (!globalVuln) {
-      const { data: aliasMatch } = await supabase
-        .from('dependency_vulnerabilities')
-        .select(GLOBAL_VULN_COLS)
-        .contains('aliases', [osvId])
-        .limit(1)
-        .maybeSingle();
-      globalVuln = aliasMatch ?? null;
-    }
-
-    // fetch reachable flows for THIS vulnerability. Flows are tagged with the
-    // osv_id of the CVE whose taint rule produced them
-    // (project_reachable_flows.osv_id), so filter on it — not just dependency_id.
-    // Two CVEs on one package that share a sink (e.g. lodash CVE-2021-23337 +
-    // CVE-2026-4800, both hitting `_.template`) each own their own flow rows; a
-    // dependency-only filter leaked every CVE's flows into every CVE's detail
-    // panel (the "4 flows = 2 paths shown twice" bug). Match the requested osv_id
-    // plus its aliases so a CVE↔GHSA mismatch between the advisory and the
-    // engine-written flow still resolves.
-    const affectedDepIds = affectedDeps.map((d: any) => d.dependency_id).filter(Boolean);
-    const flowOsvIds = [...new Set([
-      osvId,
-      ...(((vuln.aliases as string[] | null) ?? [])),
-      ...((((globalVuln as any)?.aliases as string[] | null) ?? [])),
-    ].filter(Boolean))];
-    let reachableFlows: any[] = [];
-    if (affectedDepIds.length > 0) {
-      const { data: flows } = await supabase
-        .from('project_reachable_flows')
-        .select('*')
-        .eq('project_id', projectId)
-        .in('dependency_id', affectedDepIds)
-        .in('osv_id', flowOsvIds)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-        .order('flow_length', { ascending: true })
-        .limit(20);
-      reachableFlows = flows ?? [];
-
-      // Phase 6.5 — surface per-flow suppression state. The suppression table
-      // is keyed by flow_signature_hash (Option B / OD-4) so user-state
-      // survives writeFlows wipe-and-rewrite. Resolve to a boolean per flow
-      // here so the UI doesn't need a second round-trip. Graceful no-op if
-      // the table doesn't exist yet (pre-phase27a deploy / fresh local PGLite).
-      const hashes: string[] = (reachableFlows as any[])
-        .map((f: any) => f.flow_signature_hash)
-        .filter((h: any): h is string => typeof h === 'string' && h.length > 0);
-      if (hashes.length > 0) {
-        const { data: suppressionRows, error: suppressionError } = await supabase
-          .from('project_reachable_flow_suppressions')
-          .select('flow_signature_hash')
-          .eq('project_id', projectId)
-          .in('flow_signature_hash', hashes);
-        if (!suppressionError && suppressionRows) {
-          const suppressedSet = new Set<string>(suppressionRows.map((r: any) => r.flow_signature_hash));
-          reachableFlows = (reachableFlows as any[]).map((f: any) => ({
-            ...f,
-            is_suppressed: f.flow_signature_hash ? suppressedSet.has(f.flow_signature_hash) : false,
-          }));
-        }
-      }
-    }
+    const globalVuln = bundle.advisory ?? null;
 
     res.json({
       vulnerability: {
@@ -10057,15 +10233,12 @@ router.get('/:id/projects/:projectId/vulnerabilities/:osvId/detail', async (req:
         fixed_versions: globalVuln?.fixed_versions ?? vuln.fixed_versions ?? [],
         published_at: globalVuln?.published_at ?? vuln.published_at ?? null,
       },
-      affected_dependencies: affectedDeps.map((d: any) => ({
-        ...d,
-        files: filesByDep[d.id] ?? [],
-        package_score: d.dependency_id != null ? (scoreByDependencyId[d.dependency_id] ?? null) : null,
-      })),
-      version_candidates: versionCandidates,
-      timeline_events: events ?? [],
-      reachable_flows: reachableFlows,
-      project_importance: projectImportance,
+      affected_dependencies: bundle.affected_dependencies ?? [],
+      version_candidates: bundle.version_candidates ?? [],
+      timeline_events: bundle.timeline_events ?? [],
+      reachable_flows: bundle.reachable_flows ?? [],
+      project_importance:
+        typeof bundle.importance === 'number' ? bundle.importance : 1.0,
     });
   } catch (error: any) {
     console.error('Error fetching vulnerability detail:', error);
