@@ -136,7 +136,10 @@ AS $$
         )
     ) q
   ) iac ON true
-  -- Container: KEV base-image CVEs only.
+  -- Container: KEV base-image CVEs individually, PLUS one "out-of-date base
+  -- image" finding per image that has non-KEV base-image CVEs (mirrors the
+  -- frontend collapse to a single Open row), banded by the worst depscore in
+  -- that image. Banded by depscore so the bands match the findings table.
   LEFT JOIN LATERAL (
     SELECT
       count(*) FILTER (WHERE b = 'critical') AS crit,
@@ -144,14 +147,28 @@ AS $$
       count(*) FILTER (WHERE b = 'medium') AS med,
       count(*) FILTER (WHERE b = 'low') AS low
     FROM (
-      SELECT CASE lower(COALESCE(pcf.severity, ''))
-               WHEN 'critical' THEN 'critical' WHEN 'high' THEN 'high'
-               WHEN 'medium' THEN 'medium' WHEN 'low' THEN 'low' ELSE 'low' END AS b
+      SELECT CASE
+               WHEN COALESCE(pcf.depscore, 0) >= 90 THEN 'critical'
+               WHEN COALESCE(pcf.depscore, 0) >= 70 THEN 'high'
+               WHEN COALESCE(pcf.depscore, 0) >= 40 THEN 'medium' ELSE 'low' END AS b
       FROM project_container_findings pcf
       WHERE pcf.project_id = p.id
         AND pcf.extraction_run_id = ANY(p_active_run_ids)
         AND pcf.is_kev = true
         AND COALESCE(pcf.suppressed, false) = false
+      UNION ALL
+      SELECT CASE
+               WHEN m >= 90 THEN 'critical' WHEN m >= 70 THEN 'high'
+               WHEN m >= 40 THEN 'medium' ELSE 'low' END AS b
+      FROM (
+        SELECT max(COALESCE(pcf.depscore, 0)) AS m
+        FROM project_container_findings pcf
+        WHERE pcf.project_id = p.id
+          AND pcf.extraction_run_id = ANY(p_active_run_ids)
+          AND pcf.is_kev = false
+          AND COALESCE(pcf.suppressed, false) = false
+        GROUP BY pcf.image_reference
+      ) g
     ) q
   ) cont ON true
   -- DAST: exploited or high/critical, deduped by (handler, line, vuln type) on the latest run.
