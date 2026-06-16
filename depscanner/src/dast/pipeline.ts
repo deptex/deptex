@@ -225,6 +225,7 @@ interface DastFindingInsert {
   handler_file_path: string | null;
   handler_function_name: string | null;
   handler_line: number | null;
+  handler_code_snippet: string | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
   cross_link_metadata: Record<string, unknown>;
@@ -2084,6 +2085,7 @@ export async function runDastPipeline(
       handler_file_path: link.handler_file_path,
       handler_function_name: link.handler_function_name,
       handler_line: link.handler_line,
+      handler_code_snippet: link.handler_code_snippet,
       linked_sca_osv_id: link.linked_sca_osv_id,
       linked_sca_project_dependency_id: link.linked_sca_project_dependency_id,
       cross_link_metadata: crossLinkMetadata,

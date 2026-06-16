@@ -391,7 +391,24 @@ export async function upsertBaseImageRecommendations(
     }
     inserted += batch.length;
   }
-  return { inserted, staleDeleted: 0 };
+  // Reap prior runs. One extraction == one run, so every row here shares a
+  // single extraction_run_id; any recommendation for these projects under a
+  // DIFFERENT run is stale. Without this, each re-scan leaves a dead row behind
+  // forever (the serve endpoint hides them by filtering to the active run, but
+  // they bloat the table) — this gives base-image recs the same per-run
+  // replacement every other finding type already gets. Best-effort: the upsert
+  // already committed the live row, so a reap miss only defers cleanup to the
+  // retention reaper and must never fail the scan.
+  let staleDeleted = 0;
+  const runId = rows[0].extraction_run_id;
+  const projectIds = [...new Set(rows.map((r) => r.project_id))];
+  const { count, error: reapError } = await supabase
+    .from('project_base_image_recommendations')
+    .delete({ count: 'exact' })
+    .in('project_id', projectIds)
+    .neq('extraction_run_id', runId);
+  if (!reapError) staleDeleted = count ?? 0;
+  return { inserted, staleDeleted };
 }
 
 // ============================================================================

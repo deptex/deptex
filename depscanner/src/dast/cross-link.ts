@@ -30,6 +30,9 @@ export interface EntryPointRow {
   // Phase 48: deterministically-harvested query/header/cookie params the
   // handler reads; the synthesizer emits these as OpenAPI `query` parameters.
   request_params?: RequestParam[] | null;
+  // Phase 50: the handler's source window (captured at extraction time). Copied
+  // onto the DAST finding so the UI can render the receiving code.
+  code_snippet?: string | null;
 }
 
 export interface ReachableFlowRow {
@@ -87,6 +90,10 @@ export interface CrossLinkOutput {
   handler_file_path: string | null;
   handler_function_name: string | null;
   handler_line: number | null;
+  /** The handler's captured source window — rendered as the receiving code in
+   *  the finding's expanded view. Null when no entry point matched or the
+   *  snippet wasn't captured. */
+  handler_code_snippet: string | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
   cross_link_metadata: Record<string, unknown>;
@@ -154,10 +161,16 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
         (ep) => ep.file_path === hit.file_path,
       );
       if (stillExists) {
+        // Pull the handler snippet off the matching live entry point (same
+        // file + line), so even sidecar-attributed findings show source.
+        const sidecarEp = entryPoints.find(
+          (ep) => ep.file_path === hit.file_path && ep.line_number === hit.line_number,
+        );
         return {
           handler_file_path: hit.file_path,
           handler_function_name: hit.function_name,
           handler_line: hit.line_number,
+          handler_code_snippet: sidecarEp?.code_snippet ?? null,
           linked_sca_osv_id: null,
           linked_sca_project_dependency_id: null,
           cross_link_metadata: { match_method: 'sidecar', via: 'sidecar' },
@@ -185,6 +198,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       handler_file_path: null,
       handler_function_name: null,
       handler_line: null,
+      handler_code_snippet: null,
       linked_sca_osv_id: null,
       linked_sca_project_dependency_id: null,
       cross_link_metadata: { match_method: 'none', via },
@@ -202,6 +216,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       handler_file_path: matchedEp.file_path,
       handler_function_name: matchedEp.handler_name,
       handler_line: matchedEp.line_number,
+      handler_code_snippet: matchedEp.code_snippet ?? null,
       linked_sca_osv_id: null,
       linked_sca_project_dependency_id: null,
       cross_link_metadata: { match_method: 'route_only', framework: matchedEp.framework, via },
@@ -214,6 +229,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
       handler_file_path: matchedEp.file_path,
       handler_function_name: matchedEp.handler_name,
       handler_line: matchedEp.line_number,
+      handler_code_snippet: matchedEp.code_snippet ?? null,
       linked_sca_osv_id: null,
       linked_sca_project_dependency_id: null,
       cross_link_metadata: {
@@ -242,6 +258,7 @@ export function crossLinkFinding(input: CrossLinkInput): CrossLinkOutput {
     handler_file_path: matchedEp.file_path,
     handler_function_name: matchedEp.handler_name,
     handler_line: matchedEp.line_number,
+    handler_code_snippet: matchedEp.code_snippet ?? null,
     linked_sca_osv_id: pdvs[0].osv_id,
     linked_sca_project_dependency_id: projectDep?.id ?? null,
     cross_link_metadata: {
@@ -279,7 +296,7 @@ export async function loadEntryPoints(
   const { data, error } = await supabase
     .from('project_entry_points')
     .select(
-      'framework, http_method, route_pattern, handler_name, file_path, line_number, entry_point_type, classification, auth_mechanism, middleware_chain, metadata, request_params',
+      'framework, http_method, route_pattern, handler_name, file_path, line_number, entry_point_type, classification, auth_mechanism, middleware_chain, metadata, request_params, code_snippet',
     )
     .eq('project_id', projectId)
     .eq('extraction_run_id', extractionRunId);

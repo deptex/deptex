@@ -143,7 +143,7 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
       // memory before persistence, so the DAST synthesizer points ZAP at the
       // real URL. Pure mutation of result.files[*].entryPoints; no I/O.
       resolveMountPrefixes(result.files);
-      const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files);
+      const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files, workspaceRoot);
       if (!entryResult.success && entryResult.error) {
         await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);
         if (job.jobId) {
