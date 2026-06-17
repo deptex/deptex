@@ -292,6 +292,47 @@ function main(): void {
   }
 
   // ---------------------------------------------------------------------------
+  console.log('[4e] reportDirAbsolute threads into the traditional-json report job (regression: report-path mismatch silently zeroed every scan)');
+  {
+    const out = buildAutomationYaml({
+      targetUrl: 'https://app.example.com',
+      scanProfile: 'full',
+      detectedRuntime: 'classic',
+      reportRelativePath: 'zap-report.json',
+      reportDirAbsolute: '/zap/wrk/deptex-dast-af-xyz789',
+    });
+    const reportJob = jobs(parseYaml(out)).find(
+      (j) =>
+        j.type === 'report' &&
+        (j.parameters as Record<string, unknown>)?.template === 'traditional-json',
+    );
+    const params = (reportJob?.parameters as Record<string, unknown>) ?? {};
+    assert(
+      params.reportDir === '/zap/wrk/deptex-dast-af-xyz789',
+      `traditional-json reportDir = the per-job tmpdir the worker reads back from (got ${String(params.reportDir)})`,
+    );
+    assert(params.reportFile === 'zap-report.json', `reportFile=zap-report.json`);
+  }
+
+  // ---------------------------------------------------------------------------
+  console.log('[4f] traditional-json reportDir defaults to /zap/wrk when reportDirAbsolute unset');
+  {
+    const out = buildAutomationYaml({
+      targetUrl: 'https://app.example.com',
+      scanProfile: 'full',
+      detectedRuntime: 'classic',
+      reportRelativePath: 'zap-report.json',
+    });
+    const reportJob = jobs(parseYaml(out)).find(
+      (j) =>
+        j.type === 'report' &&
+        (j.parameters as Record<string, unknown>)?.template === 'traditional-json',
+    );
+    const params = (reportJob?.parameters as Record<string, unknown>) ?? {};
+    assert(params.reportDir === '/zap/wrk', `default reportDir=/zap/wrk (got ${String(params.reportDir)})`);
+  }
+
+  // ---------------------------------------------------------------------------
   console.log('[5] loginOnly=false (default) emits the full scan job list for recorded');
   {
     const out = buildAutomationYaml({

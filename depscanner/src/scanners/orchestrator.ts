@@ -1296,8 +1296,13 @@ export async function runIaCAndContainerScans(
       await ctx.logger.warn('iac_scan', 'kill:scanner:checkov is set — skipping');
     }
 
-    const hasDockerfile = infraTypes.includes('dockerfile');
-    if (!switches.trivyKilled && hasDockerfile) {
+    // Run Trivy config whenever ANY IaC is present, not only when a Dockerfile
+    // was detected. Trivy scans repoPath recursively, so this is what surfaces
+    // (a) Dockerfile misconfigs (Checkov is run k8s/TF-only here) and (b) the
+    // Kubernetes checks Checkov's community ruleset misses — most importantly
+    // hostPath host-mounts. The parser keeps Dockerfile findings + a curated
+    // allow-list of high-value k8s rules so we don't double-report Checkov.
+    if (!switches.trivyKilled && infraTypes.length > 0) {
       tasks.push(
         (async () => {
           try {

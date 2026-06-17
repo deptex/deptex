@@ -1470,7 +1470,16 @@ router.post('/:projectId/dast/scan', async (req: AuthRequest, res) => {
       }
     }
 
-    const scanPayload = { source: 'manual_dast_scan', detected_runtime: detectedRuntime, engine };
+    // The worker reads scan_profile from the payload JSONB (pipeline.ts
+    // `payload.scan_profile ?? 'auto'`), NOT the scan_jobs.scan_profile column —
+    // so without this the configured profile never reaches the engine and every
+    // scan ran passive-only ('auto'). Carry it in the payload too.
+    const scanPayload = {
+      source: 'manual_dast_scan',
+      detected_runtime: detectedRuntime,
+      engine,
+      scan_profile: scanProfile,
+    };
     // v2.1d /criticalreview RH-1: defense-in-depth payload validation at
     // queue time. The hard-coded literal above is safe today; the validator
     // catches any future caller (cron, Aegis tool, webhook) that constructs
@@ -1642,6 +1651,74 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
 // ---------------------------------------------------------------------------
 // GET /:projectId/dast/findings?limit=N&target_id=...
 // ---------------------------------------------------------------------------
+
+/**
+ * Coarse impact class for a DAST finding, keyed off ZAP/Nuclei's alert name.
+ * Server-side injection (SQLi, SSTI, command/code injection, traversal, SSRF,
+ * deserialization, XXE) is the high-impact tier; XSS/CSRF/open-redirect the
+ * middle; passive header/cache/cookie/info-disclosure hygiene the low tier
+ * (best-practice nudges that fire on nearly every site).
+ */
+function dastImpactClass(vulnType: string | null | undefined): 'injection' | 'xss' | 'passive' | 'other' {
+  const t = (vulnType ?? '').toLowerCase();
+  if (
+    /sql injection|command injection|code injection|template injection|ldap injection|xpath|path traversal|remote os command|remote code|server side request|ssrf|xxe|xml external|deserial/.test(t)
+  ) {
+    return 'injection';
+  }
+  if (/cross site scripting|cross-site scripting|\bxss\b|cross site request|cross-site request|\bcsrf\b|open redirect/.test(t)) {
+    return 'xss';
+  }
+  if (
+    /header|\bcache|cookie|\bcsp\b|content security policy|clickjack|x-powered-by|information disclosure|source code disclosure|strict-transport|spectre|site isolation|storable|cacheable|permissions policy|sec-fetch|mime|x-content-type|charset|timestamp|comment/.test(t)
+  ) {
+    return 'passive';
+  }
+  return 'other';
+}
+
+/**
+ * DAST findings carry no stored depscore (unlike container/IaC findings, which
+ * are scored at scan time). We derive a priority score on read so the unified
+ * findings table can sort DAST alongside every other scanner category — and so
+ * the score actually differentiates findings instead of pinning every "high"
+ * alert at one number. The score combines:
+ *   - severity (ZAP/Nuclei risk band),
+ *   - confidence (how sure the scanner is it's real — confirmed/high/med/low),
+ *   - impact class (server-side injection > XSS > passive hygiene).
+ * It's then floored into the critical band when the hit is cross-linked to a
+ * known-vulnerable dependency (confirmed exploitable) or is CISA-KEV tagged.
+ */
+function dastDepscore(
+  severity: string | null | undefined,
+  opts: { confidence?: string | null; vulnType?: string | null; confirmedExploitable: boolean; kev: boolean },
+): number | null {
+  let score: number;
+  switch ((severity ?? '').toLowerCase()) {
+    case 'critical': score = 90; break;
+    case 'high': score = 72; break;
+    case 'medium': score = 48; break;
+    case 'low': score = 26; break;
+    case 'info': score = 10; break;
+    default: return null;
+  }
+  switch ((opts.confidence ?? '').toLowerCase()) {
+    case 'confirmed': score += 10; break;
+    case 'high': score += 6; break;
+    case 'low': score -= 12; break;
+    // medium / unknown: no adjustment
+  }
+  switch (dastImpactClass(opts.vulnType)) {
+    case 'injection': score += 10; break;
+    case 'xss': score += 4; break;
+    case 'passive': score -= 8; break;
+    // other: no adjustment
+  }
+  if (opts.confirmedExploitable) score = Math.max(score, 90);
+  if (opts.kev) score = Math.max(score, 96);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -1681,7 +1758,7 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
     const query = supabase
       .from('project_dast_findings')
       .select(
-        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
+        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, handler_code_snippet, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
       )
       .eq('project_id', projectId)
       .eq('target_id', filterTargetId)
@@ -1695,35 +1772,46 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
       return res.status(500).json({ error: 'Failed to load DAST findings' });
     }
 
-    const findings: DastFindingDTO[] = (data ?? []).map((row: any) => ({
-      id: row.id,
-      target_id: row.target_id ?? null,
-      auth_state: row.auth_state ?? null,
-      engine: row.engine ?? 'zap',
-      kev: row.kev ?? false,
-      endpoint_url: row.endpoint_url,
-      http_method: row.http_method,
-      vulnerability_type: row.vulnerability_type,
-      severity: row.severity,
-      cwe_id: row.cwe_id,
-      owasp_top10_ref: row.owasp_top10_ref,
-      rule_id: row.rule_id,
-      message: row.message,
-      payload_redacted: row.payload_redacted,
-      response_evidence_redacted: row.response_evidence_redacted,
-      confidence: row.confidence,
-      handler_file_path: row.handler_file_path,
-      handler_function_name: row.handler_function_name,
-      handler_line: row.handler_line,
-      linked_sca_osv_id: row.linked_sca_osv_id,
-      linked_sca_project_dependency_id: row.linked_sca_project_dependency_id,
-      linked_sast_finding_id: row.linked_sast_finding_id ?? null,
-      cross_link_methods: row.cross_link_methods ?? null,
-      confirmed_exploitable: row.linked_sca_osv_id != null,
-      status: row.status,
-      risk_accepted_reason: row.risk_accepted_reason,
-      created_at: row.created_at,
-    }));
+    const findings: DastFindingDTO[] = (data ?? []).map((row: any) => {
+      const confirmedExploitable = row.linked_sca_osv_id != null;
+      const kev = row.kev ?? false;
+      return {
+        id: row.id,
+        target_id: row.target_id ?? null,
+        auth_state: row.auth_state ?? null,
+        engine: row.engine ?? 'zap',
+        kev,
+        endpoint_url: row.endpoint_url,
+        http_method: row.http_method,
+        vulnerability_type: row.vulnerability_type,
+        severity: row.severity,
+        cwe_id: row.cwe_id,
+        owasp_top10_ref: row.owasp_top10_ref,
+        rule_id: row.rule_id,
+        message: row.message,
+        payload_redacted: row.payload_redacted,
+        response_evidence_redacted: row.response_evidence_redacted,
+        confidence: row.confidence,
+        handler_file_path: row.handler_file_path,
+        handler_function_name: row.handler_function_name,
+        handler_line: row.handler_line,
+        handler_code_snippet: row.handler_code_snippet ?? null,
+        linked_sca_osv_id: row.linked_sca_osv_id,
+        linked_sca_project_dependency_id: row.linked_sca_project_dependency_id,
+        linked_sast_finding_id: row.linked_sast_finding_id ?? null,
+        cross_link_methods: row.cross_link_methods ?? null,
+        confirmed_exploitable: confirmedExploitable,
+        depscore: dastDepscore(row.severity, {
+          confidence: row.confidence,
+          vulnType: row.vulnerability_type,
+          confirmedExploitable,
+          kev,
+        }),
+        status: row.status,
+        risk_accepted_reason: row.risk_accepted_reason,
+        created_at: row.created_at,
+      } as DastFindingDTO;
+    });
     return res.json(findings);
   } catch (e: any) {
     console.error('[dast] GET findings exception:', e);

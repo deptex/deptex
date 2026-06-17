@@ -173,9 +173,12 @@ function parseSingleReport(report: CheckovRawReport, version: string): IaCFindin
       end_line: endLine,
       severity: normalizeSeverity(c),
       message: c.check_name ?? c.short_description ?? null,
+      // Checkov community checks ship `description: ""` (empty string, not null),
+      // which `??` would keep — coalesce on a trimmed value so the empty string
+      // falls through to details / null and the UI shows a real impact line.
       description:
-        c.description ??
-        (Array.isArray(c.details) ? c.details.join('\n') : null) ??
+        (c.description && c.description.trim()) ||
+        (Array.isArray(c.details) && c.details.length ? c.details.join('\n') : null) ||
         null,
       cwe_ids: [],
       code_snippet: snippet(c),
@@ -269,6 +272,13 @@ export async function runCheckov(
     'json',
     '--quiet',
     '--skip-download',
+    // The pipeline installs dependencies before scanning, so the workspace holds
+    // vendored deps. Their manifests aren't the user's infra — skip them to avoid
+    // noise + duplicate rows. `--skip-path` is matched as a regex on the path.
+    '--skip-path',
+    'node_modules',
+    '--skip-path',
+    'vendor',
   ];
 
   const result = await runScannerSubprocess({

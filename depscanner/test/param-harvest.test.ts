@@ -179,6 +179,22 @@ async function main(): Promise<void> {
       'cross-file mount: routes/api.js routes get /api prefix',
     );
   }
+  // Cross-file with ABSOLUTE worker paths (regression: joinPath used to drop the
+  // leading slash, so the composed target path never matched the absolute byPath
+  // keys → resolution silently no-opped and `/api` was lost on every real scan).
+  {
+    const base = '/tmp/deptex-extract-abc123/repo';
+    const server = extracted(
+      `${base}/server.js`,
+      [epRow({ filePath: `${base}/server.js`, routePattern: '/api', handlerName: 'apiRouter', httpMethod: null, metadata: { instance: 'app', call: 'app.use' } })],
+      [imp('apiRouter', './routes/api')],
+    );
+    const api = extracted(`${base}/routes/api.js`, [
+      epRow({ filePath: `${base}/routes/api.js`, routePattern: '/users', handlerName: '(anonymous)', httpMethod: 'GET', metadata: { instance: 'router', call: 'router.get' } }),
+    ]);
+    resolveMountPrefixes([server, api]);
+    eq((api.entryPoints ?? [])[0].routePattern, '/api/users', 'cross-file mount resolves with absolute /tmp/... paths');
+  }
   // Same-file router instance.
   {
     const f = extracted('app.js', [

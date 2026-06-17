@@ -150,6 +150,59 @@ const CONFIDENCE_TO_LABEL: Record<string, DastFindingRaw['confidence']> = {
   '4': 'confirmed',
 };
 
+// ZAP passive "best-practice / informational" alerts we deliberately DON'T
+// store. These fire on nearly every site, carry no exploit (no payload), and are
+// pure hygiene/disclosure noise — the tail a real security team suppresses.
+// Endor/Snyk don't even do DAST, so they'd never surface these; we keep only the
+// findings ZAP actually exploited or that represent a real exposure. Keyed by
+// ZAP's stable numeric pluginid (alertRef can carry a `-N` suffix, so we match
+// on the base pluginid). Anything not listed here is kept.
+const DAST_NOISE_PLUGIN_IDS = new Set<string>([
+  // --- HTTP header / cookie hardening best-practices (the "46-score" tail) ---
+  '10015', // Re-examine Cache-control Directives
+  '10016', // Web Browser XSS Protection Not Enabled (deprecated header)
+  '10017', // Cross-Domain JavaScript Source File Inclusion
+  '10019', // Content-Type Header Missing
+  '10020', // Missing Anti-clickjacking / X-Frame-Options Header
+  '10021', // X-Content-Type-Options Header Missing
+  '10035', // Strict-Transport-Security (HSTS) Header
+  '10038', // Content Security Policy (CSP) Header Not Set
+  '10055', // CSP: Failure to Define Directive with No Fallback
+  '10054', // Cookie Without SameSite Attribute
+  '10010', // Cookie No HttpOnly Flag
+  '10011', // Cookie Without Secure Flag
+  '10063', // Permissions Policy Header Not Set
+  '90004', // Insufficient Site Isolation Against Spectre (Sec-Fetch)
+  '90005', // Sec-Fetch-* request headers missing
+  // --- informational / disclosure noise ---
+  '10025', // Information Disclosure - Sensitive Information in HTTP Referrer
+  '10047', // HTTPS Content Available via HTTP / insecure transition
+  '10027', // Information Disclosure - Suspicious Comments
+  '10036', // Server Leaks Version Information via "Server" Header
+  '10037', // Server Leaks Information via "X-Powered-By" Header
+  '10044', // Big Redirect Detected
+  '10049', // Storable and Cacheable Content
+  '10050', // Retrieved from Cache
+  '10052', // X-ChromeLogger-Data Header Information Leak
+  '10056', // X-Debug-Token Information Leak
+  '10061', // X-AspNet-Version Response Header
+  '10094', // Base64 Disclosure
+  '10096', // Timestamp Disclosure
+  '10099', // Source Code Disclosure - SQL (low-signal; echoes the real SQLi on the same endpoint)
+  '10097', // Hash Disclosure
+  '10109', // Modern Web Application
+  '10112', // Session Management Response Identified
+]);
+
+/** True when this ZAP alert is pure passive best-practice / informational noise
+ *  we don't persist. Active exploits (with an attack payload) are always kept,
+ *  even if the rule id happens to be listed. */
+function isDastNoiseAlert(alert: ZapAlert): boolean {
+  const exploited = (alert.instances ?? []).some((i) => i.attack && i.attack.trim());
+  if (exploited) return false;
+  return alert.pluginid != null && DAST_NOISE_PLUGIN_IDS.has(alert.pluginid);
+}
+
 export function owaspRefForCwe(cweId: string | null): string | null {
   if (!cweId) return null;
   // Coarse OWASP Top 10 2021 mapping covering the most common ZAP rule classes.
@@ -171,6 +224,9 @@ export function parseZapReport(report: ZapReport): DastFindingRaw[] {
   const out: DastFindingRaw[] = [];
   for (const site of report.site ?? []) {
     for (const alert of site.alerts ?? []) {
+      // Drop passive best-practice / informational hygiene noise before it's
+      // ever stored — keep only real exposures and anything ZAP exploited.
+      if (isDastNoiseAlert(alert)) continue;
       const severity = RISK_CODE_TO_SEVERITY[alert.riskcode ?? '0'] ?? 'info';
       const confidence = CONFIDENCE_TO_LABEL[alert.confidence ?? '2'] ?? 'medium';
       const cwe = alert.cweid && alert.cweid !== '-1' ? alert.cweid : null;
