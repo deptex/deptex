@@ -525,6 +525,29 @@ function bestCvss(v: TrivyImageVuln): number | null {
   return best;
 }
 
+const TRIVY_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+
+/**
+ * Normalize a container CVE's severity to our 5-band scale. Trivy emits
+ * `UNKNOWN` (or, rarely, an empty string) for CVEs the feed has not yet rated —
+ * storing that as `null` leaves the finding unable to band, sort, or score, so
+ * it renders as BAD_DATA in the UI. Derive a band from the CVSS score when Trivy
+ * provides one (same CVSS cutoffs the rest of the scorer uses), and otherwise
+ * floor at LOW: we have a real CVE, we just don't know how bad — surface it at
+ * the lowest real band rather than dropping it to `null`.
+ */
+function normalizeContainerSeverity(rawSeverity: string | undefined, cvss: number | null): string {
+  const sev = (rawSeverity ?? '').toUpperCase();
+  if (TRIVY_SEVERITIES.includes(sev)) return sev;
+  if (cvss != null) {
+    if (cvss >= 9.0) return 'CRITICAL';
+    if (cvss >= 7.0) return 'HIGH';
+    if (cvss >= 4.0) return 'MEDIUM';
+    if (cvss > 0) return 'LOW';
+  }
+  return 'LOW';
+}
+
 export function parseTrivyImageOutput(
   stdout: string,
   imageReference: string,
@@ -553,7 +576,7 @@ export function parseTrivyImageOutput(
     const ecosystem = result.Type ?? null;
     for (const v of result.Vulnerabilities ?? []) {
       if (!v.PkgName || !v.InstalledVersion) continue;
-      const sev = (v.Severity ?? '').toUpperCase();
+      const cvss = bestCvss(v);
       const cveId = v.VulnerabilityID?.startsWith('CVE-') ? v.VulnerabilityID : null;
       const osvId = v.VulnerabilityID && !cveId ? v.VulnerabilityID : null;
       const fingerprintKey = cveId ?? osvId;
@@ -570,8 +593,8 @@ export function parseTrivyImageOutput(
         os_package_ecosystem: ecosystem,
         osv_id: osvId,
         cve_id: cveId,
-        severity: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(sev) ? sev : null,
-        cvss_score: bestCvss(v),
+        severity: normalizeContainerSeverity(v.Severity, cvss),
+        cvss_score: cvss,
         epss_score: null,
         is_kev: false,
         fix_versions: v.FixedVersion ? v.FixedVersion.split(',').map((s) => s.trim()) : [],
