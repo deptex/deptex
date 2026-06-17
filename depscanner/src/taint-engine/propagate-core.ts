@@ -335,6 +335,33 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           }
         }
 
+        // Container-write taint: `recv.append(k, taintedValue)` /
+        // `recv.set(...)` / `recv.add(...)` mutates the receiver to hold the
+        // tainted value, so the receiver local becomes tainted. The engine has
+        // no object-field model, so without this a value stashed in a
+        // FormData / URLSearchParams / Headers / Map / Set and read back out
+        // later silently loses its taint. Bounded to a known mutator-method
+        // allowlist (same FP-containment principle as PERMISSIVE_INSTANCE_
+        // METHODS) so we don't taint receivers on every method call. Fires
+        // regardless of step.target — the mutation's effect is on the receiver,
+        // not the (usually void) return.
+        if (
+          (step.callee.kind === 'external' || step.callee.kind === 'unresolved') &&
+          isContainerWriteCallee(step.callee.calleeText)
+        ) {
+          const recv = receiverRoot(step.callee.calleeText);
+          if (recv) {
+            for (const a of step.args) {
+              if (!a) continue;
+              const t = local.get(a);
+              if (t) {
+                local.set(recv, extendPath(t, hopFromStep(step, 'call'), maxPathLength));
+                break;
+              }
+            }
+          }
+        }
+
         if (step.callee.kind === 'internal') {
           const callee = stateById.get(step.callee.functionId);
           if (callee) {
@@ -670,6 +697,38 @@ const PERMISSIVE_INSTANCE_METHODS: ReadonlySet<string> = new Set([
   // map cleanly to the AI's `String.format_map(*)` pattern.
   'format_map',
 ]);
+
+/**
+ * Mutator methods that write a value INTO their receiver (a container), so a
+ * tainted argument taints the receiver. Covers the Web platform builder APIs
+ * (`FormData`/`URLSearchParams`/`Headers`.append/set, `Map`/`Set`.set/add) and
+ * the array push family. Same FP-containment rationale as
+ * `PERMISSIVE_INSTANCE_METHODS`: these names are specific writes, and the
+ * alternative — losing taint through every container — produces false
+ * negatives on real flows (the Next.js server-action FormData XSS shape).
+ *
+ * Deliberately NOT included: `get`/`read`/`toString` (those are READS, already
+ * covered by the existing receiver-taint pass-through on the return value).
+ */
+const CONTAINER_WRITE_METHODS: ReadonlySet<string> = new Set([
+  'append',
+  'set',
+  'add',
+  'push',
+  'unshift',
+  'write',
+]);
+
+/**
+ * True when `calleeText` is `recv.<method>` (or `recv->method` / `recv::method`)
+ * and `<method>` is a container-write mutator. The receiver must be a member
+ * access — bare `append(x)` (no receiver) is not a container write.
+ */
+function isContainerWriteCallee(calleeText: string): boolean {
+  const m = calleeText.match(/(?:\.|->|::)([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (!m) return false;
+  return CONTAINER_WRITE_METHODS.has(m[1]);
+}
 
 export function matchesCallPattern(
   pattern: string,
