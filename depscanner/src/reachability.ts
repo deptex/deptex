@@ -516,6 +516,35 @@ export function isFrameworkEmbeddedRuntime(depName: string | undefined): boolean
 }
 
 /**
+ * JS/TS framework runtime packages a project uses *without an explicit import*.
+ * Modern frameworks wire their runtime in by convention, not by a call-site the
+ * usage extractor can see: a Next.js `app/` page or a pure-JSX component is
+ * compiled to `react`/`next` by the bundler, so `files_importing_count` is 0 for
+ * `next` / `react` / `react-dom` even though they are on every render path (the
+ * automatic JSX runtime means React 17+ JSX needs no `import React`). Treat
+ * these like the embedded-runtime components above: never collapse them to
+ * `unreachable` on import-absence — floor at `module`. Skipping this would bury
+ * a genuinely-exploitable framework CVE (e.g. Next.js CVE-2025-29927) at
+ * depscore weight 0 the moment the app happens not to `import` the framework.
+ *
+ * EXACT match (not substring) so it can't false-exempt `next-auth`, `nextra`,
+ * `react-router`, etc. — those are ordinary libraries the app does import.
+ */
+const FRAMEWORK_RUNTIME_PACKAGES = new Set([
+  'next', 'react', 'react-dom', 'react-native',
+  'vue', 'nuxt',
+  '@angular/core', '@angular/common', '@angular/platform-browser',
+  'svelte', '@sveltejs/kit',
+  'solid-js', 'preact', 'gatsby', 'astro', '@remix-run/react',
+]);
+
+/** True when `depName` is a convention-wired framework runtime (see above). */
+export function isFrameworkRuntimePackage(depName: string | undefined): boolean {
+  if (!depName) return false;
+  return FRAMEWORK_RUNTIME_PACKAGES.has(depName.toLowerCase());
+}
+
+/**
  * True when `project_dependencies.environment` marks a dependency as
  * dev/test/build scope. A dev-scoped dependency's vulnerable code is, by
  * definition, not on the production call path — the classifier floors it at
@@ -826,6 +855,22 @@ export async function updateReachabilityLevels(
     );
   }
 
+  // Import-resolution output (files_importing_count) is produced by the same AST
+  // parse but, UNLIKE call-slices, is reliable even when the app makes zero
+  // direct dep *calls*. A framework-driven app — a Next.js `app/` page that only
+  // renders JSX, a component that wires deps in by convention — legitimately
+  // produces zero usage slices while still importing (or framework-importing)
+  // its deps. So the import-ABSENCE `unreachable` verdict gates on whether the
+  // parse ran (astParsedSuccessfully), not on whether call-slices exist; the
+  // call-slice branches above keep gating on usageAnalysisProducedOutput. This
+  // is what lets a genuinely-unused direct dep (e.g. a `dompurify` listed in
+  // package.json but imported by no file) be classified `unreachable` (weight 0)
+  // instead of dishonestly floored at `module` (is_reachable=true) just because
+  // the app happens to call none of its deps directly. Framework runtimes are
+  // exempted below (isFrameworkRuntimePackage) so the framework's own package
+  // never gets buried by this path.
+  const importAnalysisRan = astParsedSuccessfully;
+
   // Second fail-open guard: `unreachable` keys on `!is_direct`, so it is only
   // safe when the direct/transitive split is trustworthy. cdxgen sometimes
   // returns an unwired dependency graph; when graph recovery also couldn't
@@ -1091,16 +1136,23 @@ export async function updateReachabilityLevels(
           !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
         const heuristicUnreachable =
           graphTrusted &&
-          usageAnalysisProducedOutput &&
+          importAnalysisRan &&
           !!meta &&
           (!meta.isDirect || allowDirectDemotion) &&
           meta.filesImporting === 0 &&
           !isFrameworkEmbeddedRuntime(depName) &&
+          !isFrameworkRuntimePackage(depName) &&
           !callgraphReachedThisDep;
         if (heuristicUnreachable) {
           level = 'unreachable';
+          // A directly-declared dep with zero importers reads differently from a
+          // transitive orphan — keep the reason honest. The `verdict`/`scope`
+          // tags stay stable (frontend + snapshot consumers key on them).
+          const directUnused = !!meta && meta.isDirect;
           details = {
-            reason: 'no source file imports this transitive dependency',
+            reason: directUnused
+              ? 'declared in the manifest but imported by no source file'
+              : 'no source file imports this transitive dependency',
             scope: 'orphan',
             verdict: 'orphan_transitive_unreachable',
           };
