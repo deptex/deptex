@@ -758,7 +758,6 @@ export const api = {
     data: {
       name: string;
       team_ids?: string[];
-      importance?: number;
       framework?: string | null;
       /**
        * When present, the backend performs project insert + repo connect +
@@ -806,7 +805,7 @@ export const api = {
     }
   },
 
-  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; importance?: number; notifications_paused_until?: string | null }): Promise<Project> {
+  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; notifications_paused_until?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),

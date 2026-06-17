@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'rea
 import { createPortal } from 'react-dom';
 import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar, Boxes } from 'lucide-react';
+import { Settings, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar, Boxes } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import ScannersPanel from '../../components/security/ScannersPanel';
 import {
@@ -21,7 +21,6 @@ import {
 import { Label } from '../../components/ui/label';
 import { Input } from '../../components/ui/input';
 import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type ProjectPolicyChange, type RepoWithProvider, type CiCdConnection, type ExtractionRun, type Organization, type PolicyValidationResult } from '../../lib/api';
-import { ImportanceSlider, IMP_DEFAULT } from '../../components/ImportanceSlider';
 import NotificationRulesSection from './NotificationRulesSection';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -241,6 +240,12 @@ export interface ProjectSettingsContentProps {
   initialSection?: string;
   /** Called when the active section changes while embedded in a sidebar. */
   onSectionChange?: (section: string) => void;
+  /** Optimistic rename: patch the new name into the graph/sidebar stores in place
+   *  (no refetch) so the node label + header update instantly. */
+  onProjectRenamed?: (newName: string) => void;
+  /** Optimistic transfer: move the project node to its new owner team in the graph
+   *  store in place (no refetch) so it relocates instantly. */
+  onProjectTransferred?: (newOwnerTeamId: string) => void;
 }
 
 /** Repo name without account prefix: "owner/repo" -> "repo" */
@@ -569,7 +574,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
-  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange } = props;
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred } = props;
   const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -589,8 +594,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   );
   const { toast } = useToast();
   const [projectName, setProjectName] = useState(project?.name || '');
-  const [importance, setImportance] = useState<number>(project?.importance ?? IMP_DEFAULT);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isSavingName, setIsSavingName] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeletingProject, setIsDeletingProject] = useState(false);
@@ -754,18 +758,15 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   }, [organizationId, projectId, sectionParam, navigate, embedInSidebar]);
 
-  // Sync projectName, importance, and notification pause state when project changes
+  // Sync projectName and notification pause state when project changes
   useEffect(() => {
     if (project?.name) {
       setProjectName(project.name);
     }
-    if (project?.importance != null) {
-      setImportance(project.importance);
-    }
     if (project?.notifications_paused_until !== undefined) {
       setNotifPausedUntil(project.notifications_paused_until ?? null);
     }
-  }, [project?.name, project?.importance, project?.notifications_paused_until]);
+  }, [project?.name, project?.notifications_paused_until]);
 
   const loadProjectRepositories = async (integrationId?: string) => {
     if (!organizationId || !projectId) return;
@@ -1372,6 +1373,14 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     return teams.filter(t => !existingTeamIds.has(t.id));
   }, [teams, projectTeams]);
 
+  // Teams this project can be transferred TO — every team except the one that already
+  // owns it (transferring to the current owner is a no-op). A contributing team is a
+  // valid target, so this only excludes the owner.
+  const transferableTeams = useMemo(
+    () => teams.filter(t => t.id !== projectTeams?.owner_team?.id),
+    [teams, projectTeams?.owner_team?.id],
+  );
+
   // Filter available teams by search query
   const filteredTeamsForAdding = useMemo(() => {
     if (!teamSearchQuery.trim()) return availableTeamsForAdding;
@@ -1516,14 +1525,12 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   };
 
-  // Set initial selected team from project teams data (owner team)
+  // Reset the transfer picker to no selection when the project (owner) changes. The
+  // current owner isn't a transfer target, so there's no sensible default — the user
+  // picks the destination team explicitly.
   useEffect(() => {
-    if (projectTeams?.owner_team) {
-      setSelectedTeamId(projectTeams.owner_team.id);
-    } else if (project?.team_ids && project.team_ids.length > 0) {
-      setSelectedTeamId(project.team_ids[0] ?? null);
-    }
-  }, [projectTeams?.owner_team, project?.team_ids]);
+    setSelectedTeamId(null);
+  }, [projectTeams?.owner_team?.id, project?.id]);
 
   // Handle transfer project to new team
   const handleTransferProject = async () => {
@@ -1542,14 +1549,20 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       setIsTransferring(true);
       await api.transferProjectOwnership(organizationId, project.id, selectedTeamId);
 
+      // Move the project node to its new owner team on the graph in place — instant,
+      // no refetch (mirrors the name-save pattern).
+      onProjectTransferred?.(selectedTeamId);
+
       const selectedTeam = teams.find(t => t.id === selectedTeamId);
       toast({
         title: 'Ownership transferred',
         description: `Project ownership has been transferred to ${selectedTeam?.name || 'the selected team'}.`,
       });
 
-      await loadProjectTeams();
-      await reloadProject();
+      // Reconcile the sidebar's owner/contributing details in the background — don't
+      // block the spinner on these two full GETs (the slow part).
+      void loadProjectTeams();
+      void reloadProject();
     } catch (error: any) {
       toast({
         title: 'Transfer failed',
@@ -1661,30 +1674,19 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
   const handleSaveName = async () => {
     if (!organizationId || !project?.id || !projectName.trim()) return;
+    const trimmed = projectName.trim();
     try {
-      setIsSaving(true);
-      await api.updateProject(organizationId, project.id, { name: projectName.trim() } as any);
+      setIsSavingName(true);
+      await api.updateProject(organizationId, project.id, { name: trimmed } as any);
+      // Patch the name into the graph/sidebar stores in place — no refetch. The PUT
+      // already returned the updated project, so a second GET only adds latency and
+      // wouldn't touch the graph stores anyway (which is why the node didn't update).
+      onProjectRenamed?.(trimmed);
       toast({ title: 'Success', description: 'Project name saved' });
-      await reloadProject();
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'Failed to save project name' });
     } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleSaveImportance = async () => {
-    if (!organizationId || !project?.id) return;
-    try {
-      setIsSaving(true);
-      await api.updateProject(organizationId, project.id, { importance });
-      toast({ title: 'Success', description: 'Project importance saved' });
-      await reloadProject();
-    } catch (error: any) {
-      console.error('Failed to save project importance:', error);
-      toast({ title: 'Error', description: 'We couldn’t save your changes. Try again in a moment.', variant: 'destructive' });
-    } finally {
-      setIsSaving(false);
+      setIsSavingName(false);
     }
   };
 
@@ -1957,52 +1959,29 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       This is your project's visible name. It will be displayed throughout the dashboard.
                     </p>
                     <div className="max-w-md">
-                      <Input
+                      <input
                         type="text"
                         value={projectName}
-                        onChange={(e) => setProjectName(e.target.value)}
+                        onChange={(e) => canEditSettings && setProjectName(e.target.value)}
+                        readOnly={!canEditSettings}
                         placeholder="Enter project name"
-                        className="bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
+                        className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors", !canEditSettings && "opacity-60 cursor-not-allowed")}
                       />
                     </div>
                   </div>
-                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                    <p className="text-xs text-foreground-secondary">
-                      Changes will be visible to all project members.
-                    </p>
+                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                     <Button
+                      variant="green"
                       onClick={handleSaveName}
-                      disabled={isSaving || projectName === project?.name || !projectName.trim()}
-                      size="sm"
-                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={isSavingName || !canEditSettings || projectName === project?.name || !projectName.trim()}
+                      className="relative"
                     >
-                      {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                      Save
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Importance Card */}
-                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                  <div className="p-6">
-                    <h3 className="text-base font-semibold text-foreground mb-1">Importance</h3>
-                    <p className="text-sm text-foreground-secondary mb-4">
-                      Multiplied into every depscore for this project. 1.0 is the default — drag up to amplify findings on a critical project, down to dampen them on a low-priority experiment.
-                    </p>
-                    <ImportanceSlider value={importance} onChange={setImportance} disabled={!canEditSettings} />
-                  </div>
-                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                    <p className="text-xs text-foreground-secondary">
-                      Changes will be visible to all project members.
-                    </p>
-                    <Button
-                      onClick={handleSaveImportance}
-                      disabled={isSaving || !canEditSettings || Math.abs(importance - (project?.importance ?? IMP_DEFAULT)) < 0.05}
-                      size="sm"
-                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                    >
-                      {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                      Save
+                      <span className={isSavingName ? 'invisible' : undefined}>Save</span>
+                      {isSavingName && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -2014,10 +1993,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     <p className="text-sm text-foreground-secondary mb-4">
                       Transfer this project to another team within your organization.
                     </p>
-                    {teams.length > 0 || loadingTeams ? (
+                    {transferableTeams.length > 0 || loadingTeams ? (
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Owner Team</label>
+                          <label className="text-sm font-medium text-foreground">New owner team</label>
                           {loadingTeams ? (
                             <div className="max-w-md w-full px-3 py-2.5 bg-background-content border border-border rounded-lg flex items-center gap-2">
                               <div className="h-5 w-5 rounded bg-muted animate-pulse flex-shrink-0" />
@@ -2028,9 +2007,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               <ProjectTeamSelect
                                 value={selectedTeamId}
                                 onChange={setSelectedTeamId}
-                                teams={teams}
+                                teams={transferableTeams}
                                 placeholder="Select a team"
-                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground transition-colors"
+                                className="bg-background-card border border-border rounded-lg text-sm text-foreground transition-colors"
                               />
                             </div>
                           )}
@@ -2039,28 +2018,24 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     ) : (
                       <div className="flex items-center gap-2 text-sm text-foreground-secondary bg-black/20 rounded-lg p-3 border border-border">
                         <Users className="h-4 w-4 flex-shrink-0" />
-                        <span>No teams available. Create a team first to transfer this project.</span>
+                        <span>No other teams to transfer to. Create another team first.</span>
                       </div>
                     )}
                   </div>
-                  {teams.length > 0 && (
-                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                      <p className="text-xs text-foreground-secondary">
-                        This will change which team owns this project.
-                      </p>
+                  {transferableTeams.length > 0 && (
+                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                       <Button
                         onClick={handleTransferProject}
-                        variant="outline"
-                        size="sm"
-                        className="h-8"
-                        disabled={!selectedTeamId || isTransferring || projectTeams?.owner_team?.id === selectedTeamId}
+                        variant="green"
+                        className="relative"
+                        disabled={!selectedTeamId || isTransferring}
                       >
-                        {isTransferring ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                        ) : (
-                          <UserPlus className="h-3.5 w-3.5 mr-2" />
+                        <span className={isTransferring ? 'invisible' : undefined}>Transfer</span>
+                        {isTransferring && (
+                          <span className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </span>
                         )}
-                        Transfer
                       </Button>
                     </div>
                   )}
@@ -2082,11 +2057,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       {!showDeleteConfirm && project && (
                         <Button
                           onClick={() => setShowDeleteConfirm(true)}
-                          variant="outline"
-                          size="sm"
-                          className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                          variant="destructive"
+                          className="flex-shrink-0"
                         >
-                          <Trash2 className="h-3.5 w-3.5 mr-2" />
                           Delete
                         </Button>
                       )}
@@ -2102,22 +2075,21 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           value={deleteConfirmText}
                           onChange={(e) => setDeleteConfirmText(e.target.value)}
                           placeholder={project.name}
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                          autoFocus
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                         />
                         <div className="flex gap-2">
                           <Button
                             onClick={handleDelete}
                             variant="destructive"
-                            size="sm"
                             disabled={deleteConfirmText !== project.name || isDeletingProject}
-                            className="h-8"
                           >
-                            {isDeletingProject ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            <span className={isDeletingProject ? 'invisible' : undefined}>Delete Forever</span>
+                            {isDeletingProject && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
                             )}
-                            Delete Forever
                           </Button>
                           <Button
                             onClick={() => {

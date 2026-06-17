@@ -128,12 +128,12 @@ describe('ProjectSettingsPage – General', () => {
     });
   });
 
-  it('shows No teams available when getTeams returns empty', async () => {
+  it('shows the no-transfer-target message when there are no other teams', async () => {
     mockGetTeams.mockResolvedValue([]);
 
     render(<ProjectSettingsPage />);
     await waitFor(() => {
-      expect(screen.getByText(/No teams available/)).toBeInTheDocument();
+      expect(screen.getByText(/No other teams to transfer to/)).toBeInTheDocument();
     });
   });
 
@@ -213,11 +213,12 @@ describe('ProjectSettingsPage – General', () => {
     render(<ProjectSettingsPage />);
     const transferBtn = await screen.findByRole('button', { name: 'Transfer' }, { timeout: 5000 });
 
-    // Wait for projectTeams to load so Team A appears in the select, then open dropdown
+    // The owner (Team A) is filtered out of the picker, which starts empty. Wait for the
+    // teams to load, open the placeholder dropdown, and pick the only target (Team B).
     await waitFor(() => {
-      expect(screen.getByText('Team A')).toBeInTheDocument();
+      expect(screen.getByText('Select a team')).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByText('Team A'));
+    await userEvent.click(screen.getByText('Select a team'));
     await waitFor(() => {
       expect(screen.getByText('Team B')).toBeInTheDocument();
     });
@@ -246,11 +247,12 @@ describe('ProjectSettingsPage – General', () => {
     render(<ProjectSettingsPage />);
     const transferBtn = await screen.findByRole('button', { name: 'Transfer' }, { timeout: 5000 });
 
-    // Wait for projectTeams to load so Team A appears in the select, then open dropdown
+    // The owner (Team A) is filtered out of the picker, which starts empty. Wait for the
+    // teams to load, open the placeholder dropdown, and pick the only target (Team B).
     await waitFor(() => {
-      expect(screen.getByText('Team A')).toBeInTheDocument();
+      expect(screen.getByText('Select a team')).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByText('Team A'));
+    await userEvent.click(screen.getByText('Select a team'));
     await waitFor(() => {
       expect(screen.getByText('Team B')).toBeInTheDocument();
     });
