@@ -318,6 +318,27 @@ function walkStatement(stmt: ts.Node, steps: Step[], opts: LowerOptions): void {
           opts.literalInitsWrites.set(target, (opts.literalInitsWrites.get(target) ?? 0) + 1);
         }
       }
+      // Destructuring binding: `const { html: echoHtml } = call()` /
+      // `const [a, b] = arr`. The lowerer has no field-precise taint, so we
+      // over-approximate (sound for forward propagation): lower the initializer
+      // to a synthetic temp, then bind EVERY destructured local to that temp.
+      // If the initializer (e.g. a server-action return) is tainted, each
+      // extracted field is treated as tainted. Misses are worse than false
+      // positives here — Gate 3 catches over-tainting.
+      if (
+        target === null &&
+        (ts.isObjectBindingPattern(decl.name) || ts.isArrayBindingPattern(decl.name))
+      ) {
+        const bound = collectBindingNames(decl.name);
+        if (bound.length > 0) {
+          const tmp = `<destructure@${steps.length}>`;
+          walkExpressionAsAssign(decl.initializer, tmp, steps, opts);
+          for (const name of bound) {
+            steps.push({ kind: 'assign', target: name, from: tmp, loc: locOf(decl, opts) });
+          }
+          continue;
+        }
+      }
       walkExpressionAsAssign(decl.initializer, target, steps, opts);
     }
     return;
@@ -499,8 +520,119 @@ function walkExpressionAsAssign(
     return;
   }
 
+  // JSX — React render trees. The lowerer otherwise drops JSX entirely, so a
+  // tainted value reaching a render sink (`dangerouslySetInnerHTML`) was
+  // invisible. Walk the tree so (a) embedded `{expr}` taint is seen and (b)
+  // the `dangerouslySetInnerHTML` attribute is lowered to a synthetic sink
+  // call. JSX never produces a taint value itself, so `target` is ignored.
+  if (
+    ts.isJsxElement(expr) ||
+    ts.isJsxSelfClosingElement(expr) ||
+    ts.isJsxFragment(expr) ||
+    ts.isJsxExpression(expr)
+  ) {
+    walkJsx(expr, steps, opts);
+    return;
+  }
+
   // Anything else (literals, this, super, regex, function expressions
   // appearing in expression position) — inert for taint.
+}
+
+/**
+ * Walk a JSX node for taint side effects. We do NOT model the render output as
+ * a value; the only thing we extract is (a) taint inside `{expr}` children /
+ * attribute values (so a sink reachable from there fires) and (b) the
+ * `dangerouslySetInnerHTML={{ __html: expr }}` attribute, which we lower to a
+ * synthetic `call` step with callee `dangerouslySetInnerHTML` so the existing
+ * call-shape sink matcher (`dangerouslySetInnerHTML(*)` in nextjs.yaml) fires
+ * on a tainted `__html`. This reuses the call/sink machinery rather than adding
+ * a JSX-attribute sink grammar to the engine.
+ */
+function walkJsx(node: ts.Node, steps: Step[], opts: LowerOptions): void {
+  if (ts.isJsxExpression(node)) {
+    if (node.expression) walkExpressionAsAssign(node.expression, null, steps, opts);
+    return;
+  }
+
+  const openingElement =
+    ts.isJsxElement(node) ? node.openingElement
+    : ts.isJsxSelfClosingElement(node) ? node
+    : undefined;
+
+  if (openingElement) {
+    for (const attr of openingElement.attributes.properties) {
+      if (ts.isJsxAttribute(attr)) {
+        const attrName = attr.name.getText(opts.sourceFile);
+        // The render sink. The value is `{{ __html: expr }}`; pull out the
+        // `__html` initializer and pass its taint as arg 0 of a synthetic
+        // `dangerouslySetInnerHTML(__html)` call.
+        if (attrName === 'dangerouslySetInnerHTML' && attr.initializer) {
+          emitDangerouslySetInnerHtmlSink(attr.initializer, attr, steps, opts);
+          continue;
+        }
+        // Any other attribute value `{expr}` — walk for side-effect taint.
+        if (attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+          walkExpressionAsAssign(attr.initializer.expression, null, steps, opts);
+        }
+      } else if (ts.isJsxSpreadAttribute(attr)) {
+        walkExpressionAsAssign(attr.expression, null, steps, opts);
+      }
+    }
+  }
+
+  // Children (JsxElement / JsxFragment only — self-closing has none).
+  if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
+    for (const child of node.children) {
+      if (
+        ts.isJsxElement(child) ||
+        ts.isJsxSelfClosingElement(child) ||
+        ts.isJsxFragment(child) ||
+        ts.isJsxExpression(child)
+      ) {
+        walkJsx(child, steps, opts);
+      }
+    }
+  }
+}
+
+/**
+ * Lower `dangerouslySetInnerHTML={...}` to a synthetic sink call. The
+ * initializer is `{{ __html: expr }}` (a JsxExpression wrapping an object
+ * literal); we resolve `expr` to a temp local so its taint flows into arg 0 of
+ * the synthetic `dangerouslySetInnerHTML(temp)` call.
+ */
+function emitDangerouslySetInnerHtmlSink(
+  initializer: ts.JsxAttributeValue,
+  attrNode: ts.Node,
+  steps: Step[],
+  opts: LowerOptions,
+): void {
+  if (!ts.isJsxExpression(initializer) || !initializer.expression) return;
+  // The attribute value is typically an object literal `{ __html: expr }`.
+  // Resolve the __html property's expression; fall back to the whole value.
+  let htmlExpr: ts.Expression = initializer.expression;
+  if (ts.isObjectLiteralExpression(initializer.expression)) {
+    for (const prop of initializer.expression.properties) {
+      if (
+        ts.isPropertyAssignment(prop) &&
+        (prop.name.getText(opts.sourceFile) === '__html')
+      ) {
+        htmlExpr = prop.initializer;
+        break;
+      }
+    }
+  }
+  const tmp = `<dsih@${steps.length}>`;
+  walkExpressionAsAssign(htmlExpr, tmp, steps, opts);
+  steps.push({
+    kind: 'call',
+    target: null,
+    callee: { kind: 'external', calleeText: 'dangerouslySetInnerHTML' },
+    args: [tmp],
+    argTexts: [htmlExpr.getText(opts.sourceFile)],
+    loc: locOf(attrNode, opts),
+  });
 }
 
 function emitReturnFromExpression(expr: ts.Expression, steps: Step[], opts: LowerOptions): void {
@@ -515,6 +647,27 @@ function emitReturnFromExpression(expr: ts.Expression, steps: Step[], opts: Lowe
   const synthetic = `<retval@${steps.length}>`;
   walkExpressionAsAssign(expr, synthetic, steps, opts);
   steps.push({ kind: 'return', from: synthetic, loc: locOf(expr, opts) });
+}
+
+/**
+ * Collect the leaf identifier names bound by an object/array binding pattern,
+ * recursing through nested patterns. `{ html: echoHtml }` → `['echoHtml']`;
+ * `[a, { b }]` → `['a', 'b']`. Rest elements (`...rest`) and default-valued
+ * elements are included by their identifier. Used to over-approximate
+ * destructuring taint (every bound local inherits the initializer's taint).
+ */
+function collectBindingNames(pattern: ts.BindingPattern): LocalVar[] {
+  const out: LocalVar[] = [];
+  for (const el of pattern.elements) {
+    if (ts.isOmittedExpression(el)) continue;
+    const name = el.name;
+    if (ts.isIdentifier(name)) {
+      out.push(name.text);
+    } else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+      out.push(...collectBindingNames(name));
+    }
+  }
+  return out;
 }
 
 /** Extract the local-var name from an argument expression, if it is one. */
