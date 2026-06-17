@@ -27,7 +27,7 @@ const BENCHMARK = {
 
 export default function BenchmarkSection() {
   return (
-    <section className="w-full">
+    <section id="benchmark" className="w-full scroll-mt-24">
       <div className="mx-auto max-w-[1200px] px-6 py-24">
         <Reveal>
           <h2 className="text-[32px] font-semibold leading-tight tracking-[-0.02em] text-foreground md:text-[40px]">

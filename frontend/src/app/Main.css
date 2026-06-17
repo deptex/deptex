@@ -209,70 +209,38 @@
     background-repeat: no-repeat;
   }
 
-  /* Fade the hero wave out before the section edge — the type-only hero is
-     shorter than the 700px wave canvas, so without this the glow band gets
-     clipped to a hard horizontal line where the next section starts. */
-  .hero-wave-clip {
-    -webkit-mask-image: linear-gradient(to bottom, black 38%, transparent 57%);
-    mask-image: linear-gradient(to bottom, black 38%, transparent 57%);
+  /* Hero background — a faint technical grid that dissolves outward + a soft
+     green glow behind the headline. Replaced the wave 2026-06-16 (founder):
+     reads more like the dev-tool standard (Vercel/Linear), calmer, on-brand. */
+  .hero-grid {
+    /* dashed-line grid — each cell's top + left edge is a dashed stroke (SVG
+       tile), so the lattice reads as dashed lines, not dots */
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='80'%20height='80'%3E%3Cpath%20d='M80%200H0V80'%20fill='none'%20stroke='white'%20stroke-opacity='0.12'%20stroke-width='1'%20stroke-dasharray='4%206'/%3E%3C/svg%3E");
+    background-size: 80px 80px;
+    -webkit-mask-image: radial-gradient(ellipse 75% 60% at 50% 28%, #000 5%, transparent 72%);
+    mask-image: radial-gradient(ellipse 75% 60% at 50% 28%, #000 5%, transparent 72%);
   }
 
-  /* Undulating wave: blurred chain of nodes, staggered animation-delay for ripple. (replaces 3 blobs, blur on container, different shift animations (fluid “shifting” effect) */
-  .wave-gradient {
-    position: absolute;
-    top: 48%;
-    left: 0;
-    width: 100%;
-    height: 200px;
-    transform: translateY(-50%);
-    z-index: 0;
-    pointer-events: none;
-    filter: blur(50px);
+  .hero-glow {
+    background: radial-gradient(
+      ellipse at center,
+      rgba(52, 208, 138, 0.16) 0%,
+      rgba(45, 212, 191, 0.06) 42%,
+      transparent 72%
+    );
+    filter: blur(30px);
+    animation: hero-glow-pulse 8s ease-in-out infinite;
   }
 
-  .wave-node {
-    position: absolute;
-    top: 50%;
-    width: 35vw;
-    height: 60px;
-    border-radius: 50px;
-    opacity: 0.8;
-    animation: undulate 6s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    .hero-glow {
+      animation: none;
+    }
   }
 
-  .wave-node.node-1 {
-    left: -10%;
-    background: #013d1f;
-    animation-delay: 0s;
-  }
-
-  .wave-node.node-2 {
-    left: 15%;
-    background: #025230;
-    animation-delay: -1.5s;
-  }
-
-  .wave-node.node-3 {
-    left: 40%;
-    background: #034d28;
-    animation-delay: -3s;
-  }
-
-  .wave-node.node-4 {
-    left: 65%;
-    background: #025230;
-    animation-delay: -4.5s;
-  }
-
-  .wave-node.node-5 {
-    left: 90%;
-    background: #013d1f;
-    animation-delay: -6s;
-  }
-
-  @keyframes undulate {
-    0%, 100% { transform: translateY(-50px); }
-    50% { transform: translateY(50px); }
+  @keyframes hero-glow-pulse {
+    0%, 100% { opacity: 0.8; transform: translate(-50%, -50%) scale(1); }
+    50% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
   }
 
   /* Pipeline showcase: subtle pulse on the scanner node */
@@ -303,6 +271,52 @@
       opacity: 1;
       transform: translateY(0);
     }
+  }
+
+  /* Breadth-wall tab switch: a quick fade so cards don't hard-pop */
+  .tab-fade {
+    animation: tab-fade 0.25s ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-fade {
+      animation: none;
+    }
+  }
+  @keyframes tab-fade {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Chrome-style active browser tab "feet" — the bottom corners flare OUTWARD
+     into the toolbar (HeroShowcase). border-radius only rounds inward, so the
+     classic trick is two pseudo-elements just outside the bottom corners, each
+     a radial-gradient carving a concave fillet in the tab fill (#141414) over
+     the title-bar background (#0a0a0a). */
+  .chrome-tab-active {
+    position: relative;
+  }
+  .chrome-tab-active::before,
+  .chrome-tab-active::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+  }
+  .chrome-tab-active::before {
+    left: -8px;
+    background: radial-gradient(circle at top left, transparent 7.5px, #141414 8.5px);
+  }
+  .chrome-tab-active::after {
+    right: -8px;
+    background: radial-gradient(circle at top right, transparent 7.5px, #141414 8.5px);
   }
 
   /* Marquee strip for ecosystem names */

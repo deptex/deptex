@@ -80,7 +80,7 @@ function StackRow({
 
 export default function StackBand() {
   return (
-    <section className="w-full border-y border-white/[0.08]">
+    <section className="w-full border-t border-white/[0.08]">
       <div className="mx-auto max-w-[1200px] px-6 py-16">
         <div className="flex flex-col gap-10">
           <StackRow

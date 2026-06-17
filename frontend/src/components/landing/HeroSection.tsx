@@ -1,65 +1,60 @@
 /**
- * HeroSection — landing-page-redesign.plan.md §3.2.
+ * HeroSection — Linear/Cursor-style hero (founder 2026-06-16).
  *
- * Motion: H1 + subhead + CTAs render INSTANTLY (LCP candidates — zero
- * entrance animation, no Reveal). Atmosphere = the wave-gradient node
- * chain (founder pick — restored 2026-06-12 after the Snyk-style halftone
- * drapery experiments were abandoned; those live in git history around
- * commits 58cde2c4..2f5bc34f and in tmp-captures/3d-lab). Type-only: the
- * screenshot collage was cut 2026-06-11 (founder) — the FindingJourney
- * film panel directly below is the page's first hero-scale product visual.
+ * Left-aligned title + CTAs, then a MASSIVE product visual directly below. The
+ * product IS the art — no abstract background (which ended the wave→dots→grid
+ * saga). The big visual is HeroShowcase: a tabbed, INTERACTIVE product window
+ * (Connect / Triage / Fix) replacing the old film — real scrollable DOM, no
+ * recording (founder 2026-06-16, Aikido reference).
+ *
+ * The H1 renders instantly (LCP). The standalone FindingJourney film section
+ * was absorbed here and is now unused.
  */
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
+import HeroShowcase from "./HeroShowcase";
 
 export default function HeroSection() {
   return (
     <section className="relative w-full overflow-hidden bg-[#050505]">
-      {/* Wave atmosphere, positioned behind the headline zone; bottom-masked
-          so the glow dissolves into the page instead of clipping at the
-          section edge (the type-only hero is shorter than the wave canvas) */}
-      <div className="hero-wave-clip absolute inset-x-0 top-0 h-[700px] pointer-events-none" aria-hidden>
-        <div className="wave-gradient">
-          <div className="wave-node node-1" />
-          <div className="wave-node node-2" />
-          <div className="wave-node node-3" />
-          <div className="wave-node node-4" />
-          <div className="wave-node node-5" />
-        </div>
-      </div>
-
-      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-6 pt-28 sm:pb-8 sm:pt-36">
-        <div className="mx-auto max-w-[800px] text-center">
-          <h1 className="text-[38px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[60px]">
-            Your repo sets the score.
-            <span className="block">
-              <span className="bg-gradient-to-r from-[#2dd4bf] via-[#34d08a] to-[#86efac] bg-clip-text text-transparent">
-                Aegis
-              </span>{" "}
-              writes the fix.
-            </span>
-          </h1>
-          <p className="mx-auto mt-6 max-w-[640px] text-[15px] leading-[1.6] text-foreground sm:text-[17px]">
-            Every finding gets a contextual risk score based on your code, not just CVSS.
-            Aegis, your org's own security engineer, investigates and writes the fix.
-          </p>
-
-          {/* CTAs — mobile: stack full-width, green first */}
-          <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-            <Button variant="green" asChild className="w-full sm:w-auto">
+      <div className="mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pt-36">
+        {/* Title block — left-aligned title, CTAs pushed right and
+            bottom-aligned with the subhead (Linear pattern) */}
+        <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-[820px]">
+            <h1 className="text-[40px] font-semibold leading-[1.05] tracking-[-0.02em] text-foreground sm:text-[60px]">
+              Secure your stack.
+              <span className="block">Cut the noise.</span>
+              <span className="block">
+                <span className="bg-gradient-to-r from-[#2dd4bf] via-[#34d08a] to-[#86efac] bg-clip-text text-transparent">
+                  Aegis
+                </span>{" "}
+                does the rest.
+              </span>
+            </h1>
+            <p className="mt-6 max-w-[500px] text-[15px] leading-[1.6] text-foreground sm:text-base">
+              Deptex is the AI security platform for your dependencies and code —
+              every finding scored by what's actually reachable, not just CVSS.
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-3">
+            <Button variant="green" asChild>
               <Link to="/login">Try for free</Link>
             </Button>
-            {/* Same pill geometry as the green primary (settings-cancel pattern) */}
             <Button
               variant="outline"
               asChild
-              className="w-full !h-8 !rounded-lg !px-3 text-foreground sm:w-auto"
+              className="!h-8 !rounded-lg !px-3 text-foreground"
             >
               <Link to="/get-demo">Book a demo</Link>
             </Button>
           </div>
         </div>
 
+        {/* Massive product visual — tabbed interactive showcase */}
+        <div className="mt-16 sm:mt-20">
+          <HeroShowcase />
+        </div>
       </div>
     </section>
   );

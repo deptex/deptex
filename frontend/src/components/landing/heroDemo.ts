@@ -1,0 +1,446 @@
+/**
+ * heroDemo — single source of truth for the hero product showcase (founder
+ * 2026-06-17). The Overview graph, the Findings table, and the Aegis chat all
+ * read from this one dataset so the three tabs tell ONE coherent story: a sample
+ * org with 5 projects across 2 teams; a spread of findings (vuln / secret / SAST
+ * / IaC) across those projects; and Aegis fixing a reachable one. The per-project
+ * label under each Overview node is the count of OPEN findings, derived from the
+ * same findings + the same autoTriageRow the table uses — so the two tabs agree.
+ *
+ * Everything here is mock data shaped to the REAL types so it feeds the real
+ * components unchanged. See [[feedback_landing_use_real_components]].
+ */
+import {
+  autoTriageRow,
+  type SecurityTableRow,
+} from "../security/VulnerabilityExpandableTable";
+import type {
+  IaCFinding,
+  IaCFramework,
+  ProjectVulnerability,
+  ReachabilityLevel,
+  ReachableFlow,
+  SecretFinding,
+  SemgrepFinding,
+  VulnerabilityDetail,
+} from "../../lib/api";
+import type { OverviewTeamWithProjects } from "../vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout";
+
+export const HERO_ORG_ID = "demo-org";
+export const HERO_ORG_NAME = "Acme Corp";
+export const HERO_ORG_AVATAR = "/images/acmelogo.png";
+const RUN = "run-1";
+const CREATED = "2026-01-08T00:00:00.000Z";
+
+/* ------------------------------------------------------------------ projects */
+// Single project list — drives both the Overview graph nodes and the Findings
+// project column. Positions are the graph layout (org center at 0,0; teams sit
+// just off centre, projects fan out a little past them).
+type Team = "platform" | "payments";
+type HeroProject = {
+  id: string;
+  name: string;
+  framework: string;
+  team: Team;
+  deps: number;
+  health: number;
+  x: number;
+  y: number;
+};
+
+export const HERO_PROJECTS: HeroProject[] = [
+  // Platform team fans DOWN below the org; Payments team sits to the RIGHT.
+  { id: "storefront-api", name: "storefront-api", framework: "express", team: "platform", deps: 142, health: 47, x: -300, y: 320 },
+  { id: "api-gateway", name: "api-gateway", framework: "go", team: "platform", deps: 48, health: 78, x: -85, y: 372 },
+  { id: "web-dashboard", name: "web-dashboard", framework: "react", team: "platform", deps: 86, health: 68, x: 130, y: 320 },
+  { id: "payments-svc", name: "payments-svc", framework: "python", team: "payments", deps: 73, health: 52, x: 400, y: -110 },
+  { id: "auth-service", name: "auth-service", framework: "java", team: "payments", deps: 61, health: 88, x: 400, y: 80 },
+];
+
+const proj = (id: string): HeroProject => {
+  const p = HERO_PROJECTS.find((x) => x.id === id);
+  if (!p) throw new Error(`unknown hero project ${id}`);
+  return p;
+};
+
+const TEAM_META: Record<Team, { teamName: string; role: string; roleColor: string; members: number; x: number; y: number }> = {
+  platform: { teamName: "Platform team", role: "Owner", roleColor: "#34d08a", members: 6, x: -85, y: 182 },
+  payments: { teamName: "Payments team", role: "Member", roleColor: "#60a5fa", members: 4, x: 170, y: -26 },
+};
+
+/* ------------------------------------------------------------------ findings */
+// project_framework is read by the table's project column (FrameworkIcon); it's
+// not on the base finding types, so each row.data is cast after we add it.
+
+function vuln(o: {
+  id: string;
+  osv: string;
+  cve: string;
+  severity: ProjectVulnerability["severity"];
+  summary: string;
+  dep: string;
+  version: string;
+  fixed?: string;
+  depscore: number;
+  level: ReachabilityLevel;
+  cvss?: number;
+  epss?: number;
+  kev?: boolean;
+  project: string;
+}): SecurityTableRow {
+  const p = proj(o.project);
+  return {
+    type: "vulnerability",
+    data: {
+      id: o.id,
+      osv_id: o.osv,
+      severity: o.severity,
+      summary: o.summary,
+      details: null,
+      aliases: [o.cve],
+      fixed_versions: o.fixed ? [o.fixed] : [],
+      published_at: null,
+      modified_at: null,
+      dependency_id: `dep-${o.id}`,
+      dependency_name: o.dep,
+      dependency_version: o.version,
+      is_reachable: o.level !== "unreachable" && o.level != null,
+      epss_score: o.epss,
+      cvss_score: o.cvss,
+      cisa_kev: o.kev ?? false,
+      depscore: o.depscore,
+      contextual_depscore: o.depscore,
+      reachability_level: o.level,
+      project_id: p.id,
+      project_name: p.name,
+      project_framework: p.framework,
+    } as ProjectVulnerability,
+  };
+}
+
+function secretRow(o: {
+  id: string;
+  detector: string;
+  file: string;
+  line: number;
+  redacted: string;
+  snippet: string;
+  depscore: number;
+  project: string;
+}): SecurityTableRow {
+  const p = proj(o.project);
+  return {
+    type: "secret",
+    data: {
+      id: o.id,
+      project_id: p.id,
+      extraction_run_id: RUN,
+      detector_type: o.detector,
+      file_path: o.file,
+      start_line: o.line,
+      is_verified: true,
+      is_current: true,
+      description: null,
+      redacted_value: o.redacted,
+      code_snippet: o.snippet,
+      depscore: o.depscore,
+      status: "open",
+      created_at: CREATED,
+      project_name: p.name,
+      project_framework: p.framework,
+    } as SecretFinding & { project_name?: string },
+  };
+}
+
+function semgrepRow(o: {
+  id: string;
+  rule: string;
+  file: string;
+  line: number;
+  severity: string;
+  message: string;
+  category: string;
+  cwe: string[];
+  snippet: string;
+  depscore: number;
+  project: string;
+}): SecurityTableRow {
+  const p = proj(o.project);
+  return {
+    type: "semgrep",
+    data: {
+      id: o.id,
+      project_id: p.id,
+      extraction_run_id: RUN,
+      rule_id: o.rule,
+      file_path: o.file,
+      start_line: o.line,
+      end_line: o.line + 3,
+      severity: o.severity,
+      message: o.message,
+      cwe_ids: o.cwe,
+      owasp_ids: [],
+      category: o.category,
+      metadata: null,
+      code_snippet: o.snippet,
+      depscore: o.depscore,
+      status: "open",
+      created_at: CREATED,
+      project_name: p.name,
+      project_framework: p.framework,
+    } as SemgrepFinding & { project_name?: string },
+  };
+}
+
+function iacRow(o: {
+  id: string;
+  rule: string;
+  framework: string;
+  file: string;
+  line: number;
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  message: string;
+  description: string;
+  snippet: string;
+  depscore: number;
+  project: string;
+}): SecurityTableRow {
+  const p = proj(o.project);
+  return {
+    type: "iac",
+    data: {
+      id: o.id,
+      project_id: p.id,
+      organization_id: HERO_ORG_ID,
+      extraction_run_id: RUN,
+      scanner: "checkov",
+      scanner_version: "3.2.0",
+      rule_id: o.rule,
+      framework: o.framework as IaCFramework,
+      file_path: o.file,
+      start_line: o.line,
+      end_line: o.line + 6,
+      severity: o.severity,
+      depscore: o.depscore,
+      message: o.message,
+      description: o.description,
+      cwe_ids: ["CWE-732"],
+      code_snippet: o.snippet,
+      rule_doc_url: null,
+      iac_fingerprint: o.id,
+      compliance_refs: { "PCI-DSS": ["1.3.1"] },
+      status: "open",
+      suppressed: false,
+      risk_accepted: false,
+      risk_accepted_reason: null,
+      created_at: CREATED,
+      project_name: p.name,
+      project_framework: p.framework,
+    } as IaCFinding,
+  };
+}
+
+// Org-wide findings, mixed types across projects. The 6 open ones (critical RCE /
+// secret / SAST / reachable vuln / IaC / data-flow vuln) carry colour + depscore;
+// the 2 set-aside (unreachable vulns) render dimmed.
+export const heroFindings: SecurityTableRow[] = [
+  vuln({ id: "ejs", osv: "CVE-2022-29078", cve: "GHSA-phwq-j96m-2c2q", severity: "critical", summary: "Server-side template injection in ejs leads to remote code execution", dep: "ejs", version: "3.1.6", fixed: "3.1.7", depscore: 90, level: "confirmed", cvss: 9.8, epss: 0.91, kev: true, project: "storefront-api" }),
+  secretRow({ id: "secret-stripe", detector: "Stripe", file: "src/config/credentials.py", line: 24, redacted: "sk_live_••••••3xQ2", snippet: 'STRIPE_KEY = "sk_live_51AbC...3xQ2"  # TODO: move to env', depscore: 88, project: "payments-svc" }),
+  semgrepRow({ id: "sast-cmdi", rule: "python.lang.security.audit.subprocess-shell-true", file: "app/routes/export.py", line: 42, severity: "ERROR", message: "subprocess called with shell=True on user input — command injection", category: "command-injection", cwe: ["CWE-78"], snippet: 'subprocess.run(f"zip -r {user_path}", shell=True)', depscore: 81, project: "storefront-api" }),
+  vuln({ id: "lodash", osv: "CVE-2021-23337", cve: "GHSA-35jh-r3h4-6jhm", severity: "high", summary: "Command injection in lodash via _.template()", dep: "lodash", version: "4.17.20", fixed: "4.17.21", depscore: 72, level: "confirmed", cvss: 7.2, epss: 0.62, project: "storefront-api" }),
+  iacRow({ id: "iac-s3", rule: "CKV_AWS_20", framework: "terraform", file: "infra/aws/s3.tf", line: 8, severity: "HIGH", message: "S3 bucket allows public read access", description: "The S3 bucket is created with acl = public-read, making its contents world-readable.", snippet: 'resource "aws_s3_bucket" "assets" {\n  acl = "public-read"\n}', depscore: 70, project: "api-gateway" }),
+  vuln({ id: "braces", osv: "CVE-2024-4068", cve: "GHSA-grv7-fg5c-xmjg", severity: "medium", summary: "Uncontrolled resource consumption in braces", dep: "braces", version: "3.0.2", fixed: "3.0.3", depscore: 44, level: "data_flow", cvss: 5.3, epss: 0.21, project: "web-dashboard" }),
+  vuln({ id: "minimist", osv: "CVE-2021-44906", cve: "GHSA-xvch-5gv4-984h", severity: "high", summary: "Prototype pollution in minimist", dep: "minimist", version: "1.2.5", fixed: "1.2.6", depscore: 0, level: "unreachable", cvss: 9.8, epss: 0.05, project: "storefront-api" }),
+  vuln({ id: "py-3177", osv: "CVE-2021-3177", cve: "CVE-2021-3177", severity: "high", summary: "ctypes PyCArg buffer overflow (python 3.5)", dep: "python", version: "3.5.0", depscore: 0, level: "unreachable", project: "payments-svc" }),
+];
+
+/* ---------------------------------------------------------------------- teams */
+// Per-project Overview label = count of OPEN findings (autoTriageRow === null),
+// coloured by the project's worst open depscore using the same red/orange/blue/
+// green band ramp as the findings table.
+function rowProjectId(r: SecurityTableRow): string | undefined {
+  return (r.data as { project_id?: string }).project_id;
+}
+function rowScore(r: SecurityTableRow): number {
+  if (r.type === "vulnerability") return r.data.contextual_depscore ?? r.data.depscore ?? 0;
+  return r.data.depscore ?? 0;
+}
+export type SeverityCounts = { critical: number; high: number; medium: number; low: number };
+
+// Per-project OPEN-finding counts, bucketed by the same depscore band ramp as the
+// findings table / SeverityPills (>=90 C / >=70 H / >=40 M / <40 L).
+function projectSeverityCounts(projectId: string): SeverityCounts {
+  const counts: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const r of heroFindings) {
+    if (rowProjectId(r) !== projectId || autoTriageRow(r) !== null) continue;
+    const s = rowScore(r);
+    if (s >= 90) counts.critical++;
+    else if (s >= 70) counts.high++;
+    else if (s >= 40) counts.medium++;
+    else counts.low++;
+  }
+  return counts;
+}
+
+/** Per-project severity counts (by project id) — the Overview graph renders these
+ *  as SeverityPills under each project node. */
+export const HERO_SEVERITY_BY_ID: Record<string, SeverityCounts> = Object.fromEntries(
+  HERO_PROJECTS.map((p) => [p.id, projectSeverityCounts(p.id)]),
+);
+
+function buildTeams(): OverviewTeamWithProjects[] {
+  return (Object.keys(TEAM_META) as Team[]).map((t) => {
+    const m = TEAM_META[t];
+    // No statusBadge — the LandingProjectNode wrapper renders SeverityPills
+    // (HERO_SEVERITY_BY_ID) under each project instead.
+    const projects = HERO_PROJECTS.filter((p) => p.team === t).map((p) => ({
+      projectId: p.id,
+      projectName: p.name,
+      framework: p.framework,
+      dependenciesCount: p.deps,
+      healthScore: p.health,
+      canvasPositionX: p.x,
+      canvasPositionY: p.y,
+    }));
+    return {
+      teamId: t,
+      teamName: m.teamName,
+      userRoleLabel: m.role,
+      userRoleColor: m.roleColor,
+      memberCount: m.members,
+      projectCount: projects.length,
+      canvasPositionX: m.x,
+      canvasPositionY: m.y,
+      projects,
+    };
+  });
+}
+
+/** Stable reference (built once) so the graph layout memo doesn't thrash. */
+export const HERO_TEAMS: OverviewTeamWithProjects[] = buildTeams();
+
+/* --------------------------------------------- reachability detail (on expand) */
+function flow(o: {
+  osv: string;
+  purl: string;
+  epFile: string;
+  epMethod: string;
+  epLine: number;
+  epCode: string;
+  sinkFile: string;
+  sinkMethod: string;
+  sinkLine: number;
+  sinkCode: string;
+  level: ReachabilityLevel;
+}): ReachableFlow {
+  return {
+    id: `flow-${o.osv}`,
+    project_id: "storefront-api",
+    extraction_run_id: RUN,
+    purl: o.purl,
+    dependency_id: null,
+    flow_nodes: [],
+    entry_point_file: o.epFile,
+    entry_point_method: o.epMethod,
+    entry_point_line: o.epLine,
+    entry_point_tag: "http",
+    entry_point_code: o.epCode,
+    sink_code: o.sinkCode,
+    sink_file: o.sinkFile,
+    sink_method: o.sinkMethod,
+    sink_line: o.sinkLine,
+    sink_is_external: true,
+    flow_length: 2,
+    llm_prompt: null,
+    created_at: CREATED,
+    osv_id: o.osv,
+    reachability_source: "semgrep_taint",
+    reachability_level: o.level,
+  };
+}
+
+const FLOWS: Record<string, ReachableFlow[]> = {
+  "CVE-2022-29078": [
+    flow({
+      osv: "CVE-2022-29078",
+      purl: "pkg:npm/ejs@3.1.6",
+      epFile: "src/routes/profile.js",
+      epMethod: "POST /profile/preview",
+      epLine: 18,
+      epCode: "router.post('/profile/preview', (req, res) => {\n  const html = renderProfile(req.body);\n  res.send(html);\n});",
+      sinkFile: "src/lib/profile-view.js",
+      sinkMethod: "ejs.render",
+      sinkLine: 6,
+      sinkCode: "function renderProfile(opts) {\n  // opts.template comes straight from the request body\n  return ejs.render(opts.template, opts.data);\n}",
+      level: "confirmed",
+    }),
+  ],
+  "CVE-2021-23337": [
+    flow({
+      osv: "CVE-2021-23337",
+      purl: "pkg:npm/lodash@4.17.20",
+      epFile: "src/routes/render.js",
+      epMethod: "POST /render",
+      epLine: 14,
+      epCode: "router.post('/render', (req, res) => {\n  const html = renderTemplate(req.body);\n  res.send(html);\n});",
+      sinkFile: "src/lib/render-template.js",
+      sinkMethod: "_.template",
+      sinkLine: 7,
+      sinkCode: "function renderTemplate(opts) {\n  const compiled = _.template(opts.tpl); // user-controlled\n  return compiled(opts.data);\n}",
+      level: "confirmed",
+    }),
+  ],
+  "CVE-2024-4068": [
+    flow({
+      osv: "CVE-2024-4068",
+      purl: "pkg:npm/braces@3.0.2",
+      epFile: "src/routes/search.js",
+      epMethod: "GET /search",
+      epLine: 9,
+      epCode: "router.get('/search', (req, res) => {\n  const out = expandPattern(req.query.q);",
+      sinkFile: "src/lib/glob.js",
+      sinkMethod: "braces",
+      sinkLine: 12,
+      sinkCode: "export function expandPattern(p) {\n  return braces(p, { expand: true }); // unbounded expansion\n}",
+      level: "data_flow",
+    }),
+  ],
+};
+
+function vulnDetail(v: ProjectVulnerability): VulnerabilityDetail {
+  return {
+    vulnerability: { ...v },
+    affected_dependencies: [
+      {
+        id: v.dependency_id,
+        name: v.dependency_name,
+        version: v.dependency_version,
+        is_direct: true,
+        dependency_id: v.dependency_id,
+        files_importing_count: 1,
+        files: [],
+      },
+    ],
+    version_candidates: [],
+    timeline_events: [],
+    reachable_flows: FLOWS[v.osv_id] ?? [],
+    project_importance: 1,
+  };
+}
+
+const DETAIL_BY_OSV: Record<string, VulnerabilityDetail> = Object.fromEntries(
+  heroFindings
+    .filter(
+      (r): r is Extract<SecurityTableRow, { type: "vulnerability" }> =>
+        r.type === "vulnerability",
+    )
+    .map((r) => [r.data.osv_id, vulnDetail(r.data)]),
+);
+
+// Drop-in for VulnerabilityExpandableTable's `fetchDetail` — resolves the mock
+// detail inline instead of hitting the authenticated API.
+export const heroFindingDetail = (
+  _organizationId: string,
+  _projectId: string,
+  osvId: string,
+): Promise<VulnerabilityDetail> => Promise.resolve(DETAIL_BY_OSV[osvId]!);

@@ -333,12 +333,8 @@ export default function NavBar() {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button
-                asChild
-                size="sm"
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold rounded-lg h-8 px-3.5"
-              >
-                <Link to="/login">Get started</Link>
+              <Button asChild variant="green">
+                <Link to="/login">Try for free</Link>
               </Button>
             )}
           </div>

@@ -103,11 +103,8 @@ export default function PlatformFeaturesPage() {
             Deptex brings dependency security, compliance, and AI automation into one place. Pick a feature below to see what it does.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <Button
-              asChild
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold text-sm px-4 py-2 rounded-lg"
-            >
-              <Link to="/login">Get started</Link>
+            <Button asChild variant="green">
+              <Link to="/login">Try for free</Link>
             </Button>
             <Button
               asChild

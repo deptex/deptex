@@ -34,7 +34,7 @@ export default function PricingPage() {
           </p>
           <div className="mt-8 flex justify-center gap-3">
             <Button variant="green" size="lg" onClick={() => navigate('/login')}>
-              Start free
+              Try for free
             </Button>
             <Button variant="outline" size="lg" onClick={() => navigate('/docs')}>
               See the docs
