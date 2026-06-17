@@ -1748,6 +1748,9 @@ export const api = {
       path: string;
       type: 'tree' | 'file' | 'submodule';
       ecosystem?: string;
+      /** Framework resolved from the folder's manifest contents (e.g. "nextjs"), when detectable.
+       * Upgrades the per-folder badge from a generic ecosystem icon to the real framework. */
+      framework?: string;
       /** True if the folder contains a Dockerfile / Containerfile / compose file at its root. */
       hasDocker?: boolean;
       isLinked?: boolean;

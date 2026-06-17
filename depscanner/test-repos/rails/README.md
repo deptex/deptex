@@ -13,7 +13,9 @@ the dogfood corpus.
   — `params[:name]` concatenated into a `find_by_sql` raw SQL string.
 - **Unreachable handler:** `app/controllers/users_controller.rb:show`
   — `User.find` parameterised binding.
-- **Historical-malicious:** `rest-client 1.6.13` — 2019 RubyGems
-  compromise (per `.github/dependabot.yml` exclusion).
+- **Malicious-pkg (deferred):** `rest-client 1.6.13` (the 2019 RubyGems
+  compromise) was seeded but is yanked from RubyGems (404), which breaks
+  `bundle` resolution — removed from the `Gemfile`. Malicious-package
+  detection is exercised separately.
 
 See `.deptex/SOURCE.md`.

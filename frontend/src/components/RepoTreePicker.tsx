@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { ChevronRight, Loader2, Lock } from 'lucide-react';
 import { SiDocker } from '@icons-pack/react-simple-icons';
 import { api } from '../lib/api';
@@ -61,12 +61,14 @@ interface DirEntry {
   path: string;
   type: EntryType;
   ecosystem?: string;
+  /** Framework resolved from the folder's manifest (e.g. "nextjs"), when detectable. */
+  framework?: string;
   hasDocker?: boolean;
   isLinked?: boolean;
   linkedByProjectName?: string;
 }
 
-interface NodeState {
+export interface NodeState {
   loading: boolean;
   entries: DirEntry[] | null;
   expanded: boolean;
@@ -79,7 +81,11 @@ interface RepoTreePickerProps {
   defaultBranch: string;
   integrationId: string;
   selectedPath: string;
-  onSelect: (path: string, ecosystem?: string) => void;
+  onSelect: (path: string, ecosystem?: string, framework?: string) => void;
+  /** Folder-expansion state, lifted to the parent so it survives the dialog
+   * closing/reopening (otherwise every reopen re-collapses and re-fetches). */
+  tree: Map<string, NodeState>;
+  setTree: Dispatch<SetStateAction<Map<string, NodeState>>>;
   /** Display name for the root row. */
   rootName: string;
   /** Repo-level framework, used to color the root row icon. */
@@ -96,8 +102,14 @@ interface RepoTreePickerProps {
   dockerizedPaths?: string[];
 }
 
-const ROOT_PATH = '';
+export const ROOT_PATH = '';
 const INDENT_PX = 16;
+
+/** Fresh tree state — a single collapsed root node. Used by the parent that owns
+ * the lifted `tree` state to seed / reset it. */
+export function makeInitialTree(): Map<string, NodeState> {
+  return new Map([[ROOT_PATH, { loading: false, entries: null, expanded: false, error: null }]]);
+}
 
 export function RepoTreePicker({
   organizationId,
@@ -106,6 +118,8 @@ export function RepoTreePicker({
   integrationId,
   selectedPath,
   onSelect,
+  tree,
+  setTree,
   rootName,
   rootFramework,
   rootEcosystem,
@@ -114,15 +128,14 @@ export function RepoTreePicker({
   dockerizedPaths,
 }: RepoTreePickerProps) {
   const dockerSet = new Set(dockerizedPaths ?? []);
-  const [tree, setTree] = useState<Map<string, NodeState>>(() => new Map());
   const abortRef = useRef<AbortController | null>(null);
 
+  // The tree state is owned by the parent (so expansion persists across
+  // open/close); we only manage the abort controller here. The parent resets
+  // `tree` when the repo identity changes.
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-
-    setTree(new Map([[ROOT_PATH, { loading: false, entries: null, expanded: false, error: null }]]));
-
     return () => {
       abortRef.current?.abort();
     };
@@ -197,6 +210,9 @@ export function RepoTreePicker({
     const isFolder = entry.type === 'tree' || entry.type === 'submodule';
     const disabled = !!entry.isLinked;
     const resolvedEcosystem = entry.ecosystem || pathHints?.[entry.path];
+    const resolvedFramework = entry.framework;
+    // Prefer the resolved framework (e.g. "nextjs") over the generic ecosystem ("npm") for the badge.
+    const badgeId = resolvedFramework || resolvedEcosystem;
     const showDocker = !!entry.hasDocker || dockerSet.has(entry.path);
 
     return (
@@ -209,13 +225,13 @@ export function RepoTreePicker({
           aria-label={entry.name + (disabled && entry.linkedByProjectName ? ` (linked to ${entry.linkedByProjectName})` : '')}
           onClick={() => {
             if (disabled) return;
-            onSelect(entry.path, resolvedEcosystem);
+            onSelect(entry.path, resolvedEcosystem, resolvedFramework);
           }}
           onKeyDown={(e) => {
             if (disabled) return;
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              onSelect(entry.path, resolvedEcosystem);
+              onSelect(entry.path, resolvedEcosystem, resolvedFramework);
             }
           }}
           style={{ paddingLeft: 10 + depth * INDENT_PX }}
@@ -282,14 +298,14 @@ export function RepoTreePicker({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="h-5 w-5 flex-shrink-0 flex items-center justify-center">
-                    {resolvedEcosystem ? (
-                      <FrameworkIcon frameworkId={resolvedEcosystem} size={18} />
+                    {badgeId ? (
+                      <FrameworkIcon frameworkId={badgeId} size={18} />
                     ) : (
                       <img src="/images/logo_white.png" alt="" className="h-[18px] w-[18px] object-contain block opacity-60" />
                     )}
                   </span>
                 </TooltipTrigger>
-                <TooltipContent>{frameworkLabel(resolvedEcosystem)}</TooltipContent>
+                <TooltipContent>{frameworkLabel(badgeId)}</TooltipContent>
               </Tooltip>
             </span>
           )}
@@ -333,11 +349,11 @@ export function RepoTreePicker({
         aria-checked={rootSelected}
         tabIndex={0}
         aria-label={rootName}
-        onClick={() => onSelect(ROOT_PATH, rootEcosystem ?? undefined)}
+        onClick={() => onSelect(ROOT_PATH, rootEcosystem ?? undefined, rootFramework ?? undefined)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onSelect(ROOT_PATH, rootEcosystem ?? undefined);
+            onSelect(ROOT_PATH, rootEcosystem ?? undefined, rootFramework ?? undefined);
           }
         }}
         className={cn(

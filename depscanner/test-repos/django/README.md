@@ -13,8 +13,9 @@ categories.
   through `mark_safe()` into an HTTP response.
 - **Unreachable handler:** `views.py:render_static()` — wraps a constant
   string in `mark_safe`; no user taint.
-- **Historical-malicious:** `ctx==0.1.2` (per `.github/dependabot.yml`
-  exclusion).
+- **Malicious-pkg (deferred):** `ctx==0.1.2` was seeded but is removed from
+  PyPI (404) — removed from `requirements.txt`. Malicious-package detection
+  is exercised separately.
 
 See `.deptex/SOURCE.md` for upstream provenance, `.deptex/expected.yaml`
 for the canonical expected-finding list, and `.deptex/deploy.sh` to

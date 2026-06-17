@@ -56,10 +56,12 @@ secrets:
     file: .env.example
     line: 5
 
-malicious_pkg:
-  - package: event-stream
-    ecosystem: npm
-    note: historical-not-published — see .github/dependabot.yml exclusion
+# malicious_pkg: deferred. event-stream@3.3.6 (the flatmap-stream incident
+# version) was seeded here, but npm unpublished that exact version — it now 404s,
+# which aborts the whole `npm install` and makes the fixture unscannable (and an
+# unresolvable version can never be enumerated into the dep tree to be flagged
+# anyway). Removed from package.json to keep the fixture scannable; malicious-
+# package detection is exercised separately, not via this fixture.
 
 semgrep_findings:
   # Server-action result rendered via dangerouslySetInnerHTML. Rule id

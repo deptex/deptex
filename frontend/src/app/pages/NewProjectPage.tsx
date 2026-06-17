@@ -91,6 +91,11 @@ export default function NewProjectPage() {
   // the repo root. Without this, picker-discovered sub-paths would fall back to root's
   // ecosystem at submit time (wrong for monorepos with mixed-language sub-projects).
   const [selectedPathEcosystem, setSelectedPathEcosystem] = useState<string | undefined>();
+  // Framework for the currently-committed path (e.g. "nextjs"). Captured from the picker's
+  // per-layer probe when the user picks a sub-path; from peek/scan for the repo root. Drives
+  // the Project Root badge + the create payload's framework so a monorepo sub-project lands
+  // with its real framework instead of "unknown".
+  const [selectedPathFramework, setSelectedPathFramework] = useState<string | undefined>();
   const [pathPickerOpen, setPathPickerOpen] = useState(false);
   const [repoScanError, setRepoScanError] = useState<string | null>(null);
   const [repoNoManifest, setRepoNoManifest] = useState(false);
@@ -238,6 +243,7 @@ export default function NewProjectPage() {
     setRepoToConnect(null);
     setSelectedPath('');
     setSelectedPathEcosystem(undefined);
+    setSelectedPathFramework(undefined);
     setRepoPeekLoading(null);
     setRepoPeekByRepo({});
     setRepoScanLoading(null);
@@ -352,6 +358,7 @@ export default function NewProjectPage() {
     setRepoNoManifest(false);
     setSelectedPath('');
     setSelectedPathEcosystem(undefined);
+    setSelectedPathFramework(undefined);
     maybeAutoSetProjectName(repoNameOnly(repo.full_name));
     if (!organizationId) return;
 
@@ -436,9 +443,9 @@ export default function NewProjectPage() {
     const teamIds = teamLocked && lockedTeam ? [lockedTeam.id] : effectiveTeamId ? [effectiveTeamId] : undefined;
     const cachedScan = repoToConnect ? repoScanResultsByRepo[repoToConnect.full_name] : null;
     const cachedPeek = repoToConnect ? repoPeekByRepo[repoToConnect.full_name] : null;
-    // If user picked a sub-path via the picker, that ecosystem came from per-layer list-dir
-    // (not the full scan's potentialProjects) so prefer it over root-derived fallbacks.
-    const effectiveFramework = cachedScan?.framework || cachedPeek?.framework || repoToConnect?.framework || null;
+    // If user picked a sub-path via the picker, that framework/ecosystem came from per-layer
+    // list-dir (not the full scan's potentialProjects) so prefer it over root-derived fallbacks.
+    const effectiveFramework = selectedPathFramework || cachedScan?.framework || cachedPeek?.framework || repoToConnect?.framework || null;
     const createPayload: Parameters<typeof api.createProject>[1] = {
       name: projectName.trim(),
       team_ids: teamIds,
@@ -462,7 +469,7 @@ export default function NewProjectPage() {
         // Ecosystem precedence: per-layer picker pick (the user's explicit choice) wins over
         // full-scan's potentialProjects, then root-derived peek/scan/repo defaults.
         ecosystem: selectedPathEcosystem || selectedProject?.ecosystem || cachedScan?.ecosystem || cachedPeek?.ecosystem || repoToConnect.ecosystem,
-        framework: cachedScan?.framework || cachedPeek?.framework || repoToConnect.framework || undefined,
+        framework: selectedPathFramework || cachedScan?.framework || cachedPeek?.framework || repoToConnect.framework || undefined,
       };
     }
 
@@ -579,6 +586,11 @@ export default function NewProjectPage() {
   // sub-projects); fall back to peek for the common root-only case.
   const rootFramework = scan?.framework || peek?.framework;
   const rootEcosystem = scan?.ecosystem || peek?.ecosystem;
+  // Badge id for the committed Project Root: a sub-path uses its own probed framework/ecosystem
+  // (so a monorepo sub-project shows e.g. "Next.js"), the repo root uses the root-derived values.
+  const selectedDisplayId = selectedPath === ''
+    ? (rootFramework || rootEcosystem)
+    : (selectedPathFramework || selectedPathEcosystem || rootFramework || rootEcosystem);
   // Ready means: we have enough info to create. Either the cheap peek confirms a root
   // manifest, OR the full scan found at least one usable sub-project.
   const ready = !!repoToConnect
@@ -896,8 +908,8 @@ export default function NewProjectPage() {
                         <span className="h-5 w-5 flex-shrink-0 flex items-center justify-center">
                           {inspecting ? (
                             <Loader2 className="h-4 w-4 animate-spin text-foreground/70" />
-                          ) : ready && (rootFramework || rootEcosystem) ? (
-                            <FrameworkIcon frameworkId={rootFramework || rootEcosystem} size={20} />
+                          ) : ready && selectedDisplayId ? (
+                            <FrameworkIcon frameworkId={selectedDisplayId} size={20} />
                           ) : (
                             <img src="/images/logo_white.png" alt="" className="h-5 w-5 object-contain block" />
                           )}
@@ -993,12 +1005,16 @@ export default function NewProjectPage() {
                             ? 'Scan failed — try again'
                             : undefined
               }
+              className="relative"
             >
-              {creating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                'Create'
+              {/* Keep the button sized to its label while loading: the spinner is
+                  overlaid and the label is hidden (not removed) so width doesn't jump. */}
+              {creating && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </span>
               )}
+              <span className={cn(creating && 'invisible')}>Create</span>
             </Button>
           </div>
         </div>
@@ -1013,11 +1029,12 @@ export default function NewProjectPage() {
           defaultBranch={repoToConnect.default_branch}
           integrationId={repoToConnect.integration_id ?? ''}
           initialPath={selectedPath}
-          onConfirm={(path, ecosystem) => {
+          onConfirm={(path, ecosystem, framework) => {
             setSelectedPath(path);
-            // For root selection fall back to peek/scan-derived ecosystem; for sub-paths the
-            // picker provides its per-layer probed ecosystem directly.
+            // For root selection fall back to peek/scan-derived ecosystem/framework; for sub-paths
+            // the picker provides its per-layer probed values directly.
             setSelectedPathEcosystem(path === '' ? rootEcosystem : ecosystem);
+            setSelectedPathFramework(path === '' ? (rootFramework ?? undefined) : framework);
             const segment = path === '' ? repoNameOnly(repoToConnect.full_name) : (path.split('/').pop() || repoNameOnly(repoToConnect.full_name));
             maybeAutoSetProjectName(toProjectName(segment));
           }}
@@ -1033,6 +1050,7 @@ export default function NewProjectPage() {
               ? rootEcosystem
               : selectedPathEcosystem || scan?.potentialProjects.find((p) => p.path === selectedPath)?.ecosystem
           }
+          initialFramework={selectedPath === '' ? rootFramework : selectedPathFramework}
           pathHints={(() => {
             const hints: Record<string, string | undefined> = {};
             for (const p of scan?.potentialProjects ?? []) {
