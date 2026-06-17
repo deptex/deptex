@@ -15,8 +15,8 @@ harness can't see.
 - **`Vulnerable Projects` team** inside the `deptex` org. Henry creates
   this manually (one-time) via Org Settings → Teams → New Team before any
   fixture walkthrough.
-- `sync_frequency=manual` setting available on the connected-repo settings
-  page (existing surface).
+- **Scan on every commit** toggle (defaults off) on the connected-repo
+  Settings → Sync page (existing surface).
 - DAST HAR import working (PR #52, merged main `b8b3162`) — needed for
   step (f) on every server-side fixture.
 
@@ -42,9 +42,10 @@ In `deptex` prod org:
 4. **Set `package_json_path` to the fixture's relative path**
    (e.g. `depscanner/test-repos/express`). This pins the project to the
    sub-path; the worker scans only that directory.
-5. **Set `sync_frequency=manual`** on the connected repo's Settings →
-   Sync page. This prevents the fixture from re-scanning on every push to
-   `deptex/deptex` (which would fan out 12 simultaneous extractions).
+5. **Leave "Scan on every commit" off** (the default) on the connected
+   repo's Settings → Sync page. This prevents the fixture from re-scanning
+   on every push to `deptex/deptex` (which would fan out 12 simultaneous
+   extractions).
 
 ### (c) Wait for scan
 
@@ -149,8 +150,8 @@ plumbing, which has its own OAuth flow and route surface
    ```
 4. **Create a Deptex project**: `dogfood-express-gitlab` (or `-bitbucket`)
    in the `Vulnerable Projects` team, connect to the new repo, leave
-   `package_json_path` empty (express is at the repo root), set
-   `sync_frequency=manual`.
+   `package_json_path` empty (express is at the repo root), and leave
+   **Scan on every commit** off (the default).
 
 ### Smoke verification
 

@@ -1840,7 +1840,7 @@ export const api = {
   async updateProjectRepositorySettings(
     organizationId: string,
     projectId: string,
-    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean; sync_frequency?: string }
+    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean; scan_on_commit?: boolean; sync_frequency?: string }
   ): Promise<ProjectRepository> {
     const result = await fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/repositories/settings`,
@@ -3925,6 +3925,7 @@ export interface ProjectRepository {
   auto_fix_vulnerabilities_enabled?: boolean;
   connected_at?: string | null;
   updated_at?: string;
+  scan_on_commit?: boolean;
   sync_frequency?: string;
   webhook_status?: string | null;
   last_webhook_at?: string | null;

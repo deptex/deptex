@@ -1569,6 +1569,7 @@ router.post('/:id/projects', async (req: AuthRequest, res) => {
           integration_id: resolvedRepo.integration_id,
           status: 'initializing',
           extraction_step: 'queued',
+          scan_on_commit: false,
           sync_frequency: 'daily',
         });
 
@@ -4503,6 +4504,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
           pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
           auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
           connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
+          scan_on_commit: (repoRecord as { scan_on_commit?: boolean }).scan_on_commit === true,
           sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
           webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
           last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
@@ -4688,6 +4690,7 @@ router.post('/:id/projects/:projectId/repositories/connect', async (req: AuthReq
           status: 'initializing',
           extraction_step: 'queued',
           extraction_error: null,
+          scan_on_commit: false,
           sync_frequency: 'daily',
           updated_at: new Date().toISOString(),
         },
@@ -4927,15 +4930,22 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
       const uid = (j.payload as any)?.started_by_user_id;
       if (uid) startedByUserIds.add(uid);
     }
-    let startedByMap: Record<string, { avatar_url?: string; full_name?: string }> = {};
+    const startedByMap: Record<string, { avatar_url?: string; full_name?: string }> = {};
     if (startedByUserIds.size > 0) {
-      const { data: profiles } = await supabase
-        .from('user_profiles')
-        .select('user_id, avatar_url, full_name')
-        .in('user_id', [...startedByUserIds]);
-      for (const p of profiles ?? []) {
-        startedByMap[p.user_id] = { avatar_url: p.avatar_url ?? undefined, full_name: p.full_name ?? undefined };
-      }
+      // Resolve display name + avatar from Supabase Auth user_metadata (Google/GitHub OAuth).
+      // user_profiles does not carry avatar_url/full_name, so the auth metadata is the source of truth.
+      // Prefer the app-set custom_* fields (Settings → Profile) over the raw OAuth provider values.
+      await Promise.all([...startedByUserIds].map(async (uid) => {
+        try {
+          const { data: { user } } = await supabase.auth.admin.getUserById(uid);
+          const meta = (user?.user_metadata ?? {}) as Record<string, string | undefined>;
+          const avatar_url = meta.custom_avatar_url || meta.picture || meta.avatar_url || undefined;
+          const full_name = meta.custom_full_name || meta.full_name || meta.name || undefined;
+          if (avatar_url || full_name) startedByMap[uid] = { avatar_url, full_name };
+        } catch {
+          /* fall back to the placeholder icon */
+        }
+      }));
     }
 
     function payloadToMeta(payload: any): Record<string, unknown> {
@@ -4980,7 +4990,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
   try {
     const userId = req.user!.id;
     const { id, projectId } = req.params;
-    const { pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, sync_frequency } = req.body || {};
+    const { pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, scan_on_commit, sync_frequency } = req.body || {};
 
     const accessCheck = await checkProjectAccess(userId, id, projectId);
     if (!accessCheck.hasAccess) {
@@ -5039,9 +5049,12 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(404).json({ error: 'No repository connected to this project' });
     }
 
-    const VALID_SYNC_FREQUENCIES = ['manual', 'on_commit', 'daily', 'weekly'] as const;
+    const VALID_SYNC_FREQUENCIES = ['daily', 'weekly'] as const;
     if (sync_frequency !== undefined && !VALID_SYNC_FREQUENCIES.includes(sync_frequency)) {
       return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
+    }
+    if (scan_on_commit !== undefined && typeof scan_on_commit !== 'boolean') {
+      return res.status(400).json({ error: 'scan_on_commit must be a boolean' });
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -5054,12 +5067,15 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
     if (sync_frequency !== undefined) {
       updates.sync_frequency = sync_frequency;
     }
+    if (typeof scan_on_commit === 'boolean') {
+      updates.scan_on_commit = scan_on_commit;
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('project_repositories')
       .update(updates)
       .eq('project_id', projectId)
-      .select('repo_full_name, default_branch, status, pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, sync_frequency')
+      .select('repo_full_name, default_branch, status, pull_request_comments_enabled, auto_fix_vulnerabilities_enabled, scan_on_commit, sync_frequency')
       .single();
 
     if (updateError) {
@@ -5072,6 +5088,7 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       status: updated.status,
       pull_request_comments_enabled: (updated as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
       auto_fix_vulnerabilities_enabled: (updated as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
+      scan_on_commit: (updated as { scan_on_commit?: boolean }).scan_on_commit === true,
       sync_frequency: (updated as any).sync_frequency ?? 'daily',
     });
   } catch (error: any) {

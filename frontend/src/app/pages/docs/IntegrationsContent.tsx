@@ -97,7 +97,7 @@ export default function IntegrationsContent() {
             <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">pullrequest:*</code> trigger extraction and PR checks.
           </p>
           <p className="text-foreground/90 leading-relaxed text-sm">
-            Sync frequency (manual, on commit, daily, weekly) is configured per project.
+            Scan-on-commit and the periodic re-check floor (daily or weekly) are configured per project.
           </p>
         </div>
       </div>

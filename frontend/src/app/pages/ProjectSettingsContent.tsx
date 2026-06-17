@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Shield, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, Radar, Boxes } from 'lucide-react';
+import { Settings, Shield, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Radar, Boxes } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import ScannersPanel from '../../components/security/ScannersPanel';
 import {
@@ -86,26 +86,26 @@ function RunRow({
               {isActive ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-foreground-secondary" aria-hidden />
-                  <span className="text-sm text-foreground-secondary">Extracting</span>
+                  <span className="text-sm font-medium text-foreground">Extracting</span>
                 </>
               ) : run.status === 'completed' ? (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
-                  <span className="text-sm text-foreground-secondary">Ready</span>
+                  <span className="text-sm font-medium text-foreground">Ready</span>
                 </>
               ) : run.status === 'cancelled' ? (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
-                  <span className="text-sm text-foreground-secondary">Cancelled</span>
+                  <span className="text-sm font-medium text-foreground">Cancelled</span>
                 </>
               ) : (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
-                  <span className="text-sm text-foreground-secondary">Error</span>
+                  <span className="text-sm font-medium text-foreground">Error</span>
                 </>
               )}
             </div>
-            <span className="text-sm text-muted-foreground">{duration}</span>
+            <span className="text-sm text-foreground-secondary tabular-nums">{duration}</span>
           </div>
 
           {/* Time + trigger source */}
@@ -120,7 +120,7 @@ function RunRow({
                   return (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <img src={run.started_by.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                        <img src={run.started_by.avatar_url} alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                       </TooltipTrigger>
                       <TooltipContent>{run.started_by.full_name || (tt === 'initial' ? 'Initial connect' : 'Manual sync')}</TooltipContent>
                     </Tooltip>
@@ -129,8 +129,8 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
-                        <Users className="h-2.5 w-2.5 text-foreground-secondary" />
+                      <span className="h-6 w-6 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <Users className="h-3.5 w-3.5 text-foreground-secondary" />
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>{tt === 'initial' ? 'Initial connect' : 'Manual sync'}</TooltipContent>
@@ -141,7 +141,7 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <img src="/images/logo.png" alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                      <img src="/images/logo.png" alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                     </TooltipTrigger>
                     <TooltipContent>Scheduled sync</TooltipContent>
                   </Tooltip>
@@ -152,7 +152,7 @@ function RunRow({
                   return (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <img src={run.commit_author.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                        <img src={run.commit_author.avatar_url} alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                       </TooltipTrigger>
                       <TooltipContent>{run.commit_author.username ? `Push by ${run.commit_author.username}` : 'Commit push'}</TooltipContent>
                     </Tooltip>
@@ -161,8 +161,8 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
-                        <GitCommit className="h-2.5 w-2.5 text-foreground-secondary" />
+                      <span className="h-6 w-6 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <GitCommit className="h-3.5 w-3.5 text-foreground-secondary" />
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>Commit push</TooltipContent>
@@ -517,10 +517,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   // Pull request comments toggle (repository settings)
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
   const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
-  const [syncFrequency, setSyncFrequency] = useState<string>('on_commit');
+  const [scanOnCommit, setScanOnCommit] = useState<boolean>(false);
+  const [syncFrequency, setSyncFrequency] = useState<string>('daily');
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(true);
+  // Which project's runs we've already loaded — gates the skeleton to the first load only.
+  const loadedRunsForProjectRef = useRef<string | null>(null);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -588,7 +591,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
         setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
       }
-      setSyncFrequency((data.connectedRepository as any)?.sync_frequency || 'daily');
+      setSyncFrequency((data.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
+      setScanOnCommit((data.connectedRepository as any)?.scan_on_commit === true);
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
     } finally {
@@ -608,7 +612,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
           setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
         }
-        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency || 'daily');
+        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
+        setScanOnCommit((cached.connectedRepository as any)?.scan_on_commit === true);
       }
       loadProjectRepositories();
     }
@@ -663,18 +668,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; };
   }, [connectedRepository?.status, importStatus?.status, checkImportStatus]);
 
-  // Fetch extraction runs when Repository tab is active
+  // Fetch extraction runs when Repository tab is active.
+  // Only show the skeleton on the first load for a given project; on tab revisits
+  // (component stays mounted) keep the existing rows and refetch silently — no flash.
   useEffect(() => {
     if (activeSection !== 'repository' || !organizationId || !projectId) return;
-    setExtractionRunsLoading(true);
+    const isFirstLoadForProject = loadedRunsForProjectRef.current !== projectId;
+    if (isFirstLoadForProject) setExtractionRunsLoading(true);
     api.getExtractionRuns(organizationId, projectId).then((runs) => {
       setExtractionRuns(runs);
+      loadedRunsForProjectRef.current = projectId;
     }).catch(() => {
-      setExtractionRuns([]);
+      if (isFirstLoadForProject) setExtractionRuns([]);
     }).finally(() => {
       setExtractionRunsLoading(false);
     });
-   
+
   }, [activeSection, organizationId, projectId]);
 
   // Poll extraction runs when on Repository tab so status and "X ago" stay live
@@ -1306,21 +1315,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
   const handleSaveSyncFrequency = async () => {
     if (!organizationId || !projectId) return;
-    const saved = (connectedRepository as any)?.sync_frequency;
-    if (syncFrequency === saved) return;
+    const savedFreq = (connectedRepository as any)?.sync_frequency ?? 'daily';
+    const savedScan = (connectedRepository as any)?.scan_on_commit === true;
+    if (syncFrequency === savedFreq && scanOnCommit === savedScan) return;
     setSyncFrequencySaving(true);
     try {
       await api.updateProjectRepositorySettings(organizationId, projectId, {
+        scan_on_commit: scanOnCommit,
         sync_frequency: syncFrequency,
       });
       setConnectedRepository((r) =>
-        r ? { ...r, sync_frequency: syncFrequency } as any : null
+        r ? { ...r, scan_on_commit: scanOnCommit, sync_frequency: syncFrequency } as any : null
       );
-      const labels: Record<string, string> = { on_commit: 'On every commit', daily: 'Daily', weekly: 'Weekly', manual: 'Manual only' };
-      toast({ title: `Sync frequency set to ${labels[syncFrequency] || syncFrequency}` });
+      toast({ title: 'Sync settings saved' });
     } catch (err: any) {
       toast({
-        title: 'Failed to update sync frequency',
+        title: 'Failed to update sync settings',
         description: (err as Error).message,
         variant: 'destructive',
       });
@@ -1619,9 +1629,11 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           <div className="text-base font-semibold text-foreground truncate font-mono">
                             {connectedRepository.repo_full_name}
                           </div>
-                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5">
-                            <GitBranch className="h-3.5 w-3.5 shrink-0" />
-                            {connectedRepository.default_branch || 'main'}
+                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5 font-mono">
+                            <Folder className="h-3.5 w-3.5 shrink-0" />
+                            {connectedRepository.package_json_path
+                              ? `/${connectedRepository.package_json_path.replace(/^\/+/, '')}`
+                              : 'Repository root'}
                           </div>
                         </div>
                       </div>
@@ -1641,18 +1653,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                   )}
                 </section>
 
-                {/* Note: Cannot disconnect — right below repo card */}
-                {connectedRepository && (
-                  <div className="rounded-lg border border-border bg-background-card px-4 py-3">
-                    <div className="flex gap-3">
-                      <Info className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5" />
-                      <p className="text-sm text-foreground-secondary">
-                        Projects cannot be disconnected from a repository. To use a different repository, create a new project or remove this project.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
                 {/* Sync Frequency */}
                 {connectedRepository && (
                   <section>
@@ -1662,74 +1662,80 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <p className="text-sm text-foreground-secondary mb-4">
                           When Deptex re-extracts dependencies from this repository.
                         </p>
-                        <div className="w-full space-y-2" role="radiogroup" aria-label="Sync frequency">
-                          {(() => {
-                            const plan = organization?.plan?.toLowerCase?.() ?? 'free';
-                            const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
-                            return [
-                              { value: 'on_commit', label: 'On every commit', description: 'Re-extract on each push to the default branch.', locked: !canUseOnCommit },
-                              { value: 'daily', label: 'Daily', description: 'Re-extract once per day.', locked: false },
-                              { value: 'weekly', label: 'Weekly', description: 'Re-extract once per week.', locked: false },
-                              { value: 'manual', label: 'Manual only', description: 'Re-extract only when you trigger a sync.', locked: false },
+                        {/* Part 1 — scan on every commit (event-driven, real-time); a single toggleable card styled like the floor options */}
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={scanOnCommit}
+                          aria-label="Scan on every commit"
+                          onClick={() => setScanOnCommit((v) => !v)}
+                          className={cn(
+                            'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                            scanOnCommit
+                              ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                              : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                          )}
+                        >
+                          <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', scanOnCommit ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-foreground">Scan on every commit</div>
+                            <p className="text-xs text-muted-foreground mt-0.5">Re-extract on each push to the default branch — catches a newly-added vulnerable dependency immediately.</p>
+                          </div>
+                        </button>
+
+                        {/* Part 2 — periodic floor (always runs, independent of the commit toggle) */}
+                        <div className="mt-6">
+                          <div className="text-sm font-medium text-foreground mb-1">Re-check for new vulnerabilities</div>
+                          <p className="text-xs text-muted-foreground mb-3">Even without new commits, re-scan dependencies against newly-published advisories at least this often.</p>
+                          <div className="w-full space-y-2" role="radiogroup" aria-label="Re-check frequency">
+                            {[
+                              { value: 'daily', label: 'Daily', description: 'Re-check once per day.' },
+                              { value: 'weekly', label: 'Weekly', description: 'Re-check once per week.' },
                             ].map((opt) => {
                               const isSelected = syncFrequency === opt.value;
-                              const isLocked = opt.locked;
                               return (
-                                <div key={opt.value} className="relative">
-                                  <button
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={isSelected}
-                                    aria-disabled={isLocked}
-                                    onClick={() => !isLocked && handleSyncFrequencySelect(opt.value)}
-                                    disabled={isLocked}
-                                    className={cn(
-                                      'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
-                                      isLocked && 'opacity-75 cursor-not-allowed',
-                                      !isLocked && (isSelected
-                                        ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                        : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30')
-                                    )}
-                                  >
-                                    <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-sm font-medium text-foreground flex items-center gap-2">
-                                        {opt.label}
-                                        {isLocked && (
-                                          <span className="text-xs font-normal text-foreground-secondary bg-transparent border border-foreground-secondary/50 px-1.5 py-0.5 rounded">
-                                            Pro or higher
-                                          </span>
-                                        )}
-                                      </div>
-                                      <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
-                                    </div>
-                                  </button>
-                                </div>
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={isSelected}
+                                  onClick={() => handleSyncFrequencySelect(opt.value)}
+                                  className={cn(
+                                    'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                                    isSelected
+                                      ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                      : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                                  )}
+                                >
+                                  <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-foreground">{opt.label}</div>
+                                    <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
+                                  </div>
+                                </button>
                               );
-                            });
-                          })()}
+                            })}
+                          </div>
                         </div>
                       </div>
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                        <p className="text-xs text-foreground-secondary">
-                          Choose when to re-extract dependencies. Click Save to apply.
-                        </p>
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                         {(() => {
                           const savedSync = (connectedRepository as any)?.sync_frequency ?? 'daily';
-                          const plan = organization?.plan?.toLowerCase?.() ?? 'free';
-                          const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
-                          const wouldSaveOnCommit = syncFrequency === 'on_commit' && !canUseOnCommit;
-                          const hasChange = syncFrequency !== savedSync && !wouldSaveOnCommit;
+                          const savedScan = (connectedRepository as any)?.scan_on_commit === true;
+                          const hasChange = syncFrequency !== savedSync || scanOnCommit !== savedScan;
                           return (
                             <Button
+                              variant="green"
                               onClick={handleSaveSyncFrequency}
-                              disabled={syncFrequencySaving || !hasChange}
-                              size="sm"
-                              variant="default"
-                              className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 disabled:opacity-50 disabled:pointer-events-none"
+                              disabled={syncFrequencySaving || !canEditSettings || !hasChange}
+                              className="relative"
                             >
-                              {syncFrequencySaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                              Save
+                              <span className={syncFrequencySaving ? 'invisible' : undefined}>Save</span>
+                              {syncFrequencySaving && (
+                                <span className="absolute inset-0 flex items-center justify-center">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                </span>
+                              )}
                             </Button>
                           );
                         })()}
