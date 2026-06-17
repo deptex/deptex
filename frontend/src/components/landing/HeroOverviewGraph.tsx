@@ -20,6 +20,7 @@ import {
   ReactFlowProvider,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type Edge,
 } from "@xyflow/react";
@@ -30,8 +31,11 @@ import { TeamGroupNode } from "../vulnerabilities-graph/TeamGroupNode";
 import { ReactiveDotGrid } from "../vulnerabilities-graph/ReactiveDotGrid";
 import { OrgCanvasCursors } from "../vulnerabilities-graph/OrgCanvasCursors";
 import { useOrganizationOverviewGraphLayout } from "../vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout";
-import type { RemoteCursor } from "../vulnerabilities-graph/useOrgCanvasCursors";
+import { useHeroCanvasChoreography } from "./useHeroCanvasChoreography";
 import { HERO_TEAMS, HERO_ORG_NAME, HERO_ORG_AVATAR } from "./heroDemo";
+import { Plus, Minus, Maximize2 } from "lucide-react";
+import { Button } from "../ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 
 // Per-project severity-count pills render natively inside VulnProjectNode (xs
 // SeverityPills) when bandCounts is supplied — fed via heroDemo / the layout.
@@ -46,12 +50,9 @@ const nodeTypes = {
 // explicit canvasPositionX/Y — without saved positions the layout stacks them
 // all at one spawn point (org center at 0,0; Platform left, Payments right).
 
-// Static "teammates" via the real OrgCanvasCursors layer (realtime not required
-// on a public page). Temporarily disabled (founder 2026-06-16) — restore by
-// re-adding entries here:
-//   { userId: "sarah", sessionId: "s1", name: "Sarah", avatarUrl: null, role: "owner", roleLabel: "Owner", roleColor: "#34d08a", x: 96, y: -52 },
-//   { userId: "marcus", sessionId: "s2", name: "Marcus", avatarUrl: null, role: "member", roleLabel: "Member", roleColor: "#60a5fa", x: -156, y: 86 },
-const DEMO_CURSORS: RemoteCursor[] = [];
+// Remote "teammates" are scripted by useHeroCanvasChoreography, which feeds the
+// real OrgCanvasCursors layer the same RemoteCursor[] / remoteDraggers inputs a
+// live multiplayer session would (no realtime/auth on a public page).
 
 const noop = () => {};
 
@@ -70,38 +71,92 @@ function Graph() {
       false,
     );
 
-  const [nodes, , onNodesChange] = useNodesState<Node>(layoutNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(layoutNodes);
   const [edges, , onEdgesChange] = useEdgesState<Edge>(layoutEdges);
+  const rf = useReactFlow();
+
+  // Scripted multiplayer: a teammate cursor picks up a project, moves it, puts
+  // it back — driving the real cursor layer + the real `remote-dragging` styling.
+  const { cursors, draggers } = useHeroCanvasChoreography(setNodes);
 
   return (
-    <ReactFlow
-      className="org-overview-hub-flow"
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      nodeTypes={nodeTypes}
-      fitView
-      fitViewOptions={{ padding: 0.1, maxZoom: 1.15 }}
-      minZoom={0.12}
-      maxZoom={2}
-      proOptions={{ hideAttribution: true }}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      panOnDrag
-      zoomOnScroll={false}
-      zoomOnPinch
-      preventScrolling={false}
-    >
-      <ReactiveDotGrid />
-      <OrgCanvasCursors
-        remoteCursors={DEMO_CURSORS}
-        onLocalCursorMove={noop}
-        onLocalCursorLeave={noop}
-        remoteDraggers={{}}
-        graphNodes={nodes}
-      />
-    </ReactFlow>
+    <div className="relative h-full w-full">
+      <ReactFlow
+        className="org-overview-hub-flow"
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.1, maxZoom: 1.15 }}
+        minZoom={0.12}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        panOnDrag
+        zoomOnScroll={false}
+        zoomOnPinch
+        preventScrolling={false}
+      >
+        <ReactiveDotGrid />
+        <OrgCanvasCursors
+          remoteCursors={cursors}
+          onLocalCursorMove={noop}
+          onLocalCursorLeave={noop}
+          remoteDraggers={draggers}
+          graphNodes={nodes}
+        />
+      </ReactFlow>
+
+      {/* Zoom / recenter rail — bottom-right (the real overview's Railway-style
+          rail, mirrored to the right corner). */}
+      <div className="absolute bottom-3 right-3 z-10 flex flex-col items-center gap-0.5 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+              onClick={() => rf.zoomIn({ duration: 150 })}
+              aria-label="Zoom in"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Zoom in</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+              onClick={() => rf.zoomOut({ duration: 150 })}
+              aria-label="Zoom out"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Zoom out</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-foreground-secondary hover:bg-white/5 hover:text-foreground"
+              onClick={() => rf.fitView({ padding: 0.1, maxZoom: 1.15, duration: 300 })}
+              aria-label="Fit view"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Fit view</TooltipContent>
+        </Tooltip>
+      </div>
+    </div>
   );
 }
 

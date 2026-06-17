@@ -257,7 +257,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
       {isOverviewTeamCard ? (
-        <div className="relative rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 h-full flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all">
+        <div className="relative rounded-xl border border-border bg-background-card-header h-full flex flex-col overflow-hidden cursor-pointer hover:border-border/80 transition-all">
           {/* Top: Team icon, name, scope pill */}
           <div className="px-4 py-3 flex items-center gap-3 min-w-0 flex-1">
             <OverviewTeamSatelliteChip />
@@ -284,7 +284,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
         <>
           {/* Compact icon-only node. Project name (and status) render below the
               card, outside the clipping box, n8n / Tines style. */}
-          <div className="relative h-full w-full rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 cursor-pointer flex items-center justify-center hover:border-border/80 transition-colors">
+          <div className="relative h-full w-full rounded-xl border border-border bg-background-card-header cursor-pointer flex items-center justify-center hover:border-border/80 transition-colors">
             {isInitialExtracting ? (
               <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" aria-hidden />
             ) : frameworkIdForIcon ? (
