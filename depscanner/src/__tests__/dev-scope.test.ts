@@ -123,6 +123,10 @@ function seed(
       is_direct: opts.isDirect ?? true,
       files_importing_count: opts.filesImporting ?? 1,
       environment: opts.environment ?? null,
+      // name/namespace live on project_dependencies (dependencies has no
+      // namespace) — the classifier resolves depName from here.
+      name: opts.depName ?? 'mocha',
+      namespace: null,
     },
   ]);
   fsk.set('dependencies', [{ id: DEP_ID, name: opts.depName ?? 'mocha' }]);

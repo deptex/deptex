@@ -1010,18 +1010,26 @@ export async function updateReachabilityLevels(
         };
       }
 
-      let depName = depNameCache.get(dependencyId);
-      let depNamespace = depNamespaceCache.get(dependencyId);
+      // Resolve the dep's name + namespace from `project_dependencies`, which
+      // carries BOTH columns. The `dependencies` table has only `name` (no
+      // `namespace`), so the previous `dependencies.select('name, namespace')`
+      // failed with a 42703 (undefined_column) on every call — the error was
+      // swallowed and depName silently became '', which broke every name-based
+      // heuristic below (function-tier name match, embedded-runtime + framework
+      // -runtime exemptions, callgraph artifactId bridging). Keying the cache on
+      // project_dependency_id is correct: every PDV maps to exactly one PD row.
+      let depName = depNameCache.get(pdv.project_dependency_id);
+      let depNamespace = depNamespaceCache.get(pdv.project_dependency_id);
       if (depName === undefined || depNamespace === undefined) {
-        const { data: dep } = await supabase
-          .from('dependencies')
+        const { data: pdRow } = await supabase
+          .from('project_dependencies')
           .select('name, namespace')
-          .eq('id', dependencyId)
+          .eq('id', pdv.project_dependency_id)
           .single();
-        depName = dep?.name ?? '';
-        depNamespace = (dep?.namespace ?? null) as string | null;
-        depNameCache.set(dependencyId, depName as string);
-        depNamespaceCache.set(dependencyId, depNamespace);
+        depName = pdRow?.name ?? '';
+        depNamespace = ((pdRow?.namespace || null) as string | null);
+        depNameCache.set(pdv.project_dependency_id, depName as string);
+        depNamespaceCache.set(pdv.project_dependency_id, depNamespace);
       }
 
       // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted

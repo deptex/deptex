@@ -114,6 +114,10 @@ function seed(
       dependency_version_id: 'dv-1',
       is_direct: opts.isDirect ?? true,
       files_importing_count: opts.filesImporting ?? 1,
+      // name/namespace live on project_dependencies (dependencies has no
+      // namespace) — the classifier resolves depName from here.
+      name: 'js-yaml',
+      namespace: null,
     },
   ]);
   fs.set('dependencies', [{ id: DEP_ID, name: 'js-yaml' }]);
