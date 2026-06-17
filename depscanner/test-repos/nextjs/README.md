@@ -3,8 +3,8 @@
 Next.js App-Router server action that returns user-controlled HTML
 without sanitisation. Stand-alone copy of the upstream taint-engine
 fixture `depscanner/fixtures/test-nextjs-server-action-xss/` layered
-with dogfood-only categories (IaC, container, secrets, malicious-pkg)
-so a single dogfood scan exercises every scanner end-to-end.
+with dogfood-only categories (IaC, container, secrets) so a single
+dogfood scan exercises the scanners end-to-end.
 
 - **Ecosystem:** npm
 - **Framework:** Next.js (App Router server action)
