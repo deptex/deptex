@@ -1170,12 +1170,14 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
       folderTargets.map(async (folder) => {
         const children = await provider.listDirectory(repo_full_name, default_branch, folder.path);
         let ecosystem: string | undefined;
+        // Track the manifest path so we can read it once to resolve the framework — this
+        // upgrades a generic ecosystem badge ("JavaScript") to the real framework ("Next.js")
+        // and lets the create payload persist the right framework for a monorepo sub-path.
+        let manifestPath: string | undefined;
         let hasDocker = false;
         for (const [fname, eco] of Object.entries(MANIFEST_FILES)) {
-          if (children.some((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname)) {
-            ecosystem = eco;
-            break;
-          }
+          const hit = children.find((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname);
+          if (hit) { ecosystem = eco; manifestPath = hit.path; break; }
         }
         if (!ecosystem) {
           for (const c of children) {
@@ -1184,7 +1186,7 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
             const dot = childName.lastIndexOf('.');
             if (dot === -1) continue;
             const eco = MANIFEST_EXTENSIONS[childName.slice(dot)];
-            if (eco) { ecosystem = eco; break; }
+            if (eco) { ecosystem = eco; manifestPath = c.path; break; }
           }
         }
         for (const c of children) {
@@ -1192,7 +1194,19 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
           const childName = c.path.split('/').pop() || '';
           if (isDockerFile(childName)) { hasDocker = true; break; }
         }
-        return { path: folder.path, ecosystem, hasDocker };
+        // Resolve the framework from the manifest contents. Best-effort: a read failure
+        // just falls back to the ecosystem badge.
+        let framework: string | undefined;
+        if (ecosystem && manifestPath) {
+          try {
+            const content = await provider.getFileContent(repo_full_name, manifestPath, default_branch);
+            const detected = detectFrameworkForEcosystem(ecosystem, content);
+            if (detected && detected !== 'unknown') framework = detected;
+          } catch {
+            /* manifest unreadable — leave framework undefined */
+          }
+        }
+        return { path: folder.path, ecosystem, framework, hasDocker };
       })
     );
     for (let i = 0; i < probes.length; i++) {
@@ -1200,6 +1214,7 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
       if (r.status !== 'fulfilled') continue;
       const target = folderTargets[i];
       if (r.value.ecosystem) target.ecosystem = r.value.ecosystem;
+      if (r.value.framework) target.framework = r.value.framework;
       if (r.value.hasDocker) target.hasDocker = true;
     }
 
