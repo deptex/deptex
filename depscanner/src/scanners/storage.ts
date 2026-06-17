@@ -400,14 +400,21 @@ export async function upsertBaseImageRecommendations(
   // already committed the live row, so a reap miss only defers cleanup to the
   // retention reaper and must never fail the scan.
   let staleDeleted = 0;
-  const runId = rows[0].extraction_run_id;
-  const projectIds = [...new Set(rows.map((r) => r.project_id))];
-  const { count, error: reapError } = await supabase
-    .from('project_base_image_recommendations')
-    .delete({ count: 'exact' })
-    .in('project_id', projectIds)
-    .neq('extraction_run_id', runId);
-  if (!reapError) staleDeleted = count ?? 0;
+  try {
+    const runId = rows[0].extraction_run_id;
+    const projectIds = [...new Set(rows.map((r) => r.project_id))];
+    const { count, error: reapError } = await supabase
+      .from('project_base_image_recommendations')
+      .delete({ count: 'exact' })
+      .in('project_id', projectIds)
+      .neq('extraction_run_id', runId);
+    if (!reapError) staleDeleted = count ?? 0;
+  } catch {
+    // Truly best-effort: the live upsert already committed above, so a reap
+    // failure (a network blip on the DELETE) must NOT throw and fail the scan —
+    // that would falsely report the recommendation as un-written. The retention
+    // reaper cleans up any stale prior-run rows later.
+  }
   return { inserted, staleDeleted };
 }
 

@@ -50,10 +50,16 @@ function makeLogger() {
 // ---- Supabase stub --------------------------------------------------------
 
 function makeSupabase(): any {
-  // upsertBaseImageRecommendations only calls .from('...').upsert(...).
+  // upsertBaseImageRecommendations calls .from('...').upsert(...) and then a
+  // best-effort stale-run reap: .from('...').delete({count}).in(...).neq(...).
   return {
     from: () => ({
       upsert: async () => ({ error: null }),
+      delete: () => ({
+        in: () => ({
+          neq: async () => ({ count: 0, error: null }),
+        }),
+      }),
     }),
   };
 }
