@@ -1,4 +1,6 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getActiveExtractionIds } from '../../active-extraction';
 import { calculateLatestSafeVersion } from '../../latest-safe-version';
 import { resolveProjectDependency } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
@@ -24,10 +26,12 @@ const checkCisaKev: AegisToolEntry<{ cveOrOsvId: string }> = {
     const projectIds = (orgProjects ?? []).map((p: any) => p.id);
     if (projectIds.length === 0) return { error: 'No projects in this organization' };
 
+    const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select('osv_id, cisa_kev, aliases')
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
 
     if (cveOrOsvId.startsWith('CVE-')) query = (query as any).contains('aliases', [cveOrOsvId]);
     else query = query.eq('osv_id', cveOrOsvId);
@@ -71,10 +75,12 @@ const getEpssScore: AegisToolEntry<{ cveOrOsvId: string }> = {
     const projectIds = (orgProjects ?? []).map((p: any) => p.id);
     if (projectIds.length === 0) return { error: 'No projects in this organization' };
 
+    const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select('osv_id, epss_score, aliases')
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds);
 
     if (cveOrOsvId.startsWith('CVE-')) query = (query as any).contains('aliases', [cveOrOsvId]);
     else query = query.eq('osv_id', cveOrOsvId);

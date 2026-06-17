@@ -66,12 +66,18 @@ export function DastFindingsSection({ organizationId, projectId }: DastFindingsS
     setLoading(true);
     (async () => {
       try {
-        const [j, f] = await Promise.all([
-          api.getDastJobs(projectId, { limit: 5 }),
-          api.getDastFindings(projectId, { limit: 200 }),
-        ]);
+        // Findings are scoped per-target on the backend (target_id is required
+        // since v2.1b — the route returns [] without it), so we must learn the
+        // most-recent scan's target before we can load its findings. Fetch jobs
+        // first, then the findings for that target.
+        const j = await api.getDastJobs(projectId, { limit: 5 });
         if (cancelled) return;
         setJobs(j);
+        const targetId = j.find((job) => job.target_id)?.target_id ?? undefined;
+        const f = targetId
+          ? await api.getDastFindings(projectId, { limit: 200, targetId })
+          : [];
+        if (cancelled) return;
         setFindings(f);
       } catch (e) {
         console.error('[dast] section load failed', e);
@@ -118,7 +124,7 @@ export function DastFindingsSection({ organizationId, projectId }: DastFindingsS
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Severity</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Engine</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Endpoint</th>
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Issue</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Finding</th>
                 <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">Linked</th>
               </tr>
             </thead>

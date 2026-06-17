@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../lib/active-extraction';
 import { supabase } from '../lib/supabase';
 import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
 import { signApprovalToken } from '../lib/aegis-v3/approval-token';
@@ -118,6 +119,105 @@ function shapeFixRow(row: FixRow) {
     createdAt: row.created_at,
     threadId: row.thread_id,
   };
+}
+
+// Scanner-truth details for the finding a fix targets, so the fix panel can
+// render the real issue card (severity band, depscore, reachability, package)
+// instead of relying solely on the LLM-written issue prose. Best-effort: a
+// missing finding row (rescan reaped it, stale fix) returns null and the
+// panel simply omits the card.
+export interface FixFindingDetail {
+  kind: 'vulnerability' | 'semgrep' | 'secret';
+  title: string;
+  severity: string | null;
+  depscore: number | null;
+  reachabilityLevel: string | null;
+  packageName: string | null;
+  packageVersion: string | null;
+  filePath: string | null;
+  line: number | null;
+}
+
+async function loadFindingDetail(row: FixRow): Promise<FixFindingDetail | null> {
+  try {
+    if (row.fix_type === 'vulnerability' && row.osv_id) {
+      const activeRunId =
+        (await getActiveExtractionId(supabase, row.project_id)) ?? NO_ACTIVE_RUN;
+      const { data } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select(
+          'osv_id, severity, depscore, reachability_level, project_dependencies!inner(name, version)',
+        )
+        .eq('project_id', row.project_id)
+        .eq('osv_id', row.osv_id)
+        .eq('extraction_run_id', activeRunId)
+        .order('depscore', { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      if (!data) return null;
+      const dep = (data as any).project_dependencies;
+      return {
+        kind: 'vulnerability',
+        title: dep?.name
+          ? `${row.osv_id} in ${dep.name}@${dep.version ?? '?'}`
+          : row.osv_id,
+        severity: (data as any).severity ?? null,
+        depscore: (data as any).depscore ?? null,
+        reachabilityLevel: (data as any).reachability_level ?? null,
+        packageName: dep?.name ?? null,
+        packageVersion: dep?.version ?? null,
+        filePath: null,
+        line: null,
+      };
+    }
+    if (row.fix_type === 'semgrep' && row.semgrep_finding_id) {
+      const { data } = await supabase
+        .from('project_semgrep_findings')
+        .select('rule_id, severity, file_path, start_line, message')
+        .eq('id', row.semgrep_finding_id)
+        .maybeSingle();
+      if (!data) return null;
+      return {
+        kind: 'semgrep',
+        title: data.message || data.rule_id,
+        severity: data.severity ?? null,
+        depscore: null,
+        reachabilityLevel: null,
+        packageName: null,
+        packageVersion: null,
+        filePath: data.file_path ?? null,
+        line: data.start_line ?? null,
+      };
+    }
+    if (row.fix_type === 'secret' && row.secret_finding_id) {
+      const { data } = await supabase
+        .from('project_secret_findings')
+        .select('detector_type, file_path, start_line, is_verified')
+        .eq('id', row.secret_finding_id)
+        .maybeSingle();
+      if (!data) return null;
+      return {
+        kind: 'secret',
+        title: `${data.detector_type} secret in ${data.file_path}`,
+        severity: data.is_verified ? 'critical' : 'high',
+        depscore: null,
+        reachabilityLevel: null,
+        packageName: null,
+        packageVersion: null,
+        filePath: data.file_path ?? null,
+        line: data.start_line ?? null,
+      };
+    }
+  } catch (err) {
+    console.warn('[aegis-fix] loadFindingDetail failed', err);
+  }
+  return null;
+}
+
+async function shapeFixRowWithFinding(row: FixRow) {
+  const shaped = shapeFixRow(row);
+  const findingDetail = await loadFindingDetail(row);
+  return { ...shaped, findingDetail };
 }
 
 async function loadFixRow(fixId: string): Promise<FixRow | null> {
@@ -381,7 +481,16 @@ router.get('/by-thread/:threadId', async (req: AuthRequest, res) => {
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
-  return res.json({ fixes: (data ?? []).map((row: any) => shapeFixRow(row)) });
+  // Skip rows where plan generation crashed before producing anything (no plan,
+  // status=failed). They have no actionable surface — no PlanCard pill in chat,
+  // no plan to view in the panel — and would otherwise auto-open the panel to
+  // a useless "Plan unavailable" placeholder. The chat tool-result already
+  // surfaces the underlying error to the user inline.
+  const visible = (data ?? []).filter(
+    (row: any) => !(row.status === 'failed' && row.plan == null),
+  );
+  const fixes = await Promise.all(visible.map((row: any) => shapeFixRowWithFinding(row)));
+  return res.json({ fixes });
 });
 
 router.get('/:fixId', async (req: AuthRequest, res) => {
@@ -391,7 +500,7 @@ router.get('/:fixId', async (req: AuthRequest, res) => {
   if (!(await isOrgMember(row.organization_id, userId))) {
     return res.status(403).json({ error: 'Not a member of this organization' });
   }
-  return res.json({ fix: shapeFixRow(row) });
+  return res.json({ fix: await shapeFixRowWithFinding(row) });
 });
 
 

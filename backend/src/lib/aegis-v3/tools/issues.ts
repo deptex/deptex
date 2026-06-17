@@ -1,4 +1,7 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getActiveExtractionId, NO_ACTIVE_RUN } from '../../active-extraction';
+import { vulnAutoIgnoreReason } from '../finding-triage';
 import { resolveProject } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
@@ -39,10 +42,11 @@ const listProjectIssues: AegisToolEntry<{
   projectName: string;
   types?: IssueType[];
   limit?: number;
+  includeAutoIgnored?: boolean;
 }> = {
   name: 'list_project_issues',
   description:
-    "List the security issues on a project — vulnerabilities (open-source CVEs / GHSAs), Semgrep static-analysis findings, and detected secrets — in one unified, depscore-sorted view. Each row includes `handle` (opaque, NEVER show this string to the user — it's only for the `findingHandle` arg to `request_fix`), `type` ('vulnerability' | 'semgrep' | 'secret'), `severity`, `title`, `file_path`, `line`, `rule_or_cve`, `cwe_ids`, `depscore`, and `status`. When you describe an issue to the user in prose, use `title` / `file_path` / `line` — never the handle. Use this BEFORE `request_fix` to find the right handle and type. Only `status: 'open'` issues are returned by default.",
+    "List the security issues on a project — vulnerabilities (open-source CVEs / GHSAs), Semgrep static-analysis findings, and detected secrets — in one unified, depscore-sorted view. Each row includes `handle` (opaque, NEVER show this string to the user — it's only for the `findingHandle` arg to `request_fix`), `type` ('vulnerability' | 'semgrep' | 'secret'), `severity`, `title`, `file_path`, `line`, `rule_or_cve`, `cwe_ids`, `depscore`, and `status`. When you describe an issue to the user in prose, use `title` / `file_path` / `line` — never the handle. Use this BEFORE `request_fix` to find the right handle and type. Only `status: 'open'` issues are returned by default — vulnerabilities the platform auto-ignores (not reachable / not confirmed reachable, the findings table's Auto Ignored rows) are excluded unless `includeAutoIgnored: true`.",
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
@@ -54,13 +58,24 @@ const listProjectIssues: AegisToolEntry<{
         description: 'Optional: filter to specific issue types. Default: all three.',
       },
       limit: { type: 'integer', minimum: 1, maximum: 200 },
+      includeAutoIgnored: {
+        type: 'boolean',
+        description:
+          "Include vulnerabilities the platform auto-ignored (not reachable). They come back with status 'auto_ignored'. Default false.",
+      },
     },
     required: ['projectName'],
     additionalProperties: false,
   }),
-  execute: async ({ projectName, types, limit }, ctx) => {
+  execute: async ({ projectName, types, limit, includeAutoIgnored }, ctx) => {
     const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
     if ('error' in resolved) return resolved;
+
+    // Findings tables hold one generation of rows per extraction run — filter
+    // to the active run or every historical scan's rows come back as
+    // apparent duplicates.
+    const activeRunId =
+      (await getActiveExtractionId(ctx.supabase as SupabaseClient, resolved.id)) ?? NO_ACTIVE_RUN;
 
     const cap = limit ?? 50;
     const wanted = new Set<IssueType>(
@@ -72,9 +87,11 @@ const listProjectIssues: AegisToolEntry<{
       const { data: vulns, error } = await ctx.supabase
         .from('project_dependency_vulnerabilities')
         .select(
-          'osv_id, severity, summary, depscore, status, project_dependency_id',
+          'osv_id, severity, summary, depscore, status, project_dependency_id, reachability_level, is_reachable, runtime_confirmed_at',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
+        .eq('suppressed', false)
         .eq('status', 'open')
         .order('depscore', { ascending: false, nullsFirst: false })
         .limit(cap);
@@ -103,7 +120,16 @@ const listProjectIssues: AegisToolEntry<{
           depscore: number | null;
           status: string | null;
           project_dependency_id: string;
+          reachability_level: string | null;
+          is_reachable: boolean | null;
+          runtime_confirmed_at: string | null;
         };
+        // Mirror the findings table's auto-triage: rows the UI shows as
+        // "Auto Ignored" (not reachable / not confirmed reachable) are
+        // excluded by default so the agent doesn't propose fixes the user's
+        // own findings view has set aside.
+        const autoIgnored = vulnAutoIgnoreReason(row) != null;
+        if (autoIgnored && !includeAutoIgnored) continue;
         const dep = pdById.get(row.project_dependency_id);
         const depLabel = dep
           ? `${dep.name}${dep.version ? `@${dep.version}` : ''}`
@@ -118,7 +144,7 @@ const listProjectIssues: AegisToolEntry<{
           rule_or_cve: row.osv_id,
           cwe_ids: null,
           depscore: row.depscore ?? null,
-          status: row.status,
+          status: autoIgnored ? 'auto_ignored' : row.status,
         });
       }
     }
@@ -130,6 +156,7 @@ const listProjectIssues: AegisToolEntry<{
           'id, rule_id, severity, message, file_path, start_line, cwe_ids, depscore, status',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
         .eq('status', 'open')
         .order('depscore', { ascending: false, nullsFirst: false })
         .limit(cap);
@@ -173,6 +200,7 @@ const listProjectIssues: AegisToolEntry<{
           'id, detector_type, file_path, start_line, description, depscore, status, is_verified',
         )
         .eq('project_id', resolved.id)
+        .eq('extraction_run_id', activeRunId)
         .eq('status', 'open')
         .eq('is_current', true)
         .order('depscore', { ascending: false, nullsFirst: false })

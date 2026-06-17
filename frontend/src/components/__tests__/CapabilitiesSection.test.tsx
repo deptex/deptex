@@ -127,7 +127,7 @@ describe('CapabilitiesSection', () => {
     expect(screen.queryByText('Spawns processes')).not.toBeInTheDocument();
   });
 
-  it('renders "scan pending" when ecosystem is null', () => {
+  it('renders "scan pending" when ecosystem is null', async () => {
     render(
       <CapabilitiesSection
         organizationId="org-1"
@@ -136,7 +136,9 @@ describe('CapabilitiesSection', () => {
         version="1.0.0"
       />,
     );
-    expect(screen.getByText('Capability scan pending')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Capability scan pending')).toBeInTheDocument();
+    });
     expect(api.capabilities.fetch).not.toHaveBeenCalled();
   });
 });

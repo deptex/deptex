@@ -84,4 +84,15 @@ sinks:
     argument_indices: [0]
     description: Next.js bare `redirect()` from next/navigation
 
+  # Client-render sink. React's `dangerouslySetInnerHTML={{ __html: x }}`
+  # injects `x` as raw HTML — a tainted value here is reflected/stored XSS.
+  # JSX attributes aren't call expressions, so the TS lowerer emits a synthetic
+  # `dangerouslySetInnerHTML(__html)` call for this attribute (see ir.ts
+  # `walkJsx`); this call-shape sink fires on that synthetic call. Classic
+  # Next.js App Router server-action XSS shape (searchParams → action → render).
+  - pattern: dangerouslySetInnerHTML(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: React dangerouslySetInnerHTML raw-HTML injection (XSS)
+
 sanitizers: []

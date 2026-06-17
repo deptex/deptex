@@ -17,33 +17,24 @@ async function fetchUsersByIds(
   const out = new Map<string, MemberRow>();
   if (userIds.length === 0) return out;
 
-  const { data: profiles } = await supabase
-    .from('user_profiles')
-    .select('user_id, full_name, avatar_url')
-    .in('user_id', userIds);
-  const profileById = new Map<string, { full_name: string | null; avatar_url: string | null }>();
-  for (const p of profiles ?? []) {
-    profileById.set(
-      (p as { user_id: string }).user_id,
-      {
-        full_name: (p as { full_name: string | null }).full_name ?? null,
-        avatar_url: (p as { avatar_url: string | null }).avatar_url ?? null,
-      },
-    );
-  }
-
+  // Identity (display name + avatar) lives on auth.users.raw_user_meta_data
+  // under custom_* keys since PR #35 — see frontend/src/lib/userIdentity.ts
+  // for the mirrored read priority. user_profiles no longer has these columns.
   await Promise.all(
     userIds.map(async (userId) => {
       try {
         const { data } = await supabase.auth.admin.getUserById(userId);
         const user = data?.user;
-        const profile = profileById.get(userId);
-        const fullName = profile?.full_name || (user?.user_metadata as any)?.full_name || null;
+        const meta = (user?.user_metadata as Record<string, unknown> | undefined) ?? {};
+        const fullName =
+          (meta.custom_full_name as string | null | undefined) ||
+          (meta.full_name as string | null | undefined) ||
+          null;
         const email = user?.email || '';
         const avatar =
-          profile?.avatar_url ||
-          (user?.user_metadata as any)?.picture ||
-          (user?.user_metadata as any)?.avatar_url ||
+          (meta.custom_avatar_url as string | null | undefined) ||
+          (meta.picture as string | null | undefined) ||
+          (meta.avatar_url as string | null | undefined) ||
           null;
         out.set(userId, {
           user_id: userId,

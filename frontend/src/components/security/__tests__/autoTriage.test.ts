@@ -44,7 +44,7 @@ describe('autoTriageRow — Refined/All reachability rules', () => {
     expect(autoTriageRow(container)?.reason).toBe('base_image');
   });
 
-  it('never triages secret or code-issue finding types', () => {
+  it('never triages secret or semgrep finding types', () => {
     const secret = { type: 'secret', data: { id: 's1' } } as unknown as SecurityTableRow;
     const semgrep = { type: 'semgrep', data: { id: 'g1' } } as unknown as SecurityTableRow;
     expect(autoTriageRow(secret)).toBeNull();

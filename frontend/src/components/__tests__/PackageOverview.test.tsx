@@ -113,61 +113,11 @@ describe('PackageOverview', () => {
     expect(screen.getByText('MIT')).toBeInTheDocument();
   });
 
-  it('shows deprecation banner with recommended alternative when deprecation is set', () => {
-    const dep = minimalDependency({ name: 'old-pkg' });
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        deprecation={{
-          recommended_alternative: 'new-pkg',
-          deprecated_by: null,
-          created_at: new Date().toISOString(),
-        }}
-      />
-    );
+  it('shows the Analyze usage action for direct dependencies without a summary', () => {
+    const dep = minimalDependency({ is_direct: true });
+    render(<PackageOverview dependency={dep} {...defaultProps} />);
 
-    expect(screen.getByText('Deprecated by your organization')).toBeInTheDocument();
-    expect(screen.getAllByText('new-pkg').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('does not show Remove Deprecation button when canManageDeprecations is false', () => {
-    const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        deprecation={{
-          recommended_alternative: 'other-pkg',
-          deprecated_by: null,
-          created_at: new Date().toISOString(),
-        }}
-        canManageDeprecations={false}
-        onRemoveDeprecation={async () => {}}
-      />
-    );
-
-    expect(screen.getByText('Deprecated by your organization')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Remove Deprecation/i })).not.toBeInTheDocument();
-  });
-
-  it('shows Remove Deprecation button when canManageDeprecations is true and onRemoveDeprecation provided', () => {
-    const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        deprecation={{
-          recommended_alternative: 'other-pkg',
-          deprecated_by: null,
-          created_at: new Date().toISOString(),
-        }}
-        canManageDeprecations={true}
-        onRemoveDeprecation={async () => {}}
-      />
-    );
-
-    expect(screen.getByRole('button', { name: /Remove Deprecation/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Analyze usage/i })).toBeInTheDocument();
   });
 
   it('renders NPM link', () => {
@@ -258,37 +208,11 @@ describe('PackageOverview', () => {
     expect(screen.getByText(/Transitive dependency — not directly imported/)).toBeInTheDocument();
   });
 
-
-  it('shows Deprecate button when canManageDeprecations and not deprecated', () => {
+  it('does not render any deprecation surface (custom deprecations parked)', () => {
     const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        canManageDeprecations={true}
-        onDeprecate={async () => {}}
-      />
-    );
+    render(<PackageOverview dependency={dep} {...defaultProps} />);
 
-    expect(screen.getByRole('button', { name: /Deprecate/i })).toBeInTheDocument();
-  });
-
-  it('does not show Deprecate button when already deprecated', () => {
-    const dep = minimalDependency();
-    render(
-      <PackageOverview
-        dependency={dep}
-        {...defaultProps}
-        canManageDeprecations={true}
-        onDeprecate={async () => {}}
-        deprecation={{
-          recommended_alternative: 'new-pkg',
-          deprecated_by: null,
-          created_at: new Date().toISOString(),
-        }}
-      />
-    );
-
-    expect(screen.queryByRole('button', { name: /^Deprecate$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Deprecated by your/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Deprecate/i })).not.toBeInTheDocument();
   });
 });

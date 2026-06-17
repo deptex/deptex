@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Folder, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { SeverityPills } from '../SeverityPills';
 import { FrameworkIcon } from '../framework-icon';
 import { OverviewTeamSatelliteChip, TeamIcon } from '../TeamIcon';
 import { type WorstSeverity } from './useVulnerabilitiesGraphLayout';
@@ -38,6 +39,11 @@ export interface VulnProjectNodeData {
   statusBadge?: string | null;
   /** Hex color for status badge (e.g. from organization_statuses.color). */
   statusBadgeColor?: string | null;
+  /**
+   * Org overview: open finding counts by depscore band — rendered as mini SeverityPills
+   * under the tile. Undefined until the security-summary fetch lands (no pills shown).
+   */
+  bandCounts?: { critical: number; high: number; medium: number; low: number } | null;
   /** Team nodes: risk grade shown on the right (e.g. A+). */
   riskGrade?: string | null;
   /** Team nodes (org overview): number of projects for bottom bar. */
@@ -155,7 +161,7 @@ function statusBadgeColorFallback(label: string | null | undefined): string | nu
 }
 
 function VulnProjectNodeComponent({ data }: NodeProps) {
-  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, riskGrade, projectsCount, membersCount, dependenciesCount, importance, overviewOrgEdgeTargetHandle } =
+  const { projectName = 'Project', projectId, framework, worstSeverity, isTeamNode, slaBreachCount, isExtracting, isInitialExtracting, isInitialExtractionFailed, hasExtractingProjects, neutralStyle, roleBadge, roleBadgeColor, statusBadge, statusBadgeColor, bandCounts, riskGrade, projectsCount, membersCount, dependenciesCount, importance, overviewOrgEdgeTargetHandle } =
     (data as unknown as VulnProjectNodeData) ?? {};
   const hasKnownFramework = framework && framework.toLowerCase() !== 'unknown';
   const frameworkIdForIcon = hasKnownFramework ? framework : undefined;
@@ -299,13 +305,15 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               <span className="text-[10px] text-muted-foreground mt-0.5">Creating</span>
             ) : isInitialExtractionFailed ? (
               <span className="text-[10px] text-destructive/80 mt-0.5">Failed</span>
-            ) : showStatusBadge ? (
-              <span
-                className="mt-0.5 text-[10px] font-medium truncate max-w-full"
-                style={{ color: effectiveStatusColor ?? undefined }}
-              >
-                {statusBadge}
-              </span>
+            ) : bandCounts ? (
+              <SeverityPills
+                size="xs"
+                critical={bandCounts.critical}
+                high={bandCounts.high}
+                medium={bandCounts.medium}
+                low={bandCounts.low}
+                className="mt-1"
+              />
             ) : null}
           </div>
         </>

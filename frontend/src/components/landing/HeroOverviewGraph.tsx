@@ -22,7 +22,6 @@ import {
   useEdgesState,
   type Node,
   type Edge,
-  type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { GroupCenterNode } from "../vulnerabilities-graph/GroupCenterNode";
@@ -32,43 +31,13 @@ import { ReactiveDotGrid } from "../vulnerabilities-graph/ReactiveDotGrid";
 import { OrgCanvasCursors } from "../vulnerabilities-graph/OrgCanvasCursors";
 import { useOrganizationOverviewGraphLayout } from "../vulnerabilities-graph/useOrganizationVulnerabilitiesGraphLayout";
 import type { RemoteCursor } from "../vulnerabilities-graph/useOrgCanvasCursors";
-import { SeverityPills } from "../SeverityPills";
-import {
-  HERO_TEAMS,
-  HERO_ORG_NAME,
-  HERO_ORG_AVATAR,
-  HERO_SEVERITY_BY_ID,
-} from "./heroDemo";
+import { HERO_TEAMS, HERO_ORG_NAME, HERO_ORG_AVATAR } from "./heroDemo";
 
-// Wraps the real project node and renders per-project severity-count pills below
-// it (the overview graph has no native pills) — landing-only composition reusing
-// the real VulnProjectNode + real SeverityPills.
-function LandingProjectNode(props: NodeProps) {
-  const id = (props.data as { projectId?: string })?.projectId;
-  const counts = id ? HERO_SEVERITY_BY_ID[id] : undefined;
-  return (
-    <div className="relative">
-      <VulnProjectNode {...props} />
-      {counts && (
-        <div
-          className="absolute left-1/2 top-full z-10 flex -translate-x-1/2 justify-center"
-          style={{ width: 220, marginTop: 30 }}
-        >
-          <SeverityPills
-            critical={counts.critical}
-            high={counts.high}
-            medium={counts.medium}
-            low={counts.low}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
+// Per-project severity-count pills render natively inside VulnProjectNode (xs
+// SeverityPills) when bandCounts is supplied — fed via heroDemo / the layout.
 const nodeTypes = {
   groupCenterNode: GroupCenterNode,
-  vulnProjectNode: LandingProjectNode,
+  vulnProjectNode: VulnProjectNode,
   teamGroupNode: TeamGroupNode,
 };
 
@@ -96,7 +65,6 @@ function Graph() {
       undefined,
       "demo-org",
       "owner",
-      null,
       null,
       null,
       false,

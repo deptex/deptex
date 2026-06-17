@@ -152,7 +152,7 @@ describe('MembersPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
     const row = screen.getByText('invited@example.com').closest('tr')!;
-    const menuTrigger = within(row).getByRole('button');
+    const menuTrigger = await within(row).findByRole('button');
     await userEvent.click(menuTrigger);
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Cancel Invitation' })).toBeInTheDocument());
     await userEvent.click(screen.getByRole('menuitem', { name: 'Cancel Invitation' }));
@@ -169,7 +169,7 @@ describe('MembersPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Pending Invitations/i }));
     await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
     const row = screen.getByText('invited@example.com').closest('tr')!;
-    const menuTrigger = within(row).getByRole('button');
+    const menuTrigger = await within(row).findByRole('button');
     await userEvent.click(menuTrigger);
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Resend Invitation' })).toBeInTheDocument());
     await userEvent.click(screen.getByRole('menuitem', { name: 'Resend Invitation' }));
@@ -192,7 +192,7 @@ describe('MembersPage', () => {
     const row = screen.getByText('invited@example.com').closest('tr')!;
     expect(within(row).getByText('Pending')).toBeInTheDocument();
 
-    await userEvent.click(within(row).getByRole('button'));
+    await userEvent.click(await within(row).findByRole('button'));
     await userEvent.click(screen.getByRole('menuitem', { name: 'Resend Invitation' }));
 
     // While in flight, status cell flips to "Resending..."
@@ -467,7 +467,7 @@ describe('MembersPage', () => {
       await waitFor(() => expect(screen.getByText('invited@example.com')).toBeInTheDocument());
 
       const row = screen.getByText('invited@example.com').closest('tr')!;
-      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(await within(row).findByRole('button'));
       await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Cancel Invitation' })).toBeInTheDocument());
       await userEvent.click(screen.getByRole('menuitem', { name: 'Cancel Invitation' }));
 
@@ -488,7 +488,7 @@ describe('MembersPage', () => {
       await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
 
       const row = screen.getByText('member@example.com').closest('tr')!;
-      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(await within(row).findByRole('button'));
       await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Remove Member' })).toBeInTheDocument());
       await userEvent.click(screen.getByRole('menuitem', { name: 'Remove Member' }));
       await waitFor(() => expect(screen.getByText(/Are you sure you want to remove/)).toBeInTheDocument());
@@ -514,7 +514,7 @@ describe('MembersPage', () => {
       await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
 
       const row = screen.getByText('owner@example.com').closest('tr')!;
-      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(await within(row).findByRole('button'));
       await waitFor(() => expect(screen.getByRole('menuitem', { name: /Leave Organization/i })).toBeInTheDocument());
       await userEvent.click(screen.getByRole('menuitem', { name: /Leave Organization/i }));
 
@@ -536,7 +536,7 @@ describe('MembersPage', () => {
       await waitFor(() => expect(screen.getByText('owner@example.com')).toBeInTheDocument());
 
       const row = screen.getByText('owner@example.com').closest('tr')!;
-      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(await within(row).findByRole('button'));
       await userEvent.click(screen.getByRole('menuitem', { name: /Leave Organization/i }));
       await waitFor(() => expect(screen.getByText(/Are you sure you want to leave/)).toBeInTheDocument());
       await userEvent.click(screen.getByRole('button', { name: 'Leave' }));
@@ -577,7 +577,7 @@ describe('MembersPage', () => {
       await waitFor(() => expect(screen.getByText('member@example.com')).toBeInTheDocument());
 
       const row = screen.getByText('member@example.com').closest('tr')!;
-      await userEvent.click(within(row).getByRole('button'));
+      await userEvent.click(await within(row).findByRole('button'));
       await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Change Role' })).toBeInTheDocument());
       expect(screen.queryByRole('menuitem', { name: 'Add to Team' })).not.toBeInTheDocument();
 

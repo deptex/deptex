@@ -22,14 +22,14 @@ describe('SeverityPills', () => {
     expect(container.querySelectorAll('span.rounded-full').length).toBe(2);
   });
 
-  it('renders "No issues" when totals are zero and hideZeros is set', () => {
+  it('renders "No findings" when totals are zero and hideZeros is set', () => {
     render(<SeverityPills critical={0} high={0} medium={0} low={0} hideZeros />);
-    expect(screen.getByText('No issues')).toBeTruthy();
+    expect(screen.getByText('No findings')).toBeTruthy();
   });
 
   it('treats omitted counts as zero', () => {
     const { container } = render(<SeverityPills hideZeros />);
-    expect(screen.getByText('No issues')).toBeTruthy();
+    expect(screen.getByText('No findings')).toBeTruthy();
     expect(container.querySelectorAll('span.rounded-full').length).toBe(0);
   });
 });

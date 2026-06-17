@@ -96,6 +96,14 @@ export interface BuildAutomationYamlOptions {
    * emit. Spider/activeScan still respect `scanProfile`.
    */
   openApiSpecPath?: string;
+  /**
+   * Absolute directory ZAP's traditional-json `report` job writes to.
+   * Defaults to `/zap/wrk`. The pipeline overrides this with the per-job
+   * tmpdir it later reads `zap-report.json` back from — without this override
+   * ZAP wrote the report to `/zap/wrk` while the worker read it from the
+   * tmpdir, so every scan silently parsed zero findings.
+   */
+  reportDirAbsolute?: string;
 }
 
 // v2.1d / Phase 36 (v1.1) — auth budget reserved out of scan_timeout_minutes
@@ -370,7 +378,7 @@ export function buildAutomationYaml(opts: BuildAutomationYamlOptions): string {
       type: 'report',
       parameters: {
         template: 'traditional-json',
-        reportDir: '/zap/wrk',
+        reportDir: opts.reportDirAbsolute ?? '/zap/wrk',
         reportFile: opts.reportRelativePath,
       },
     });

@@ -91,8 +91,15 @@ export const createMockSupabase = (registry: TableRegistry = {}, rpcRegistry: Rp
       },
     },
     from: jest.fn().mockImplementation((table: string) => {
+      // Real PostgREST clients return a NEW builder per from() call. Mirror
+      // that: a derived object carries its own _table so queries constructed
+      // concurrently (Promise.all across tables) don't clobber each other,
+      // while the shared jest.fn methods are inherited via the prototype so
+      // `queryBuilder.eq.mock.calls`-style assertions keep working. The base
+      // _table is still set for tests whose custom mockImplementations
+      // `return queryBuilder` directly.
       queryBuilder._table = table;
-      return queryBuilder;
+      return Object.create(queryBuilder, { _table: { value: table, writable: true } });
     }),
     rpc: jest.fn().mockImplementation((name: string) => {
       const r = consumeRpc(rpcRegistry, name);

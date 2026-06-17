@@ -263,7 +263,7 @@ function rowProjectId(r: SecurityTableRow): string | undefined {
 }
 function rowScore(r: SecurityTableRow): number {
   if (r.type === "vulnerability") return r.data.contextual_depscore ?? r.data.depscore ?? 0;
-  return r.data.depscore ?? 0;
+  return (r.data as { depscore?: number | null }).depscore ?? 0;
 }
 export type SeverityCounts = { critical: number; high: number; medium: number; low: number };
 
@@ -282,21 +282,16 @@ function projectSeverityCounts(projectId: string): SeverityCounts {
   return counts;
 }
 
-/** Per-project severity counts (by project id) — the Overview graph renders these
- *  as SeverityPills under each project node. */
-export const HERO_SEVERITY_BY_ID: Record<string, SeverityCounts> = Object.fromEntries(
-  HERO_PROJECTS.map((p) => [p.id, projectSeverityCounts(p.id)]),
-);
-
 function buildTeams(): OverviewTeamWithProjects[] {
   return (Object.keys(TEAM_META) as Team[]).map((t) => {
     const m = TEAM_META[t];
-    // No statusBadge — the LandingProjectNode wrapper renders SeverityPills
-    // (HERO_SEVERITY_BY_ID) under each project instead.
+    // No statusBadge — bandCounts drives the native SeverityPills under each
+    // project node (VulnProjectNode renders them at size xs).
     const projects = HERO_PROJECTS.filter((p) => p.team === t).map((p) => ({
       projectId: p.id,
       projectName: p.name,
       framework: p.framework,
+      bandCounts: projectSeverityCounts(p.id),
       dependenciesCount: p.deps,
       healthScore: p.health,
       canvasPositionX: p.x,

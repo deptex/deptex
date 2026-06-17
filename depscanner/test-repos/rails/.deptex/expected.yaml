@@ -40,10 +40,10 @@ secrets:
     file: .env.example
     line: 2
 
-malicious_pkg:
-  - package: rest-client
-    ecosystem: gem
-    note: historical-malicious — 2019 RubyGems compromise (1.6.13)
+# malicious_pkg: deferred. rest-client 1.6.13 (the 2019 RubyGems compromise) was
+# yanked — that version now 404s on RubyGems, so it can't be resolved or
+# enumerated to be flagged. Removed from the Gemfile to keep the fixture
+# scannable; malicious-package detection is exercised separately.
 
 semgrep_findings:
   - rule_id: ruby.rails.security.audit.rails-find-by-sql.rails-find-by-sql

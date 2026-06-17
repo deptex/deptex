@@ -50,13 +50,22 @@ const PROJECT_ID = 'proj-x';
 const USER = { id: 'user-1', email: 'a@b.com' };
 const TOKEN = 'valid-token';
 
-/** project↔org bind passes; org admin path approves checkProjectManagePermission. */
+/**
+ * project↔org bind passes; the member's role bundle carries
+ * manage_teams_and_projects, which approves checkProjectManagePermission.
+ * (The legacy role-NAME `admin` short-circuit was removed — a role named
+ * "admin" only passes via its permissions JSONB now.)
+ */
 function setProjectManagePerm() {
   pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
   setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });
+  setTableResponse('organization_roles', 'single', {
+    data: { permissions: { manage_teams_and_projects: true } },
+    error: null,
+  });
 }
 
-/** project↔org bind passes; org admin + manage_teams_and_projects approves checkProjectAccess. */
+/** project↔org bind passes; manage_teams_and_projects approves checkProjectAccess. */
 function setProjectAccess() {
   pushTableResponse('projects', { data: { organization_id: ORG_ID }, error: null });
   setTableResponse('organization_members', 'single', { data: { role: 'admin' }, error: null });

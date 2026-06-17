@@ -1,5 +1,6 @@
 import type { Tree } from 'web-tree-sitter';
 import type { ExtractedFile, SupportedLanguageId } from '../tree-sitter-extractor/languages/types';
+import type { RequestParam } from '../param-harvest/types';
 
 export type EntryPointType =
   | 'http_route'
@@ -36,6 +37,14 @@ export interface EntryPoint {
   authMechanism: string | null;
   middlewareChain: string[] | null;
   metadata: Record<string, unknown> | null;
+  /**
+   * Deterministically-harvested request parameters (query/header/cookie) the
+   * handler reads — drives the DAST OpenAPI synthesizer's `query` parameters.
+   * Populated by the per-framework param harvest during detection; null when
+   * none recovered (or the handler isn't an inline function). Canonicalized
+   * (deduped + sorted) — see param-harvest/types.ts.
+   */
+  requestParams?: RequestParam[] | null;
 }
 
 /**

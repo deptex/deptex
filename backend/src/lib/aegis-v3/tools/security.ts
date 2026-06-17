@@ -1,4 +1,11 @@
 import { jsonSchema } from 'ai';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  getActiveExtractionId,
+  getActiveExtractionIds,
+  NO_ACTIVE_RUN,
+} from '../../active-extraction';
+import { vulnAutoIgnoreReason } from '../finding-triage';
 import { resolveProject, resolveProjectVulnerability } from './resolvers';
 import type { AegisToolEntry } from '../tool-types';
 
@@ -10,7 +17,7 @@ const getProjectVulnerabilities: AegisToolEntry<{
 }> = {
   name: 'get_project_vulnerabilities',
   description:
-    'Vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, and fixed versions. Pass the project name exactly as the user said it.',
+    "Vulnerabilities for a project. Each row includes OSV id, CVE aliases, severity, CVSS, EPSS, KEV flag, reachability level, depscore, the affected dependency@version, fixed versions, and `autoIgnored` (true = the findings table sets this row aside as Auto Ignored because it isn't reachable — treat those as low priority and don't propose fixes for them unprompted). Pass the project name exactly as the user said it.",
   danger: 'safe',
   inputSchema: jsonSchema({
     type: 'object',
@@ -27,12 +34,20 @@ const getProjectVulnerabilities: AegisToolEntry<{
     const resolved = await resolveProject(projectName, ctx.orgId, ctx.supabase);
     if ('error' in resolved) return resolved;
 
+    // PDV holds one generation of rows per extraction run; without this filter
+    // the same CVE shows up once per historical run and the model narrates
+    // phantom duplicates ("the top 3 CVEs are all the same CVE").
+    const activeRunId =
+      (await getActiveExtractionId(ctx.supabase as SupabaseClient, resolved.id)) ?? NO_ACTIVE_RUN;
+
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
+        'osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, runtime_confirmed_at, epss_score, cvss_score, cisa_kev, depscore, published_at, project_dependency_id',
       )
       .eq('project_id', resolved.id)
+      .eq('extraction_run_id', activeRunId)
+      .eq('suppressed', false)
       .order('depscore', { ascending: false, nullsFirst: false })
       .limit(limit ?? 200);
 
@@ -67,6 +82,9 @@ const getProjectVulnerabilities: AegisToolEntry<{
           isKev: !!v.cisa_kev,
           isReachable: !!v.is_reachable,
           reachabilityLevel: v.reachability_level,
+          // Same derivation as the findings table's Auto Ignored status —
+          // keeps the agent's narrative consistent with what the user sees.
+          autoIgnored: vulnAutoIgnoreReason(v) != null,
           depscore: v.depscore,
           publishedAt: v.published_at,
           summary: v.summary,
@@ -94,10 +112,13 @@ const getSecurityPosture: AegisToolEntry<Record<string, never>> = {
     if (!projects || projects.length === 0) return { projectCount: 0, vulnCounts: null };
 
     const projectIds = projects.map((p: any) => p.id);
+    const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, projectIds);
     const { data: vulns } = await ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select('severity, is_reachable, cisa_kev, depscore')
-      .in('project_id', projectIds);
+      .in('project_id', projectIds)
+      .in('extraction_run_id', activeRunIds)
+      .eq('suppressed', false);
 
     const vulnCounts = { critical: 0, high: 0, medium: 0, low: 0 };
     let reachable = 0;
@@ -170,12 +191,14 @@ const getVulnerabilityDetail: AegisToolEntry<{
     const projectNameById = new Map<string, string>();
     for (const p of orgProjects ?? []) projectNameById.set(p.id, p.name);
 
+    const activeRunIds = await getActiveExtractionIds(ctx.supabase as SupabaseClient, orgProjectIds);
     let query = ctx.supabase
       .from('project_dependency_vulnerabilities')
       .select(
         'project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, is_reachable, reachability_level, epss_score, cvss_score, cisa_kev, depscore, published_at',
       )
-      .in('project_id', orgProjectIds);
+      .in('project_id', orgProjectIds)
+      .in('extraction_run_id', activeRunIds);
 
     if (trimmed.toUpperCase().startsWith('CVE-')) {
       query = (query as any).contains('aliases', [trimmed.toUpperCase()]);
@@ -262,12 +285,16 @@ const getReachabilityFlows: AegisToolEntry<{
       .eq('id', vuln.project_dependency_id)
       .single();
 
+    const activeRunId =
+      (await getActiveExtractionId(ctx.supabase as SupabaseClient, vuln.project_id)) ??
+      NO_ACTIVE_RUN;
     const { data: flows } = await ctx.supabase
       .from('project_reachable_flows')
       .select(
         'id, purl, entry_point_file, entry_point_method, entry_point_line, sink_file, sink_method, sink_line, flow_length, flow_nodes',
       )
       .eq('project_id', vuln.project_id)
+      .eq('extraction_run_id', activeRunId)
       .limit(10);
 
     const packageMatch = pd?.name

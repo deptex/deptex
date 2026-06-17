@@ -22,6 +22,12 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
   orgMembership: { role: string } | null;
   teamMembership: { role_id: string | null } | null;
   orgRole: { permissions: any; display_order: number } | null;
+  /** The validated team row — endpoints need it for activity logs / old-value diffs, so return it
+   *  here instead of every handler re-reading `teams` (the IDOR guard fetches the row anyway). */
+  team: { id: string; name: string; avatar_url: string | null; description: string | null } | null;
+  /** The caller's team role (joined through team_members.role_id) — null when they're not a team
+   *  member or have no role. Saves the follow-up `team_roles` read every permission check was doing. */
+  teamRole: { name: string; display_name: string | null; color: string | null; permissions: any; display_order: number } | null;
   error?: { status: number; message: string };
 }> {
   // Check if user is a member of the organization
@@ -38,17 +44,20 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
       orgMembership: null,
       teamMembership: null,
       orgRole: null,
+      team: null,
+      teamRole: null,
       error: { status: 404, message: 'Organization not found or access denied' }
     };
   }
 
   // Validate the team belongs to this org (IDOR guard — the service-role key bypasses RLS, so a
   // member of org A could otherwise pass a teamId from org B), and load the caller's team membership
-  // + org role. These three reads are independent once we have orgMembership, so run them in parallel
-  // — this is the hot path shared by every team endpoint, so the saved round-trips add up.
+  // (with their team role joined in) + org role. These three reads are independent once we have
+  // orgMembership, so run them in parallel — this is the hot path shared by every team endpoint, so
+  // the saved round-trips add up.
   const [teamRowRes, teamMembershipRes, orgRoleRes] = await Promise.all([
-    supabase.from('teams').select('id').eq('id', teamId).eq('organization_id', organizationId).single(),
-    supabase.from('team_members').select('role_id').eq('team_id', teamId).eq('user_id', userId).single(),
+    supabase.from('teams').select('id, name, avatar_url, description').eq('id', teamId).eq('organization_id', organizationId).single(),
+    supabase.from('team_members').select('role_id, team_roles(name, display_name, color, permissions, display_order)').eq('team_id', teamId).eq('user_id', userId).single(),
     supabase.from('organization_roles').select('permissions, display_order').eq('organization_id', organizationId).eq('name', orgMembership.role).single(),
   ]);
 
@@ -59,12 +68,17 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
       orgMembership,
       teamMembership: null,
       orgRole: null,
+      team: null,
+      teamRole: null,
       error: { status: 404, message: 'Team not found' }
     };
   }
 
   const { data: teamMembership } = teamMembershipRes;
   const { data: orgRole } = orgRoleRes;
+  // supabase-js types to-one embeds loosely — normalize to a single object (or null).
+  const teamRolesEmbed = (teamMembership as { team_roles?: unknown } | null)?.team_roles;
+  const teamRole = (Array.isArray(teamRolesEmbed) ? teamRolesEmbed[0] : teamRolesEmbed) ?? null;
 
   // Access is granted to a team member, the org owner, or anyone with the manage_teams_and_projects
   // permission. No role-NAME checks: 'owner' is the only structural role, there is no built-in 'admin'
@@ -83,6 +97,8 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
       orgMembership,
       teamMembership,
       orgRole,
+      team: teamRow,
+      teamRole,
       error: { status: 403, message: 'You do not have access to this team' }
     };
   }
@@ -91,7 +107,9 @@ async function checkTeamAccess(userId: string, organizationId: string, teamId: s
     hasAccess: true,
     orgMembership,
     teamMembership,
-    orgRole
+    orgRole,
+    team: teamRow,
+    teamRole
   };
 }
 
@@ -237,8 +255,8 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
           }
         }
 
-        // Org admins/owners OR users with manage_teams_and_projects permission get all permissions on teams
-        if (membership.role === 'owner' || membership.role === 'admin' || canViewAllTeams) {
+        // Org owners OR users with manage_teams_and_projects permission get all permissions on teams
+        if (membership.role === 'owner' || canViewAllTeams) {
           userPermissions = {
             view_overview: true,
             manage_projects: true,
@@ -382,34 +400,20 @@ router.put('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-    const { orgMembership, teamMembership } = accessCheck;
+    const { orgMembership, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
 
     if (!isOrgAdmin) {
-      // Check if user has view_settings permission on team (which implies edit for now)
-      if (teamMembership?.role_id) {
-        const { data: role } = await supabase
-          .from('team_roles')
-          .select('permissions')
-          .eq('id', teamMembership.role_id)
-          .single();
-
-        if (!role?.permissions?.view_settings) {
-          return res.status(403).json({ error: 'Only team managers or org admins can update teams' });
-        }
-      } else {
+      // Check if user has view_settings permission on team (which implies edit for now).
+      // The caller's team role rides along on checkTeamAccess — no extra read.
+      if (!teamRole?.permissions?.view_settings) {
         return res.status(403).json({ error: 'Only team managers or org admins can update teams' });
       }
     }
 
-    // Get current team data for activity logs
-    const { data: currentTeam } = await supabase
-      .from('teams')
-      .select('name, avatar_url, description')
-      .eq('id', teamId)
-      .eq('organization_id', id)
-      .single();
+    // Current team data for activity-log diffs — already fetched by checkTeamAccess's IDOR guard.
+    const currentTeam = accessCheck.team;
 
     // Build update data
     const updateData: any = {
@@ -577,32 +581,30 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-    const { orgMembership, teamMembership } = accessCheck;
+    const { orgMembership, teamMembership, orgRole, teamRole } = accessCheck;
+    if (!orgMembership) {
+      return res.status(403).json({ error: 'Not a member of this organization' });
+    }
 
-    // Get team data
-    const { data: team, error: teamError } = await supabase
-      .from('teams')
-      .select('*')
-      .eq('id', teamId)
-      .eq('organization_id', id)
-      .single();
+    // Full team row + the two counts are independent — fetch in parallel. The caller's team role
+    // (when they have one) and the org role already ride along on checkTeamAccess; the only extra
+    // role read left is the legacy "team member without a role_id → member role" fallback.
+    const needsMemberRoleFallback = !!teamMembership && !teamMembership.role_id;
+    const [teamRes, memberCountRes, projectCountRes, memberRoleRes] = await Promise.all([
+      supabase.from('teams').select('*').eq('id', teamId).eq('organization_id', id).single(),
+      supabase.from('team_members').select('*', { count: 'exact', head: true }).eq('team_id', teamId),
+      supabase.from('project_teams').select('*', { count: 'exact', head: true }).eq('team_id', teamId),
+      needsMemberRoleFallback
+        ? supabase.from('team_roles').select('name, display_name, color, permissions, display_order').eq('team_id', teamId).eq('name', 'member').single()
+        : Promise.resolve({ data: null }),
+    ]);
 
+    const { data: team, error: teamError } = teamRes;
     if (teamError || !team) {
       return res.status(404).json({ error: 'Team not found' });
     }
-
-    // Get member and project counts
-    const { count: memberCount } = await supabase
-      .from('team_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('team_id', teamId);
-
-    const { count: projectCount } = await supabase
-      .from('project_teams')
-      .select('*', { count: 'exact', head: true })
-      .eq('team_id', teamId);
-
-    // teamMembership already obtained from checkTeamAccess
+    const memberCount = memberCountRes.count;
+    const projectCount = projectCountRes.count;
 
     let userRole = 'member';
     let userRoleDisplayName = 'Member';
@@ -619,60 +621,23 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
 
     let userRank: number | null = null;
 
-    // If user has a team membership with a role, get role details
-    if (teamMembership?.role_id) {
-      const { data: role } = await supabase
-        .from('team_roles')
-        .select('name, display_name, color, permissions, display_order')
-        .eq('id', teamMembership.role_id)
-        .single();
-
-      if (role) {
-        userRole = role.name;
-        userRoleDisplayName = role.display_name || role.name.charAt(0).toUpperCase() + role.name.slice(1);
-        userRoleColor = role.color;
-        userRank = role.display_order;
-        // Merge permissions but always ensure view_overview is true (everyone can view overview)
-        userPermissions = {
-          ...userPermissions,
-          ...(role.permissions || {}),
-          view_overview: true, // Always allow viewing overview
-        };
-      }
-    } else if (teamMembership) {
-      // User is a team member but without role_id, get the member role
-      const { data: memberRole } = await supabase
-        .from('team_roles')
-        .select('name, display_name, color, permissions, display_order')
-        .eq('team_id', teamId)
-        .eq('name', 'member')
-        .single();
-
-      if (memberRole) {
-        userRole = memberRole.name;
-        userRoleDisplayName = memberRole.display_name || 'Member';
-        userRoleColor = memberRole.color;
-        userRank = memberRole.display_order;
-        // Merge permissions but always ensure view_overview is true (everyone can view overview)
-        userPermissions = {
-          ...userPermissions,
-          ...(memberRole.permissions || {}),
-          view_overview: true, // Always allow viewing overview
-        };
-      }
+    // Role details: the joined role from checkTeamAccess, or the member-role fallback above
+    const role = teamRole ?? memberRoleRes.data;
+    if (role) {
+      userRole = role.name;
+      userRoleDisplayName = role.display_name || role.name.charAt(0).toUpperCase() + role.name.slice(1);
+      userRoleColor = role.color;
+      userRank = role.display_order;
+      // Merge permissions but always ensure view_overview is true (everyone can view overview)
+      userPermissions = {
+        ...userPermissions,
+        ...(role.permissions || {}),
+        view_overview: true, // Always allow viewing overview
+      };
     }
 
-    // Org admins/owners OR users with view_all_teams_and_projects/manage_teams_and_projects permission get all permissions on teams
-    // We need to check org role permissions for this
-    if (!orgMembership) {
-      return res.status(403).json({ error: 'Not a member of this organization' });
-    }
-    const { data: orgRole } = await supabase
-      .from('organization_roles')
-      .select('permissions, display_order')
-      .eq('organization_id', id)
-      .eq('name', orgMembership.role)
-      .single();
+    // Org admins/owners OR users with view_all_teams_and_projects/manage_teams_and_projects
+    // permission get all permissions on teams. orgRole comes from checkTeamAccess — no extra read.
 
     // Get the current user's org rank for hierarchy checks
     const userOrgRank = orgRole?.display_order ?? 999;
@@ -680,7 +645,7 @@ router.get('/:id/teams/:teamId', async (req: AuthRequest, res) => {
     const canViewAllTeamsAndProjects = orgRole?.permissions?.view_all_teams_and_projects === true;
     const canManageTeamsAndProjects = orgRole?.permissions?.manage_teams_and_projects === true;
 
-    if (orgMembership?.role === 'owner' || orgMembership?.role === 'admin' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
+    if (orgMembership?.role === 'owner' || canViewAllTeamsAndProjects || canManageTeamsAndProjects) {
       userPermissions = {
         view_overview: true,
         manage_projects: true,
@@ -769,31 +734,21 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-    const { orgMembership, teamMembership } = accessCheck;
+    const { orgMembership, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userPermissions: any = null;
 
     if (!isOrgAdmin) {
-      // Check if user has edit_roles permission on team
-      if (teamMembership?.role_id) {
-        const { data: role } = await supabase
-          .from('team_roles')
-          .select('name, permissions, display_order')
-          .eq('id', teamMembership.role_id)
-          .single();
+      // Check if user has edit_roles permission on team, or is the top ranked role (display_order 0).
+      // The caller's team role rides along on checkTeamAccess — no extra read.
+      const hasEditRoles = teamRole?.permissions?.edit_roles === true;
+      const isTopRankedRole = teamRole?.display_order === 0;
 
-        // Check if user has edit_roles permission or is top ranked role (display_order 0)
-        const hasEditRoles = role?.permissions?.edit_roles === true;
-        const isTopRankedRole = role?.display_order === 0;
-
-        if (!role || (!hasEditRoles && !isTopRankedRole)) {
-          return res.status(403).json({ error: 'Only team admins or org admins can create roles' });
-        }
-        userPermissions = role.permissions;
-      } else {
+      if (!teamRole || (!hasEditRoles && !isTopRankedRole)) {
         return res.status(403).json({ error: 'Only team admins or org admins can create roles' });
       }
+      userPermissions = teamRole.permissions;
     }
 
     // Check if user is trying to grant permissions they don't have
@@ -847,22 +802,16 @@ router.post('/:id/teams/:teamId/roles', async (req: AuthRequest, res) => {
       throw roleError;
     }
 
-    // Get team name for activity log
-    const { data: team } = await supabase
-      .from('teams')
-      .select('name')
-      .eq('id', teamId)
-      .single();
-
-    // Create activity log
+    // Create activity log (team name already on the access check — no extra read)
+    const teamName = accessCheck.team?.name;
     await createActivity({
       organization_id: id,
       user_id: userId,
       activity_type: 'created_team_role',
-      description: `created role "${display_name || name.trim()}" in team "${team?.name || teamId}"`,
+      description: `created role "${display_name || name.trim()}" in team "${teamName || teamId}"`,
       metadata: {
         team_id: teamId,
-        team_name: team?.name,
+        team_name: teamName,
         role_name: display_name || name.trim(),
         role_id: role.id,
       },
@@ -888,42 +837,21 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-    const { orgMembership, teamMembership } = accessCheck;
+    const { orgMembership, orgRole, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership!.role === 'owner' || orgMembership!.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userRank = 0; // Org admins have rank 0 (highest)
     let userPermissions: any = null; // For checking permission granting
-    let hasOrgManagePermission = isOrgAdmin;
-
-    if (!isOrgAdmin) {
-      // Check if user's org role has manage_teams_and_projects permission
-      const { data: orgRoleData } = await supabase
-        .from('organization_roles')
-        .select('permissions')
-        .eq('organization_id', id)
-        .eq('name', orgMembership!.role)
-        .single();
-
-      hasOrgManagePermission = orgRoleData?.permissions?.manage_teams_and_projects === true;
-    }
+    // Org role + the caller's team role both ride along on checkTeamAccess — no extra reads.
+    const hasOrgManagePermission = isOrgAdmin || orgRole?.permissions?.manage_teams_and_projects === true;
 
     if (!isOrgAdmin && !hasOrgManagePermission) {
-      if (teamMembership?.role_id) {
-        const { data: userRole } = await supabase
-          .from('team_roles')
-          .select('name, display_order, permissions')
-          .eq('id', teamMembership.role_id)
-          .single();
-
-        // Check if user has edit_roles permission
-        if (!userRole || !userRole.permissions?.edit_roles) {
-          return res.status(403).json({ error: 'You do not have permission to update roles' });
-        }
-        userRank = userRole.display_order;
-        userPermissions = userRole.permissions;
-      } else {
-        return res.status(403).json({ error: 'Only users with edit_roles permission can update roles' });
+      // Check if user has edit_roles permission
+      if (!teamRole || !teamRole.permissions?.edit_roles) {
+        return res.status(403).json({ error: 'You do not have permission to update roles' });
       }
+      userRank = teamRole.display_order;
+      userPermissions = teamRole.permissions;
     }
 
     // Get the target role to check rank
@@ -1009,32 +937,28 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
       return res.status(404).json({ error: 'Role not found' });
     }
 
-    // Get team name for activity log
-    const { data: team } = await supabase
-      .from('teams')
-      .select('name')
-      .eq('id', teamId)
-      .single();
-
-    // Create activity logs for different types of changes
+    // Create activity logs for different types of changes (team name already on the access check —
+    // no extra read). The logs are independent and non-critical, so fire them in parallel.
+    const teamName = accessCheck.team?.name;
     const roleDisplayName = role.display_name || role.name;
+    const activityLogs: Promise<void>[] = [];
 
     // Check if this is a rank change only
     if (display_order !== undefined && display_order !== targetRole.display_order) {
-      await createActivity({
+      activityLogs.push(createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'changed_team_role_rank',
-        description: `changed rank of role "${roleDisplayName}" in team "${team?.name || teamId}"`,
+        description: `changed rank of role "${roleDisplayName}" in team "${teamName || teamId}"`,
         metadata: {
           team_id: teamId,
-          team_name: team?.name,
+          team_name: teamName,
           role_name: roleDisplayName,
           role_id: roleId,
           old_rank: targetRole.display_order,
           new_rank: display_order,
         },
-      });
+      }));
     }
 
     // Check for name or permission changes
@@ -1045,7 +969,7 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
       const changes: string[] = [];
       const metadata: any = {
         team_id: teamId,
-        team_name: team?.name,
+        team_name: teamName,
         role_id: roleId,
       };
 
@@ -1064,14 +988,16 @@ router.put('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) => 
         changes.push('color');
       }
 
-      await createActivity({
+      activityLogs.push(createActivity({
         organization_id: id,
         user_id: userId,
         activity_type: 'updated_team_role',
-        description: `updated role "${roleDisplayName}" in team "${team?.name || teamId}"`,
+        description: `updated role "${roleDisplayName}" in team "${teamName || teamId}"`,
         metadata,
-      });
+      }));
     }
+
+    await Promise.all(activityLogs);
 
     res.json(role);
   } catch (error: any) {
@@ -1086,67 +1012,44 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
     const userId = req.user!.id;
     const { id, teamId, roleId } = req.params;
 
-    // Check if user is org admin/owner or has manage_teams_and_projects permission
-    const { data: orgMembership, error: orgMembershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (orgMembershipError || !orgMembership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
+    // checkTeamAccess validates org membership AND that the team belongs to this org (the old
+    // hand-rolled check here never tied teamId to the org — a cross-org IDOR for callers holding
+    // manage_teams_and_projects in their own org), and returns the org role + the caller's team
+    // role + team row in two round-trips instead of up to four sequential reads.
+    const accessCheck = await checkTeamAccess(userId, id, teamId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
+    const { orgMembership, orgRole, teamRole } = accessCheck;
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership!.role === 'owner';
     let userRank = 0; // Org admins have rank 0 (highest)
-    let hasOrgManagePermission = false;
+    const hasOrgManagePermission = isOrgAdmin || orgRole?.permissions?.manage_teams_and_projects === true;
 
-    if (!isOrgAdmin) {
-      // Check if user's org role has manage_teams_and_projects permission
-      const { data: orgRoleData } = await supabase
-        .from('organization_roles')
-        .select('permissions')
-        .eq('organization_id', id)
-        .eq('name', orgMembership.role)
-        .single();
-
-      hasOrgManagePermission = orgRoleData?.permissions?.manage_teams_and_projects === true;
-
-      if (!hasOrgManagePermission) {
-        const { data: teamMembership } = await supabase
-          .from('team_members')
-          .select('role_id')
-          .eq('team_id', teamId)
-          .eq('user_id', userId)
-          .single();
-
-        if (teamMembership?.role_id) {
-          const { data: userRole } = await supabase
-            .from('team_roles')
-            .select('name, display_order, permissions')
-            .eq('id', teamMembership.role_id)
-            .single();
-
-          // Check if user has edit_roles permission
-          if (!userRole || !userRole.permissions?.edit_roles) {
-            return res.status(403).json({ error: 'You do not have permission to delete roles' });
-          }
-          userRank = userRole.display_order;
-        } else {
-          return res.status(403).json({ error: 'Only users with edit_roles permission can delete roles' });
-        }
+    if (!isOrgAdmin && !hasOrgManagePermission) {
+      // Check if user has edit_roles permission
+      if (!teamRole || !teamRole.permissions?.edit_roles) {
+        return res.status(403).json({ error: 'You do not have permission to delete roles' });
       }
+      userRank = teamRole.display_order;
     }
 
-    // Check if role exists and get its details
-    const { data: roleToDelete } = await supabase
-      .from('team_roles')
-      .select('is_default, name, display_order')
-      .eq('id', roleId)
-      .eq('team_id', teamId)
-      .single();
+    // The target role + members-holding-it reads are independent — run them in parallel.
+    const [roleToDeleteRes, membersWithRoleRes] = await Promise.all([
+      supabase
+        .from('team_roles')
+        .select('is_default, name, display_name, display_order')
+        .eq('id', roleId)
+        .eq('team_id', teamId)
+        .single(),
+      supabase
+        .from('team_members')
+        .select('user_id')
+        .eq('team_id', teamId)
+        .eq('role_id', roleId),
+    ]);
 
+    const { data: roleToDelete } = roleToDeleteRes;
     if (!roleToDelete) {
       return res.status(404).json({ error: 'Role not found' });
     }
@@ -1163,13 +1066,8 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
       return res.status(403).json({ error: 'You cannot delete roles at or above your rank' });
     }
 
-    // Check if any members have this role
-    const { data: membersWithRole, error: membersError } = await supabase
-      .from('team_members')
-      .select('user_id')
-      .eq('team_id', teamId)
-      .eq('role_id', roleId);
-
+    // Check if any members have this role (fetched in parallel with the role above)
+    const { data: membersWithRole, error: membersError } = membersWithRoleRes;
     if (membersError) {
       throw membersError;
     }
@@ -1179,13 +1077,6 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
         error: `Cannot delete this role because ${membersWithRole.length} member(s) have this role. Please reassign them first.`
       });
     }
-
-    // Get team info for activity log before deletion
-    const { data: team } = await supabase
-      .from('teams')
-      .select('name')
-      .eq('id', teamId)
-      .single();
 
     // Delete role
     const { error: deleteError } = await supabase
@@ -1198,16 +1089,18 @@ router.delete('/:id/teams/:teamId/roles/:roleId', async (req: AuthRequest, res) 
       throw deleteError;
     }
 
-    // Create activity log
-    const roleDisplayName = (roleToDelete as { display_name?: string; name?: string } | undefined)?.display_name || (roleToDelete as { name?: string } | undefined)?.name || 'Unknown';
+    // Create activity log (team name already on the access check — no extra read; display_name is
+    // now actually selected above, so the log shows the human name instead of always falling back)
+    const teamName = accessCheck.team?.name;
+    const roleDisplayName = roleToDelete.display_name || roleToDelete.name || 'Unknown';
     await createActivity({
       organization_id: id,
       user_id: userId,
       activity_type: 'deleted_team_role',
-      description: `deleted role "${roleDisplayName}" from team "${team?.name || teamId}"`,
+      description: `deleted role "${roleDisplayName}" from team "${teamName || teamId}"`,
       metadata: {
         team_id: teamId,
-        team_name: team?.name,
+        team_name: teamName,
         role_name: roleDisplayName,
       },
     });
@@ -1347,7 +1240,7 @@ router.post('/:id/teams/:teamId/members', async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1492,7 +1385,7 @@ router.put('/:id/teams/:teamId/members/:memberId/role', async (req: AuthRequest,
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1684,7 +1577,7 @@ router.delete('/:id/teams/:teamId/members/:memberId', async (req: AuthRequest, r
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if user's org role has manage_teams_and_projects permission
     let hasOrgManagePermission = false;
@@ -1846,7 +1739,7 @@ router.post('/:id/teams/:teamId/transfer-ownership', async (req: AuthRequest, re
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
 
-    const isOrgAdmin = orgMembership.role === 'owner' || orgMembership.role === 'admin';
+    const isOrgAdmin = orgMembership.role === 'owner';
 
     // Check if current user is team owner
     const { data: currentUserMembership } = await supabase
@@ -1992,6 +1885,7 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
     const { data: projects } = await supabase
       .from('projects')
       .select('id, name, active_extraction_run_id, infra_types')
+      .eq('organization_id', id)  // defense-in-depth: the team's linked projects must belong to this org (service-role bypasses RLS)
       .in('id', projectIds);
 
     // Phase 19: only include findings tagged with each project's currently active run
@@ -2046,7 +1940,9 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
         ignored_count: Number(c?.ignored_count ?? 0),
         repo_provider: repo?.provider ?? null,
         repo_full_name: repo?.repo_full_name ?? null,
-        last_scan_at: c?.last_scan_at ?? repo?.last_extracted_at ?? null,
+        // Latest COMPLETED scan only — NOT project_repositories.last_extracted_at, which is bumped
+        // on every extraction attempt (incl. failed/incomplete) and reads stale. No completed scan → null ("Never").
+        last_scan_at: c?.last_scan_at ?? null,
         infra_types: Array.isArray(p.infra_types) ? p.infra_types : [],
         has_container: !!c?.has_container,
         has_dast: !!c?.has_dast,
@@ -2093,7 +1989,7 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
       statusesResult,
     ] = await Promise.all([
       projectIds.length > 0
-        ? supabase.from('projects').select('id, name, health_score, status_id, active_extraction_run_id').in('id', projectIds)
+        ? supabase.from('projects').select('id, name, health_score, status_id, active_extraction_run_id').eq('organization_id', orgId).in('id', projectIds)
         : Promise.resolve({ data: [] }),
       supabase.from('team_members').select('id', { count: 'exact', head: true }).eq('team_id', teamId),
       supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', orgId),
@@ -2279,6 +2175,7 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const { data: projectsForActive } = await supabase
       .from('projects')
       .select('id, active_extraction_run_id')
+      .eq('organization_id', id)  // defense-in-depth: the team's linked projects must belong to this org (service-role bypasses RLS)
       .in('id', projectIds);
     const activeRunIds = (projectsForActive ?? [])
       .map((p: any) => p.active_extraction_run_id)
@@ -2333,31 +2230,26 @@ router.get('/:id/teams/:teamId/vulnerabilities', async (req: AuthRequest, res) =
     const depMap = new Map<string, { name: string; version: string; dependency_id: string }>();
     const projMap = new Map<string, { name: string; framework: string | null }>();
 
-    if (pdIds.length > 0) {
-      const { data: deps, error: depErr } = await supabase
-        .from('project_dependencies')
-        .select('id, name, version, dependency_id')
-        .in('id', pdIds)
-        .is('removed_at', null);
-      if (depErr) throw depErr;
-      for (const d of deps || []) {
-        depMap.set((d as any).id, {
-          name: (d as any).name ?? 'Unknown',
-          version: (d as any).version ?? 'Unknown',
-          dependency_id: (d as any).dependency_id ?? '',
-        });
-      }
+    // The dependency-name lookup and the project-name lookup are independent — run them in parallel.
+    const [depsRes, projsRes] = await Promise.all([
+      pdIds.length > 0
+        ? supabase.from('project_dependencies').select('id, name, version, dependency_id').in('id', pdIds).is('removed_at', null)
+        : Promise.resolve({ data: [] as any[], error: null }),
+      projIds.length > 0
+        ? supabase.from('projects').select('id, name, framework').in('id', projIds)
+        : Promise.resolve({ data: [] as any[], error: null }),
+    ]);
+    if (depsRes.error) throw depsRes.error;
+    if (projsRes.error) throw projsRes.error;
+    for (const d of depsRes.data || []) {
+      depMap.set((d as any).id, {
+        name: (d as any).name ?? 'Unknown',
+        version: (d as any).version ?? 'Unknown',
+        dependency_id: (d as any).dependency_id ?? '',
+      });
     }
-
-    if (projIds.length > 0) {
-      const { data: projs, error: projErr } = await supabase
-        .from('projects')
-        .select('id, name, framework')
-        .in('id', projIds);
-      if (projErr) throw projErr;
-      for (const p of projs || []) {
-        projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown', framework: (p as any).framework ?? null });
-      }
+    for (const p of projsRes.data || []) {
+      projMap.set((p as any).id, { name: (p as any).name ?? 'Unknown', framework: (p as any).framework ?? null });
     }
 
     const data = list.map((r: any) => {
@@ -2433,6 +2325,7 @@ router.get('/:id/teams/:teamId/secret-findings', async (req: AuthRequest, res) =
     const { data: projectsForActive } = await supabase
       .from('projects')
       .select('id, active_extraction_run_id')
+      .eq('organization_id', id)  // defense-in-depth: the team's linked projects must belong to this org (service-role bypasses RLS)
       .in('id', projectIds);
     const activeRunIds = (projectsForActive ?? [])
       .map((p: any) => p.active_extraction_run_id)
@@ -2515,6 +2408,7 @@ router.get('/:id/teams/:teamId/semgrep-findings', async (req: AuthRequest, res) 
     const { data: projectsForActive } = await supabase
       .from('projects')
       .select('id, active_extraction_run_id')
+      .eq('organization_id', id)  // defense-in-depth: the team's linked projects must belong to this org (service-role bypasses RLS)
       .in('id', projectIds);
     const activeRunIds = (projectsForActive ?? [])
       .map((p: any) => p.active_extraction_run_id)

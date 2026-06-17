@@ -225,6 +225,7 @@ interface DastFindingInsert {
   handler_file_path: string | null;
   handler_function_name: string | null;
   handler_line: number | null;
+  handler_code_snippet: string | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
   cross_link_metadata: Record<string, unknown>;
@@ -682,6 +683,17 @@ async function runZapWithControlPlane(
     pollIntervalMs: number;
   },
 ): Promise<ZapRunOutputs> {
+  // Create the per-job tmpdir BEFORE building the YAML so the traditional-json
+  // report job can target it via reportDirAbsolute. ZAP writes the report to
+  // `${reportDir}/${reportFile}` and the worker reads it back from
+  // `${tmpDir}/zap-report.json` — these MUST be the same directory. They were
+  // not: the report job wrote to the hardcoded /zap/wrk while the worker read
+  // the tmpdir, so `fs.existsSync(reportPath)` was always false and every scan
+  // silently parsed zero findings.
+  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
+  const yamlPath = path.join(tmpDir, 'automation.yaml');
+  const reportPath = path.join(tmpDir, 'zap-report.json');
+
   let yamlText: string;
   try {
     yamlText = buildAutomationYaml({
@@ -689,6 +701,7 @@ async function runZapWithControlPlane(
       scanProfile: inputs.scanProfile,
       detectedRuntime: inputs.detectedRuntime,
       reportRelativePath: 'zap-report.json',
+      reportDirAbsolute: tmpDir,
       scope: inputs.scope,
       authStrategy: inputs.authStrategy,
       authPayload: inputs.authPayload,
@@ -698,6 +711,12 @@ async function runZapWithControlPlane(
       openApiSpecPath: inputs.openApiSpecPath,
     });
   } catch (e) {
+    // tmpDir exists now — clean it up before surfacing the build failure.
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* noop */
+    }
     if (e instanceof InvalidCredentialCharacterError) {
       // A crafted credential (CR/LF/control char in a cookie, bad-alphabet
       // JWT) could inject headers into every ZAP request. Fail the job
@@ -712,9 +731,6 @@ async function runZapWithControlPlane(
     throw e;
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
-  const yamlPath = path.join(tmpDir, 'automation.yaml');
-  const reportPath = path.join(tmpDir, 'zap-report.json');
   // automation.yaml embeds plaintext form/JWT/cookie credentials — write it
   // owner-read/write only so it is never world-readable on disk.
   fs.writeFileSync(yamlPath, yamlText, { encoding: 'utf-8', mode: 0o600 });
@@ -2069,6 +2085,7 @@ export async function runDastPipeline(
       handler_file_path: link.handler_file_path,
       handler_function_name: link.handler_function_name,
       handler_line: link.handler_line,
+      handler_code_snippet: link.handler_code_snippet,
       linked_sca_osv_id: link.linked_sca_osv_id,
       linked_sca_project_dependency_id: link.linked_sca_project_dependency_id,
       cross_link_metadata: crossLinkMetadata,
@@ -2079,15 +2096,27 @@ export async function runDastPipeline(
     };
   });
 
-  // Dedupe non-cross-linked findings against the partial unique index.
+  // Dedupe the batch against the partial unique index
+  // `project_dast_findings_target_resolved`
+  //   (target_id, dast_run_id, rule_id, handler_file_path,
+  //    handler_function_name, vulnerability_type) WHERE handler_file_path IS NOT NULL.
+  // Cross-linked rows (handler_file_path !== null) MUST be keyed exactly as the
+  // index — an active scan emits many instances of the same vuln class on one
+  // handler (e.g. several SQLi/XSS payloads against /api/render?tpl), all of
+  // which the OpenAPI sidecar attributes to the same handler, so they collapse
+  // to one index key and a raw batch insert violates the constraint. Previously
+  // only the NON-cross-linked branch was deduped (keyed on endpoint/param, which
+  // the index doesn't cover) while cross-linked rows passed through unfiltered —
+  // exactly backwards. target_id + dast_run_id are constant across this batch,
+  // so they're omitted from the key. The `H|`/`U|` prefixes keep the two key
+  // spaces disjoint.
   const seen = new Set<string>();
   const dedupedInserts: DastFindingInsert[] = [];
   for (const row of inserts) {
-    if (row.handler_file_path !== null) {
-      dedupedInserts.push(row);
-      continue;
-    }
-    const key = `${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
+    const key =
+      row.handler_file_path !== null
+        ? `H|${row.rule_id ?? ''}|${row.handler_file_path}|${row.handler_function_name ?? ''}|${row.vulnerability_type}`
+        : `U|${row.rule_id ?? ''}|${row.endpoint_url}|${row.http_method}|${row.vulnerability_type}`;
     if (seen.has(key)) continue;
     seen.add(key);
     dedupedInserts.push(row);

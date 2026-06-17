@@ -32,7 +32,7 @@ export function ToolCallGroup({ tools }: ToolCallGroupProps) {
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className={cn(
-          'inline-flex items-center gap-1.5 text-xs transition-colors',
+          'inline-flex items-center gap-1.5 text-sm transition-colors',
           hasError
             ? 'text-destructive/90 hover:text-destructive'
             : 'text-foreground-secondary hover:text-foreground',
@@ -55,7 +55,7 @@ export function ToolCallGroup({ tools }: ToolCallGroupProps) {
               <div
                 key={i}
                 className={cn(
-                  'flex items-center gap-1.5 text-xs',
+                  'flex items-center gap-1.5 text-sm',
                   t.state === 'error' ? 'text-destructive/90' : 'text-foreground-secondary',
                 )}
               >

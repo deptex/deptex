@@ -10,10 +10,10 @@ end-to-end walkthrough exercises the full pipeline.
   injection via `_.template`), called directly from `routes/api.js`.
 - **Unreachable vulnerable dep:** `minimist@1.2.5` — CVE-2021-44906
   (prototype pollution), present in `package.json` but never imported.
-- **Historical-malicious dep:** `event-stream@3.3.6` — the 2018 supply-chain
-  incident. Listed for the malicious-package scanner; `.github/dependabot.yml`
-  in repo root excludes `depscanner/test-repos/**` so Dependabot does not
-  open a real PR against this seed.
+- **Malicious-pkg (deferred):** `event-stream@3.3.6` (the 2018 supply-chain
+  incident) is unpublished on npm (404) and would abort the whole install, so
+  it is not pinned in `package.json`. Malicious-package detection is exercised
+  separately.
 - **SQL-injection sink:** `routes/api.js` concatenates `req.query.id` into a
   raw query string — canonical Semgrep injection signature.
 - **Dockerfile misconfigs:** `USER root` (CKV_DOCKER_8), `:latest` tag

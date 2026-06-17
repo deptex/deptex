@@ -1,7 +1,28 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Package, Scale, Check, X } from 'lucide-react';
-import type { DependencyNodeData } from './useGraphLayout';
+import type { SupplyChainChild, ProjectEffectivePolicies } from '../../lib/api';
+
+export interface DependencyNodeData {
+  name: string;
+  version: string;
+  score: number | null;
+  license: string | null;
+  policies: ProjectEffectivePolicies | null;
+  criticalVulns: number;
+  highVulns: number;
+  mediumVulns: number;
+  lowVulns: number;
+  vulnerabilities: SupplyChainChild['vulnerabilities'];
+  /** When false, hide the license badge (e.g. on vulnerabilities graph). Default true. */
+  showLicense?: boolean;
+  /** When true, show "Not imported" badge (e.g. direct dep that is a zombie on vulnerabilities graph). */
+  notImported?: boolean;
+  /** Package manager ecosystem (npm, pypi, maven, etc.) for logo. */
+  ecosystem?: string | null;
+  /** Policy result: when defined, show Allowed / Not allowed badge. */
+  policyAllowed?: boolean | null;
+}
 
 const ECOSYSTEM_ICON: Record<string, string> = {
   npm: '/images/npm_icon.png',
@@ -43,9 +64,9 @@ function DependencyNodeComponent({ data }: NodeProps) {
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
       <Handle id="source-left" type="source" position={Position.Left} className="!opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !border-0 !p-0" />
 
-      {/* Main card */}
+      {/* Main card — same chrome as the org overview tiles */}
       <div
-        className="rounded-lg border border-border bg-background-card shadow-md"
+        className="rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 hover:border-border/80 transition-colors"
         style={{ minWidth: 220 }}
       >
         {/* Header row */}

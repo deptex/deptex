@@ -11,6 +11,7 @@ import {
   textOf,
   walkTree,
 } from '../util/javascript';
+import { harvestExpressParams } from '../../param-harvest/express-harvest';
 
 const ROUTE_METHOD_NAMES = new Set([...Object.keys(HTTP_METHOD_NAMES), 'all', 'use']);
 
@@ -70,6 +71,9 @@ export const expressDetector: FrameworkDetector = {
       const lastArg = args ? args.namedChild(args.namedChildCount - 1) : null;
       const handlerName = handlerDescriptor(lastArg, source);
       const middlewareChain = collectMiddlewareChain(args, source);
+      // Deterministically harvest the query/header/cookie params the inline
+      // handler reads (no-op for router-mount `use()` calls + named handlers).
+      const requestParams = harvestExpressParams(lastArg, source);
 
       entryPoints.push({
         filePath: file.filePath,
@@ -84,6 +88,7 @@ export const expressDetector: FrameworkDetector = {
         authMechanism,
         middlewareChain: middlewareChain.length ? middlewareChain : null,
         metadata: { instance: instanceName, call: `${instanceName}.${methodName}` },
+        requestParams,
       });
     });
 
