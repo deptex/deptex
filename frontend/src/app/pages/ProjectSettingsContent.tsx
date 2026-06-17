@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Shield, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Radar, Boxes } from 'lucide-react';
+import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Radar, Boxes } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import ScannersPanel from '../../components/security/ScannersPanel';
 import {
   Dialog,
   DialogContent,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from '../../components/ui/dialog';
 import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type RepoWithProvider, type ExtractionRun, type Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
@@ -1921,7 +1923,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                           Contributing Teams
                         </span>
-                        <div className="h-7 w-24 bg-muted rounded animate-pulse"></div>
+                        <div className="h-8 w-28 bg-muted rounded-lg animate-pulse"></div>
                       </div>
                       <div className="divide-y divide-border">
                         {[1, 2].map((i) => (
@@ -1944,7 +1946,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                           Additional Members
                         </span>
-                        <div className="h-7 w-28 bg-muted rounded animate-pulse"></div>
+                        <div className="h-8 w-28 bg-muted rounded-lg animate-pulse"></div>
                       </div>
                       <div className="divide-y divide-border">
                         {[1, 2, 3].map((i) => (
@@ -2011,10 +2013,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         </span>
                         <Button
                           onClick={() => setShowAddTeamSidepanel(true)}
-                          size="sm"
-                          className="h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
-                          <Plus className="h-3 w-3 mr-1.5" />
                           Add Team
                         </Button>
                       </div>
@@ -2069,10 +2069,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         </span>
                         <Button
                           onClick={() => setShowAddMemberSidepanel(true)}
-                          size="sm"
-                          className="h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
-                          <Plus className="h-3 w-3 mr-1.5" />
                           Add Member
                         </Button>
                       </div>
@@ -2177,27 +2175,17 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
           setSelectedTeamsToAdd([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[85vh]">
           {/* Header */}
-          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-            <DialogTitle className="text-xl font-semibold text-foreground">Add Contributing Teams</DialogTitle>
-            <button
-              onClick={() => {
-                setShowAddTeamSidepanel(false);
-                setTeamSearchQuery('');
-                setSelectedTeamsToAdd([]);
-              }}
-              className="text-foreground-secondary hover:text-foreground transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle>Add Contributing Teams</DialogTitle>
+            <DialogDescription className="mt-1">
+              Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
+            </DialogDescription>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-            <p className="text-sm text-foreground-secondary mb-4">
-              Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
-            </p>
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
 
             {/* Search */}
             <div className="relative mb-4">
@@ -2207,7 +2195,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 placeholder="Search teams..."
                 value={teamSearchQuery}
                 onChange={(e) => setTeamSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                className="w-full pl-10 pr-4 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
               />
             </div>
 
@@ -2221,8 +2209,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       key={team.id}
                       onClick={() => toggleTeamSelection(team.id)}
                       className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                        ? 'bg-primary/10 border-primary'
-                        : 'bg-background-card border-border hover:border-primary/50'
+                        ? 'bg-background-subtle border-foreground/40'
+                        : 'bg-background-card border-border hover:border-foreground-secondary/40'
                         }`}
                     >
                       <div className="flex-1 min-w-0">
@@ -2236,7 +2224,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         )}
                       </div>
                       <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                        ? 'bg-primary border-primary text-primary-foreground'
+                        ? 'bg-foreground border-foreground text-background'
                         : 'border-border'
                         }`}>
                         {isSelected && <Check className="h-3 w-3" />}
@@ -2264,28 +2252,36 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
           </div>
 
-          {/* Footer with Add Button */}
-          {filteredTeamsForAdding.length > 0 && (
-            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
-              <Button
-                onClick={handleAddContributingTeams}
-                disabled={selectedTeamsToAdd.length === 0 || addingTeam}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              >
-                {addingTeam ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Adding
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add {selectedTeamsToAdd.length > 0 ? `(${selectedTeamsToAdd.length})` : ''}
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
+          {/* Footer */}
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={addingTeam}
+              onClick={() => {
+                setShowAddTeamSidepanel(false);
+                setTeamSearchQuery('');
+                setSelectedTeamsToAdd([]);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddContributingTeams}
+              variant="green"
+              disabled={selectedTeamsToAdd.length === 0 || addingTeam}
+              className="relative"
+            >
+              <span className={addingTeam ? 'invisible' : undefined}>
+                Add{selectedTeamsToAdd.length > 0 ? ` (${selectedTeamsToAdd.length})` : ''}
+              </span>
+              {addingTeam && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -2297,27 +2293,17 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
           setSelectedMembersToAdd([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[85vh]">
           {/* Header */}
-          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-            <DialogTitle className="text-xl font-semibold text-foreground">Add Project Members</DialogTitle>
-            <button
-              onClick={() => {
-                setShowAddMemberSidepanel(false);
-                setMemberSearchQuery('');
-                setSelectedMembersToAdd([]);
-              }}
-              className="text-foreground-secondary hover:text-foreground transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle>Add Project Members</DialogTitle>
+            <DialogDescription className="mt-1">
+              Select members to give them direct access to this project. Members already on teams with access are not shown.
+            </DialogDescription>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-            <p className="text-sm text-foreground-secondary mb-4">
-              Select members to give them direct access to this project. Members already on teams with access are not shown.
-            </p>
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
 
             {/* Search */}
             <div className="relative mb-4">
@@ -2327,7 +2313,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 placeholder="Search members..."
                 value={memberSearchQuery}
                 onChange={(e) => setMemberSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                className="w-full pl-10 pr-4 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
               />
             </div>
 
@@ -2341,8 +2327,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       key={member.user_id}
                       onClick={() => toggleMemberSelection(member.user_id)}
                       className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                        ? 'bg-primary/10 border-primary'
-                        : 'bg-background-card border-border hover:border-primary/50'
+                        ? 'bg-background-subtle border-foreground/40'
+                        : 'bg-background-card border-border hover:border-foreground-secondary/40'
                         }`}
                     >
                       <img
@@ -2365,7 +2351,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         )}
                       </div>
                       <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                        ? 'bg-primary border-primary text-primary-foreground'
+                        ? 'bg-foreground border-foreground text-background'
                         : 'border-border'
                         }`}>
                         {isSelected && <Check className="h-3 w-3" />}
@@ -2393,28 +2379,36 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
           </div>
 
-          {/* Footer with Add Button */}
-          {filteredMembersForAdding.length > 0 && (
-            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
-              <Button
-                onClick={handleAddDirectMembers}
-                disabled={selectedMembersToAdd.length === 0 || addingMember}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              >
-                {addingMember ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Adding
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add {selectedMembersToAdd.length > 0 ? `(${selectedMembersToAdd.length})` : ''}
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
+          {/* Footer */}
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={addingMember}
+              onClick={() => {
+                setShowAddMemberSidepanel(false);
+                setMemberSearchQuery('');
+                setSelectedMembersToAdd([]);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddDirectMembers}
+              variant="green"
+              disabled={selectedMembersToAdd.length === 0 || addingMember}
+              className="relative"
+            >
+              <span className={addingMember ? 'invisible' : undefined}>
+                Add{selectedMembersToAdd.length > 0 ? ` (${selectedMembersToAdd.length})` : ''}
+              </span>
+              {addingMember && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
