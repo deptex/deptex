@@ -14,7 +14,9 @@ categories.
   flows into `send_from_directory` via vulnerable `safe_join`.
 - **Unreachable handler:** `app.py:internal_dump()` — guarded by a
   hardcoded path constant.
-- **Historical-malicious:** `ctx==0.1.2`.
+- **Malicious-pkg (deferred):** `ctx==0.1.2` was seeded but is removed from
+  PyPI (404) — removed from `requirements.txt`. Malicious-package detection
+  is exercised separately.
 
 See `.deptex/SOURCE.md` for provenance, `.deptex/expected.yaml`, and
 `.deptex/deploy.sh` to boot for DAST.

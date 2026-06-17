@@ -18,8 +18,9 @@ dogfood scan exercises the scanners end-to-end.
   `app/page.tsx` via `dangerouslySetInnerHTML`.
 - **Unreachable taint flow:** `app/actions/safe.ts:safeAction()` —
   wraps a literal string.
-- **Historical-malicious:** `event-stream==3.3.6` (per
-  `.github/dependabot.yml` exclusion).
+- **Malicious-pkg (deferred):** `event-stream==3.3.6` was seeded but is
+  unpublished on npm (404), which aborts the whole install — removed from
+  `package.json`. Malicious-package detection is exercised separately.
 
 See `.deptex/SOURCE.md` for upstream provenance, `.deptex/expected.yaml`
 for the canonical expected-finding list, and `.deptex/deploy.sh` to

@@ -92,7 +92,11 @@ run `dogfood:check`).
 
 ## Safety: malicious-package seeds
 
-Fixtures may reference historical-malicious-but-unpublished package names.
-The repo's `.github/dependabot.yml` excludes `depscanner/test-repos/**` so
-GitHub Dependabot never opens real PRs against these intentionally-vulnerable
-seeds.
+Historical-malicious package *versions* are almost always unpublished/yanked by
+their registry after the incident. Pinning one in a fixture manifest with no
+committed lockfile aborts the whole install — the scan then hard-fails, and the
+package can never be enumerated into the dependency tree to be flagged anyway.
+The dogfood fixtures therefore do **not** pin unpublished malicious versions;
+malicious-package detection is exercised separately. The repo's
+`.github/dependabot.yml` still excludes `depscanner/test-repos/**` so Dependabot
+never opens real PRs against the intentionally-vulnerable (but published) seeds.
