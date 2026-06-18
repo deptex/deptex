@@ -21,7 +21,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -364,6 +364,7 @@ export default function OrganizationOverviewPage() {
   const [projectBaseImageRecs, setProjectBaseImageRecs] = useState<BaseImageRecommendation[]>([]);
   const [projectMaliciousFindings, setProjectMaliciousFindings] = useState<MaliciousFinding[]>([]);
   const [projectDastFindings, setProjectDastFindings] = useState<DastFindingDTO[]>([]);
+  const [projectCodeFlows, setProjectCodeFlows] = useState<DataFlowFinding[]>([]);
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
   const [projectSidebarTab, setProjectSidebarTab] = useState<'findings' | 'dependencies' | 'compliance' | 'settings'>('findings');
@@ -2723,17 +2724,19 @@ export default function OrganizationOverviewPage() {
     pid: string,
     isCancelled?: () => boolean,
   ) => {
-    const [iac, container, malicious, baseImageRecs] = await Promise.allSettled([
+    const [iac, container, malicious, baseImageRecs, codeFlows] = await Promise.allSettled([
       api.getProjectIaCFindings(oid, pid, { perPage: 100, status: 'open' }),
       api.getProjectContainerFindings(oid, pid, { perPage: 100, status: 'open' }),
       api.maliciousFindings.list(oid, pid, 1, 100),
       api.getBaseImageRecommendations(oid, pid),
+      api.getCodeFlowFindings(oid, pid),
     ]);
     if (isCancelled?.()) return;
     setProjectIacFindings(iac.status === 'fulfilled' ? iac.value.data ?? [] : []);
     setProjectContainerFindings(container.status === 'fulfilled' ? container.value.data ?? [] : []);
     setProjectMaliciousFindings(malicious.status === 'fulfilled' ? malicious.value.data ?? [] : []);
     setProjectBaseImageRecs(baseImageRecs.status === 'fulfilled' ? baseImageRecs.value.recommendations ?? [] : []);
+    setProjectCodeFlows(codeFlows.status === 'fulfilled' ? codeFlows.value.data ?? [] : []);
     try {
       const jobs = await api.getDastJobs(pid, { limit: 5 });
       if (isCancelled?.()) return;
@@ -2760,6 +2763,7 @@ export default function OrganizationOverviewPage() {
     setProjectBaseImageRecs([]);
     setProjectMaliciousFindings([]);
     setProjectDastFindings([]);
+    setProjectCodeFlows([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
     setProjectSidebarProjectLoading(true);
@@ -2836,7 +2840,8 @@ export default function OrganizationOverviewPage() {
     ...projectContainerFindings.map((f) => ({ type: 'container' as const, data: f })),
     ...projectDastFindings.map((f) => ({ type: 'dast' as const, data: f })),
     ...projectMaliciousFindings.map((f) => ({ type: 'malicious' as const, data: f })),
-  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep, projectIacFindings, projectContainerFindings, projectDastFindings, projectMaliciousFindings]);
+    ...projectCodeFlows.map((f) => ({ type: 'taint_flow' as const, data: f })),
+  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep, projectIacFindings, projectContainerFindings, projectDastFindings, projectMaliciousFindings, projectCodeFlows]);
 
   const toggleProjectVulnerabilityRow = useCallback(async (rowId: string, osvId: string) => {
     setExpandedProjectVulnRowId((prev) => (prev === rowId ? null : rowId));
