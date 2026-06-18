@@ -281,18 +281,27 @@ sinks:
     vuln_class: deserialization
     argument_indices: [0]
     description: cPickle.loads
+  # PyYAML loaders carry osv_id: CVE-2020-14343 so a reachable `yaml.load`
+  # flow promotes the pinned PyYAML dependency CVE (dep-scan/OSV) to
+  # `confirmed`. The propagator's sink fan-out (matchSinkVariants) needs the
+  # FIRST-matched sink to be CVE-targeted; since this generic sink sorts before
+  # pyyaml.yaml in readdir order it must carry the osv_id itself. See
+  # framework-models/pyyaml.yaml for the consolidated loader surface + rationale.
   - pattern: yaml.load(*)
     vuln_class: deserialization
     argument_indices: [0]
-    description: yaml.load (unsafe, pre-default-safe)
+    osv_id: CVE-2020-14343
+    description: yaml.load (unsafe, pre-default-safe) — untrusted YAML executes arbitrary Python on PyYAML < 5.4 (CVE-2020-14343)
   - pattern: yaml.unsafe_load(*)
     vuln_class: deserialization
     argument_indices: [0]
-    description: yaml.unsafe_load
+    osv_id: CVE-2020-14343
+    description: yaml.unsafe_load — UnsafeLoader deserializes arbitrary Python (CVE-2020-14343)
   - pattern: yaml.full_load(*)
     vuln_class: deserialization
     argument_indices: [0]
-    description: yaml.full_load (5.x — still permits arbitrary tags)
+    osv_id: CVE-2020-14343
+    description: yaml.full_load (5.x — still permits arbitrary tags) — FullLoader RCE (CVE-2020-14343)
   - pattern: marshal.loads(*)
     vuln_class: deserialization
     argument_indices: [0]

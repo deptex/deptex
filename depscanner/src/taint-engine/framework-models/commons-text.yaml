@@ -79,6 +79,7 @@ sinks:
   - pattern: "StringSubstitutor.replace(*)"
     vuln_class: code_injection
     argument_indices: []
+    osv_id: CVE-2022-42889
     description: Apache Commons Text StringSubstitutor.replace — any tainted argument treated as a ${script:...} substitution sink (Text4Shell, CVE-2022-42889; FP risk accepted, fp-filter gates)
 
   # `StringSubstitutor.replaceIn(...)` — in-place mutation variant. Same
@@ -86,6 +87,7 @@ sinks:
   - pattern: "StringSubstitutor.replaceIn(*)"
     vuln_class: code_injection
     argument_indices: []
+    osv_id: CVE-2022-42889
     description: Apache Commons Text StringSubstitutor.replaceIn — in-place variant of replace; same Text4Shell surface
 
   # `StringLookupFactory.*StringLookup(*)` family. Methods like

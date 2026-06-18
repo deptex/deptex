@@ -1,0 +1,54 @@
+# go-yaml (gopkg.in/yaml.v2) framework spec — Deptex cross-file taint engine.
+#
+# Targets CVE-2019-11254: gopkg.in/yaml.v2 before v2.2.3 is vulnerable to an
+# uncontrolled resource-consumption denial of service when unmarshalling a
+# crafted YAML document with deeply nested / billion-laughs-style aliases.
+# The cost is paid inside the decoder during `yaml.Unmarshal(...)` (and the
+# strict variant `yaml.UnmarshalStrict(...)`), so any attacker-controlled
+# bytes flowing into the first argument are the trigger.
+#
+# vuln_class mapping rationale.
+#   `redos` — the closed vuln_class enum (spec.ts + backend + frontend mirrors)
+#   has no dedicated "resource exhaustion" / "denial of service" bucket. The
+#   `redos` class is the engine's existing super-linear-blowup / algorithmic-
+#   complexity DoS bucket (see `regexp.MustCompile` and
+#   `language.ParseAcceptLanguage` in go-stdlib.yaml). CVE-2019-11254 is the
+#   same shape — untrusted input drives unbounded work — so we reuse `redos`
+#   rather than widen the enum.
+#
+# Why a dedicated spec (not the existing go-stdlib `yaml.Unmarshal` sink).
+#   go-stdlib.yaml already lists `yaml.Unmarshal(*)` as a *deserialization*
+#   sink (the generic "gob/yaml can be RCE-shaped" surface). That entry carries
+#   no osv_id. This spec adds the CVE-attributed view of the SAME call surface:
+#   a `redos` sink stamped with `osv_id: CVE-2019-11254` so a reachable
+#   `yaml.Unmarshal` promotes that dependency CVE to `confirmed` in the
+#   reachability classifier. The two sinks are different vuln_classes, so a
+#   single call site emits both flows independently.
+#
+# Sources are NOT redeclared here — Gin's `c.Query`/`c.GetRawData`/etc. and the
+# other Go framework param accessors are pre-tainted by gin.yaml / the other
+# per-framework specs. A request input flowing into `yaml.Unmarshal(input, ...)`
+# resolves with no additional source wiring.
+
+framework: go-yaml
+language: go
+version: "*"
+
+sources: []
+
+sinks:
+  # gopkg.in/yaml.v2 Unmarshal — tainted first arg (the YAML bytes) drives the
+  # decoder. CVE-2019-11254 ReDoS-style resource exhaustion (fixed in v2.2.3).
+  - pattern: yaml.Unmarshal(*)
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: CVE-2019-11254
+    description: gopkg.in/yaml.v2 Unmarshal — crafted YAML drives uncontrolled resource consumption (CVE-2019-11254, fixed v2.2.3)
+  # Strict variant — same decoder, same blow-up surface.
+  - pattern: yaml.UnmarshalStrict(*)
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: CVE-2019-11254
+    description: gopkg.in/yaml.v2 UnmarshalStrict — crafted YAML drives uncontrolled resource consumption (CVE-2019-11254, fixed v2.2.3)
+
+sanitizers: []
