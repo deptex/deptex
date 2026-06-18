@@ -192,7 +192,7 @@ export default function ProjectsContent() {
             </div>
             <div className="p-4 text-sm text-foreground/90 leading-relaxed space-y-2">
               <p>
-                Configure which branch to track and the <strong className="text-foreground">sync frequency</strong>: manual (extract only when you click Sync), on commit (webhook on push), daily, or weekly. Webhook-triggered extractions run when your provider sends a push event (for projects set to on commit). A <strong className="text-foreground">Sync</strong> button on the overview triggers a new extraction with a short cooldown to avoid duplicate runs.
+                Configure which branch to track, whether to <strong className="text-foreground">scan on every commit</strong> (webhook-triggered re-extraction on push), and the periodic <strong className="text-foreground">re-check</strong> floor (daily or weekly) that always runs against newly-published advisories. The two run independently. Webhook-triggered extractions run when your provider sends a push event (for projects with scan-on-commit enabled). A <strong className="text-foreground">Sync</strong> button on the overview triggers a new extraction with a short cooldown to avoid duplicate runs.
               </p>
             </div>
           </div>

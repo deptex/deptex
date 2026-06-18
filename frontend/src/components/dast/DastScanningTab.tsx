@@ -1,24 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, AlertTriangle, ShieldCheck, Plus } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Label } from '../ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { Switch } from '../ui/switch';
-import { Badge } from '../ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from '../ui/dialog';
 import { useToast } from '../../hooks/use-toast';
+import { cn } from '../../lib/utils';
 import { supabase } from '../../lib/supabase';
 import {
   api,
-  type DastConfigDTO,
   type DastJobDTO,
   type DastScanProfile,
   type DastScopeConfig,
   type DastTargetDTO,
 } from '../../lib/api';
-import { DastScopePanel } from './DastScopePanel';
 import { DastTargetsList } from './DastTargetsList';
 import { DastTargetEditDialog } from './DastTargetEditDialog';
+import { DastTargetAuthDialog } from './DastTargetAuthDialog';
 import {
   ActiveScanOptInDialog,
   hasActiveScanOptIn,
@@ -38,14 +41,16 @@ interface TabState {
   scope_config: DastScopeConfig;
 }
 
-const SCAN_PROFILE_LABELS: Record<DastScanProfile, string> = {
-  auto: 'Auto (passive baseline)',
-  quick: 'Quick (passive only, ~2 min)',
-  full: 'Full (active fuzzing, ~20+ min)',
-  api: 'API only (uses framework routes)',
+// Profile / timeout / scope are no longer surfaced as user controls — every
+// project runs the safe passive baseline and the worker handles escalation.
+// We still round-trip whatever the project has saved so a toggle never
+// clobbers an existing config.
+const DEFAULT_STATE: TabState = {
+  enabled: false,
+  scan_profile: 'auto',
+  scan_timeout_minutes: 30,
+  scope_config: {},
 };
-
-const TIMEOUT_PRESETS = [10, 20, 30, 45, 60];
 
 function formatRelative(iso: string | null | undefined): string {
   if (!iso) return '';
@@ -85,26 +90,18 @@ function statusLabel(status: DastJobDTO['status']): string {
   switch (status) {
     case 'queued': return 'Queued';
     case 'processing': return 'Scanning';
-    case 'completed': return 'Done';
+    case 'completed': return 'Completed';
     case 'cancelled': return 'Cancelled';
     case 'failed': return 'Failed';
     default: return status;
   }
 }
 
-const EMPTY_STATE: TabState = {
-  enabled: false,
-  scan_profile: 'auto',
-  scan_timeout_minutes: 30,
-  scope_config: {},
-};
-
 export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) {
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
-  const [config, setConfig] = useState<TabState>(EMPTY_STATE);
-  const [savedConfig, setSavedConfig] = useState<TabState | null>(null);
+  const [config, setConfig] = useState<TabState>(DEFAULT_STATE);
   const [saving, setSaving] = useState(false);
 
   const [targets, setTargets] = useState<DastTargetDTO[]>([]);
@@ -112,9 +109,11 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
   const [jobsLoading, setJobsLoading] = useState(true);
 
   const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
+  const [authTargetId, setAuthTargetId] = useState<string | null>(null);
+  const [deletingTarget, setDeletingTarget] = useState<DastTargetDTO | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [scanningTargetId, setScanningTargetId] = useState<string | null>(null);
-  const [recheckingRuntimeTargetId, setRecheckingRuntimeTargetId] = useState<string | null>(null);
   const [activeScanDialog, setActiveScanDialog] = useState<DastTargetDTO | null>(null);
   // Engine chosen at the moment the active-scan opt-in dialog opened, replayed
   // when the user confirms it.
@@ -124,14 +123,12 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
 
   const refreshConfig = async () => {
     const cfg = await api.getDastConfig(projectId);
-    const normalized: TabState = {
+    setConfig({
       enabled: !!cfg.enabled,
       scan_profile: cfg.scan_profile ?? 'auto',
       scan_timeout_minutes: cfg.scan_timeout_minutes ?? 30,
       scope_config: cfg.scope_config ?? {},
-    };
-    setConfig(normalized);
-    setSavedConfig(normalized);
+    });
     setTargets(cfg.targets ?? []);
   };
 
@@ -241,16 +238,6 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  const isDirty = useMemo(() => {
-    if (!savedConfig) return false;
-    return (
-      config.enabled !== savedConfig.enabled ||
-      config.scan_profile !== savedConfig.scan_profile ||
-      config.scan_timeout_minutes !== savedConfig.scan_timeout_minutes ||
-      JSON.stringify(config.scope_config) !== JSON.stringify(savedConfig.scope_config)
-    );
-  }, [config, savedConfig]);
-
   // Latest job per target_id, for the per-row scan status / auth-failed banner.
   const jobsByTargetId = useMemo(() => {
     const map: Record<string, DastJobDTO | undefined> = {};
@@ -267,29 +254,37 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     [targets, editingTargetId],
   );
 
-  const handleSave = async () => {
+  const authTarget = useMemo(
+    () => targets.find((t) => t.id === authTargetId) ?? null,
+    [targets, authTargetId],
+  );
+
+  // The enable toggle auto-saves (optimistic) — it's the only setting on this
+  // tab, so an explicit Save button would be ceremony. Round-trips the
+  // preserved profile/timeout/scope so they're never reset.
+  const handleToggleEnabled = async (next: boolean) => {
     if (!canManage) return;
+    const prev = config;
+    setConfig({ ...config, enabled: next });
     setSaving(true);
     try {
       const saved = await api.saveDastConfig(projectId, {
-        enabled: config.enabled,
-        scan_profile: config.scan_profile,
-        scan_timeout_minutes: config.scan_timeout_minutes,
-        scope_config: config.scope_config,
+        enabled: next,
+        scan_profile: prev.scan_profile,
+        scan_timeout_minutes: prev.scan_timeout_minutes,
+        scope_config: prev.scope_config,
       });
-      const normalized: TabState = {
+      setConfig({
         enabled: !!saved.enabled,
         scan_profile: saved.scan_profile ?? 'auto',
         scan_timeout_minutes: saved.scan_timeout_minutes ?? 30,
         scope_config: saved.scope_config ?? {},
-      };
-      setConfig(normalized);
-      setSavedConfig(normalized);
+      });
       if (saved.targets) setTargets(saved.targets);
-      toast({ title: 'DAST settings saved' });
     } catch (e: any) {
-      const detail = (e?.responseBody as any)?.detail || e?.message || 'Save failed';
-      toast({ title: 'Failed to save', description: detail, variant: 'destructive' });
+      setConfig(prev);
+      const detail = (e?.responseBody as any)?.detail || e?.message || 'Update failed';
+      toast({ title: 'Failed to update DAST', description: detail, variant: 'destructive' });
     } finally {
       setSaving(false);
     }
@@ -302,7 +297,7 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
       await api.triggerDastScan(projectId, { target_id: target.id, engine });
       toast({
         title: `${engine === 'nuclei' ? 'Nuclei' : 'ZAP'} scan queued`,
-        description: 'Findings will appear in the Security tab once the scan completes.',
+        description: 'Findings will appear in the Findings tab once the scan completes.',
       });
       void refreshJobs();
       void refreshTargets();
@@ -333,157 +328,192 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     await triggerScan(activeScanDialog, pendingScanEngine);
   };
 
-  const handleRecheckRuntime = async (target: DastTargetDTO) => {
-    setRecheckingRuntimeTargetId(target.id);
+  const handleToggleTargetEnabled = async (target: DastTargetDTO, next: boolean) => {
+    if (!canManage) return;
+    setTargets((prev) => prev.map((t) => (t.id === target.id ? { ...t, enabled: next } : t)));
     try {
-      const result = await api.recheckDastTargetRuntime(projectId, target.id);
-      setTargets((prev) => prev.map((t) => (t.id === target.id ? result.target : t)));
-      toast({
-        title: 'Runtime re-probed',
-        description: result.probe.probed
-          ? `Detected as ${result.target.detected_runtime} (confidence ${Math.round(result.probe.confidence * 100)}%).`
-          : 'Probe inconclusive — first scan will retry.',
-      });
+      const updated = await api.updateDastTarget(projectId, target.id, { enabled: next });
+      setTargets((prev) => prev.map((t) => (t.id === target.id ? updated : t)));
     } catch (e: any) {
-      toast({
-        title: 'Failed to re-probe runtime',
-        description: e?.message,
-        variant: 'destructive',
-      });
+      setTargets((prev) => prev.map((t) => (t.id === target.id ? { ...t, enabled: !next } : t)));
+      toast({ title: 'Failed to update target', description: e?.message, variant: 'destructive' });
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingTarget || !canManage) return;
+    setDeleting(true);
+    try {
+      await api.deleteDastTarget(projectId, deletingTarget.id);
+      setTargets((prev) => prev.filter((t) => t.id !== deletingTarget.id));
+      toast({ title: 'Target removed' });
+      setDeletingTarget(null);
+    } catch (e: any) {
+      toast({ title: 'Failed to remove target', description: e?.message, variant: 'destructive' });
     } finally {
-      setRecheckingRuntimeTargetId(null);
+      setDeleting(false);
     }
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-foreground">Scanning</h2>
-        <p className="text-sm text-foreground-secondary mt-1">
-          Configure dynamic application security testing (DAST) for your deployed app. Scan
-          multiple URLs, store credentials securely per target, and cross-link findings to known
-          vulnerabilities in reachable dependencies.
-        </p>
-      </div>
-
       {loading ? (
         <ScanningTabSkeleton />
       ) : (
         <>
-          <ProfileAndTimeoutCard
-            config={config}
-            savedConfig={savedConfig}
-            isDirty={isDirty}
-            saving={saving}
-            canManage={canManage}
-            onChange={setConfig}
-            onSave={handleSave}
-          />
-
-          <Card title="Scope">
-            <div className="p-4">
-              <DastScopePanel
-                value={config.scope_config}
-                onChange={(scope) => setConfig((c) => ({ ...c, scope_config: scope }))}
-                disabled={!canManage}
-              />
-            </div>
-          </Card>
-
-          <Card
-            title="Targets"
-            action={
-              canManage ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCreateDialogOpen(true)}
-                  disabled={!config.enabled}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-2" /> Add target
-                </Button>
-              ) : null
-            }
-          >
-            <DastTargetsList
-              targets={targets}
-              jobsByTargetId={jobsByTargetId}
-              scanningTargetId={scanningTargetId}
-              recheckingRuntimeTargetId={recheckingRuntimeTargetId}
-              drainModeOn={false /* surfaced via 503 + per-row tooltip when triggered */}
-              canManage={canManage}
-              onScan={handleScan}
-              onEdit={(t) => setEditingTargetId(t.id)}
-              onRecheckRuntime={handleRecheckRuntime}
-            />
-          </Card>
-
-          <Card title="Scan history">
-            {jobsLoading ? (
-              <div className="p-4 space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-10 bg-muted animate-pulse rounded" />
-                ))}
-              </div>
-            ) : jobs.length === 0 ? (
-              <div className="p-8 text-center">
-                <p className="text-sm text-foreground-secondary">No scans yet.</p>
-                <p className="text-xs text-foreground-secondary mt-1">
-                  Add a target above and click Scan to run your first scan.
+          {/* DAST — title + description + enable toggle (header) / targets (body) / Add target (footer) */}
+          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+            <div className="px-6 pt-6 pb-4 space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold text-foreground">DAST</h3>
+                <p className="text-sm text-foreground-secondary mt-1 max-w-2xl">
+                  Dynamic application security testing scans your deployed app's live endpoints for
+                  runtime vulnerabilities and cross-links them to reachable dependency CVEs.
                 </p>
               </div>
-            ) : (
-              <table className="w-full">
-                <thead className="bg-background-card-header border-b border-border">
-                  <tr>
-                    <th className="text-left text-xs font-medium text-foreground-secondary px-4 py-2.5">Target</th>
-                    <th className="text-left text-xs font-medium text-foreground-secondary px-4 py-2.5">Profile</th>
-                    <th className="text-left text-xs font-medium text-foreground-secondary px-4 py-2.5">Status</th>
-                    <th className="text-right text-xs font-medium text-foreground-secondary px-4 py-2.5">Findings</th>
-                    <th className="text-right text-xs font-medium text-foreground-secondary px-4 py-2.5">Duration</th>
-                    <th className="text-right text-xs font-medium text-foreground-secondary px-4 py-2.5">Time</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {jobs.map((job) => (
-                    <tr key={job.id} className="hover:bg-table-hover transition-colors">
-                      <td className="px-4 py-3 text-sm text-foreground truncate max-w-xs" title={job.target_url ?? undefined}>
-                        {job.target_url ?? '—'}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-foreground-secondary">
-                        <Badge variant="outline" className="capitalize">{job.scan_profile ?? '—'}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2 text-sm text-foreground-secondary">
-                          {statusDot(job.status)}
-                          <span>{statusLabel(job.status)}</span>
-                          {job.status === 'failed' && job.error ? (
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={config.enabled}
+                aria-label="Enable dynamic scanning"
+                onClick={() => handleToggleEnabled(!config.enabled)}
+                disabled={!canManage || saving}
+                className={cn(
+                  'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all disabled:cursor-not-allowed',
+                  config.enabled
+                    ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                    : 'bg-black/20 border-border hover:border-foreground-secondary/30 hover:bg-black/30',
+                )}
+              >
+                <div
+                  className={cn(
+                    'h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors',
+                    config.enabled ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent',
+                  )}
+                  aria-hidden
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-foreground">Dynamic scanning</div>
+                  <p className="text-xs text-foreground-secondary mt-0.5">
+                    When on, add targets and run security scans against your deployed app. Off keeps
+                    existing findings but stops new scans.
+                  </p>
+                </div>
+                {saving ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-foreground-secondary" /> : null}
+              </button>
+            </div>
+
+            {/* Targets + Add target collapse/expand with the toggle (no snap). */}
+            <div
+              className="grid transition-[grid-template-rows] duration-300 ease-out"
+              style={{ gridTemplateRows: config.enabled ? '1fr' : '0fr' }}
+            >
+              <div className="overflow-hidden">
+                <div className="px-6 pb-6">
+                  <div className="rounded-lg border border-border overflow-hidden">
+                    <DastTargetsList
+                      targets={targets}
+                      jobsByTargetId={jobsByTargetId}
+                      scanningTargetId={scanningTargetId}
+                      drainModeOn={false /* surfaced via 503 + per-row tooltip when triggered */}
+                      canManage={canManage}
+                      onScan={handleScan}
+                      onEdit={(t) => setEditingTargetId(t.id)}
+                      onConfigureAuth={(t) => setAuthTargetId(t.id)}
+                      onToggleEnabled={handleToggleTargetEnabled}
+                      onDelete={(t) => setDeletingTarget(t)}
+                    />
+                  </div>
+                </div>
+                {canManage ? (
+                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+                    <Button
+                      variant="green"
+                      onClick={() => setCreateDialogOpen(true)}
+                      disabled={!config.enabled}
+                    >
+                      Add target
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          {/* Scan history — bare table, same chrome as the Repository tab's activity table */}
+          <div>
+            <h3 className="text-base font-semibold text-foreground mb-3">Scan history</h3>
+            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+              {jobsLoading ? (
+                <TableSkeleton />
+              ) : jobs.length === 0 ? (
+                <div className="px-6 py-10 text-center">
+                  <p className="text-sm text-foreground-secondary">No scans yet.</p>
+                  <p className="text-xs text-foreground-secondary mt-1">
+                    Add a target and run a scan to see activity here.
+                  </p>
+                </div>
+              ) : (
+                <table className="w-full table-fixed">
+                  <ScanHistoryColgroup />
+                  <thead className="bg-background-card-header border-b border-border">
+                    <tr>
+                      <th className="text-left text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5">Target</th>
+                      <th className="text-left text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5">Status</th>
+                      <th className="text-right text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5">Findings</th>
+                      <th className="text-right text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5">Duration</th>
+                      <th className="text-right text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {jobs.map((job) => (
+                      <tr key={job.id} className="hover:bg-table-hover transition-colors">
+                        <td className="px-4 py-3">
+                          {job.target_url ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                                <span className="block text-sm text-foreground truncate cursor-default">
+                                  {job.target_url}
+                                </span>
                               </TooltipTrigger>
-                              <TooltipContent className="max-w-md">
-                                {job.error_category ? `${job.error_category}: ${job.error}` : job.error}
-                              </TooltipContent>
+                              <TooltipContent className="max-w-md break-all">{job.target_url}</TooltipContent>
                             </Tooltip>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
-                        {job.findings_count ?? '—'}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
-                        {formatDuration(job.duration_seconds)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
-                        {formatRelative(job.created_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </Card>
+                          ) : (
+                            <span className="text-sm text-foreground-secondary">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            {statusDot(job.status)}
+                            <span className="text-sm font-medium text-foreground">{statusLabel(job.status)}</span>
+                            {job.status === 'failed' && job.error ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-md">
+                                  {job.error_category ? `${job.error_category}: ${job.error}` : job.error}
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
+                          {job.findings_count ?? '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
+                          {formatDuration(job.duration_seconds)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-foreground-secondary text-right tabular-nums">
+                          {formatRelative(job.created_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </>
       )}
 
@@ -507,10 +537,50 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
         onSaved={(t) => {
           setTargets((prev) => prev.map((p) => (p.id === t.id ? t : p)));
         }}
-        onDeleted={(id) => {
-          setTargets((prev) => prev.filter((p) => p.id !== id));
-        }}
       />
+
+      <DastTargetAuthDialog
+        open={authTargetId !== null}
+        onOpenChange={(o) => !o && setAuthTargetId(null)}
+        projectId={projectId}
+        target={authTarget}
+        canManage={canManage}
+        onChanged={() => void refreshTargets()}
+      />
+
+      <Dialog open={deletingTarget !== null} onOpenChange={(o) => !o && !deleting && setDeletingTarget(null)}>
+        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0 overflow-hidden flex flex-col">
+          <div className="px-6 pt-6 pb-4">
+            <DialogTitle>Delete target?</DialogTitle>
+            <DialogDescription className="mt-1">
+              This removes <span className="font-mono text-foreground">{deletingTarget?.label ?? deletingTarget?.target_url}</span> and all of its DAST findings. This can't be undone.
+            </DialogDescription>
+          </div>
+          <DialogFooter className="px-6 py-4 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={deleting}
+              onClick={() => setDeletingTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3 relative text-destructive hover:text-destructive"
+              disabled={deleting}
+              onClick={handleConfirmDelete}
+            >
+              <span className={deleting ? 'invisible' : undefined}>Delete target</span>
+              {deleting && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ActiveScanOptInDialog
         open={activeScanDialog !== null}
@@ -522,107 +592,47 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
   );
 }
 
-interface CardProps {
-  title: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}
-function Card({ title, action, children }: CardProps) {
+/** Shared column widths so the scan-history table never shifts. */
+function ScanHistoryColgroup() {
   return (
-    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-        {action}
-      </div>
-      {children}
-    </div>
+    <colgroup>
+      <col className="w-[40%]" />
+      <col className="w-[20%]" />
+      <col className="w-[13%]" />
+      <col className="w-[13%]" />
+      <col className="w-[14%]" />
+    </colgroup>
   );
 }
 
-interface ProfileAndTimeoutCardProps {
-  config: TabState;
-  savedConfig: TabState | null;
-  isDirty: boolean;
-  saving: boolean;
-  canManage: boolean;
-  onChange: (next: TabState) => void;
-  onSave: () => void;
-}
-function ProfileAndTimeoutCard({ config, savedConfig, isDirty, saving, canManage, onChange, onSave }: ProfileAndTimeoutCardProps) {
+function TableSkeleton() {
   return (
-    <Card title="Profile & timeout">
-      <div className="p-4 space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <Label className="text-sm text-foreground">DAST enabled</Label>
-            <p className="text-xs text-foreground-secondary mt-0.5">
-              Required to add targets and trigger scans. Disabling preserves existing findings.
-            </p>
-          </div>
-          <Switch
-            checked={config.enabled}
-            onCheckedChange={(v) => onChange({ ...config, enabled: v })}
-            disabled={!canManage}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl">
-          <div>
-            <Label className="text-sm text-foreground">Scan profile</Label>
-            <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
-              Auto runs a passive baseline. Full activates fuzzing — gated by an opt-in dialog.
-            </p>
-            <Select
-              value={config.scan_profile}
-              onValueChange={(v) => onChange({ ...config, scan_profile: v as DastScanProfile })}
-              disabled={!canManage}
+    <table className="w-full table-fixed">
+      <ScanHistoryColgroup />
+      <thead className="bg-background-card-header border-b border-border">
+        <tr>
+          {['Target', 'Status', 'Findings', 'Duration', 'Time'].map((h, i) => (
+            <th
+              key={h}
+              className={`text-xs font-semibold text-foreground-secondary uppercase tracking-wider px-4 py-2.5 ${i === 0 || i === 1 ? 'text-left' : 'text-right'}`}
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(SCAN_PROFILE_LABELS) as DastScanProfile[]).map((p) => (
-                  <SelectItem key={p} value={p}>{SCAN_PROFILE_LABELS[p]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-sm text-foreground">Timeout</Label>
-            <p className="text-xs text-foreground-secondary mt-0.5 mb-2">
-              Hard limit on scan duration (5–60 minutes).
-            </p>
-            <Select
-              value={String(config.scan_timeout_minutes)}
-              onValueChange={(v) => onChange({ ...config, scan_timeout_minutes: Number(v) })}
-              disabled={!canManage}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TIMEOUT_PRESETS.map((m) => (
-                  <SelectItem key={m} value={String(m)}>{m} minutes</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-      <div className="px-4 py-3 border-t border-border bg-background-card-header flex items-center justify-between">
-        <p className="text-xs text-foreground-secondary">
-          {savedConfig?.enabled
-            ? <span className="inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Active for this project</span>
-            : <span className="inline-flex items-center gap-1 text-foreground-secondary"><AlertTriangle className="h-3.5 w-3.5" /> Disabled — saved scans won't run automatically</span>}
-        </p>
-        {canManage && (
-          <Button variant="outline" size="sm" onClick={onSave} disabled={!isDirty || saving}>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : null}
-            Save
-          </Button>
-        )}
-      </div>
-    </Card>
+              {h}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-border">
+        {[1, 2, 3].map((i) => (
+          <tr key={i} className="animate-pulse">
+            <td className="px-4 py-3"><div className="h-4 w-48 bg-muted rounded" /></td>
+            <td className="px-4 py-3"><div className="h-4 w-20 bg-muted rounded" /></td>
+            <td className="px-4 py-3"><div className="h-4 w-8 bg-muted rounded ml-auto" /></td>
+            <td className="px-4 py-3"><div className="h-4 w-10 bg-muted rounded ml-auto" /></td>
+            <td className="px-4 py-3"><div className="h-4 w-14 bg-muted rounded ml-auto" /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -630,19 +640,28 @@ function ScanningTabSkeleton() {
   const pulse = 'bg-muted animate-pulse rounded';
   return (
     <div className="space-y-6">
+      {/* Dynamic scanning card: header (title + toggle) / body / footer */}
       <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-border">
-          <div className={`h-4 w-20 ${pulse}`} />
+        <div className="px-6 pt-6 pb-4 space-y-4">
+          <div className="space-y-2">
+            <div className={`h-5 w-16 ${pulse}`} />
+            <div className={`h-3 w-96 max-w-full ${pulse}`} />
+          </div>
+          <div className="w-full rounded-lg border border-border bg-black/20 px-4 py-3 flex items-center gap-3">
+            <div className={`h-4 w-4 rounded-full ${pulse}`} />
+            <div className="flex-1 space-y-2">
+              <div className={`h-4 w-36 ${pulse}`} />
+              <div className={`h-3 w-72 max-w-full ${pulse}`} />
+            </div>
+          </div>
         </div>
-        <div className="p-4 space-y-4">
-          <div className={`h-10 w-full max-w-xl ${pulse}`} />
-          <div className={`h-10 w-full max-w-xl ${pulse}`} />
+        <div className="px-6 pb-6">
+          <div className="rounded-lg border border-border px-6 py-10 flex justify-center">
+            <div className={`h-4 w-56 ${pulse}`} />
+          </div>
         </div>
-      </div>
-      <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <div className={`h-4 w-24 ${pulse}`} />
-          <div className={`h-8 w-24 ${pulse}`} />
+        <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
+          <div className={`h-8 w-24 rounded-lg ${pulse}`} />
         </div>
       </div>
     </div>

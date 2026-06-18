@@ -533,6 +533,43 @@ describe('Project Routes', () => {
       expect(res.body.error).toMatch(/Invalid sync_frequency/i);
     });
 
+    it('returns 200 and updates scan_on_commit when user is org owner', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+      setTableResponse('project_repositories', 'then', { data: { id: 'repo-1', scan_on_commit: true, sync_frequency: 'daily' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ scan_on_commit: true });
+
+      expect(res.status).toBe(200);
+      expect(queryBuilder.update).toHaveBeenCalled();
+    });
+
+    it('returns 400 for a retired sync_frequency value (on_commit)', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ sync_frequency: 'on_commit' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid sync_frequency/i);
+    });
+
+    it('returns 400 when scan_on_commit is not a boolean', async () => {
+      setTableResponse('project_repositories', 'single', { data: { id: 'repo-1' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/repositories/settings`)
+        .set('Authorization', `Bearer ${mockToken}`)
+        .send({ scan_on_commit: 'yes' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/scan_on_commit must be a boolean/i);
+    });
+
     it('returns 404 when no repository is connected', async () => {
       setTableResponse('project_repositories', 'single', { data: null, error: { message: 'Not found' } });
 

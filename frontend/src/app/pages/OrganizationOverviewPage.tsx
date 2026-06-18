@@ -1072,12 +1072,29 @@ export default function OrganizationOverviewPage() {
             const newProjectMap = new Map(newTeam.projects.map((p) => [p.projectId, p]));
             const prevIds = new Set(prevTeam.projects.map((p) => p.projectId));
             const ordered = [
-              // Existing projects in their original order, with fresh data applied
-              ...prevTeam.projects.filter((p) => newProjectMap.has(p.projectId)).map((p) => newProjectMap.get(p.projectId)!),
+              // Existing projects in their original order, with fresh data applied —
+              // but keep the locally-known canvas position when the fresh fetch has
+              // none yet: a drag-save still in flight returns NULL until it commits,
+              // and we mustn't let that NULL snap the node back to the spawn point.
+              ...prevTeam.projects.filter((p) => newProjectMap.has(p.projectId)).map((p) => {
+                const fresh = newProjectMap.get(p.projectId)!;
+                return {
+                  ...fresh,
+                  canvasPositionX: fresh.canvasPositionX ?? p.canvasPositionX ?? null,
+                  canvasPositionY: fresh.canvasPositionY ?? p.canvasPositionY ?? null,
+                };
+              }),
               // New projects from API not yet in the graph
               ...newTeam.projects.filter((p) => !prevIds.has(p.projectId)),
             ];
-            return { ...newTeam, projects: ordered };
+            // Same coalesce for the team's own node position — a NULL from a racing
+            // refresh must not clobber a just-dragged (in-flight) position.
+            return {
+              ...newTeam,
+              canvasPositionX: newTeam.canvasPositionX ?? prevTeam.canvasPositionX ?? null,
+              canvasPositionY: newTeam.canvasPositionY ?? prevTeam.canvasPositionY ?? null,
+              projects: ordered,
+            };
           });
         });
       })
@@ -1578,6 +1595,50 @@ export default function OrganizationOverviewPage() {
     setSidebarParams({ tab: 'findings', subtab: null });
     setProjectFindingToOpen(osvId);
   }, [setSidebarParams]);
+
+  /** Optimistic project rename: patch the new name into every store the graph + sidebar
+   *  derive from (no refetch), so the node label and header update instantly — mirrors the
+   *  team-rename in handleTeamSettingsSave. */
+  const handleProjectRenamed = useCallback((newName: string) => {
+    if (!selectedProjectId) return;
+    setSelectedProjectName(newName);
+    setProjectSidebarProject((prev) => (prev ? { ...prev, name: newName } : prev));
+    setRawTeamsWithProjects((prev) =>
+      prev.map((t) => ({
+        ...t,
+        projects: t.projects.map((p) =>
+          p.projectId === selectedProjectId ? { ...p, projectName: newName } : p
+        ),
+      }))
+    );
+  }, [selectedProjectId]);
+
+  /** Optimistic transfer — move the project node out of its current owner team and into
+   *  the new one in the graph store (no refetch), so it relocates instantly. The sidebar's
+   *  owner/contributing details reconcile via the background refetch in handleTransferProject. */
+  const handleProjectTransferred = useCallback((newOwnerTeamId: string) => {
+    if (!selectedProjectId) return;
+    setRawTeamsWithProjects((prev) => {
+      // Bail if the destination team isn't on the graph — a refresh will reconcile.
+      if (!prev.some((t) => t.teamId === newOwnerTeamId)) return prev;
+      const moved = prev.flatMap((t) => t.projects).find((p) => p.projectId === selectedProjectId);
+      if (!moved) return prev;
+      // Clear the stale canvas position so it re-spawns cleanly under the new team
+      // rather than rendering at its old team's coordinates.
+      const movedProject = { ...moved, canvasPositionX: null, canvasPositionY: null };
+      return prev.map((t) => {
+        if (t.teamId === newOwnerTeamId) {
+          const projects = [...t.projects.filter((p) => p.projectId !== selectedProjectId), movedProject];
+          return { ...t, projects, projectCount: projects.length };
+        }
+        if (t.projects.some((p) => p.projectId === selectedProjectId)) {
+          const projects = t.projects.filter((p) => p.projectId !== selectedProjectId);
+          return { ...t, projects, projectCount: projects.length };
+        }
+        return t;
+      });
+    });
+  }, [selectedProjectId]);
 
   const closeOrgSidebarImmediate = useCallback(() => {
     setOrgSidebarVisible(false);
@@ -3981,6 +4042,8 @@ export default function OrganizationOverviewPage() {
                     embedInSidebar
                     initialSection={projectSettingsSubTab}
                     onSectionChange={(s) => { setProjectSettingsSubTab(s); setSidebarParams({ subtab: s }); }}
+                    onProjectRenamed={handleProjectRenamed}
+                    onProjectTransferred={handleProjectTransferred}
                   />
                 )}
                 {projectSidebarTab !== 'findings' && projectSidebarProjectLoading && (

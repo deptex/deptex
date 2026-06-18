@@ -758,7 +758,6 @@ export const api = {
     data: {
       name: string;
       team_ids?: string[];
-      importance?: number;
       framework?: string | null;
       /**
        * When present, the backend performs project insert + repo connect +
@@ -806,7 +805,7 @@ export const api = {
     }
   },
 
-  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; importance?: number; notifications_paused_until?: string | null }): Promise<Project> {
+  async updateProject(organizationId: string, projectId: string, data: { name?: string; team_ids?: string[]; auto_bump?: boolean; notifications_paused_until?: string | null }): Promise<Project> {
     const project = await fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -1844,7 +1843,7 @@ export const api = {
   async updateProjectRepositorySettings(
     organizationId: string,
     projectId: string,
-    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean; sync_frequency?: string }
+    data: { pull_request_comments_enabled?: boolean; auto_fix_vulnerabilities_enabled?: boolean; scan_on_commit?: boolean; sync_frequency?: string }
   ): Promise<ProjectRepository> {
     const result = await fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/repositories/settings`,
@@ -3938,6 +3937,7 @@ export interface ProjectRepository {
   auto_fix_vulnerabilities_enabled?: boolean;
   connected_at?: string | null;
   updated_at?: string;
+  scan_on_commit?: boolean;
   sync_frequency?: string;
   webhook_status?: string | null;
   last_webhook_at?: string | null;

@@ -54,7 +54,9 @@ const connectedRepo = {
   id: 'repo-1',
   repo_full_name: 'org/my-repo',
   default_branch: 'main',
+  package_json_path: 'packages/api',
   status: 'connected',
+  scan_on_commit: false,
   sync_frequency: 'daily',
   provider: 'github',
 };
@@ -123,22 +125,33 @@ describe('ProjectSettingsPage – Repository', () => {
       });
     });
 
-    it('shows the default branch', async () => {
+    it('shows the project path within the repository', async () => {
       render(<ProjectSettingsPage />);
       await waitFor(() => {
-        expect(screen.getByText('main')).toBeInTheDocument();
+        expect(screen.getByText('/packages/api')).toBeInTheDocument();
       });
     });
 
-    it('shows Sync Frequency section with all options', async () => {
+    it('shows "Repository root" when the project is at the repo root', async () => {
+      mockGetProjectRepositories.mockResolvedValue({
+        repositories: [],
+        connectedRepository: { ...connectedRepo, package_json_path: '' },
+      });
+      render(<ProjectSettingsPage />);
+      await waitFor(() => {
+        expect(screen.getByText('Repository root')).toBeInTheDocument();
+      });
+    });
+
+    it('shows Sync Frequency section with the commit toggle and floor options', async () => {
       render(<ProjectSettingsPage />);
       await waitFor(() => {
         expect(screen.getByText('Sync Frequency')).toBeInTheDocument();
       });
+      expect(screen.getByRole('checkbox', { name: /scan on every commit/i })).toBeInTheDocument();
       expect(screen.getByText('Daily')).toBeInTheDocument();
       expect(screen.getByText('Weekly')).toBeInTheDocument();
-      expect(screen.getByText('Manual only')).toBeInTheDocument();
-      expect(screen.getByText('On every commit')).toBeInTheDocument();
+      expect(screen.queryByText('Manual only')).not.toBeInTheDocument();
     });
 
     it('Save button is disabled when sync frequency unchanged', async () => {
@@ -190,13 +203,36 @@ describe('ProjectSettingsPage – Repository', () => {
       expect(saveBtn).toBeDisabled();
     });
 
-    it('on_commit option is locked on free plan', async () => {
+    it('scan-on-commit toggle is functional and enables Save', async () => {
       render(<ProjectSettingsPage />);
+      const toggle = await screen.findByRole('checkbox', { name: /scan on every commit/i });
+      expect(toggle).not.toBeDisabled();
+      await userEvent.click(toggle);
+      expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+    });
+
+    it('Save sends scan_on_commit when the toggle is flipped', async () => {
+      render(<ProjectSettingsPage />);
+      const toggle = await screen.findByRole('checkbox', { name: /scan on every commit/i });
+      await userEvent.click(toggle);
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => {
-        expect(screen.getByText('On every commit')).toBeInTheDocument();
+        expect(mockUpdateProjectRepositorySettings).toHaveBeenCalledWith(
+          'org-1',
+          'proj-1',
+          expect.objectContaining({ scan_on_commit: true })
+        );
       });
-      const onCommitBtn = screen.getByRole('radio', { name: /On every commit/i });
-      expect(onCommitBtn).toBeDisabled();
+    });
+
+    it('normalizes a legacy on_commit sync_frequency to the Daily floor on load', async () => {
+      mockGetProjectRepositories.mockResolvedValue({
+        repositories: [],
+        connectedRepository: { ...connectedRepo, sync_frequency: 'on_commit' },
+      });
+      render(<ProjectSettingsPage />);
+      const dailyRadio = await screen.findByRole('radio', { name: /daily/i });
+      expect(dailyRadio).toHaveAttribute('aria-checked', 'true');
     });
 
     it('shows Recent Activity table when connected', async () => {

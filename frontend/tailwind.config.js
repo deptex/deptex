@@ -30,7 +30,7 @@ export default {
         "table-hover": "#111111",
         foreground: {
           DEFAULT: "#fafafa",
-          secondary: "#a1a1a1",
+          secondary: "#c8c8c8",
           muted: "#71717a",
         },
         success: {
@@ -58,7 +58,7 @@ export default {
         },
         muted: {
           DEFAULT: "#171717",
-          foreground: "#a1a1a1",
+          foreground: "#c8c8c8",
         },
         accent: {
           DEFAULT: "#025230",
@@ -84,7 +84,7 @@ export default {
           border: "#262626",
           "border-hover": "#404040",
           text: "#fafafa",
-          "text-secondary": "#a1a1a1",
+          "text-secondary": "#c8c8c8",
           "text-muted": "#71717a",
         },
       },

@@ -285,7 +285,7 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
 
   const { data: rows } = await supabase
     .from('project_repositories')
-    .select('project_id, repo_full_name, default_branch, package_json_path, sync_frequency, status, integration_id, ecosystem, projects(organization_id)')
+    .select('project_id, repo_full_name, default_branch, package_json_path, scan_on_commit, sync_frequency, status, integration_id, ecosystem, projects(organization_id)')
     .eq('repo_full_name', repoFullName)
     .eq('provider', 'gitlab');
 
@@ -318,7 +318,7 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
     const workspaceChanged = affectedWorkspaces.has(workspace);
     const isAffected = forceFullExtraction || workspaceChanged || (rootChanged && workspace !== '');
 
-    if (isAffected && row.sync_frequency === 'on_commit' && extractionCount < MAX_EXTRACTION_PER_PUSH) {
+    if (isAffected && row.scan_on_commit && extractionCount < MAX_EXTRACTION_PER_PUSH) {
       try {
         const branchName = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
         const commits = payload.commits ?? [];
@@ -364,7 +364,7 @@ async function handleGitLabPushEvent(payload: any): Promise<void> {
         author_email: c.author?.email,
         committed_at: c.timestamp,
         manifest_changed: isAffected,
-        extraction_triggered: isAffected && row.sync_frequency === 'on_commit',
+        extraction_triggered: isAffected && row.scan_on_commit,
         files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
         provider: 'gitlab',
         provider_url: c.url,

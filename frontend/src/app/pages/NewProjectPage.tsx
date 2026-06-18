@@ -3,7 +3,6 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Search, Check, Lock, Loader2, ChevronDown, PackageSearch, Inbox, HelpCircle } from 'lucide-react';
 import { api, Team, type Project, type CiCdConnection, type RepoWithProvider, type RepoPeek } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { ImportanceSlider, IMP_DEFAULT } from '../../components/ImportanceSlider';
 import { supabase } from '../../lib/supabase';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
@@ -58,8 +57,6 @@ export default function NewProjectPage() {
 
   const [projectName, setProjectName] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(lockedTeam?.id ?? null);
-  const [importance, setImportance] = useState<number>(IMP_DEFAULT);
-  const [importanceExpanded, setImportanceExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // Default true so the page renders the loading skeleton on first mount
@@ -450,7 +447,6 @@ export default function NewProjectPage() {
       name: projectName.trim(),
       team_ids: teamIds,
       framework: effectiveFramework || undefined,
-      importance,
     };
 
     if (repoToConnect) {
@@ -932,50 +928,6 @@ export default function NewProjectPage() {
                   </div>
                 </div>
 
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setImportanceExpanded((v) => !v)}
-                    aria-expanded={importanceExpanded}
-                    className="flex w-full items-center justify-between text-left transition-colors hover:text-foreground group"
-                  >
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground-secondary group-hover:text-foreground transition-colors cursor-help">
-                          Project Importance
-                          <HelpCircle className="h-3.5 w-3.5" />
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[280px] p-3">
-                        <p className="text-sm font-semibold text-foreground normal-case tracking-normal">Project importance</p>
-                        <p className="mt-1 text-xs text-foreground-secondary normal-case tracking-normal">
-                          Weights every finding's depscore for this project. Raise it for high-stakes services like payments or auth where a bug hurts most; lower it for internal sandboxes.
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <span className="flex items-center gap-2">
-                      <span className="text-sm tabular-nums text-foreground">{importance.toFixed(1)}×</span>
-                      <ChevronDown
-                        className={cn(
-                          'h-4 w-4 text-foreground-secondary transition-transform duration-200',
-                          importanceExpanded && 'rotate-180',
-                        )}
-                      />
-                    </span>
-                  </button>
-                  <div
-                    className={cn(
-                      'grid transition-[grid-template-rows] duration-200 ease-out',
-                      importanceExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-                    )}
-                  >
-                    <div className="overflow-hidden">
-                      <div className="pt-4">
-                        <ImportanceSlider value={importance} onChange={setImportance} hideHeader />
-                      </div>
-                    </div>
-                  </div>
-                </div>
               </div>
 
           <div className="px-8 py-4 border-t border-border bg-background-card flex items-center justify-between">

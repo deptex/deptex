@@ -1,16 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
-import { createPortal } from 'react-dom';
-import { useOutletContext, useNavigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
+import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Trash2, Shield, Bell, ChevronDown, Users, Plus, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, BookOpen, Clock, Loader2, Eye, Ban, Mail, Webhook, GitBranch, Info, RefreshCw, GitCommit, AlertTriangle, PauseCircle, Radar, Boxes } from 'lucide-react';
+import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
-import ScannersPanel from '../../components/security/ScannersPanel';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '../../components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -18,21 +10,10 @@ import {
   DialogDescription,
   DialogFooter,
 } from '../../components/ui/dialog';
-import { Label } from '../../components/ui/label';
-import { Input } from '../../components/ui/input';
-import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type ProjectEffectivePolicies, type ProjectPolicyException, type ProjectPolicyChange, type RepoWithProvider, type CiCdConnection, type ExtractionRun, type Organization, type PolicyValidationResult } from '../../lib/api';
-import { ImportanceSlider, IMP_DEFAULT } from '../../components/ImportanceSlider';
-import NotificationRulesSection from './NotificationRulesSection';
+import { api, ProjectWithRole, ProjectPermissions, Team, ProjectTeamsResponse, ProjectContributingTeam, ProjectMember, OrganizationMember, ProjectRepository, ProjectImportStatus, type RepoWithProvider, type ExtractionRun, type Organization } from '../../lib/api';
 import { useToast } from '../../hooks/use-toast';
 import { Button } from '../../components/ui/button';
-import { Badge } from '../../components/ui/badge';
 import { FrameworkIcon } from '../../components/framework-icon';
-import { PolicyCodeEditor } from '../../components/PolicyCodeEditor';
-import { PolicyDiffViewer } from '../../components/PolicyDiffViewer';
-import { JsLangBadge } from '../../components/JsLangBadge';
-import { PolicyAIAssistant } from '../../components/PolicyAIAssistant';
-import { PolicyExceptionSidebar } from '../../components/PolicyExceptionSidebar';
-import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import { InlineExtractionLogs } from '../../components/InlineExtractionLogs';
 import { isExtractionOngoing } from '../../lib/extractionStatus';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
@@ -106,26 +87,26 @@ function RunRow({
               {isActive ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-foreground-secondary" aria-hidden />
-                  <span className="text-sm text-foreground-secondary">Extracting</span>
+                  <span className="text-sm font-medium text-foreground">Extracting</span>
                 </>
               ) : run.status === 'completed' ? (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-emerald-500" />
-                  <span className="text-sm text-foreground-secondary">Ready</span>
+                  <span className="text-sm font-medium text-foreground">Ready</span>
                 </>
               ) : run.status === 'cancelled' ? (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-amber-500" />
-                  <span className="text-sm text-foreground-secondary">Cancelled</span>
+                  <span className="text-sm font-medium text-foreground">Cancelled</span>
                 </>
               ) : (
                 <>
                   <span className="h-2 w-2 rounded-full shrink-0 bg-destructive" />
-                  <span className="text-sm text-foreground-secondary">Error</span>
+                  <span className="text-sm font-medium text-foreground">Error</span>
                 </>
               )}
             </div>
-            <span className="text-sm text-muted-foreground">{duration}</span>
+            <span className="text-sm text-foreground-secondary tabular-nums">{duration}</span>
           </div>
 
           {/* Time + trigger source */}
@@ -140,7 +121,7 @@ function RunRow({
                   return (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <img src={run.started_by.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                        <img src={run.started_by.avatar_url} alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                       </TooltipTrigger>
                       <TooltipContent>{run.started_by.full_name || (tt === 'initial' ? 'Initial connect' : 'Manual sync')}</TooltipContent>
                     </Tooltip>
@@ -149,8 +130,8 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
-                        <Users className="h-2.5 w-2.5 text-foreground-secondary" />
+                      <span className="h-6 w-6 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <Users className="h-3.5 w-3.5 text-foreground-secondary" />
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>{tt === 'initial' ? 'Initial connect' : 'Manual sync'}</TooltipContent>
@@ -161,7 +142,7 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <img src="/images/logo.png" alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                      <img src="/images/logo.png" alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                     </TooltipTrigger>
                     <TooltipContent>Scheduled sync</TooltipContent>
                   </Tooltip>
@@ -172,7 +153,7 @@ function RunRow({
                   return (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <img src={run.commit_author.avatar_url} alt="" className="h-4 w-4 rounded-full flex-shrink-0" />
+                        <img src={run.commit_author.avatar_url} alt="" className="h-6 w-6 rounded-full flex-shrink-0" />
                       </TooltipTrigger>
                       <TooltipContent>{run.commit_author.username ? `Push by ${run.commit_author.username}` : 'Commit push'}</TooltipContent>
                     </Tooltip>
@@ -181,8 +162,8 @@ function RunRow({
                 return (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="h-4 w-4 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
-                        <GitCommit className="h-2.5 w-2.5 text-foreground-secondary" />
+                      <span className="h-6 w-6 rounded-full bg-foreground-secondary/20 flex items-center justify-center flex-shrink-0">
+                        <GitCommit className="h-3.5 w-3.5 text-foreground-secondary" />
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>Commit push</TooltipContent>
@@ -241,6 +222,12 @@ export interface ProjectSettingsContentProps {
   initialSection?: string;
   /** Called when the active section changes while embedded in a sidebar. */
   onSectionChange?: (section: string) => void;
+  /** Optimistic rename: patch the new name into the graph/sidebar stores in place
+   *  (no refetch) so the node label + header update instantly. */
+  onProjectRenamed?: (newName: string) => void;
+  /** Optimistic transfer: move the project node to its new owner team in the graph
+   *  store in place (no refetch) so it relocates instantly. */
+  onProjectTransferred?: (newOwnerTeamId: string) => void;
 }
 
 /** Repo name without account prefix: "owner/repo" -> "repo" */
@@ -294,7 +281,7 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
   return `${Math.floor(m / 60)}h`;
 }
 
-const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'notifications', 'policies', 'scanning', 'scanners']);
+const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'scanning']);
 
 
 /** Renders a tab-specific content skeleton for the project settings loading state. */
@@ -430,113 +417,6 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
           </div>
         </div>
       );
-    case 'notifications':
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className={`h-8 w-36 ${pulse}`} />
-            <div className={`h-9 w-24 ${pulse}`} />
-          </div>
-          <div className="flex items-center border-b border-border pb-px">
-            <div className="flex items-center gap-6">
-              <div className={`h-4 w-24 ${pulse} pb-3`} />
-              <div className={`h-4 w-20 ${pulse} pb-3`} />
-            </div>
-          </div>
-          <div className="pt-6 space-y-8">
-            <div>
-              <div className={`h-5 w-48 ${pulse} mb-3`} />
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <div className="px-4 py-2.5 bg-background-card-header border-b border-border">
-                  <div className={`h-4 w-16 ${pulse}`} />
-                </div>
-                <table className="w-full">
-                  <thead className="bg-background-subtle/30 border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
-                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {[1, 2, 3].map((i) => (
-                      <tr key={i}>
-                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
-                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div>
-              <div className={`h-5 w-40 ${pulse} mb-3`} />
-              <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-background-subtle/30 border-b border-border">
-                    <tr>
-                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-16 ${pulse}`} /></th>
-                      <th className="text-left px-4 py-2.5"><div className={`h-3 w-20 ${pulse}`} /></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {[1, 2].map((i) => (
-                      <tr key={i}>
-                        <td className="px-4 py-3"><div className={`h-4 w-20 ${pulse}`} /></td>
-                        <td className="px-4 py-3"><div className={`h-4 w-28 ${pulse}`} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    case 'policies':
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className={`h-8 w-24 ${pulse}`} />
-            </div>
-            <div className="flex items-center gap-2">
-              <div className={`h-8 w-24 ${pulse}`} />
-              <div className={`h-8 w-16 ${pulse}`} />
-            </div>
-          </div>
-          <div className="flex items-center border-b border-border pb-px">
-            <div className="flex items-center gap-6">
-              <div className={`h-4 w-20 ${pulse} pb-3`} />
-              <div className={`h-4 w-24 ${pulse} pb-3`} />
-            </div>
-          </div>
-          <div className="pt-6 space-y-6">
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
-                <div className={`h-4 w-20 ${pulse}`} />
-              </div>
-              <div className="p-6">
-                <div className={`h-4 w-full max-w-lg ${pulse} mb-3`} />
-                <div className={`h-3 w-full max-w-md ${pulse} mb-4`} />
-                <div className={`h-24 w-full ${pulse}`} />
-              </div>
-            </div>
-            <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-              <div className="px-4 py-2 border-b border-border bg-background-subtle/30">
-                <div className={`h-4 w-24 ${pulse}`} />
-              </div>
-              <div className="divide-y divide-border">
-                {[1, 2].map((i) => (
-                  <div key={i} className="px-4 py-3 flex items-center justify-between">
-                    <div className={`h-4 w-32 ${pulse}`} />
-                    <div className={`h-5 w-16 ${pulse}`} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      );
     case 'scanning':
       return (
         <div className="space-y-6">
@@ -569,7 +449,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
-  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange } = props;
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred } = props;
   const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -589,8 +469,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   );
   const { toast } = useToast();
   const [projectName, setProjectName] = useState(project?.name || '');
-  const [importance, setImportance] = useState<number>(project?.importance ?? IMP_DEFAULT);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isSavingName, setIsSavingName] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeletingProject, setIsDeletingProject] = useState(false);
@@ -639,10 +518,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   // Pull request comments toggle (repository settings)
   const [pullRequestCommentsEnabled, setPullRequestCommentsEnabled] = useState(true);
   const [autoFixVulnerabilitiesEnabled, setAutoFixVulnerabilitiesEnabled] = useState(false);
-  const [syncFrequency, setSyncFrequency] = useState<string>('on_commit');
+  const [scanOnCommit, setScanOnCommit] = useState<boolean>(false);
+  const [syncFrequency, setSyncFrequency] = useState<string>('daily');
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(true);
+  // Which project's runs we've already loaded — gates the skeleton to the first load only.
+  const loadedRunsForProjectRef = useRef<string | null>(null);
   // Transfer project state
   const [teams, setTeams] = useState<Team[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
@@ -669,73 +551,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [selectedMembersToAdd, setSelectedMembersToAdd] = useState<string[]>([]);
   const [teamMemberIds, setTeamMemberIds] = useState<Set<string>>(new Set());
 
-  // Policies section state
-  const [projectPolicies, setProjectPolicies] = useState<ProjectEffectivePolicies | null>(null);
-  const [policiesLoading, setPoliciesLoading] = useState(false);
-  const [policyCancellingId, setPolicyCancellingId] = useState<string | null>(null);
-  const [policyActiveTab, setPolicyActiveTab] = useState<'package_policy' | 'project_status' | 'pr_check' | 'change_requests'>('package_policy');
-  const [policyChanges, setPolicyChanges] = useState<ProjectPolicyChange[]>([]);
-  const [usePhase4Policies, setUsePhase4Policies] = useState(false);
-  // three policy types (when backend returns inherited_* / effective_*)
-  const [packagePolicyBody, setPackagePolicyBody] = useState('');
-  const [inheritedPackagePolicyBody, setInheritedPackagePolicyBody] = useState('');
-  const [projectStatusBody, setProjectStatusBody] = useState('');
-  const [inheritedProjectStatusBody, setInheritedProjectStatusBody] = useState('');
-  const [prCheckBody, setPrCheckBody] = useState('');
-  const [inheritedPrCheckBody, setInheritedPrCheckBody] = useState('');
-  const [notificationActiveTab, setNotificationActiveTab] = useState<'notifications' | 'destinations'>('notifications');
-  const [hasVisitedNotifications, setHasVisitedNotifications] = useState(false);
-  const [hasVisitedPolicies, setHasVisitedPolicies] = useState(false);
-  const [projectConnections, setProjectConnections] = useState<{ inherited: CiCdConnection[]; team: CiCdConnection[]; project: CiCdConnection[] }>({ inherited: [], team: [], project: [] });
-  const [projectConnectionsLoading, setProjectConnectionsLoading] = useState(false);
-  const [showJiraPatDialog, setShowJiraPatDialog] = useState(false);
-  const [jiraPatBaseUrl, setJiraPatBaseUrl] = useState('');
-  const [jiraPatToken, setJiraPatToken] = useState('');
-  const [jiraPatSaving, setJiraPatSaving] = useState(false);
-  const [showProjectEmailDialog, setShowProjectEmailDialog] = useState(false);
-  const [projectEmailToAdd, setProjectEmailToAdd] = useState('');
-  const [projectEmailSaving, setProjectEmailSaving] = useState(false);
-  const [showProjectCustomDialog, setShowProjectCustomDialog] = useState(false);
-  const [projectCustomType, setProjectCustomType] = useState<'notification' | 'ticketing'>('notification');
-  const [projectCustomName, setProjectCustomName] = useState('');
-  const [projectCustomWebhookUrl, setProjectCustomWebhookUrl] = useState('');
-  const [projectCustomSaving, setProjectCustomSaving] = useState(false);
-  const [notifPausedUntil, setNotifPausedUntil] = useState<string | null>(null);
-  const [notifPauseLoading, setNotifPauseLoading] = useState(false);
-
-  const [inheritedComplianceBody, setInheritedComplianceBody] = useState('');
-  const [inheritedPullRequestBody, setInheritedPullRequestBody] = useState('');
-  const [effectiveComplianceBody, setEffectiveComplianceBody] = useState('');
-  const [effectivePullRequestBody, setEffectivePullRequestBody] = useState('');
-  const [complianceBody, setComplianceBody] = useState('');
-  const [pullRequestBody, setPullRequestBody] = useState('');
-  const [hasSyncedPolicies, setHasSyncedPolicies] = useState(false);
-
-  const [showExceptionSidebar, setShowExceptionSidebar] = useState<'compliance' | 'pullRequest' | null>(null);
-  const [viewingExceptionId, setViewingExceptionId] = useState<string | null>(null);
-  const [requestChangeCodeType, setRequestChangeCodeType] = useState<'package_policy' | 'project_status' | 'pr_check' | null>(null);
-  const [requestChangeSidebarVisible, setRequestChangeSidebarVisible] = useState(false);
-  const requestChangeSidebarCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [requestChangeMessage, setRequestChangeMessage] = useState('');
-  const [requestChangeSubmitting, setRequestChangeSubmitting] = useState(false);
-  const [policyValidationResult, setPolicyValidationResult] = useState<PolicyValidationResult | null>(null);
-  const [policyValidationResultCodeType, setPolicyValidationResultCodeType] = useState<'package_policy' | 'project_status' | 'pr_check' | null>(null);
-  const [policyValidating, setPolicyValidating] = useState(false);
-  const policyValidationCardRef = useRef<HTMLDivElement>(null);
-  const [showAI, setShowAI] = useState(false);
-  const [aiPanelVisible, setAiPanelVisible] = useState(false);
-  const aiCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const aiAssistantCloseRef = useRef<(() => void) | null>(null);
-  const notificationCreateRef = useRef<(() => void) | null>(null);
-
-  // Open Policies section when navigated from "Request Exception" (e.g. compliance table)
-  useEffect(() => {
-    const state = location.state as { section?: string } | null;
-    if (state?.section === 'policies' && organizationId && projectId) {
-      navigate(`/organizations/${organizationId}/projects/${projectId}/settings/policies`, { replace: true, state: {} });
-    }
-  }, [location.state, organizationId, projectId, navigate]);
-
   // Normalize legacy ?section=... query to path so refresh and back/forward work
   useEffect(() => {
     if (embedInSidebar) return;
@@ -754,18 +569,12 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   }, [organizationId, projectId, sectionParam, navigate, embedInSidebar]);
 
-  // Sync projectName, importance, and notification pause state when project changes
+  // Sync projectName when project changes
   useEffect(() => {
     if (project?.name) {
       setProjectName(project.name);
     }
-    if (project?.importance != null) {
-      setImportance(project.importance);
-    }
-    if (project?.notifications_paused_until !== undefined) {
-      setNotifPausedUntil(project.notifications_paused_until ?? null);
-    }
-  }, [project?.name, project?.importance, project?.notifications_paused_until]);
+  }, [project?.name]);
 
   const loadProjectRepositories = async (integrationId?: string) => {
     if (!organizationId || !projectId) return;
@@ -783,268 +592,14 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       if (data.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
         setAutoFixVulnerabilitiesEnabled(data.connectedRepository.auto_fix_vulnerabilities_enabled === true);
       }
-      setSyncFrequency((data.connectedRepository as any)?.sync_frequency || 'daily');
+      setSyncFrequency((data.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
+      setScanOnCommit((data.connectedRepository as any)?.scan_on_commit === true);
     } catch (error: any) {
       setRepositoriesError(error.message || 'Failed to load repositories');
     } finally {
       setRepositoriesLoading(false);
     }
   };
-
-  const DEFAULT_PULL_REQUEST_BODY = 'return { passed: true };';
-  const DEFAULT_COMPLIANCE_BODY = 'return { compliant: true };';
-  const DEFAULT_PACKAGE_POLICY_BODY = 'return { allowed: true, reasons: [] };';
-  const DEFAULT_PROJECT_STATUS_BODY = 'return { status: "Compliant", violations: [] };';
-
-  function wrapPackagePolicyBody(body: string): string {
-    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-    return `function packagePolicy(context) {\n${lines.join('\n')}\n}`;
-  }
-  function wrapProjectStatusBody(body: string): string {
-    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-    return `function projectStatus(context) {\n${lines.join('\n')}\n}`;
-  }
-  function wrapPrCheckBody(body: string): string {
-    const lines = body.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-    return `function pullRequestCheck(context) {\n${lines.join('\n')}\n}`;
-  }
-
-  function extractFunctionBody(code: string, fnName: string): string | null {
-    const regex = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
-    const match = regex.exec(code);
-    if (!match) return null;
-    const startIdx = match.index + match[0].length;
-    let depth = 1;
-    let i = startIdx;
-    while (i < code.length && depth > 0) {
-      if (code[i] === '{') depth++;
-      else if (code[i] === '}') depth--;
-      i++;
-    }
-    return code.slice(startIdx, i - 1).trim();
-  }
-
-  function parsePolicyCode(code: string): { pullRequestBody: string; complianceBody: string } {
-    const prBody = extractFunctionBody(code, 'pullRequestCheck');
-    const compBody = extractFunctionBody(code, 'projectCompliance');
-    return {
-      pullRequestBody: prBody ?? DEFAULT_PULL_REQUEST_BODY,
-      complianceBody: compBody ?? DEFAULT_COMPLIANCE_BODY,
-    };
-  }
-
-  function assemblePolicyCode(prBody: string, compBody: string): string {
-    const prLines = prBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-    const compLines = compBody.trim().split('\n').map((l) => (l ? `  ${l}` : ''));
-    return `function pullRequestCheck(context) {\n${prLines.join('\n')}\n}\n\nfunction projectCompliance(context) {\n${compLines.join('\n')}\n}`;
-  }
-
-  const loadPoliciesSection = useCallback(async () => {
-    if (!organizationId || !projectId) return;
-    setPoliciesLoading(true);
-    try {
-      const [orgPol, projPol, changes] = await Promise.all([
-        api.getOrganizationPolicies(organizationId),
-        api.getProjectPolicies(organizationId, projectId),
-        api.getProjectPolicyChanges(organizationId, projectId),
-      ]);
-      setPolicyChanges(changes ?? []);
-
-      const hasPhase4 = typeof (projPol as any).inherited_package_policy_code === 'string';
-      if (hasPhase4) {
-        setUsePhase4Policies(true);
-        const iPackage = (projPol as any).inherited_package_policy_code ?? '';
-        const iStatus = (projPol as any).inherited_project_status_code ?? '';
-        const iPR = (projPol as any).inherited_pr_check_code ?? '';
-        const ePackage = (projPol as any).effective_package_policy_code ?? iPackage;
-        const eStatus = (projPol as any).effective_project_status_code ?? iStatus;
-        const ePR = (projPol as any).effective_pr_check_code ?? iPR;
-        const iPackageBody = extractFunctionBody(iPackage, 'packagePolicy') ?? DEFAULT_PACKAGE_POLICY_BODY;
-        const iStatusBody = extractFunctionBody(iStatus, 'projectStatus') ?? DEFAULT_PROJECT_STATUS_BODY;
-        const iPRBody = extractFunctionBody(iPR, 'pullRequestCheck') ?? DEFAULT_PULL_REQUEST_BODY;
-        const ePackageBody = extractFunctionBody(ePackage, 'packagePolicy') ?? iPackageBody;
-        const eStatusBody = extractFunctionBody(eStatus, 'projectStatus') ?? iStatusBody;
-        const ePRBody = extractFunctionBody(ePR, 'pullRequestCheck') ?? iPRBody;
-        setInheritedPackagePolicyBody(iPackageBody);
-        setInheritedProjectStatusBody(iStatusBody);
-        setInheritedPrCheckBody(iPRBody);
-        setPackagePolicyBody(ePackageBody);
-        setProjectStatusBody(eStatusBody);
-        setPrCheckBody(ePRBody);
-      } else {
-        setUsePhase4Policies(false);
-      }
-
-      const inheritedCode = (orgPol.policy_code ?? '').trim();
-      const { pullRequestBody: iPR, complianceBody: iComp } = inheritedCode
-        ? parsePolicyCode(inheritedCode)
-        : { pullRequestBody: DEFAULT_PULL_REQUEST_BODY, complianceBody: DEFAULT_COMPLIANCE_BODY };
-      setInheritedComplianceBody(iComp);
-      setInheritedPullRequestBody(iPR);
-      setProjectPolicies(projPol);
-
-      const effectiveCode = (projPol.effective_policy_code ?? inheritedCode).trim();
-      const { pullRequestBody: ePR, complianceBody: eComp } = effectiveCode
-        ? parsePolicyCode(effectiveCode)
-        : { pullRequestBody: DEFAULT_PULL_REQUEST_BODY, complianceBody: DEFAULT_COMPLIANCE_BODY };
-      setEffectiveComplianceBody(eComp);
-      setEffectivePullRequestBody(ePR);
-      setComplianceBody(eComp);
-      setPullRequestBody(ePR);
-      setHasSyncedPolicies(true);
-      policiesDataLoadedForRef.current = `${organizationId}:${projectId}`;
-    } catch (e) {
-      console.error('Failed to load policies:', e);
-    } finally {
-      setPoliciesLoading(false);
-    }
-  }, [organizationId, projectId]);
-
-  // Load policies when policies section is active; skip if already loaded for this project (cache)
-  useEffect(() => {
-    if (activeSection !== 'policies' || !organizationId || !projectId) return;
-    const key = `${organizationId}:${projectId}`;
-    if (policiesDataLoadedForRef.current === key) return;
-    loadPoliciesSection();
-  }, [activeSection, organizationId, projectId, loadPoliciesSection]);
-
-  const complianceDirty = hasSyncedPolicies && complianceBody !== effectiveComplianceBody;
-  const pullRequestDirty = hasSyncedPolicies && pullRequestBody !== effectivePullRequestBody;
-
-  const pendingChangeByType = useMemo(() => {
-    const pending = (policyChanges ?? []).filter((c) => c.status === 'pending');
-    return {
-      package_policy: pending.find((c) => c.code_type === 'package_policy'),
-      project_status: pending.find((c) => c.code_type === 'project_status'),
-      pr_check: pending.find((c) => c.code_type === 'pr_check'),
-    };
-  }, [policyChanges]);
-
-  const packagePolicyDirty = usePhase4Policies && packagePolicyBody !== inheritedPackagePolicyBody;
-  const projectStatusDirty = usePhase4Policies && projectStatusBody !== inheritedProjectStatusBody;
-  const prCheckDirtyPhase4 = usePhase4Policies && prCheckBody !== inheritedPrCheckBody;
-
-  const handleRequestChangeSubmit = async () => {
-    if (!organizationId || !projectId || !requestChangeCodeType || !requestChangeMessage.trim()) return;
-    const body = requestChangeCodeType === 'package_policy' ? packagePolicyBody : requestChangeCodeType === 'project_status' ? projectStatusBody : prCheckBody;
-    const fullCode = requestChangeCodeType === 'package_policy' ? wrapPackagePolicyBody(body) : requestChangeCodeType === 'project_status' ? wrapProjectStatusBody(body) : wrapPrCheckBody(body);
-    setRequestChangeSubmitting(true);
-    try {
-      await api.createProjectPolicyChange(organizationId, projectId, {
-        code_type: requestChangeCodeType,
-        proposed_code: fullCode,
-        message: requestChangeMessage.trim(),
-      });
-      toast({ title: 'Change requested', description: 'Your request has been submitted for review.' });
-      closeRequestChangeSidebar();
-      await loadPoliciesSection();
-    } catch (e: any) {
-      toast({ title: 'Error', description: e?.message || 'Failed to submit change request', variant: 'destructive' });
-    } finally {
-      setRequestChangeSubmitting(false);
-    }
-  };
-
-  const handleRevertToOrg = async (codeType: 'package_policy' | 'project_status' | 'pr_check') => {
-    if (!organizationId || !projectId) return;
-    try {
-      await api.revertProjectPolicy(organizationId, projectId, codeType);
-      toast({ title: 'Reverted', description: 'Project now uses organization policy for this type.' });
-      await loadPoliciesSection();
-    } catch (e: any) {
-      toast({ title: 'Error', description: e?.message || 'Failed to revert', variant: 'destructive' });
-    }
-  };
-
-  const codeTypeLabel = (codeType: string) =>
-    codeType === 'package_policy' ? 'Package Policy' : codeType === 'project_status' ? 'Project Status' : 'Pull Request';
-
-  const closeRequestChangeSidebar = useCallback(() => {
-    setRequestChangeSidebarVisible(false);
-    if (requestChangeSidebarCloseTimeoutRef.current) clearTimeout(requestChangeSidebarCloseTimeoutRef.current);
-    requestChangeSidebarCloseTimeoutRef.current = setTimeout(() => {
-      requestChangeSidebarCloseTimeoutRef.current = null;
-      setRequestChangeCodeType(null);
-      setRequestChangeMessage('');
-    }, 150);
-  }, []);
-
-  useEffect(() => {
-    if (requestChangeCodeType) {
-      setRequestChangeSidebarVisible(false);
-      const raf = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setRequestChangeSidebarVisible(true));
-      });
-      return () => cancelAnimationFrame(raf);
-    }
-  }, [requestChangeCodeType]);
-
-  type ValidationCheckItem = { name: string; pass: boolean; error?: string };
-  const policyValidationChecks: ValidationCheckItem[] | null = policyValidationResult
-    ? [
-        { name: 'syntax', pass: policyValidationResult.syntaxPass, error: policyValidationResult.syntaxError },
-        { name: 'shape', pass: policyValidationResult.shapePass, error: policyValidationResult.shapeError },
-        { name: 'fetch_resilience', pass: policyValidationResult.fetchResiliencePass, error: policyValidationResult.fetchResilienceError },
-      ]
-    : null;
-  const showPolicyValidationFailedCard = policyValidationResult && policyValidationChecks && policyValidationChecks.some((c) => !c.pass) && policyValidationResultCodeType != null;
-
-  /** On Request change click: validate; if pass open sidebar, if fail show validation card. */
-  const handleRequestChangeClick = async (codeType: 'package_policy' | 'project_status' | 'pr_check') => {
-    if (!organizationId) return;
-    const body = codeType === 'package_policy' ? packagePolicyBody : codeType === 'project_status' ? projectStatusBody : prCheckBody;
-    const code = codeType === 'package_policy' ? wrapPackagePolicyBody(body) : codeType === 'project_status' ? wrapProjectStatusBody(body) : wrapPrCheckBody(body);
-    setPolicyValidating(true);
-    setPolicyValidationResult(null);
-    setPolicyValidationResultCodeType(null);
-    try {
-      const validation = await api.validatePolicyCode(organizationId, code, codeType);
-      setPolicyValidationResult(validation);
-      setPolicyValidationResultCodeType(codeType);
-      if (validation.allPassed) {
-        setPolicyValidationResult(null);
-        setPolicyValidationResultCodeType(null);
-        setRequestChangeMessage('');
-        setRequestChangeCodeType(codeType);
-      } else {
-        policyValidationCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message || 'Validation failed', variant: 'destructive' });
-    } finally {
-      setPolicyValidating(false);
-    }
-  };
-
-  // AI sidebar animation
-  useEffect(() => {
-    if (showAI) {
-      setAiPanelVisible(false);
-      const raf = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setAiPanelVisible(true));
-      });
-      return () => cancelAnimationFrame(raf);
-    } else {
-      setAiPanelVisible(false);
-    }
-  }, [showAI]);
-
-  useEffect(() => () => {
-    if (aiCloseTimeoutRef.current) clearTimeout(aiCloseTimeoutRef.current);
-  }, []);
-
-  useEffect(() => () => {
-    if (requestChangeSidebarCloseTimeoutRef.current) clearTimeout(requestChangeSidebarCloseTimeoutRef.current);
-  }, []);
-
-  const closeAIPanel = useCallback(() => {
-    setAiPanelVisible(false);
-    if (aiCloseTimeoutRef.current) clearTimeout(aiCloseTimeoutRef.current);
-    aiCloseTimeoutRef.current = setTimeout(() => {
-      aiCloseTimeoutRef.current = null;
-      setShowAI(false);
-    }, 150);
-  }, []);
 
   useEffect(() => {
     if (activeSection === 'repository' && organizationId && projectId) {
@@ -1058,7 +613,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         if (cached.connectedRepository?.auto_fix_vulnerabilities_enabled !== undefined) {
           setAutoFixVulnerabilitiesEnabled(cached.connectedRepository.auto_fix_vulnerabilities_enabled === true);
         }
-        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency || 'daily');
+        setSyncFrequency((cached.connectedRepository as any)?.sync_frequency === 'weekly' ? 'weekly' : 'daily');
+        setScanOnCommit((cached.connectedRepository as any)?.scan_on_commit === true);
       }
       loadProjectRepositories();
     }
@@ -1113,18 +669,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     return () => { if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; };
   }, [connectedRepository?.status, importStatus?.status, checkImportStatus]);
 
-  // Fetch extraction runs when Repository tab is active
+  // Fetch extraction runs when Repository tab is active.
+  // Only show the skeleton on the first load for a given project; on tab revisits
+  // (component stays mounted) keep the existing rows and refetch silently — no flash.
   useEffect(() => {
     if (activeSection !== 'repository' || !organizationId || !projectId) return;
-    setExtractionRunsLoading(true);
+    const isFirstLoadForProject = loadedRunsForProjectRef.current !== projectId;
+    if (isFirstLoadForProject) setExtractionRunsLoading(true);
     api.getExtractionRuns(organizationId, projectId).then((runs) => {
       setExtractionRuns(runs);
+      loadedRunsForProjectRef.current = projectId;
     }).catch(() => {
-      setExtractionRuns([]);
+      if (isFirstLoadForProject) setExtractionRuns([]);
     }).finally(() => {
       setExtractionRunsLoading(false);
     });
-   
+
   }, [activeSection, organizationId, projectId]);
 
   // Poll extraction runs when on Repository tab so status and "X ago" stay live
@@ -1160,9 +720,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
   // Track which project we've loaded access data for (skip refetch when returning to tab)
   const accessDataLoadedForRef = useRef<string | null>(null);
-  const notificationsDataLoadedForRef = useRef<string | null>(null);
-  const policiesDataLoadedForRef = useRef<string | null>(null);
-  const integrationCallbackHandledRef = useRef<string | null>(null);
 
   // Clear access state when project or org changes
   useEffect(() => {
@@ -1268,99 +825,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     loadAccessData();
   }, [activeSection, organizationId, projectId]);
 
-  const loadProjectConnections = useCallback(async () => {
-    if (!organizationId || !projectId) return;
-    setProjectConnectionsLoading(true);
-    try {
-      const data = await api.getProjectConnections(organizationId, projectId);
-      setProjectConnections(data);
-      notificationsDataLoadedForRef.current = `${organizationId}:${projectId}`;
-    } catch (err: any) {
-      toast({ title: 'Failed to load connections', description: err.message, variant: 'destructive' });
-    } finally {
-      setProjectConnectionsLoading(false);
-    }
-  }, [organizationId, projectId, toast]);
-
-  // Clear notifications cache and visit flag when project or org changes
-  useEffect(() => {
-    if (!organizationId || !projectId) return;
-    const key = `${organizationId}:${projectId}`;
-    if (notificationsDataLoadedForRef.current && notificationsDataLoadedForRef.current !== key) {
-      setProjectConnections({ inherited: [], team: [], project: [] });
-      setHasVisitedNotifications(false);
-      notificationsDataLoadedForRef.current = null;
-    }
-  }, [organizationId, projectId]);
-
-  // Clear policies cache and visit flag when project or org changes
-  useEffect(() => {
-    if (!organizationId || !projectId) return;
-    const key = `${organizationId}:${projectId}`;
-    if (policiesDataLoadedForRef.current && policiesDataLoadedForRef.current !== key) {
-      setProjectPolicies(null);
-      setHasSyncedPolicies(false);
-      setHasVisitedPolicies(false);
-      policiesDataLoadedForRef.current = null;
-    }
-  }, [organizationId, projectId]);
-
-  // Track when user visits Notifications/Policies tabs so we can keep them mounted when switching away (like Access)
-  useEffect(() => {
-    if (activeSection === 'notifications') setHasVisitedNotifications(true);
-    if (activeSection === 'policies') setHasVisitedPolicies(true);
-  }, [activeSection]);
-
-  // Load project connections when notifications section is active; skip if already loaded (cache)
-  useEffect(() => {
-    if (activeSection !== 'notifications' || !organizationId || !projectId) return;
-    const key = `${organizationId}:${projectId}`;
-    if (notificationsDataLoadedForRef.current === key) return;
-    loadProjectConnections();
-  }, [activeSection, organizationId, projectId, loadProjectConnections]);
-
-  // Handle integration OAuth callbacks (Slack, Discord, Jira, Linear, Asana) - toast + switch to destinations + refetch + clear URL
-  useEffect(() => {
-    const connected = searchParams.get('connected');
-    const error = searchParams.get('error');
-    const message = searchParams.get('message');
-    const callbackKey = connected || error ? `${connected || error}-${organizationId}-${projectId}` : null;
-
-    if (!callbackKey || integrationCallbackHandledRef.current === callbackKey) return;
-    if (!organizationId || !projectId) return;
-
-    // If we landed on General (e.g. old redirect URL), navigate to notifications first so we handle in context
-    if (activeSection !== 'notifications') {
-      navigate(`/organizations/${organizationId}/projects/${projectId}/settings/notifications?${searchParams.toString()}`, { replace: true });
-      return;
-    }
-
-    const providerLabels: Record<string, string> = {
-      slack: 'Slack', discord: 'Discord', jira: 'Jira', linear: 'Linear', asana: 'Asana',
-    };
-    const providerLabel = (connected || error) ? (providerLabels[connected || error || ''] || (connected || error)) : '';
-
-    if (connected) {
-      integrationCallbackHandledRef.current = callbackKey;
-      setNotificationActiveTab('destinations');
-      loadProjectConnections();
-      toast({
-        title: `${providerLabel} Connected`,
-        description: `${providerLabel} has been successfully connected to this project.`,
-      });
-      // Defer clearing URL so the toast has time to render before the re-render from setSearchParams
-      setTimeout(() => setSearchParams({}), 100);
-    } else if (error && message) {
-      integrationCallbackHandledRef.current = callbackKey;
-      toast({
-        title: `${providerLabel} Connection Failed`,
-        description: decodeURIComponent(message),
-        variant: 'destructive',
-      });
-      setTimeout(() => setSearchParams({}), 100);
-    }
-  }, [searchParams, activeSection, organizationId, projectId, navigate, toast, setSearchParams, loadProjectConnections, location.search]);
-
   // Available teams for adding (exclude owner and already contributing teams)
   const availableTeamsForAdding = useMemo(() => {
     if (!projectTeams || !teams.length) return [];
@@ -1371,6 +835,14 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     projectTeams.contributing_teams.forEach(t => existingTeamIds.add(t.id));
     return teams.filter(t => !existingTeamIds.has(t.id));
   }, [teams, projectTeams]);
+
+  // Teams this project can be transferred TO — every team except the one that already
+  // owns it (transferring to the current owner is a no-op). A contributing team is a
+  // valid target, so this only excludes the owner.
+  const transferableTeams = useMemo(
+    () => teams.filter(t => t.id !== projectTeams?.owner_team?.id),
+    [teams, projectTeams?.owner_team?.id],
+  );
 
   // Filter available teams by search query
   const filteredTeamsForAdding = useMemo(() => {
@@ -1516,14 +988,12 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   };
 
-  // Set initial selected team from project teams data (owner team)
+  // Reset the transfer picker to no selection when the project (owner) changes. The
+  // current owner isn't a transfer target, so there's no sensible default — the user
+  // picks the destination team explicitly.
   useEffect(() => {
-    if (projectTeams?.owner_team) {
-      setSelectedTeamId(projectTeams.owner_team.id);
-    } else if (project?.team_ids && project.team_ids.length > 0) {
-      setSelectedTeamId(project.team_ids[0] ?? null);
-    }
-  }, [projectTeams?.owner_team, project?.team_ids]);
+    setSelectedTeamId(null);
+  }, [projectTeams?.owner_team?.id, project?.id]);
 
   // Handle transfer project to new team
   const handleTransferProject = async () => {
@@ -1542,14 +1012,20 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       setIsTransferring(true);
       await api.transferProjectOwnership(organizationId, project.id, selectedTeamId);
 
+      // Move the project node to its new owner team on the graph in place — instant,
+      // no refetch (mirrors the name-save pattern).
+      onProjectTransferred?.(selectedTeamId);
+
       const selectedTeam = teams.find(t => t.id === selectedTeamId);
       toast({
         title: 'Ownership transferred',
         description: `Project ownership has been transferred to ${selectedTeam?.name || 'the selected team'}.`,
       });
 
-      await loadProjectTeams();
-      await reloadProject();
+      // Reconcile the sidebar's owner/contributing details in the background — don't
+      // block the spinner on these two full GETs (the slow part).
+      void loadProjectTeams();
+      void reloadProject();
     } catch (error: any) {
       toast({
         title: 'Transfer failed',
@@ -1579,24 +1055,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       icon: <Shield className="h-4 w-4 tab-icon-shake" />,
     },
     {
-      id: 'notifications',
-      label: 'Notifications',
-      icon: <Bell className="h-4 w-4 tab-icon-shake" />,
-    },
-    {
-      id: 'policies',
-      label: 'Policies',
-      icon: <BookOpen className="h-4 w-4 tab-icon-shake" />,
-    },
-    {
       id: 'scanning',
-      label: 'Scanning',
-      icon: <Radar className="h-4 w-4 tab-icon-shake" />,
-    },
-    {
-      id: 'scanners',
-      label: 'Scanners',
-      icon: <Boxes className="h-4 w-4 tab-icon-shake" />,
+      label: 'DAST',
+      icon: <Globe className="h-4 w-4 tab-icon-shake" />,
     },
   ];
 
@@ -1661,30 +1122,19 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
   const handleSaveName = async () => {
     if (!organizationId || !project?.id || !projectName.trim()) return;
+    const trimmed = projectName.trim();
     try {
-      setIsSaving(true);
-      await api.updateProject(organizationId, project.id, { name: projectName.trim() } as any);
+      setIsSavingName(true);
+      await api.updateProject(organizationId, project.id, { name: trimmed } as any);
+      // Patch the name into the graph/sidebar stores in place — no refetch. The PUT
+      // already returned the updated project, so a second GET only adds latency and
+      // wouldn't touch the graph stores anyway (which is why the node didn't update).
+      onProjectRenamed?.(trimmed);
       toast({ title: 'Success', description: 'Project name saved' });
-      await reloadProject();
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'Failed to save project name' });
     } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleSaveImportance = async () => {
-    if (!organizationId || !project?.id) return;
-    try {
-      setIsSaving(true);
-      await api.updateProject(organizationId, project.id, { importance });
-      toast({ title: 'Success', description: 'Project importance saved' });
-      await reloadProject();
-    } catch (error: any) {
-      console.error('Failed to save project importance:', error);
-      toast({ title: 'Error', description: 'We couldn’t save your changes. Try again in a moment.', variant: 'destructive' });
-    } finally {
-      setIsSaving(false);
+      setIsSavingName(false);
     }
   };
 
@@ -1861,21 +1311,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
 
   const handleSaveSyncFrequency = async () => {
     if (!organizationId || !projectId) return;
-    const saved = (connectedRepository as any)?.sync_frequency;
-    if (syncFrequency === saved) return;
+    const savedFreq = (connectedRepository as any)?.sync_frequency ?? 'daily';
+    const savedScan = (connectedRepository as any)?.scan_on_commit === true;
+    if (syncFrequency === savedFreq && scanOnCommit === savedScan) return;
     setSyncFrequencySaving(true);
     try {
       await api.updateProjectRepositorySettings(organizationId, projectId, {
+        scan_on_commit: scanOnCommit,
         sync_frequency: syncFrequency,
       });
       setConnectedRepository((r) =>
-        r ? { ...r, sync_frequency: syncFrequency } as any : null
+        r ? { ...r, scan_on_commit: scanOnCommit, sync_frequency: syncFrequency } as any : null
       );
-      const labels: Record<string, string> = { on_commit: 'On every commit', daily: 'Daily', weekly: 'Weekly', manual: 'Manual only' };
-      toast({ title: `Sync frequency set to ${labels[syncFrequency] || syncFrequency}` });
+      toast({ title: 'Sync settings saved' });
     } catch (err: any) {
       toast({
-        title: 'Failed to update sync frequency',
+        title: 'Failed to update sync settings',
         description: (err as Error).message,
         variant: 'destructive',
       });
@@ -1957,52 +1408,29 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       This is your project's visible name. It will be displayed throughout the dashboard.
                     </p>
                     <div className="max-w-md">
-                      <Input
+                      <input
                         type="text"
                         value={projectName}
-                        onChange={(e) => setProjectName(e.target.value)}
+                        onChange={(e) => canEditSettings && setProjectName(e.target.value)}
+                        readOnly={!canEditSettings}
                         placeholder="Enter project name"
-                        className="bg-black/20 border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary transition-all"
+                        className={cn("w-full px-3 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors", !canEditSettings && "opacity-60 cursor-not-allowed")}
                       />
                     </div>
                   </div>
-                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                    <p className="text-xs text-foreground-secondary">
-                      Changes will be visible to all project members.
-                    </p>
+                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                     <Button
+                      variant="green"
                       onClick={handleSaveName}
-                      disabled={isSaving || projectName === project?.name || !projectName.trim()}
-                      size="sm"
-                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                      disabled={isSavingName || !canEditSettings || projectName === project?.name || !projectName.trim()}
+                      className="relative"
                     >
-                      {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                      Save
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Importance Card */}
-                <div className="bg-background-card border border-border rounded-lg overflow-hidden">
-                  <div className="p-6">
-                    <h3 className="text-base font-semibold text-foreground mb-1">Importance</h3>
-                    <p className="text-sm text-foreground-secondary mb-4">
-                      Multiplied into every depscore for this project. 1.0 is the default — drag up to amplify findings on a critical project, down to dampen them on a low-priority experiment.
-                    </p>
-                    <ImportanceSlider value={importance} onChange={setImportance} disabled={!canEditSettings} />
-                  </div>
-                  <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                    <p className="text-xs text-foreground-secondary">
-                      Changes will be visible to all project members.
-                    </p>
-                    <Button
-                      onClick={handleSaveImportance}
-                      disabled={isSaving || !canEditSettings || Math.abs(importance - (project?.importance ?? IMP_DEFAULT)) < 0.05}
-                      size="sm"
-                      className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-                    >
-                      {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                      Save
+                      <span className={isSavingName ? 'invisible' : undefined}>Save</span>
+                      {isSavingName && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -2014,10 +1442,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     <p className="text-sm text-foreground-secondary mb-4">
                       Transfer this project to another team within your organization.
                     </p>
-                    {teams.length > 0 || loadingTeams ? (
+                    {transferableTeams.length > 0 || loadingTeams ? (
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Owner Team</label>
+                          <label className="text-sm font-medium text-foreground">New owner team</label>
                           {loadingTeams ? (
                             <div className="max-w-md w-full px-3 py-2.5 bg-background-content border border-border rounded-lg flex items-center gap-2">
                               <div className="h-5 w-5 rounded bg-muted animate-pulse flex-shrink-0" />
@@ -2028,9 +1456,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               <ProjectTeamSelect
                                 value={selectedTeamId}
                                 onChange={setSelectedTeamId}
-                                teams={teams}
+                                teams={transferableTeams}
                                 placeholder="Select a team"
-                                className="bg-black/20 border border-border rounded-lg text-sm text-foreground transition-colors"
+                                className="bg-background-card border border-border rounded-lg text-sm text-foreground transition-colors"
                               />
                             </div>
                           )}
@@ -2039,28 +1467,24 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     ) : (
                       <div className="flex items-center gap-2 text-sm text-foreground-secondary bg-black/20 rounded-lg p-3 border border-border">
                         <Users className="h-4 w-4 flex-shrink-0" />
-                        <span>No teams available. Create a team first to transfer this project.</span>
+                        <span>No other teams to transfer to. Create another team first.</span>
                       </div>
                     )}
                   </div>
-                  {teams.length > 0 && (
-                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                      <p className="text-xs text-foreground-secondary">
-                        This will change which team owns this project.
-                      </p>
+                  {transferableTeams.length > 0 && (
+                    <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                       <Button
                         onClick={handleTransferProject}
-                        variant="outline"
-                        size="sm"
-                        className="h-8"
-                        disabled={!selectedTeamId || isTransferring || projectTeams?.owner_team?.id === selectedTeamId}
+                        variant="green"
+                        className="relative"
+                        disabled={!selectedTeamId || isTransferring}
                       >
-                        {isTransferring ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                        ) : (
-                          <UserPlus className="h-3.5 w-3.5 mr-2" />
+                        <span className={isTransferring ? 'invisible' : undefined}>Transfer</span>
+                        {isTransferring && (
+                          <span className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          </span>
                         )}
-                        Transfer
                       </Button>
                     </div>
                   )}
@@ -2082,11 +1506,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       {!showDeleteConfirm && project && (
                         <Button
                           onClick={() => setShowDeleteConfirm(true)}
-                          variant="outline"
-                          size="sm"
-                          className="flex-shrink-0 h-8 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                          variant="destructive"
+                          className="flex-shrink-0"
                         >
-                          <Trash2 className="h-3.5 w-3.5 mr-2" />
                           Delete
                         </Button>
                       )}
@@ -2102,22 +1524,21 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           value={deleteConfirmText}
                           onChange={(e) => setDeleteConfirmText(e.target.value)}
                           placeholder={project.name}
-                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-all"
+                          autoFocus
+                          className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-destructive/50 focus:border-destructive transition-colors"
                         />
                         <div className="flex gap-2">
                           <Button
                             onClick={handleDelete}
                             variant="destructive"
-                            size="sm"
                             disabled={deleteConfirmText !== project.name || isDeletingProject}
-                            className="h-8"
                           >
-                            {isDeletingProject ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
+                            <span className={isDeletingProject ? 'invisible' : undefined}>Delete Forever</span>
+                            {isDeletingProject && (
+                              <span className="absolute inset-0 flex items-center justify-center">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              </span>
                             )}
-                            Delete Forever
                           </Button>
                           <Button
                             onClick={() => {
@@ -2204,9 +1625,11 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           <div className="text-base font-semibold text-foreground truncate font-mono">
                             {connectedRepository.repo_full_name}
                           </div>
-                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5">
-                            <GitBranch className="h-3.5 w-3.5 shrink-0" />
-                            {connectedRepository.default_branch || 'main'}
+                          <div className="text-xs text-foreground-secondary flex items-center gap-1 mt-0.5 font-mono">
+                            <Folder className="h-3.5 w-3.5 shrink-0" />
+                            {connectedRepository.package_json_path
+                              ? `/${connectedRepository.package_json_path.replace(/^\/+/, '')}`
+                              : 'Repository root'}
                           </div>
                         </div>
                       </div>
@@ -2226,18 +1649,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                   )}
                 </section>
 
-                {/* Note: Cannot disconnect — right below repo card */}
-                {connectedRepository && (
-                  <div className="rounded-lg border border-border bg-background-card px-4 py-3">
-                    <div className="flex gap-3">
-                      <Info className="h-5 w-5 text-foreground-secondary shrink-0 mt-0.5" />
-                      <p className="text-sm text-foreground-secondary">
-                        Projects cannot be disconnected from a repository. To use a different repository, create a new project or remove this project.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
                 {/* Sync Frequency */}
                 {connectedRepository && (
                   <section>
@@ -2247,74 +1658,80 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <p className="text-sm text-foreground-secondary mb-4">
                           When Deptex re-extracts dependencies from this repository.
                         </p>
-                        <div className="w-full space-y-2" role="radiogroup" aria-label="Sync frequency">
-                          {(() => {
-                            const plan = organization?.plan?.toLowerCase?.() ?? 'free';
-                            const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
-                            return [
-                              { value: 'on_commit', label: 'On every commit', description: 'Re-extract on each push to the default branch.', locked: !canUseOnCommit },
-                              { value: 'daily', label: 'Daily', description: 'Re-extract once per day.', locked: false },
-                              { value: 'weekly', label: 'Weekly', description: 'Re-extract once per week.', locked: false },
-                              { value: 'manual', label: 'Manual only', description: 'Re-extract only when you trigger a sync.', locked: false },
+                        {/* Part 1 — scan on every commit (event-driven, real-time); a single toggleable card styled like the floor options */}
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={scanOnCommit}
+                          aria-label="Scan on every commit"
+                          onClick={() => setScanOnCommit((v) => !v)}
+                          className={cn(
+                            'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                            scanOnCommit
+                              ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                              : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                          )}
+                        >
+                          <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', scanOnCommit ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-foreground">Scan on every commit</div>
+                            <p className="text-xs text-muted-foreground mt-0.5">Re-extract on each push to the default branch — catches a newly-added vulnerable dependency immediately.</p>
+                          </div>
+                        </button>
+
+                        {/* Part 2 — periodic floor (always runs, independent of the commit toggle) */}
+                        <div className="mt-6">
+                          <div className="text-sm font-medium text-foreground mb-1">Re-check for new vulnerabilities</div>
+                          <p className="text-xs text-muted-foreground mb-3">Even without new commits, re-scan dependencies against newly-published advisories at least this often.</p>
+                          <div className="w-full space-y-2" role="radiogroup" aria-label="Re-check frequency">
+                            {[
+                              { value: 'daily', label: 'Daily', description: 'Re-check once per day.' },
+                              { value: 'weekly', label: 'Weekly', description: 'Re-check once per week.' },
                             ].map((opt) => {
                               const isSelected = syncFrequency === opt.value;
-                              const isLocked = opt.locked;
                               return (
-                                <div key={opt.value} className="relative">
-                                  <button
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={isSelected}
-                                    aria-disabled={isLocked}
-                                    onClick={() => !isLocked && handleSyncFrequencySelect(opt.value)}
-                                    disabled={isLocked}
-                                    className={cn(
-                                      'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
-                                      isLocked && 'opacity-75 cursor-not-allowed',
-                                      !isLocked && (isSelected
-                                        ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
-                                        : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30')
-                                    )}
-                                  >
-                                    <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-sm font-medium text-foreground flex items-center gap-2">
-                                        {opt.label}
-                                        {isLocked && (
-                                          <span className="text-xs font-normal text-foreground-secondary bg-transparent border border-foreground-secondary/50 px-1.5 py-0.5 rounded">
-                                            Pro or higher
-                                          </span>
-                                        )}
-                                      </div>
-                                      <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
-                                    </div>
-                                  </button>
-                                </div>
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={isSelected}
+                                  onClick={() => handleSyncFrequencySelect(opt.value)}
+                                  className={cn(
+                                    'w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all',
+                                    isSelected
+                                      ? 'bg-background-card border-foreground/50 ring-1 ring-foreground/20'
+                                      : 'bg-black/20 border-border text-foreground hover:border-foreground-secondary/30 hover:bg-black/30'
+                                  )}
+                                >
+                                  <div className={cn('h-4 w-4 rounded-full border-2 flex-shrink-0 transition-colors', isSelected ? 'border-foreground bg-foreground' : 'border-foreground-secondary/50 bg-transparent')} aria-hidden />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-foreground">{opt.label}</div>
+                                    <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
+                                  </div>
+                                </button>
                               );
-                            });
-                          })()}
+                            })}
+                          </div>
                         </div>
                       </div>
-                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-between">
-                        <p className="text-xs text-foreground-secondary">
-                          Choose when to re-extract dependencies. Click Save to apply.
-                        </p>
+                      <div className="px-6 py-3 bg-black/20 border-t border-border flex items-center justify-end">
                         {(() => {
                           const savedSync = (connectedRepository as any)?.sync_frequency ?? 'daily';
-                          const plan = organization?.plan?.toLowerCase?.() ?? 'free';
-                          const canUseOnCommit = ['pro', 'team', 'enterprise'].includes(plan);
-                          const wouldSaveOnCommit = syncFrequency === 'on_commit' && !canUseOnCommit;
-                          const hasChange = syncFrequency !== savedSync && !wouldSaveOnCommit;
+                          const savedScan = (connectedRepository as any)?.scan_on_commit === true;
+                          const hasChange = syncFrequency !== savedSync || scanOnCommit !== savedScan;
                           return (
                             <Button
+                              variant="green"
                               onClick={handleSaveSyncFrequency}
-                              disabled={syncFrequencySaving || !hasChange}
-                              size="sm"
-                              variant="default"
-                              className="h-8 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 disabled:opacity-50 disabled:pointer-events-none"
+                              disabled={syncFrequencySaving || !canEditSettings || !hasChange}
+                              className="relative"
                             >
-                              {syncFrequencySaving && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-                              Save
+                              <span className={syncFrequencySaving ? 'invisible' : undefined}>Save</span>
+                              {syncFrequencySaving && (
+                                <span className="absolute inset-0 flex items-center justify-center">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                </span>
+                              )}
                             </Button>
                           );
                         })()}
@@ -2500,7 +1917,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                           Contributing Teams
                         </span>
-                        <div className="h-7 w-24 bg-muted rounded animate-pulse"></div>
+                        <div className="h-8 w-28 bg-muted rounded-lg animate-pulse"></div>
                       </div>
                       <div className="divide-y divide-border">
                         {[1, 2].map((i) => (
@@ -2523,7 +1940,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">
                           Additional Members
                         </span>
-                        <div className="h-7 w-28 bg-muted rounded animate-pulse"></div>
+                        <div className="h-8 w-28 bg-muted rounded-lg animate-pulse"></div>
                       </div>
                       <div className="divide-y divide-border">
                         {[1, 2, 3].map((i) => (
@@ -2590,10 +2007,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         </span>
                         <Button
                           onClick={() => setShowAddTeamSidepanel(true)}
-                          size="sm"
-                          className="h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
-                          <Plus className="h-3 w-3 mr-1.5" />
                           Add Team
                         </Button>
                       </div>
@@ -2648,10 +2063,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         </span>
                         <Button
                           onClick={() => setShowAddMemberSidepanel(true)}
-                          size="sm"
-                          className="h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
+                          variant="green"
                         >
-                          <Plus className="h-3 w-3 mr-1.5" />
                           Add Member
                         </Button>
                       </div>
@@ -2725,910 +2138,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
               </div>
             )}
 
-            {/* Keep Notifications mounted after first visit so it doesn't reload when switching tabs (like Access) */}
-            {(activeSection === 'notifications' || hasVisitedNotifications) && organizationId && projectId && (
-              <div style={{ display: activeSection === 'notifications' ? undefined : 'none' }}>
-                <div className="flex items-center justify-between gap-4 flex-wrap pb-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-2xl font-bold text-foreground">Notifications</h2>
-                      <Link to="/docs/notification-rules" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground" aria-label="Notification rules docs">
-                        <BookOpen className="h-4 w-4" />
-                      </Link>
-                    </div>
-                    <p className="mt-1.5 text-sm text-foreground-secondary">
-                      Create custom rules with code to decide when to notify. Send alerts to Slack, email, Jira, webhooks, and more. The AI assistant can help you write the trigger logic.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-xs gap-1.5" disabled={notifPauseLoading}>
-                          {notifPauseLoading ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <PauseCircle className="h-3.5 w-3.5" />
-                          )}
-                          {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? 'Paused' : 'Pause All'}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {notifPausedUntil && new Date(notifPausedUntil) > new Date() ? (
-                          <DropdownMenuItem onClick={async () => {
-                            setNotifPauseLoading(true);
-                            try {
-                              await api.updateProject(organizationId!, projectId!, { notifications_paused_until: null });
-                              setNotifPausedUntil(null);
-                              await reloadProject();
-                              toast({ title: 'Resumed', description: 'Notifications have been resumed.' });
-                            } catch { toast({ title: 'Error', description: 'Failed to resume notifications.', variant: 'destructive' }); }
-                            finally { setNotifPauseLoading(false); }
-                          }}>
-                            Resume notifications
-                          </DropdownMenuItem>
-                        ) : (
-                          <>
-                            {[{ label: 'Pause for 1 hour', hours: 1 }, { label: 'Pause for 4 hours', hours: 4 }, { label: 'Pause for 24 hours', hours: 24 }].map(({ label, hours }) => (
-                              <DropdownMenuItem key={hours} onClick={async () => {
-                                setNotifPauseLoading(true);
-                                try {
-                                  const until = new Date(Date.now() + hours * 3600000).toISOString();
-                                  await api.updateProject(organizationId!, projectId!, { notifications_paused_until: until });
-                                  setNotifPausedUntil(until);
-                                  await reloadProject();
-                                  toast({ title: 'Paused', description: `Notifications paused for ${hours} hour${hours > 1 ? 's' : ''}.` });
-                                } catch { toast({ title: 'Error', description: 'Failed to pause notifications.', variant: 'destructive' }); }
-                                finally { setNotifPauseLoading(false); }
-                              }}>
-                                {label}
-                              </DropdownMenuItem>
-                            ))}
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    {notificationActiveTab === 'notifications' && organizationId && projectId && (
-                      <Button
-                        onClick={() => notificationCreateRef.current?.()}
-                        className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-8 text-sm"
-                      >
-                        Create Rule
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {notifPausedUntil && new Date(notifPausedUntil) > new Date() && (
-                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 mt-4">
-                    <PauseCircle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                    <span className="text-sm text-amber-400">
-                      Notifications paused until {new Date(notifPausedUntil).toLocaleString()}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between border-b border-border pb-px mt-6">
-                  <div className="flex items-center gap-6">
-                    <button
-                      type="button"
-                      onClick={() => setNotificationActiveTab('notifications')}
-                      className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                        notificationActiveTab === 'notifications' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                      }`}
-                    >
-                      Notifications
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setNotificationActiveTab('destinations')}
-                      className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                        notificationActiveTab === 'destinations' ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                      }`}
-                    >
-                      Destinations
-                    </button>
-                  </div>
-                </div>
-
-                {notificationActiveTab === 'notifications' && organizationId && projectId && (
-                  <div className="pt-6">
-                    <NotificationRulesSection
-                      organizationId={organizationId}
-                      projectId={projectId}
-                      hideTitle
-                      createHandlerRef={notificationCreateRef}
-                      connections={[...(projectConnections.inherited || []), ...(projectConnections.team || []), ...(projectConnections.project || [])]}
-                    />
-                  </div>
-                )}
-
-                {notificationActiveTab === 'destinations' && (
-                  <div className="pt-6 space-y-8">
-                    <div>
-                      <h3 className="text-lg font-semibold text-foreground mb-3">Inherited from organization</h3>
-                      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                        <table className="w-full table-fixed">
-                          <colgroup>
-                            <col className="w-[200px]" />
-                            <col />
-                            <col className="w-[120px]" />
-                          </colgroup>
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {projectConnectionsLoading ? (
-                              [1, 2, 3].map((i) => (
-                                <tr key={i}>
-                                  <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3" />
-                                </tr>
-                              ))
-                            ) : projectConnections.inherited.length === 0 ? (
-                              <tr>
-                                <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                  No inherited integrations. Connect integrations in Organization Settings.
-                                </td>
-                              </tr>
-                            ) : (
-                              projectConnections.inherited.map((conn: CiCdConnection) => (
-                                <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center gap-2.5">
-                                      {(conn.provider === 'slack' || conn.provider === 'discord') && (
-                                        <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />
-                                      )}
-                                      {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                      {(conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') && (
-                                        conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                        conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      <span className="text-sm font-medium text-foreground">
-                                        {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
-                                          conn.provider === 'email' ? 'Email' :
-                                          conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className="text-sm text-foreground truncate block">{conn.display_name || '-'}</span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-xs text-foreground-secondary px-2 py-1 rounded border border-border bg-transparent">Inherited</span>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    {/* Inherited from team */}
-                    <div>
-                      <h3 className="text-lg font-semibold text-foreground mb-3">Inherited from team</h3>
-                      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                        <table className="w-full table-fixed">
-                          <colgroup>
-                            <col className="w-[200px]" />
-                            <col />
-                            <col className="w-[120px]" />
-                          </colgroup>
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {projectConnectionsLoading ? (
-                              [1, 2].map((i) => (
-                                <tr key={i}>
-                                  <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3" />
-                                </tr>
-                              ))
-                            ) : (projectConnections.team || []).length === 0 ? (
-                              <tr>
-                                <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                  No team integrations. Connect integrations in Team Settings.
-                                </td>
-                              </tr>
-                            ) : (
-                              (projectConnections.team || []).map((conn: CiCdConnection) => (
-                                <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center gap-2.5">
-                                      {(conn.provider === 'slack' || conn.provider === 'discord') && (
-                                        <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />
-                                      )}
-                                      {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                      {(conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') && (
-                                        conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                        conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      <span className="text-sm font-medium text-foreground">
-                                        {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
-                                          conn.provider === 'email' ? 'Email' :
-                                          conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className="text-sm text-foreground truncate block">{conn.display_name || '-'}</span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-xs text-foreground-secondary px-2 py-1 rounded border border-border bg-transparent">Inherited</span>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    <div>
-                      <h3 className="text-lg font-semibold text-foreground mb-3">Project-specific</h3>
-                      {canEditSettings && (
-                        <div className="flex items-center gap-2 mb-4 flex-wrap">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={() => { setProjectEmailToAdd(''); setShowProjectEmailDialog(true); }}
-                          >
-                            <Mail className="h-3.5 w-3.5 mr-1.5" />
-                            Add Email
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={async () => {
-                              try {
-                                const { redirectUrl } = await api.connectSlackOrg(organizationId!, projectId!);
-                                window.location.href = redirectUrl;
-                              } catch (err: any) {
-                                toast({ title: 'Error', description: err.message || 'Failed to connect Slack', variant: 'destructive' });
-                              }
-                            }}
-                          >
-                            <img src="/images/integrations/slack.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                            Add Slack
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={async () => {
-                              try {
-                                const { redirectUrl } = await api.connectDiscordOrg(organizationId!, projectId!);
-                                window.location.href = redirectUrl;
-                              } catch (err: any) {
-                                toast({ title: 'Error', description: err.message || 'Failed to connect Discord', variant: 'destructive' });
-                              }
-                            }}
-                          >
-                            <img src="/images/integrations/discord.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                            Add Discord
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="outline" size="sm" className="text-xs">
-                                <img src="/images/integrations/jira.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                                Add Jira
-                                <ChevronDown className="h-3 w-3 ml-1" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={async () => {
-                                try {
-                                  const { redirectUrl } = await api.connectJiraOrg(organizationId!, projectId!);
-                                  window.location.href = redirectUrl;
-                                } catch (err: any) {
-                                  toast({ title: 'Error', description: err.message || 'Failed to connect Jira', variant: 'destructive' });
-                                }
-                              }}>
-                                Jira Cloud (OAuth)
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => {
-                                setJiraPatBaseUrl('');
-                                setJiraPatToken('');
-                                setShowJiraPatDialog(true);
-                              }}>
-                                Jira Data Center (PAT)
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={async () => {
-                              try {
-                                const { redirectUrl } = await api.connectLinearOrg(organizationId!, projectId!);
-                                window.location.href = redirectUrl;
-                              } catch (err: any) {
-                                toast({ title: 'Error', description: err.message || 'Failed to connect Linear', variant: 'destructive' });
-                              }
-                            }}
-                          >
-                            <img src="/images/integrations/linear.png" alt="" className="h-3.5 w-3.5 rounded-sm mr-1.5" />
-                            Add Linear
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={() => { setProjectCustomType('notification'); setProjectCustomName(''); setProjectCustomWebhookUrl(''); setShowProjectCustomDialog(true); }}
-                          >
-                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                            Add Custom Notifications
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={() => { setProjectCustomType('ticketing'); setProjectCustomName(''); setProjectCustomWebhookUrl(''); setShowProjectCustomDialog(true); }}
-                          >
-                            <Webhook className="h-3.5 w-3.5 mr-1.5" />
-                            Add Custom Ticketing
-                          </Button>
-                        </div>
-                      )}
-                      <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                        <table className="w-full table-fixed">
-                          <colgroup>
-                            <col className="w-[200px]" />
-                            <col />
-                            <col className="w-[140px]" />
-                          </colgroup>
-                          <thead className="bg-background-card-header border-b border-border">
-                            <tr>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Provider</th>
-                              <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Connection</th>
-                              <th className="text-right px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase tracking-wider"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {projectConnectionsLoading ? (
-                              [1, 2].map((i) => (
-                                <tr key={i}>
-                                  <td className="px-4 py-3"><div className="h-4 w-20 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3"><div className="h-4 w-28 bg-muted animate-pulse rounded" /></td>
-                                  <td className="px-4 py-3" />
-                                </tr>
-                              ))
-                            ) : projectConnections.project.length === 0 ? (
-                              <tr>
-                                <td colSpan={3} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                  No project-specific integrations. Add one above.
-                                </td>
-                              </tr>
-                            ) : (
-                              projectConnections.project.map((conn: CiCdConnection) => (
-                                <tr key={conn.id} className="group hover:bg-table-hover transition-colors">
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center gap-2.5">
-                                      {(conn.provider === 'slack' || conn.provider === 'discord') && (
-                                        <img src={`/images/integrations/${conn.provider}.png`} alt="" className="h-5 w-5 rounded-sm" />
-                                      )}
-                                      {conn.provider === 'email' && <Mail className="h-5 w-5 text-foreground-secondary" />}
-                                      {(conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing') && (
-                                        conn.metadata?.icon_url ? <img src={conn.metadata.icon_url} alt="" className="h-5 w-5 rounded-sm" /> : <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      {!['slack', 'discord', 'email', 'custom_notification', 'custom_ticketing'].includes(conn.provider) && (
-                                        conn.provider === 'jira' ? <img src="/images/integrations/jira.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        conn.provider === 'linear' ? <img src="/images/integrations/linear.png" alt="" className="h-5 w-5 rounded-sm" /> :
-                                        <Webhook className="h-5 w-5 text-foreground-secondary" />
-                                      )}
-                                      <span className="text-sm font-medium text-foreground">
-                                        {conn.provider === 'custom_notification' || conn.provider === 'custom_ticketing' ? 'Custom' :
-                                          conn.provider === 'email' ? 'Email' :
-                                          conn.provider === 'jira' ? (conn.metadata?.type === 'data_center' ? 'Jira DC' : 'Jira') :
-                                          conn.provider === 'slack' ? 'Slack' : conn.provider === 'discord' ? 'Discord' : conn.provider === 'linear' ? 'Linear' : conn.provider}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className="text-sm text-foreground truncate block">
-                                      {conn.provider === 'email' ? conn.metadata?.email || conn.display_name : conn.display_name || '-'}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    {canEditSettings && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="text-xs hover:bg-destructive/10 hover:border-destructive/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        onClick={async () => {
-                                          if (!confirm('Remove this integration?')) return;
-                                          try {
-                                            await api.deleteProjectConnection(organizationId!, projectId!, conn.id);
-                                            toast({ title: 'Removed', description: 'Integration removed.' });
-                                            loadProjectConnections();
-                                          } catch (err: any) {
-                                            toast({ title: 'Failed to remove', description: err.message, variant: 'destructive' });
-                                          }
-                                        }}
-                                      >
-                                        Remove
-                                      </Button>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Keep Policies mounted after first visit so it doesn't reload when switching tabs (like Notifications) */}
-            {(activeSection === 'policies' || hasVisitedPolicies) && (
-              <div style={{ display: activeSection === 'policies' ? undefined : 'none' }}>
-                <div className="sticky top-0 z-10 bg-background-content pb-2">
-                  <div className="mb-6 flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-2xl font-bold text-foreground">Policies</h2>
-                      <Link to="/docs/policies" target="_blank" rel="noopener noreferrer" className="shrink-0 text-foreground-secondary hover:text-foreground" aria-label="Policies docs">
-                        <BookOpen className="h-4 w-4" />
-                      </Link>
-                    </div>
-                    {canViewSettings && (
-                      <Button variant="outline" size="sm" className="text-xs" onClick={() => setShowAI(true)}>
-                        AI Assistant
-                      </Button>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-6 border-b border-border pb-px">
-                    {(['package_policy', 'project_status', 'pr_check', 'change_requests'] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        onClick={() => setPolicyActiveTab(tab)}
-                        className={cn(
-                          'pb-3 text-sm font-medium border-b-2 -mb-px transition-colors',
-                          policyActiveTab === tab ? 'text-foreground border-foreground' : 'text-foreground-secondary hover:text-foreground border-transparent'
-                        )}
-                      >
-                        {tab === 'change_requests' ? 'Change requests' : codeTypeLabel(tab)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {policyActiveTab === 'package_policy' && (
-                  <>
-                    {policiesLoading ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}>
-                            <div className="space-y-1.5 animate-pulse">
-                              <div className="h-3 bg-white/10 rounded w-[70%]" /><div className="h-3 bg-white/10 rounded w-[55%] ml-4" /><div className="h-3 bg-white/10 rounded w-[80%] ml-4" />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : projectPolicies ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        {usePhase4Policies ? (
-                          <>
-                            {pendingChangeByType.package_policy && (
-                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <Clock className="h-4 w-4 text-warning" />
-                                  <span className="text-sm text-foreground">Package policy change under review</span>
-                                </div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <JsLangBadge className="text-xs" />
-                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">packagePolicy</span>
-                                  {!pendingChangeByType.package_policy && (packagePolicyBody === inheritedPackagePolicyBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
-                                </div>
-                                {canViewSettings && !pendingChangeByType.package_policy && !packagePolicyDirty && packagePolicyBody !== inheritedPackagePolicyBody && (
-                                  <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('package_policy')}>Revert to org</Button>
-                                )}
-                              </div>
-                              <div className="bg-background-card relative">
-                                {canViewSettings && !pendingChangeByType.package_policy && packagePolicyDirty && (
-                                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-                                    <Button variant="outline" size="sm" onClick={() => { setPackagePolicyBody(inheritedPackagePolicyBody); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium backdrop-blur border-border bg-background-card/95 hover:bg-background-card shadow-sm">
-                                      Cancel changes
-                                    </Button>
-                                    <Button size="sm" onClick={() => handleRequestChangeClick('package_policy')} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 shadow-sm">
-                                      {policyValidating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                                      Request change
-                                    </Button>
-                                  </div>
-                                )}
-                                <PolicyCodeEditor value={packagePolicyBody} onChange={(val) => { setPackagePolicyBody(val ?? ''); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} readOnly={!canViewSettings || !!pendingChangeByType.package_policy} fitContent />
-                              </div>
-                            </div>
-                            {showPolicyValidationFailedCard && policyValidationResultCodeType === 'package_policy' && policyActiveTab === 'package_policy' && policyValidationChecks && (
-                              <div ref={policyValidationCardRef} className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10">
-                                <div className="flex items-center gap-3">
-                                  <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive"><X className="h-4 w-4" /></div>
-                                  <span className="text-base font-medium text-destructive">Validation failed</span>
-                                </div>
-                                <div className="mt-3 space-y-2 pl-12">
-                                  {policyValidationChecks.filter((c) => !c.pass).map((check, i) => (
-                                    <div key={i} className="text-sm">
-                                      <span className="font-medium text-destructive">
-                                        {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
-                                      </span>
-                                      {check.error && <p className="text-foreground-secondary mt-0.5">{check.error}</p>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card/80 mt-6 px-4 py-3">
-                              <div className="flex gap-3">
-                                <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                                <p className="text-sm text-foreground-secondary min-w-0">
-                                  This code runs on each dependency in this project and decides whether the package is allowed or blocked (license, score, tier, etc.). The project inherits the organization&apos;s package policy by default; use the header actions to request a change or revert to the org code.
-                                </p>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            {(projectPolicies.pending_exceptions ?? []).filter((p) => p.status === 'pending' && ['compliance', 'full'].includes(p.policy_type ?? '')).map((pending) => (
-                              <div key={pending.id} className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Compliance exception under review</span></div>
-                                {canViewSettings && (
-                                  <Button variant="outline" size="sm" disabled={!!policyCancellingId} className="h-7 text-xs" onClick={async () => { if (!organizationId || !pending.id) return; setPolicyCancellingId(pending.id); try { await api.deletePolicyException(organizationId, pending.id); toast({ title: 'Request withdrawn', description: 'Exception request has been cancelled.' }); await loadPoliciesSection(); } catch (e: any) { toast({ title: 'Error', description: e.message || 'Failed to cancel request', variant: 'destructive' }); } finally { setPolicyCancellingId(null); } }}>
-                                    {policyCancellingId === pending.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <X className="h-3.5 w-3.5 mr-1.5" />} Cancel request
-                                  </Button>
-                                )}
-                              </div>
-                            ))}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project Compliance</span>
-                                  {!complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && ((projectPolicies.accepted_exceptions ?? []).some((e) => ['compliance', 'full'].includes(e.policy_type ?? 'full')) ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge> : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>)}
-                                </div>
-                                {canViewSettings && complianceDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full')) && (<div className="flex items-center gap-1.5"><Button variant="outline" size="sm" onClick={() => setComplianceBody(effectiveComplianceBody)} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none">Cancel</Button><Button size="sm" onClick={() => setShowExceptionSidebar('compliance')} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20">Apply for Exception</Button></div>)}
-                              </div>
-                              <div className="bg-background-card"><PolicyCodeEditor value={complianceBody} onChange={setComplianceBody} readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['compliance', 'full'].includes(p.policy_type ?? 'full'))} fitContent /></div>
-                            </div>
-                            <div className="rounded-lg border border-border bg-background-card/80 mt-6 px-4 py-3">
-                              <div className="flex gap-3">
-                                <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                                <p className="text-sm text-foreground-secondary min-w-0">
-                                  This code runs on each dependency in this project and decides whether the package is allowed or blocked. The project inherits the organization&apos;s package policy by default; use Apply for Exception to request a project-level override.
-                                </p>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
-                    )}
-                  </>
-                )}
-
-                {policyActiveTab === 'project_status' && (
-                  <>
-                    {policiesLoading ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/10 rounded w-[70%]" /></div></div>
-                        </div>
-                      </div>
-                    ) : projectPolicies ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        {usePhase4Policies ? (
-                          <>
-                            {pendingChangeByType.project_status && (
-                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Project status change under review</span></div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">projectStatus</span>
-                                  {!pendingChangeByType.project_status && (projectStatusBody === inheritedProjectStatusBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
-                                </div>
-                                {canViewSettings && !pendingChangeByType.project_status && !projectStatusDirty && projectStatusBody !== inheritedProjectStatusBody && (
-                                  <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('project_status')}>Revert to org</Button>
-                                )}
-                              </div>
-                              <div className="bg-background-card relative">
-                                {canViewSettings && !pendingChangeByType.project_status && projectStatusDirty && (
-                                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-                                    <Button variant="outline" size="sm" onClick={() => { setProjectStatusBody(inheritedProjectStatusBody); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium backdrop-blur border-border bg-background-card/95 hover:bg-background-card shadow-sm">
-                                      Cancel changes
-                                    </Button>
-                                    <Button size="sm" onClick={() => handleRequestChangeClick('project_status')} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 shadow-sm">
-                                      {policyValidating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                                      Request change
-                                    </Button>
-                                  </div>
-                                )}
-                                <PolicyCodeEditor value={projectStatusBody} onChange={(val) => { setProjectStatusBody(val ?? ''); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} readOnly={!canViewSettings || !!pendingChangeByType.project_status} fitContent />
-                              </div>
-                            </div>
-                            {showPolicyValidationFailedCard && policyValidationResultCodeType === 'project_status' && policyActiveTab === 'project_status' && policyValidationChecks && (
-                              <div ref={policyValidationCardRef} className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10" role="alert">
-                                <div className="flex items-center gap-3">
-                                  <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive"><X className="h-4 w-4" /></div>
-                                  <span className="text-base font-medium text-destructive">Validation failed</span>
-                                </div>
-                                <div className="mt-3 space-y-2 pl-12">
-                                  {policyValidationChecks.filter((c) => !c.pass).map((check, i) => (
-                                    <div key={i} className="text-sm">
-                                      <span className="font-medium text-destructive">
-                                        {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
-                                      </span>
-                                      {check.error && <p className="text-foreground-secondary mt-0.5">{check.error}</p>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card/80 mt-6 px-4 py-3">
-                              <div className="flex gap-3">
-                                <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                                <p className="text-sm text-foreground-secondary min-w-0">
-                                  This code runs after dependency and compliance evaluation and assigns a status to this project. The project inherits the organization&apos;s status code by default; use the header actions to request a change or revert to the org code.
-                                </p>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <p className="text-sm text-foreground-secondary">Project status is set by your organization&apos;s Status code in Organization Settings → Statuses & Tiers → Status Code.</p>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
-                    )}
-                  </>
-                )}
-
-                {policyActiveTab === 'pr_check' && (
-                  <>
-                    {policiesLoading ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                          <div className="px-4 py-2.5 bg-background-card-header border-b border-border"><div className="h-3.5 bg-muted rounded w-32 animate-pulse" /></div>
-                          <div className="px-4 py-3 font-mono text-[13px] leading-6" style={{ minHeight: '180px', backgroundColor: CODE_BLOCK_BG }}><div className="space-y-1.5 animate-pulse"><div className="h-3 bg-white/10 rounded w-[70%]" /></div></div>
-                        </div>
-                      </div>
-                    ) : projectPolicies ? (
-                      <div className="space-y-6 pt-2 pb-8">
-                        {usePhase4Policies ? (
-                          <>
-                            {pendingChangeByType.pr_check && (
-                              <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Pull request check change under review</span></div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <JsLangBadge className="text-xs" />
-                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">pullRequestCheck</span>
-                                  {!pendingChangeByType.pr_check && (prCheckBody === inheritedPrCheckBody ? <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge> : null)}
-                                </div>
-                                {canViewSettings && !pendingChangeByType.pr_check && !prCheckDirtyPhase4 && prCheckBody !== inheritedPrCheckBody && (
-                                  <Button variant="outline" size="sm" className="h-5 min-h-5 px-1.5 py-0 text-[11px]" onClick={() => handleRevertToOrg('pr_check')}>Revert to org</Button>
-                                )}
-                              </div>
-                              <div className="bg-background-card relative">
-                                {canViewSettings && !pendingChangeByType.pr_check && prCheckDirtyPhase4 && (
-                                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-                                    <Button variant="outline" size="sm" onClick={() => { setPrCheckBody(inheritedPrCheckBody); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium backdrop-blur border-border bg-background-card/95 hover:bg-background-card shadow-sm">
-                                      Cancel changes
-                                    </Button>
-                                    <Button size="sm" onClick={() => handleRequestChangeClick('pr_check')} disabled={policyValidating} className="h-7 px-2 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 shadow-sm">
-                                      {policyValidating && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                                      Request change
-                                    </Button>
-                                  </div>
-                                )}
-                                <PolicyCodeEditor value={prCheckBody} onChange={(val) => { setPrCheckBody(val ?? ''); setPolicyValidationResult(null); setPolicyValidationResultCodeType(null); }} readOnly={!canViewSettings || !!pendingChangeByType.pr_check} fitContent />
-                              </div>
-                            </div>
-                            {showPolicyValidationFailedCard && policyValidationResultCodeType === 'pr_check' && policyActiveTab === 'pr_check' && policyValidationChecks && (
-                              <div ref={policyValidationCardRef} className="mt-3 p-4 rounded-lg border border-destructive/30 bg-destructive/10" role="alert">
-                                <div className="flex items-center gap-3">
-                                  <div className="rounded-md bg-destructive/20 border border-destructive/40 w-9 h-9 flex items-center justify-center flex-shrink-0 text-destructive"><X className="h-4 w-4" /></div>
-                                  <span className="text-base font-medium text-destructive">Validation failed</span>
-                                </div>
-                                <div className="mt-3 space-y-2 pl-12">
-                                  {policyValidationChecks.filter((c) => !c.pass).map((check, i) => (
-                                    <div key={i} className="text-sm">
-                                      <span className="font-medium text-destructive">
-                                        {check.name === 'syntax' ? 'Syntax' : check.name === 'shape' ? 'Return value' : check.name === 'fetch_resilience' ? 'Fetch handling' : check.name.replace(/_/g, ' ')} failed
-                                      </span>
-                                      {check.error && <p className="text-foreground-secondary mt-0.5">{check.error}</p>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            <div className="rounded-lg border border-border bg-background-card/80 mt-6 px-4 py-3">
-                              <div className="flex gap-3">
-                                <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                                <p className="text-sm text-foreground-secondary min-w-0">
-                                  This code runs when pull requests change lockfiles or manifests and returns whether the PR should pass or be blocked. The project inherits the organization&apos;s PR check by default; use the header actions to request a change or revert to the org code.
-                                </p>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            {(projectPolicies.pending_exceptions ?? []).filter((p) => p.status === 'pending' && ['pull_request', 'full'].includes(p.policy_type ?? '')).map((pending) => (
-                              <div key={pending.id} className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2"><Clock className="h-4 w-4 text-warning" /><span className="text-sm text-foreground">Pull request exception under review</span></div>
-                                {canViewSettings && (
-                                  <Button variant="outline" size="sm" disabled={!!policyCancellingId} className="h-7 text-xs" onClick={async () => { if (!organizationId || !pending.id) return; setPolicyCancellingId(pending.id); try { await api.deletePolicyException(organizationId, pending.id); toast({ title: 'Request withdrawn', description: 'Exception request has been cancelled.' }); await loadPoliciesSection(); } catch (e: any) { toast({ title: 'Error', description: e.message || 'Failed to cancel request', variant: 'destructive' }); } finally { setPolicyCancellingId(null); } }}>
-                                    {policyCancellingId === pending.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <X className="h-3.5 w-3.5 mr-1.5" />} Cancel request
-                                  </Button>
-                                )}
-                              </div>
-                            ))}
-                            <div className="rounded-lg border border-border bg-background-card overflow-hidden">
-                              <div className="px-4 py-2 bg-background-card-header border-b border-border min-h-[36px] flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Pull Request Check</span>
-                                  {!pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && ((projectPolicies.accepted_exceptions ?? []).some((e) => ['pull_request', 'full'].includes(e.policy_type ?? 'full')) ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-500">Exception active</Badge> : <Badge variant="outline" className="text-[10px] px-1.5 py-0">Inherited from org</Badge>)}
-                                </div>
-                                {canViewSettings && pullRequestDirty && !(projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full')) && (<div className="flex items-center gap-1.5"><Button variant="outline" size="sm" onClick={() => setPullRequestBody(effectivePullRequestBody)} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none">Cancel</Button><Button size="sm" onClick={() => setShowExceptionSidebar('pullRequest')} className="h-5 min-h-5 px-1.5 py-0 text-[11px] leading-none shadow-sm gap-1 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20">Apply for Exception</Button></div>)}
-                              </div>
-                              <div className="bg-background-card"><PolicyCodeEditor value={pullRequestBody} onChange={setPullRequestBody} readOnly={!canViewSettings || (projectPolicies.pending_exceptions ?? []).some((p) => ['pull_request', 'full'].includes(p.policy_type ?? 'full'))} fitContent /></div>
-                            </div>
-                            <div className="rounded-lg border border-border bg-background-card/80 mt-6 px-4 py-3">
-                              <div className="flex gap-3">
-                                <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                                <p className="text-sm text-foreground-secondary min-w-0">
-                                  This code runs when pull requests change lockfiles or manifests and can pass or block the PR. The project inherits the organization&apos;s PR check by default; use Apply for Exception to request a project-level override.
-                                </p>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="rounded-lg border border-border p-8 text-center text-foreground-secondary text-sm">Failed to load policies.</div>
-                    )}
-                  </>
-                )}
-
-                {policyActiveTab === 'change_requests' && (
-                  <div className="space-y-6 pt-2 pb-8 min-w-0">
-                    <div className="rounded-lg border border-border bg-background-card overflow-x-auto">
-                      <table className="w-full table-auto min-w-[640px]">
-                        <colgroup>
-                          <col className="w-[130px]" />
-                          <col className="w-[110px]" />
-                          <col className="min-w-[120px]" />
-                          <col className="w-[95px]" />
-                          <col className="w-[90px]" />
-                        </colgroup>
-                        <thead className="bg-background-card-header border-b border-border">
-                          <tr>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Reason</th>
-                            <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Date</th>
-                            <th className="text-right px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {policiesLoading ? (
-                            [0, 1, 2].map((i) => (
-                              <tr key={i} className="animate-pulse">
-                                <td className="px-4 py-3"><div className="h-5 bg-muted rounded w-16" /></td>
-                                <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-20" /></td>
-                                <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-3/4" /></td>
-                                <td className="px-4 py-3"><div className="h-4 bg-muted rounded w-16" /></td>
-                                <td className="px-4 py-3 text-right"><div className="h-7 bg-muted rounded w-12 ml-auto" /></td>
-                              </tr>
-                            ))
-                          ) : (() => {
-                            const changes = policyChanges ?? [];
-                            const allExceptions: ProjectPolicyException[] = [
-                              ...(projectPolicies?.pending_exceptions ?? []),
-                              ...(projectPolicies?.accepted_exceptions ?? []),
-                              ...(projectPolicies?.revoked_exceptions ?? []),
-                            ];
-                            const hasChanges = changes.length > 0;
-                            const hasExceptions = allExceptions.length > 0;
-                            if (!hasChanges && !hasExceptions) {
-                              return (
-                                <tr>
-                                  <td colSpan={5} className="px-4 py-6 text-center text-sm text-foreground-secondary">
-                                    No change requests
-                                  </td>
-                                </tr>
-                              );
-                            }
-                            return (
-                              <>
-                                {changes.map((c) => (
-                                  <tr key={`change-${c.id}`} className="group hover:bg-table-hover transition-colors">
-                                    <td className="px-4 py-3">
-                                      {c.status === 'pending' && <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>}
-                                      {c.status === 'accepted' && <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>}
-                                      {c.status === 'rejected' && <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary">{codeTypeLabel(c.code_type)}</td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary min-w-0 max-w-[200px]">
-                                      <span className="block truncate" title={c.message || undefined}>{c.message || '\u2014'}</span>
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary whitespace-nowrap">{new Date(c.created_at).toLocaleDateString()}</td>
-                                    <td className="px-4 py-3 text-right whitespace-nowrap" />
-                                  </tr>
-                                ))}
-                                {allExceptions.map((ex) => (
-                                  <tr key={`ex-${ex.id}`} className="group hover:bg-table-hover transition-colors">
-                                    <td className="px-4 py-3">
-                                      {ex.status === 'pending' && <Badge variant="warning" className="gap-1"><Clock className="h-3 w-3" /> Pending</Badge>}
-                                      {ex.status === 'accepted' && <Badge variant="success" className="gap-1"><Check className="h-3 w-3" /> Accepted</Badge>}
-                                      {ex.status === 'rejected' && <Badge variant="destructive" className="gap-1"><X className="h-3 w-3" /> Rejected</Badge>}
-                                      {ex.status === 'revoked' && <Badge variant="destructive" className="gap-1"><Ban className="h-3 w-3" /> Revoked</Badge>}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary">
-                                      {ex.policy_type === 'pull_request' ? 'Legacy (Pull Request)' : ex.policy_type === 'compliance' ? 'Legacy (Compliance)' : 'Legacy (Full)'}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary min-w-0 max-w-[200px]">
-                                      <span className="block truncate" title={ex.reason || undefined}>{ex.reason || '\u2014'}</span>
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-foreground-secondary whitespace-nowrap">{new Date(ex.created_at).toLocaleDateString()}</td>
-                                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                                      {ex.base_policy_code && ex.requested_policy_code && (
-                                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setViewingExceptionId(ex.id)}>
-                                          <Eye className="h-3.5 w-3.5 mr-1" /> View
-                                        </Button>
-                                      )}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </>
-                            );
-                          })()}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             {activeSection === 'scanning' && projectId && (
               <DastScanningTab
                 projectId={projectId}
@@ -3636,180 +2145,9 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
               />
             )}
 
-            {activeSection === 'scanners' && organizationId && projectId && (
-              <div className="space-y-6">
-                <div className="mb-6 flex items-center gap-2">
-                  <h2 className="text-2xl font-bold text-foreground">Scanners</h2>
-                </div>
-                <ScannersPanel
-                  organizationId={organizationId}
-                  projectId={projectId}
-                  canManage={!!userPermissions?.edit_settings}
-                />
-              </div>
-            )}
           </div>
         </div>
       </div>
-
-      {/* Request policy change sidebar – opens after validation passes */}
-      {requestChangeCodeType && createPortal(
-        <div className="fixed inset-0 z-50">
-          <div
-            className={cn('fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150', requestChangeSidebarVisible ? 'opacity-100' : 'opacity-0')}
-            onClick={closeRequestChangeSidebar}
-          />
-          <div
-            className={cn(
-              'fixed right-4 top-4 bottom-4 w-full max-w-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              requestChangeSidebarVisible ? 'translate-x-0' : 'translate-x-full'
-            )}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 pt-5 pb-3 flex-shrink-0">
-              <h2 className="text-xl font-semibold text-foreground">Request policy change</h2>
-              <p className="text-sm text-muted-foreground mt-1">Add a message for reviewers. Your request will appear under Change requests until an org admin accepts or rejects it.</p>
-            </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
-              {projectPolicies?.request_will_auto_accept && (
-                <div className="rounded-lg border border-border bg-background-card/80 px-4 py-3 mb-4 flex gap-3">
-                  <Info className="h-5 w-5 text-foreground-muted flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-foreground-secondary min-w-0">
-                    You have organization permissions to manage policies. This change will be applied immediately (auto-accepted).
-                  </p>
-                </div>
-              )}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Message</label>
-                  <Input
-                    type="text"
-                    value={requestChangeMessage}
-                    onChange={(e) => setRequestChangeMessage(e.target.value)}
-                    placeholder=""
-                    disabled={requestChangeSubmitting}
-                    className="h-9 w-full"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <span className="text-sm font-medium text-foreground">Changes</span>
-                  <div className="rounded-lg overflow-hidden border border-border bg-[#1a1c1e] shadow-inner">
-                    <PolicyDiffViewer
-                      baseCode={
-                        requestChangeCodeType === 'package_policy'
-                          ? wrapPackagePolicyBody(inheritedPackagePolicyBody)
-                          : requestChangeCodeType === 'project_status'
-                            ? wrapProjectStatusBody(inheritedProjectStatusBody)
-                            : wrapPrCheckBody(inheritedPrCheckBody)
-                      }
-                      requestedCode={
-                        requestChangeCodeType === 'package_policy'
-                          ? wrapPackagePolicyBody(packagePolicyBody)
-                          : requestChangeCodeType === 'project_status'
-                            ? wrapProjectStatusBody(projectStatusBody)
-                            : wrapPrCheckBody(prCheckBody)
-                      }
-                      minHeight="200px"
-                      className="text-[11px]"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header flex items-center justify-end gap-3">
-              <Button variant="outline" size="sm" onClick={closeRequestChangeSidebar} disabled={requestChangeSubmitting}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleRequestChangeSubmit}
-                disabled={requestChangeSubmitting || !requestChangeMessage.trim()}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              >
-                {requestChangeSubmitting && <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />}
-                Submit request
-              </Button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
-
-      {/* Policy Exception View Sidebar */}
-      {viewingExceptionId && projectPolicies && project && (() => {
-        const allEx = [...(projectPolicies.pending_exceptions ?? []), ...(projectPolicies.accepted_exceptions ?? []), ...(projectPolicies.revoked_exceptions ?? [])];
-        const ex = allEx.find((e) => e.id === viewingExceptionId);
-        if (!ex?.base_policy_code || !ex?.requested_policy_code) return null;
-        return (
-          <PolicyExceptionSidebar
-            key={viewingExceptionId}
-            mode="view"
-            baseCode={ex.base_policy_code}
-            requestedCode={ex.requested_policy_code}
-            projectName={project.name}
-            reason={ex.reason}
-            status={ex.status}
-            onClose={() => setViewingExceptionId(null)}
-          />
-        );
-      })()}
-
-      {/* Policy Exception Sidebar */}
-      {showExceptionSidebar && organizationId && projectId && (
-        <PolicyExceptionSidebar
-          mode="apply"
-          baseCode={assemblePolicyCode(effectivePullRequestBody, effectiveComplianceBody)}
-          requestedCode={assemblePolicyCode(
-            showExceptionSidebar === 'pullRequest' ? pullRequestBody : effectivePullRequestBody,
-            showExceptionSidebar === 'compliance' ? complianceBody : effectiveComplianceBody
-          )}
-          onApply={async (reason) => {
-            const code = assemblePolicyCode(pullRequestBody, complianceBody);
-            await api.createPolicyException(organizationId, projectId, {
-              reason,
-              requested_policy_code: code,
-              policy_type: showExceptionSidebar === 'compliance' ? 'compliance' : 'pull_request',
-            });
-            toast({ title: 'Exception requested', description: 'Your request has been sent for review.' });
-            setShowExceptionSidebar(null);
-            await loadPoliciesSection();
-          }}
-          onClose={() => setShowExceptionSidebar(null)}
-        />
-      )}
-
-      {/* AI Assistant */}
-      {showAI && organizationId && createPortal(
-        <div className="fixed inset-0 z-50">
-          <div
-            className={cn(
-              'fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity duration-150',
-              aiPanelVisible ? 'opacity-100' : 'opacity-0'
-            )}
-            onClick={() => { aiAssistantCloseRef.current ? aiAssistantCloseRef.current() : closeAIPanel(); }}
-          />
-          <div
-            className={cn(
-              'fixed right-4 top-4 bottom-4 w-full max-w-[40rem] bg-background-card-header border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-transform duration-150 ease-out',
-              // Extra offset past 100% so border/shadow don’t peek when closed
-              aiPanelVisible ? 'translate-x-0' : 'translate-x-[calc(100%+32px)]'
-            )}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <PolicyAIAssistant
-              organizationId={organizationId}
-              complianceBody={complianceBody}
-              pullRequestBody={pullRequestBody}
-              onUpdateCompliance={setComplianceBody}
-              onUpdatePullRequest={setPullRequestBody}
-              onClose={closeAIPanel}
-              variant="edge"
-              innerCloseRef={aiAssistantCloseRef}
-            />
-          </div>
-        </div>,
-        document.body
-      )}
 
       {/* Add Team Modal */}
       <Dialog open={showAddTeamSidepanel} onOpenChange={(open) => {
@@ -3819,27 +2157,17 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
           setSelectedTeamsToAdd([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[85vh]">
           {/* Header */}
-          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-            <DialogTitle className="text-xl font-semibold text-foreground">Add Contributing Teams</DialogTitle>
-            <button
-              onClick={() => {
-                setShowAddTeamSidepanel(false);
-                setTeamSearchQuery('');
-                setSelectedTeamsToAdd([]);
-              }}
-              className="text-foreground-secondary hover:text-foreground transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle>Add Contributing Teams</DialogTitle>
+            <DialogDescription className="mt-1">
+              Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
+            </DialogDescription>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-            <p className="text-sm text-foreground-secondary mb-4">
-              Select teams to give them access to this project. Contributing teams can view the project but cannot manage settings.
-            </p>
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
 
             {/* Search */}
             <div className="relative mb-4">
@@ -3849,7 +2177,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 placeholder="Search teams..."
                 value={teamSearchQuery}
                 onChange={(e) => setTeamSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                className="w-full pl-10 pr-4 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
               />
             </div>
 
@@ -3863,8 +2191,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       key={team.id}
                       onClick={() => toggleTeamSelection(team.id)}
                       className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                        ? 'bg-primary/10 border-primary'
-                        : 'bg-background-card border-border hover:border-primary/50'
+                        ? 'bg-background-subtle border-foreground/40'
+                        : 'bg-background-card border-border hover:border-foreground-secondary/40'
                         }`}
                     >
                       <div className="flex-1 min-w-0">
@@ -3878,7 +2206,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         )}
                       </div>
                       <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                        ? 'bg-primary border-primary text-primary-foreground'
+                        ? 'bg-foreground border-foreground text-background'
                         : 'border-border'
                         }`}>
                         {isSelected && <Check className="h-3 w-3" />}
@@ -3906,28 +2234,36 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
           </div>
 
-          {/* Footer with Add Button */}
-          {filteredTeamsForAdding.length > 0 && (
-            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
-              <Button
-                onClick={handleAddContributingTeams}
-                disabled={selectedTeamsToAdd.length === 0 || addingTeam}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              >
-                {addingTeam ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Adding
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add {selectedTeamsToAdd.length > 0 ? `(${selectedTeamsToAdd.length})` : ''}
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
+          {/* Footer */}
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
+            <Button
+              variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={addingTeam}
+              onClick={() => {
+                setShowAddTeamSidepanel(false);
+                setTeamSearchQuery('');
+                setSelectedTeamsToAdd([]);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddContributingTeams}
+              variant="green"
+              disabled={selectedTeamsToAdd.length === 0 || addingTeam}
+              className="relative"
+            >
+              <span className={addingTeam ? 'invisible' : undefined}>
+                Add{selectedTeamsToAdd.length > 0 ? ` (${selectedTeamsToAdd.length})` : ''}
+              </span>
+              {addingTeam && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -3939,27 +2275,17 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
           setSelectedMembersToAdd([]);
         }
       }}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[80vh]">
+        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden flex flex-col min-h-[480px] max-h-[85vh]">
           {/* Header */}
-          <div className="px-6 py-5 border-b border-border flex items-center justify-between flex-shrink-0">
-            <DialogTitle className="text-xl font-semibold text-foreground">Add Project Members</DialogTitle>
-            <button
-              onClick={() => {
-                setShowAddMemberSidepanel(false);
-                setMemberSearchQuery('');
-                setSelectedMembersToAdd([]);
-              }}
-              className="text-foreground-secondary hover:text-foreground transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
+          <div className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle>Add Project Members</DialogTitle>
+            <DialogDescription className="mt-1">
+              Select members to give them direct access to this project. Members already on teams with access are not shown.
+            </DialogDescription>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-6">
-            <p className="text-sm text-foreground-secondary mb-4">
-              Select members to give them direct access to this project. Members already on teams with access are not shown.
-            </p>
+          <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4">
 
             {/* Search */}
             <div className="relative mb-4">
@@ -3969,7 +2295,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 placeholder="Search members..."
                 value={memberSearchQuery}
                 onChange={(e) => setMemberSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+                className="w-full pl-10 pr-4 py-2.5 bg-background-card border border-border rounded-lg text-sm text-foreground placeholder:text-foreground-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:border-input transition-colors"
               />
             </div>
 
@@ -3983,8 +2309,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                       key={member.user_id}
                       onClick={() => toggleMemberSelection(member.user_id)}
                       className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${isSelected
-                        ? 'bg-primary/10 border-primary'
-                        : 'bg-background-card border-border hover:border-primary/50'
+                        ? 'bg-background-subtle border-foreground/40'
+                        : 'bg-background-card border-border hover:border-foreground-secondary/40'
                         }`}
                     >
                       <img
@@ -4007,7 +2333,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                         )}
                       </div>
                       <div className={`h-5 w-5 rounded border flex items-center justify-center transition-colors ${isSelected
-                        ? 'bg-primary border-primary text-primary-foreground'
+                        ? 'bg-foreground border-foreground text-background'
                         : 'border-border'
                         }`}>
                         {isSelected && <Check className="h-3 w-3" />}
@@ -4035,222 +2361,34 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
             )}
           </div>
 
-          {/* Footer with Add Button */}
-          {filteredMembersForAdding.length > 0 && (
-            <div className="px-6 py-4 flex items-center justify-end flex-shrink-0">
-              <Button
-                onClick={handleAddDirectMembers}
-                disabled={selectedMembersToAdd.length === 0 || addingMember}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              >
-                {addingMember ? (
-                  <>
-                    <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full mr-2" />
-                    Adding
-                  </>
-                ) : (
-                  <>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add {selectedMembersToAdd.length > 0 ? `(${selectedMembersToAdd.length})` : ''}
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Project Email Notification Dialog */}
-      <Dialog open={showProjectEmailDialog} onOpenChange={setShowProjectEmailDialog}>
-        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-          <div className="px-6 pt-6 pb-4 border-b border-border">
-            <div className="flex items-center gap-3">
-              <div className="h-7 w-7 rounded flex items-center justify-center text-foreground-secondary">
-                <Mail className="h-7 w-7" />
-              </div>
-              <div>
-                <DialogTitle>Add Email</DialogTitle>
-                <DialogDescription>Add an email address to receive notification alerts.</DialogDescription>
-              </div>
-            </div>
-          </div>
-          <div className="px-6 py-6 grid gap-4 bg-background">
-            <div className="grid gap-2">
-              <Label htmlFor="project-email-to-add">Email address</Label>
-              <Input
-                id="project-email-to-add"
-                type="email"
-                value={projectEmailToAdd}
-                onChange={(e) => setProjectEmailToAdd(e.target.value)}
-                placeholder=""
-              />
-            </div>
-          </div>
-          <DialogFooter className="px-6 py-4 bg-background">
-            <Button variant="outline" onClick={() => setShowProjectEmailDialog(false)}>Cancel</Button>
+          {/* Footer */}
+          <DialogFooter className="px-6 py-4 flex-shrink-0 border-t border-border bg-background-card-header sm:rounded-b-lg sm:justify-between">
             <Button
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              disabled={!projectEmailToAdd.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(projectEmailToAdd.trim()) || projectEmailSaving}
-              onClick={async () => {
-                if (!organizationId || !projectId) return;
-                setProjectEmailSaving(true);
-                try {
-                  await api.createProjectEmailNotification(organizationId, projectId, projectEmailToAdd.trim());
-                  toast({ title: 'Added', description: 'Email notification added successfully.' });
-                  setShowProjectEmailDialog(false);
-                  setProjectEmailToAdd('');
-                  loadProjectConnections();
-                } catch (err: any) {
-                  toast({ title: 'Error', description: err.message || 'Failed to add email.', variant: 'destructive' });
-                } finally {
-                  setProjectEmailSaving(false);
-                }
+              variant="outline"
+              className="h-8 rounded-lg px-3"
+              disabled={addingMember}
+              onClick={() => {
+                setShowAddMemberSidepanel(false);
+                setMemberSearchQuery('');
+                setSelectedMembersToAdd([]);
               }}
             >
-              {projectEmailSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-              Add
+              Cancel
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Project Custom Integration Dialog */}
-      <Dialog open={showProjectCustomDialog} onOpenChange={setShowProjectCustomDialog}>
-        <DialogContent hideClose className="sm:max-w-[520px] bg-background p-0 gap-0 overflow-hidden">
-          <div className="px-6 pt-6 pb-4 border-b border-border">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <DialogTitle>Add custom {projectCustomType === 'notification' ? 'notifications' : 'ticketing'}</DialogTitle>
-                <DialogDescription className="mt-1">
-                  {projectCustomType === 'notification'
-                    ? 'Set up a custom webhook endpoint for notifications.'
-                    : 'Set up a custom webhook endpoint for ticketing (e.g. create issues).'}
-                </DialogDescription>
-              </div>
-              <Link to="/docs/integrations" target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm" className="text-xs shrink-0">
-                  <BookOpen className="h-3.5 w-3.5 mr-1.5" />
-                  Docs
-                </Button>
-              </Link>
-            </div>
-          </div>
-          <div className="px-6 py-4 grid gap-4 bg-background">
-            <div className="grid gap-2">
-              <Label htmlFor="project-custom-name">Name</Label>
-              <Input
-                id="project-custom-name"
-                value={projectCustomName}
-                onChange={(e) => setProjectCustomName(e.target.value)}
-                placeholder=""
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="project-custom-webhook">Webhook URL</Label>
-              <Input
-                id="project-custom-webhook"
-                type="url"
-                value={projectCustomWebhookUrl}
-                onChange={(e) => setProjectCustomWebhookUrl(e.target.value)}
-                placeholder=""
-                className={projectCustomWebhookUrl.trim() && !projectCustomWebhookUrl.trim().toLowerCase().startsWith('https://') ? 'border-destructive focus-visible:ring-destructive/50' : undefined}
-              />
-            </div>
-          </div>
-          <DialogFooter className="px-6 py-4 bg-background">
-            <Button variant="outline" onClick={() => setShowProjectCustomDialog(false)}>Cancel</Button>
             <Button
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              disabled={!projectCustomName.trim() || !projectCustomWebhookUrl.trim() || projectCustomSaving || !/^https:\/\/[^\s]+$/i.test(projectCustomWebhookUrl.trim())}
-              onClick={async () => {
-                if (!organizationId || !projectId) return;
-                setProjectCustomSaving(true);
-                try {
-                  await api.createProjectCustomIntegration(organizationId, projectId, {
-                    name: projectCustomName.trim(),
-                    type: projectCustomType,
-                    webhook_url: projectCustomWebhookUrl.trim(),
-                  });
-                  toast({ title: 'Created', description: 'Custom integration created.' });
-                  setShowProjectCustomDialog(false);
-                  setProjectCustomName('');
-                  setProjectCustomWebhookUrl('');
-                  loadProjectConnections();
-                } catch (err: any) {
-                  toast({ title: 'Error', description: err.message || 'Failed to save.', variant: 'destructive' });
-                } finally {
-                  setProjectCustomSaving(false);
-                }
-              }}
+              onClick={handleAddDirectMembers}
+              variant="green"
+              disabled={selectedMembersToAdd.length === 0 || addingMember}
+              className="relative"
             >
-              {projectCustomSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-              Create connection
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Jira Data Center PAT Dialog (for project Destinations) */}
-      <Dialog open={showJiraPatDialog} onOpenChange={setShowJiraPatDialog}>
-        <DialogContent hideClose className="sm:max-w-[440px] bg-background p-0 gap-0">
-          <div className="px-6 pt-6 pb-4 border-b border-border">
-            <div className="flex items-center gap-3">
-              <img src="/images/integrations/jira.png" alt="Jira" className="h-7 w-7 rounded object-contain" />
-              <div>
-                <DialogTitle>Jira Data Center</DialogTitle>
-                <DialogDescription>Connect via Personal Access Token</DialogDescription>
-              </div>
-            </div>
-          </div>
-
-          <div className="px-6 py-6 grid gap-4 bg-background">
-            <div className="grid gap-2">
-              <Label htmlFor="jira-url">Server URL</Label>
-              <Input
-                id="jira-url"
-                type="url"
-                value={jiraPatBaseUrl}
-                onChange={(e) => setJiraPatBaseUrl(e.target.value)}
-                placeholder="https://jira.example.com"
-              />
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="jira-pat">Personal Access Token</Label>
-              <Input
-                id="jira-pat"
-                type="password"
-                value={jiraPatToken}
-                onChange={(e) => setJiraPatToken(e.target.value)}
-                placeholder=""
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="px-6 py-4 bg-background">
-            <Button variant="outline" onClick={() => setShowJiraPatDialog(false)}>Cancel</Button>
-            <Button
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40"
-              disabled={!jiraPatBaseUrl.trim() || !jiraPatToken.trim() || jiraPatSaving}
-              onClick={async () => {
-                if (!organizationId || !projectId) return;
-                setJiraPatSaving(true);
-                try {
-                  await api.connectJiraPatOrg(organizationId, jiraPatBaseUrl.trim(), jiraPatToken.trim(), projectId);
-                  toast({ title: 'Connected', description: 'Jira Data Center connected successfully.' });
-                  setShowJiraPatDialog(false);
-                  setJiraPatBaseUrl('');
-                  setJiraPatToken('');
-                  loadProjectConnections();
-                } catch (err: any) {
-                  toast({ title: 'Error', description: err.message || 'Failed to connect.', variant: 'destructive' });
-                } finally {
-                  setJiraPatSaving(false);
-                }
-              }}
-            >
-              {jiraPatSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
-              Create connection
+              <span className={addingMember ? 'invisible' : undefined}>
+                Add{selectedMembersToAdd.length > 0 ? ` (${selectedMembersToAdd.length})` : ''}
+              </span>
+              {addingMember && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                </span>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1451,6 +1451,7 @@ type PushProjectRow = {
   default_branch: string;
   package_json_path: string | null;
   installation_id: string;
+  scan_on_commit: boolean;
   sync_frequency: string;
   status: string;
   ecosystem?: string;
@@ -1474,7 +1475,7 @@ async function handlePushEvent(payload: any): Promise<void> {
 
   const { data: rows, error: fetchError } = await supabase
     .from('project_repositories')
-    .select('project_id, repo_full_name, default_branch, package_json_path, installation_id, sync_frequency, status, ecosystem, provider, integration_id, projects(organization_id)')
+    .select('project_id, repo_full_name, default_branch, package_json_path, installation_id, scan_on_commit, sync_frequency, status, ecosystem, provider, integration_id, projects(organization_id)')
     .eq('repo_full_name', repoFullName)
     .eq('installation_id', String(installationId));
 
@@ -1535,7 +1536,7 @@ async function handlePushEvent(payload: any): Promise<void> {
 
     let extractionTriggered = false;
 
-    if (isAffected && row.sync_frequency === 'on_commit') {
+    if (isAffected && row.scan_on_commit) {
       if (extractionCount < MAX_EXTRACTION_PER_PUSH) {
         try {
           const branchName = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
