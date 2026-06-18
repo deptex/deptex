@@ -92,7 +92,7 @@ export default function BreadthWall() {
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
 
   return (
-    <section className="w-full">
+    <section className="w-full border-t border-white/[0.08]">
       <div className="mx-auto max-w-[1200px] px-6 py-24">
         <Reveal>
           <h2 className="text-[32px] font-semibold leading-[1.1] tracking-[-0.02em] text-foreground sm:text-[40px]">

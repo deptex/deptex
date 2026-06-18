@@ -239,7 +239,7 @@ function DraftPrCard() {
 
 export default function AegisSection() {
   return (
-    <section id="aegis" className="w-full border-y border-white/[0.08]">
+    <section id="aegis" className="w-full border-t border-white/[0.08]">
       <div className="mx-auto max-w-[1200px] px-6 py-24 sm:py-28">
         {/* two-column text header (Linear pattern) */}
         <Reveal>
