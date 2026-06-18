@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe, Boxes } from 'lucide-react';
+import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
-import ScannersPanel from '../../components/security/ScannersPanel';
 import {
   Dialog,
   DialogContent,
@@ -282,7 +281,7 @@ function formatRunDuration(createdAt: string, completedAt: string | null, status
   return `${Math.floor(m / 60)}h`;
 }
 
-const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'scanning', 'scanners']);
+const VALID_PROJECT_SETTINGS_SECTIONS = new Set(['general', 'repository', 'access', 'scanning']);
 
 
 /** Renders a tab-specific content skeleton for the project settings loading state. */
@@ -1059,11 +1058,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
       id: 'scanning',
       label: 'DAST',
       icon: <Globe className="h-4 w-4 tab-icon-shake" />,
-    },
-    {
-      id: 'scanners',
-      label: 'Scanners',
-      icon: <Boxes className="h-4 w-4 tab-icon-shake" />,
     },
   ];
 
@@ -2151,18 +2145,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
               />
             )}
 
-            {activeSection === 'scanners' && organizationId && projectId && (
-              <div className="space-y-6">
-                <div className="mb-6 flex items-center gap-2">
-                  <h2 className="text-2xl font-bold text-foreground">Scanners</h2>
-                </div>
-                <ScannersPanel
-                  organizationId={organizationId}
-                  projectId={projectId}
-                  canManage={!!userPermissions?.edit_settings}
-                />
-              </div>
-            )}
           </div>
         </div>
       </div>
