@@ -17,4 +17,6 @@ Rails.application.routes.draw do
   get  "/integrations/filter",     to: "integrations#filter"
 
   get  "/posts/preview", to: "posts#preview"
+
+  post "/documents/parse", to: "documents#parse"
 end

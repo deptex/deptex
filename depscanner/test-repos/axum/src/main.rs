@@ -52,6 +52,7 @@ async fn main() {
         .route("/go", get(handlers::redirect::go))
         .route("/match", get(handlers::redos::match_input))
         .route("/load", post(handlers::deser::load_blob))
+        .route("/config", get(handlers::config::parse_config))
         .route("/event", post(handlers::logging::record_event))
         .with_state(pool);
     let _ = axum::Server::bind(&"0.0.0.0:4008".parse().unwrap())

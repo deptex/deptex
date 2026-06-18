@@ -12,6 +12,7 @@ import pickle
 import subprocess
 import re
 
+import yaml
 from fastapi import APIRouter, Request, Query, Path, Form, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import create_engine, text
@@ -100,6 +101,16 @@ async def eval_compute(request: Request):
     # REACHABLE: deserialization (code injection via eval)
     expr = await request.body()
     eval(expr)
+    return {"ok": True}
+
+
+@router.post("/config/import")
+async def config_import(request: Request):
+    # REACHABLE: deserialization — request body -> yaml.load
+    # Parses a user-supplied YAML config with the default (full) loader.
+    # On PyYAML < 5.4 this is arbitrary code execution (CVE-2020-14343).
+    doc = await request.body()
+    yaml.load(doc)
     return {"ok": True}
 
 

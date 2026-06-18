@@ -6,6 +6,7 @@
     "php": "^7.4|^8.0",
     "laravel/framework": "8.6.11",
     "guzzlehttp/guzzle": "7.2.0",
-    "league/flysystem": "1.0.70"
+    "league/flysystem": "1.0.70",
+    "phpmailer/phpmailer": "5.2.16"
   }
 }

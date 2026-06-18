@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod command;
+pub mod config;
 pub mod deser;
 pub mod files;
 pub mod logging;
