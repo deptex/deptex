@@ -17,7 +17,18 @@ import HeroShowcase from "./HeroShowcase";
 export default function HeroSection() {
   return (
     <section className="relative w-full overflow-hidden bg-[#050505]">
-      <div className="mx-auto max-w-[1200px] px-6 pb-20 pt-28 sm:pt-36">
+      {/* Linear-style stage glow — sits BEHIND the product (content is z-10):
+          black up top, fading DOWN to its strongest emerald at the hero's base
+          (~100px below the window). Full-bleed, end to end. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-[1200px]"
+        aria-hidden
+        style={{
+          background:
+            "linear-gradient(to bottom, transparent 0%, rgba(52,208,138,0.04) 52%, rgba(52,208,138,0.16) 76%, rgba(52,208,138,0.40) 100%)",
+        }}
+      />
+      <div className="relative z-10 mx-auto max-w-[1200px] px-6 pb-[100px] pt-28 sm:pt-36">
         {/* Title block — left-aligned title, CTAs pushed right and
             bottom-aligned with the subhead (Linear pattern) */}
         <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">

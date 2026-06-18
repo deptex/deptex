@@ -319,16 +319,11 @@ export default function HeroShowcase() {
 
   return (
     <div className="relative">
-      <div
-        className="glow-green pointer-events-none absolute -inset-x-8 -top-8 bottom-0 opacity-25"
-        aria-hidden
-      />
-
       {/* app window — styled as a real (dark) Chrome browser: mac traffic
           lights + Chrome tabs in the title bar, then a toolbar with the address
           bar (founder 2026-06-16). Overview / Findings / Aegis ARE the browser
           tabs; the active tab merges into the toolbar exactly like Chrome. */}
-      <div className="relative overflow-hidden rounded-xl border border-[#262626] bg-[#0a0a0a] shadow-[0_30px_80px_rgba(0,0,0,0.6)]">
+      <div className="relative overflow-hidden rounded-xl border border-[#262626] bg-[#0a0a0a]">
         {/* title bar — traffic lights + Chrome tabs */}
         <div className="flex h-11 items-end gap-1.5 bg-[#0a0a0a] px-3">
           <div className="flex shrink-0 items-center gap-2 self-center pr-3">

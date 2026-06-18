@@ -5,11 +5,15 @@
  * Socket, Semgrep, Aikido, Snyk, Wiz): the number-forward camp asserts its
  * noise-reduction stat PUNCHY and HIGH and parks methodology in docs — nobody
  * leads with (or even ships) a rigorous benchmark block on the homepage. So the
- * heavy benchmark was split then dropped: the punchy 79.6% lives in ProofStatBand
- * (the logo-wall slot — pre-launch, the number IS the social proof) and the
- * Verified section explains HOW we earn it; the corpus/methodology stays in the
- * repo (depscanner/docs/reachability-benchmark.md), where the field keeps it.
- * Aegis was promoted up to right after Verified — the hero's differentiator.
+ * heavy benchmark was split then dropped.
+ *
+ * Section 2 (founder 2026-06-18): a standalone stat band / engine diagram /
+ * noise funnel were all tried and dropped — they duplicated the reachability
+ * story Verified already tells with a real product visual. So the punchy 79.6% /
+ * 5× stats were FOLDED INTO VerifiedSection ("we don't guess, we trace the
+ * path"), which is now section 2 right under the hero: the outcome stat + the
+ * trace→findings proof in one place. The corpus/methodology stays in the repo
+ * (depscanner/docs/reachability-benchmark.md). Aegis follows — the differentiator.
  *
  * Top (founder 2026-06-16): the hero is now Linear/Cursor-style — left-aligned
  * title + CTAs with the product film as its big visual (HeroSection absorbed the
@@ -20,7 +24,6 @@
  * ChangelogBand (hardcoded entries go stale; docs routes not live pre-launch).
  */
 import HeroSection from "../../components/landing/HeroSection";
-import ProofStatBand from "../../components/landing/ProofStatBand";
 import VerifiedSection from "../../components/landing/VerifiedSection";
 import AegisSection from "../../components/landing/AegisSection";
 import BreadthWall from "../../components/landing/BreadthWall";
@@ -32,7 +35,6 @@ export default function HomePage() {
   return (
     <div className="bg-[#050505] text-foreground">
       <HeroSection />
-      <ProofStatBand />
       <VerifiedSection />
       <AegisSection />
       <BreadthWall />

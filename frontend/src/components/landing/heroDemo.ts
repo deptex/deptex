@@ -20,6 +20,7 @@ import type {
   ProjectVulnerability,
   ReachabilityLevel,
   ReachableFlow,
+  ReachableFlowNode,
   SecretFinding,
   SemgrepFinding,
   VulnerabilityDetail,
@@ -327,6 +328,9 @@ function flow(o: {
   sinkLine: number;
   sinkCode: string;
   level: ReachabilityLevel;
+  /** Intermediate hops between Source and Sink (the path the stepper walks).
+   *  buildHops overrides hops[0]/hops[last] with the entry-point/sink fields. */
+  nodes?: ReachableFlowNode[];
 }): ReachableFlow {
   return {
     id: `flow-${o.osv}`,
@@ -334,7 +338,7 @@ function flow(o: {
     extraction_run_id: RUN,
     purl: o.purl,
     dependency_id: null,
-    flow_nodes: [],
+    flow_nodes: o.nodes ?? [],
     entry_point_file: o.epFile,
     entry_point_method: o.epMethod,
     entry_point_line: o.epLine,
@@ -377,12 +381,59 @@ const FLOWS: Record<string, ReachableFlow[]> = {
       epFile: "src/routes/render.js",
       epMethod: "POST /render",
       epLine: 14,
-      epCode: "router.post('/render', (req, res) => {\n  const html = renderTemplate(req.body);\n  res.send(html);\n});",
+      epCode:
+        "import { handleRender } from '../controllers/render';\n" +
+        "\n" +
+        "// POST /render — public preview route, no auth\n" +
+        "router.post('/render', (req, res) => {\n" +
+        "  // template + data come straight from the client body\n" +
+        "  const { tpl, data } = req.body;\n" +
+        "\n" +
+        "  // no validation — handed straight to the controller\n" +
+        "  const html = handleRender({ tpl, data });\n" +
+        "\n" +
+        "  res.set('content-type', 'text/html');\n" +
+        "  res.send(html);\n" +
+        "});",
       sinkFile: "src/lib/render-template.js",
       sinkMethod: "_.template",
       sinkLine: 7,
-      sinkCode: "function renderTemplate(opts) {\n  const compiled = _.template(opts.tpl); // user-controlled\n  return compiled(opts.data);\n}",
+      sinkCode:
+        "import _ from 'lodash';\n" +
+        "\n" +
+        "// Compiles and runs a user-supplied template string.\n" +
+        "export function renderTemplate(opts) {\n" +
+        "  // opts.tpl reaches lodash _.template as a string\n" +
+        "  //  → prototype pollution → command injection\n" +
+        "  const compiled = _.template(opts.tpl);\n" +
+        "\n" +
+        "  // executing the compiled template runs attacker input\n" +
+        "  return compiled(opts.data);\n" +
+        "}",
       level: "confirmed",
+      nodes: [
+        { file: "src/routes/render.js", line: 14, label: "POST /render" },
+        {
+          file: "src/controllers/render.ts",
+          line: 22,
+          label: "handleRender",
+          code:
+            "import { renderTemplate } from '../lib/render-template';\n" +
+            "\n" +
+            "// Builds the render options from the raw request body.\n" +
+            "export function handleRender(body) {\n" +
+            "  // body.tpl is attacker-controlled and flows on\n" +
+            "  // untouched — no schema, no escaping, no allow-list\n" +
+            "  const opts = {\n" +
+            "    tpl: body.tpl,\n" +
+            "    data: body.data ?? {},\n" +
+            "  };\n" +
+            "\n" +
+            "  return renderTemplate(opts);\n" +
+            "}",
+        },
+        { file: "src/lib/render-template.js", line: 7, label: "_.template" },
+      ],
     }),
   ],
   "CVE-2024-4068": [
@@ -439,3 +490,60 @@ export const heroFindingDetail = (
   _projectId: string,
   osvId: string,
 ): Promise<VulnerabilityDetail> => Promise.resolve(DETAIL_BY_OSV[osvId]!);
+
+/* A single ready-made (vuln, detail) pair for the landing "we trace the path"
+   section — the REAL VulnerabilityExpandedCard renders this unchanged, so the
+   section shows the actual product reachability view (Source → Sink stepper,
+   tier badge, signal badges), not a hand-built facsimile. lodash CVE-2021-23337
+   is confirmed-reachable with a 2-hop taint trace. */
+const TRACE_OSV = "CVE-2021-23337";
+export const heroTraceVuln: ProjectVulnerability = heroFindings.find(
+  (r): r is Extract<SecurityTableRow, { type: "vulnerability" }> =>
+    r.type === "vulnerability" && r.data.osv_id === TRACE_OSV,
+)!.data;
+export const heroTraceDetail: VulnerabilityDetail = DETAIL_BY_OSV[TRACE_OSV]!;
+
+/* A varied findings list for the "wall of findings" BACKGROUND in the Verified
+   section — a diverse spread of real-looking vulns (distinct packages / CVEs /
+   depscores, sorted descending by the table) so the faded, non-interactive
+   table behind the flow card reads as a believable list, NOT repeated rows.
+   Texture only: it's masked + dimmed, never read row-by-row. */
+const BG_VULNS: {
+  dep: string;
+  version: string;
+  osv: string;
+  severity: ProjectVulnerability["severity"];
+  level: ReachabilityLevel;
+  depscore: number;
+  summary: string;
+  project: string;
+}[] = [
+  { dep: "ejs", version: "3.1.6", osv: "CVE-2022-29078", severity: "critical", level: "confirmed", depscore: 90, summary: "Server-side template injection in ejs leads to remote code execution", project: "storefront-api" },
+  { dep: "lodash", version: "4.17.20", osv: "CVE-2021-23337", severity: "high", level: "confirmed", depscore: 72, summary: "Command injection in lodash via _.template()", project: "storefront-api" },
+  { dep: "jsonwebtoken", version: "8.5.1", osv: "CVE-2022-23529", severity: "high", level: "function", depscore: 58, summary: "Insecure key handling allows JWT forgery in jsonwebtoken", project: "auth-service" },
+  { dep: "express", version: "4.17.1", osv: "CVE-2022-24999", severity: "high", level: "function", depscore: 52, summary: "Prototype pollution via qs in express query parsing", project: "storefront-api" },
+  { dep: "follow-redirects", version: "1.14.7", osv: "CVE-2022-0536", severity: "medium", level: "data_flow", depscore: 47, summary: "Information leak on cross-host redirect in follow-redirects", project: "payments-svc" },
+  { dep: "braces", version: "3.0.2", osv: "CVE-2024-4068", severity: "medium", level: "data_flow", depscore: 44, summary: "Uncontrolled resource consumption in braces", project: "web-dashboard" },
+  { dep: "moment", version: "2.29.1", osv: "CVE-2022-31129", severity: "medium", level: "data_flow", depscore: 41, summary: "Inefficient regex in moment enables ReDoS", project: "web-dashboard" },
+  { dep: "semver", version: "7.3.4", osv: "CVE-2022-25883", severity: "medium", level: "module", depscore: 38, summary: "ReDoS in semver range parsing", project: "api-gateway" },
+  { dep: "ws", version: "7.4.5", osv: "CVE-2021-32640", severity: "medium", level: "module", depscore: 36, summary: "ReDoS in ws when handling crafted headers", project: "api-gateway" },
+  { dep: "node-fetch", version: "2.6.6", osv: "CVE-2022-0235", severity: "medium", level: "module", depscore: 33, summary: "node-fetch leaks sensitive headers across redirects", project: "web-dashboard" },
+  { dep: "minimist", version: "1.2.5", osv: "CVE-2021-44906", severity: "high", level: "unreachable", depscore: 0, summary: "Prototype pollution in minimist", project: "storefront-api" },
+  { dep: "glob-parent", version: "5.1.1", osv: "CVE-2020-28469", severity: "high", level: "unreachable", depscore: 0, summary: "ReDoS in glob-parent enclosure regex", project: "api-gateway" },
+  { dep: "y18n", version: "4.0.0", osv: "CVE-2020-7774", severity: "high", level: "unreachable", depscore: 0, summary: "Prototype pollution in y18n", project: "web-dashboard" },
+];
+
+export const heroBackgroundFindings: SecurityTableRow[] = BG_VULNS.map((b, i) =>
+  vuln({
+    id: `bg-${i}`,
+    osv: b.osv,
+    cve: b.osv,
+    severity: b.severity,
+    summary: b.summary,
+    dep: b.dep,
+    version: b.version,
+    depscore: b.depscore,
+    level: b.level,
+    project: b.project,
+  }),
+);
