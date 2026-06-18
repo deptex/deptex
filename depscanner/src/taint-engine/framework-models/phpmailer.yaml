@@ -1,0 +1,62 @@
+# PHPMailer framework spec — Deptex cross-file taint engine.
+#
+# Targets CVE-2016-10033 ("PHPMailer < 5.2.18 RCE"): in vulnerable
+# PHPMailer releases (phpmailer/phpmailer 5.2.16 is in range), an
+# attacker-controlled Sender / From address is passed unescaped into the
+# `mail()` builtin's 5th `additional_params` argument as the sendmail `-f`
+# option. A `From`/`Sender` value containing shell metacharacters (e.g.
+# `"attacker@x.com -OQueueDirectory=/tmp -X/var/www/shell.php"`) is therefore
+# injected into the sendmail command line — a remote-code-execution primitive.
+#
+# The public API surface that accepts the attacker-controlled address is
+# `PHPMailer::setFrom($address, ...)` (sets both From and, by default,
+# Sender) and `PHPMailer::addAddress($address, ...)` (recipient list,
+# likewise interpolated into the envelope). Any tainted bytes flowing into
+# either call's address argument are the injection point.
+#
+# vuln_class mapping rationale.
+#   `command_injection` — the tainted address is interpolated into the
+#   sendmail command line via mail()'s `-f` option, so the runtime executes
+#   attacker-influenced shell. This is the standard command-injection shape
+#   (cf. the exec/system/shell_exec sinks in laravel.yaml / symfony.yaml).
+#
+# Sink-pattern style.
+#   We use the wildcard-receiver `*->method(*)` form (same idiom as
+#   laravel.yaml's `*->whereRaw(*)` etc.). The PHP propagator's
+#   matchesCallPattern (propagate-core.ts) matches a `*->method` pattern
+#   against any callee text ending in `->method`, so a chained instance call
+#   like `$mail->setFrom($request->input('email'))` whose callee text ends
+#   in `->setFrom` resolves to this entry regardless of the receiver
+#   variable name.
+#
+# Sources are NOT redeclared here — Laravel's `$request->input()` /
+# `Request::input()` family and Symfony's HttpFoundation accessors are
+# already pre-tainted by laravel.yaml / symfony.yaml. The cross-spec load
+# order means a flow from `$request->input('email')` into
+# `$mail->setFrom(...)` resolves with no additional source wiring.
+
+framework: phpmailer
+language: php
+version: "*"
+
+sources: []
+
+sinks:
+  # PHPMailer::setFrom($address, $name = '', $auto = true) — sets From and
+  # (by default) Sender, which is interpolated into mail()'s sendmail `-f`
+  # option. Argument 0 is the attacker-controlled address.
+  - pattern: "*->setFrom(*)"
+    vuln_class: command_injection
+    argument_indices: [0]
+    osv_id: CVE-2016-10033
+    description: PHPMailer::setFrom — attacker-controlled From/Sender interpolated into the sendmail -f option (RCE, CVE-2016-10033)
+
+  # PHPMailer::addAddress($address, $name = '') — recipient address likewise
+  # flows into the envelope / sendmail invocation in vulnerable releases.
+  - pattern: "*->addAddress(*)"
+    vuln_class: command_injection
+    argument_indices: [0]
+    osv_id: CVE-2016-10033
+    description: PHPMailer::addAddress — attacker-controlled recipient address interpolated into the sendmail invocation (RCE, CVE-2016-10033)
+
+sanitizers: []

@@ -23,6 +23,7 @@ func main() {
 	r.GET("/filter", compileFilter)
 	r.GET("/audit", auditLog)
 	r.POST("/config", loadConfig)
+	r.GET("/parse-config", parseConfig)
 	r.POST("/ping", pingHost)
 	r.GET("/records", formatRecord)
 

@@ -103,6 +103,17 @@ func loadConfig(c *gin.Context) {
 	c.String(http.StatusOK, "ok")
 }
 
+// parseConfig unmarshals a user-supplied YAML config string with the strict
+// decoder. gopkg.in/yaml.v2 < v2.2.3 is vulnerable to CVE-2019-11254: a crafted
+// document drives uncontrolled resource consumption inside the decoder.
+func parseConfig(c *gin.Context) {
+	// REACHABLE: redos — CVE-2019-11254 (gopkg.in/yaml.v2 UnmarshalStrict)
+	cfg := c.Query("cfg")
+	var out map[string]interface{}
+	yaml.UnmarshalStrict([]byte(cfg), &out)
+	c.String(http.StatusOK, "ok")
+}
+
 // pingHost passes a form value straight into a shell command.
 func pingHost(c *gin.Context) {
 	// REACHABLE: command_injection
