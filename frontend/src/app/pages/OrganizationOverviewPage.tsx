@@ -2430,6 +2430,13 @@ export default function OrganizationOverviewPage() {
       for (const f of dast) rows.push({ type: 'dast', data: { ...f, project_name: projectName } });
     } catch { /* no DAST target for this project */ }
 
+    // First-party data-flow findings — the taint engine's source→sink paths in
+    // the project's own code. One cheap request; empty for most projects.
+    try {
+      const cf = await api.getCodeFlowFindings(oid, pid);
+      for (const f of cf.data ?? []) rows.push({ type: 'taint_flow', data: { ...f, project_name: projectName } });
+    } catch { /* no code-flow findings for this project */ }
+
     const baseImageRecs = recsR.status === 'fulfilled' ? (recsR.value.recommendations ?? []) : [];
     return { rows, baseImageRecs };
   }, []);

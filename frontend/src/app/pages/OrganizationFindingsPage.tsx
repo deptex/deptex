@@ -22,6 +22,7 @@ import {
   type ContainerFinding,
   type MaliciousFinding,
   type DastFindingDTO,
+  type DataFlowFinding,
 } from '../../lib/api';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
@@ -111,6 +112,7 @@ const TYPE_COLORS: Record<TypeKey, string> = {
   container_group: '#2dd4bf', // teal-400 — same family as container CVEs
   dast: '#0d9488', // teal-600 — runtime
   malicious: '#047857', // emerald-700 — deepest
+  taint_flow: '#5eead4', // teal-300 — first-party data-flow paths
 };
 const TYPE_LABELS: Record<TypeKey, string> = {
   vulnerability: 'CVEs',
@@ -123,6 +125,7 @@ const TYPE_LABELS: Record<TypeKey, string> = {
   container_group: 'Base image',
   dast: 'DAST',
   malicious: 'Malicious',
+  taint_flow: 'Data-flow',
 };
 
 // Per-type description surfaced in the Findings by Type detail panel when
@@ -181,6 +184,11 @@ const TYPE_DESCRIPTIONS: Record<TypeKey, { source: string; description: string }
     source: 'OSV malicious feeds + GHSA',
     description:
       'Packages flagged as actively malicious — typosquats, protestware, credential stealers. Fix-immediately.',
+  },
+  taint_flow: {
+    source: 'Taint engine',
+    description:
+      'A traced source→sink path in your OWN code — untrusted input reaching a dangerous sink (XSS, SQLi, SSRF). Reachable, not just a pattern match.',
   },
 };
 
@@ -440,6 +448,11 @@ export default function OrganizationFindingsPage() {
             : [];
           return { kind: 'dast' as const, projectId: p.id, data };
         })(),
+        api.getCodeFlowFindings(organizationId, p.id).then((r) => ({
+          kind: 'code_flow' as const,
+          projectId: p.id,
+          data: r.data ?? [],
+        })),
       ]);
 
       const [vulnsResult, ...perProjectResults] = await Promise.allSettled([
@@ -471,6 +484,7 @@ export default function OrganizationFindingsPage() {
           | ContainerFinding
           | MaliciousFinding
           | DastFindingDTO
+          | DataFlowFinding
         )[]) {
           const stamped = { ...item, project_name: projectName };
           switch (kind) {
@@ -491,6 +505,9 @@ export default function OrganizationFindingsPage() {
               break;
             case 'malicious':
               rows.push({ type: 'malicious', data: stamped as MaliciousFinding & { project_name?: string } });
+              break;
+            case 'code_flow':
+              rows.push({ type: 'taint_flow', data: stamped as DataFlowFinding & { project_name?: string } });
               break;
           }
         }
@@ -664,6 +681,7 @@ export default function OrganizationFindingsPage() {
       container_group: 0,
       dast: 0,
       malicious: 0,
+      taint_flow: 0,
     };
     for (const r of allRows) counts[r.type]++;
     return (Object.keys(counts) as TypeKey[])
