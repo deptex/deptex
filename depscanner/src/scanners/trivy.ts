@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { runScannerSubprocess, type ScannerSubprocessLogger } from '../with-timeout';
@@ -291,10 +292,85 @@ function trivySnippet(misconfig: TrivyConfigMisconfig): string | null {
   return lines.map((l) => l.Content).join('\n').trimEnd() || null;
 }
 
+// Trivy's CauseMetadata.Code.Lines is a TRUNCATED preview (~10 lines from the
+// resource start). For a k8s resource whose violated field sits deeper than
+// that — a hostPath volume declared below the container spec — the offending
+// line is absent from the preview entirely, so the UI has nothing to highlight
+// and shows no code at all. When the finding carries a StartLine..EndLine
+// range, read that exact slice from the real manifest so the stored snippet
+// always contains the violated construct (the UI highlights it by token match).
+// Bounded by the resource (EndLine) plus a hard cap so a pathological manifest
+// can't bloat a row; falls back to the preview when the file is unreadable or
+// the range is implausible.
+const TRIVY_SLICE_MAX_LINES = 200;
+function readResourceSlice(
+  repoPath: string,
+  relPath: string,
+  startLine: number | null,
+  endLine: number | null,
+): string | null {
+  if (startLine == null || endLine == null || endLine < startLine) return null;
+  if (endLine - startLine + 1 > TRIVY_SLICE_MAX_LINES) return null;
+  try {
+    const text = fs.readFileSync(path.join(repoPath, relPath), 'utf8');
+    const lines = text.split(/\r?\n/);
+    return lines.slice(startLine - 1, endLine).join('\n').trimEnd() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Dockerfile rules (DS-*) flag a single instruction (e.g. `USER root` on one
+// line), which on its own gives the user no context. Dockerfiles are small, so
+// we show the WHOLE file (from line 1) and let the UI highlight the flagged
+// line — the same way a k8s finding shows its whole resource. Capped so a
+// pathological generated Dockerfile can't bloat a row.
+const DOCKERFILE_MAX_LINES = 150;
+function readDockerfileSnippet(repoPath: string, relPath: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(repoPath, relPath), 'utf8');
+    const lines = text.split(/\r?\n/);
+    return lines.slice(0, DOCKERFILE_MAX_LINES).join('\n').trimEnd() || null;
+  } catch {
+    return null;
+  }
+}
+
+// High-value Kubernetes misconfigs that Checkov's community ruleset misses (or
+// under-flags). We keep ONLY these from Trivy's k8s output so we don't
+// double-report everything Checkov already covers (TF/K8s). hostPath host-mounts
+// are the headline gap — mounting `/` into a container is full node compromise,
+// and no CKV_K8S_* community rule flags it.
+// Trivy stores ids dash-form (`KSV-0023`); cover both forms. KSV-0121 =
+// disallowed volume type mounted (also hostPath-class). The `/host\s?path/`
+// text fallback below is the real safety net if the id scheme drifts again.
+const K8S_TRIVY_ALLOW: ReadonlySet<string> = new Set([
+  'KSV023', 'KSV-0023', 'AVD-KSV-0023', 'KSV0023',
+]);
+// KSV-0121 ("disallowed volumes mounted") fires on the very same hostPath that
+// KSV-0023 ("hostPath volumes mounted") flags — keeping both shows the user the
+// identical issue twice. Drop KSV-0121 as a duplicate; KSV-0023 is the canonical,
+// more specific hostPath check. The deny is checked BEFORE the hostPath text
+// fallback below, which would otherwise re-admit KSV-0121 via its description.
+const K8S_TRIVY_DENY: ReadonlySet<string> = new Set([
+  'KSV0121', 'KSV-0121', 'AVD-KSV-0121', 'KSV121',
+]);
+function isHighValueK8sMisconfig(m: TrivyConfigMisconfig): boolean {
+  const id = (m.AVDID ?? m.ID ?? '').toUpperCase();
+  if (K8S_TRIVY_DENY.has(id)) return false;
+  if (K8S_TRIVY_ALLOW.has(id)) return true;
+  // Fall back to a text match so a Trivy id-scheme change can't silently drop
+  // the host-mount finding.
+  const text = `${m.Title ?? ''} ${m.Description ?? ''}`.toLowerCase();
+  return /host\s?path/.test(text);
+}
+
 /**
- * Parse `trivy config --format json --scanners=misconfig` output and emit
- * Dockerfile findings only — Checkov already covers TF/K8s, so trivy config's
- * overlapping coverage is intentionally dropped to avoid duplicate rows.
+ * Parse `trivy config --format json --scanners=misconfig` output. Emits ALL
+ * Dockerfile findings (Checkov is run k8s/TF-only here, so it never sees the
+ * Dockerfile) plus a curated allow-list of high-value Kubernetes rules Checkov
+ * misses (hostPath host-mounts). Everything else k8s/TF is dropped to avoid
+ * duplicate rows with Checkov.
  */
 export function parseTrivyConfigOutput(stdout: string, version: string): IaCFinding[] {
   let parsed: TrivyConfigReport | null = null;
@@ -310,11 +386,13 @@ export function parseTrivyConfigOutput(stdout: string, version: string): IaCFind
     const isDockerfile =
       result.Type === 'dockerfile' ||
       /Dockerfile(\..+)?$/i.test(result.Target ?? '');
-    if (!isDockerfile) continue;
     const target = (result.Target ?? '').replace(/^\//, '');
     if (!target) continue;
     const misconfigs = result.Misconfigurations ?? [];
     for (const m of misconfigs) {
+      // Dockerfile → keep all. Other IaC (k8s/yaml) → keep only the curated
+      // high-value rules so we don't double-report Checkov's coverage.
+      if (!isDockerfile && !isHighValueK8sMisconfig(m)) continue;
       const ruleId = m.AVDID ?? m.ID;
       if (!ruleId) continue;
       const sev = (m.Severity ?? '').toUpperCase();
@@ -322,7 +400,7 @@ export function parseTrivyConfigOutput(stdout: string, version: string): IaCFind
         scanner: 'trivy',
         scanner_version: version,
         rule_id: ruleId,
-        framework: 'dockerfile',
+        framework: isDockerfile ? 'dockerfile' : 'kubernetes',
         file_path: target,
         start_line: m.CauseMetadata?.StartLine ?? null,
         end_line: m.CauseMetadata?.EndLine ?? null,
@@ -360,8 +438,17 @@ export async function runTrivyConfig(
     args: [
       'config',
       '--format', 'json',
-      '--skip-db-update',
-      '--scanners=misconfig',
+      // NOTE: `trivy config` is misconfig-only and REJECTS the vuln-scan flags
+      // `--scanners` and `--skip-db-update` ("FATAL: unknown flag") — passing
+      // either killed the subprocess on every scan, so IaC Trivy silently
+      // produced zero findings. Keep ONLY config-valid flags here.
+      '--skip-version-check',
+      // The pipeline runs `npm install` (etc.) before scanning, so the workspace
+      // contains installed dependencies. Their own Dockerfiles / manifests
+      // (e.g. node_modules/<pkg>/.devcontainer/Dockerfile) are NOT the user's
+      // infra — scanning them is pure noise + duplicate rows. Skip vendor dirs.
+      '--skip-dirs', '**/node_modules/**',
+      '--skip-dirs', '**/vendor/**',
       opts.repoPath,
     ],
     cwd: opts.repoPath,
@@ -379,6 +466,15 @@ export async function runTrivyConfig(
     return { findings: [], version: `trivy@${version}`, warnings };
   }
   const findings = parseTrivyConfigOutput(result.stdout, `trivy@${version}`);
+  // Replace Trivy's truncated/single-line inline preview with real file context
+  // so the snippet the UI renders always contains the flagged line: the whole
+  // (small) Dockerfile for DS-* rules, or the real k8s resource slice otherwise.
+  for (const f of findings) {
+    const slice = f.framework === 'dockerfile'
+      ? readDockerfileSnippet(opts.repoPath, f.file_path)
+      : readResourceSlice(opts.repoPath, f.file_path, f.start_line, f.end_line);
+    if (slice) f.code_snippet = slice;
+  }
   return { findings, version: `trivy@${version}`, warnings };
 }
 
@@ -429,6 +525,29 @@ function bestCvss(v: TrivyImageVuln): number | null {
   return best;
 }
 
+const TRIVY_SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+
+/**
+ * Normalize a container CVE's severity to our 5-band scale. Trivy emits
+ * `UNKNOWN` (or, rarely, an empty string) for CVEs the feed has not yet rated —
+ * storing that as `null` leaves the finding unable to band, sort, or score, so
+ * it renders as BAD_DATA in the UI. Derive a band from the CVSS score when Trivy
+ * provides one (same CVSS cutoffs the rest of the scorer uses), and otherwise
+ * floor at LOW: we have a real CVE, we just don't know how bad — surface it at
+ * the lowest real band rather than dropping it to `null`.
+ */
+function normalizeContainerSeverity(rawSeverity: string | undefined, cvss: number | null): string {
+  const sev = (rawSeverity ?? '').toUpperCase();
+  if (TRIVY_SEVERITIES.includes(sev)) return sev;
+  if (cvss != null) {
+    if (cvss >= 9.0) return 'CRITICAL';
+    if (cvss >= 7.0) return 'HIGH';
+    if (cvss >= 4.0) return 'MEDIUM';
+    if (cvss > 0) return 'LOW';
+  }
+  return 'LOW';
+}
+
 export function parseTrivyImageOutput(
   stdout: string,
   imageReference: string,
@@ -457,7 +576,7 @@ export function parseTrivyImageOutput(
     const ecosystem = result.Type ?? null;
     for (const v of result.Vulnerabilities ?? []) {
       if (!v.PkgName || !v.InstalledVersion) continue;
-      const sev = (v.Severity ?? '').toUpperCase();
+      const cvss = bestCvss(v);
       const cveId = v.VulnerabilityID?.startsWith('CVE-') ? v.VulnerabilityID : null;
       const osvId = v.VulnerabilityID && !cveId ? v.VulnerabilityID : null;
       const fingerprintKey = cveId ?? osvId;
@@ -474,8 +593,8 @@ export function parseTrivyImageOutput(
         os_package_ecosystem: ecosystem,
         osv_id: osvId,
         cve_id: cveId,
-        severity: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(sev) ? sev : null,
-        cvss_score: bestCvss(v),
+        severity: normalizeContainerSeverity(v.Severity, cvss),
+        cvss_score: cvss,
         epss_score: null,
         is_kev: false,
         fix_versions: v.FixedVersion ? v.FixedVersion.split(',').map((s) => s.trim()) : [],

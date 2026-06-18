@@ -158,10 +158,12 @@ sinks:
     vuln_class: deserialization
     argument_indices: [0]
     description: Generic ReadObject on a DataContractSerializer-shaped receiver
-  - pattern: "JsonConvert.DeserializeObject(*)"
-    vuln_class: deserialization
-    argument_indices: [0]
-    description: Newtonsoft.Json.JsonConvert.DeserializeObject (best-effort — risky with TypeNameHandling)
+  # Newtonsoft.Json `JsonConvert.DeserializeObject(*)` lives in its own
+  # dedicated, CVE-targeted spec (newtonsoft-json.yaml) so a reachable call
+  # stamps CVE-2024-21907 onto the flow. It is intentionally NOT duplicated
+  # here: a framework-generic (no-osv) copy would load first and shadow the
+  # CVE-targeted variant as `matchSinkPattern`'s firstMatch, suppressing the
+  # `matchSinkVariants` osv fan-out (which requires firstMatch.osv_id).
   - pattern: "JsonSerializer.Deserialize(*)"
     vuln_class: deserialization
     argument_indices: [0]

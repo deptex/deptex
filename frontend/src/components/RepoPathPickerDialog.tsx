@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Button } from './ui/button';
-import { RepoTreePicker } from './RepoTreePicker';
+import { RepoTreePicker, makeInitialTree, type NodeState } from './RepoTreePicker';
 
 interface RepoPathPickerDialogProps {
   open: boolean;
@@ -23,8 +23,11 @@ interface RepoPathPickerDialogProps {
    * clicking "Select" without changing the selection still surfaces a real ecosystem to the
    * parent (instead of `undefined`). */
   initialEcosystem?: string;
+  /** Framework committed for `initialPath`, if known. Seeds `draftFramework` on open so the
+   * parent keeps the right framework when the user clicks "Select" without re-picking a row. */
+  initialFramework?: string | null;
   /** Called with the chosen path when the user clicks "Select". */
-  onConfirm: (path: string, ecosystem?: string) => void;
+  onConfirm: (path: string, ecosystem?: string, framework?: string) => void;
   rootName: string;
   rootFramework?: string | null;
   rootEcosystem?: string | null;
@@ -45,6 +48,7 @@ export function RepoPathPickerDialog({
   integrationId,
   initialPath,
   initialEcosystem,
+  initialFramework,
   onConfirm,
   rootName,
   rootFramework,
@@ -55,15 +59,25 @@ export function RepoPathPickerDialog({
 }: RepoPathPickerDialogProps) {
   const [draftPath, setDraftPath] = useState(initialPath);
   const [draftEcosystem, setDraftEcosystem] = useState<string | undefined>(initialEcosystem);
+  const [draftFramework, setDraftFramework] = useState<string | undefined>(initialFramework ?? undefined);
+  // Folder-expansion state is owned here (not inside RepoTreePicker) so it survives the
+  // dialog closing + reopening — otherwise every reopen re-collapses the tree and the user
+  // has to re-expand + re-fetch each layer. Reset only when the repo identity changes.
+  const [tree, setTree] = useState<Map<string, NodeState>>(() => makeInitialTree());
+
+  useEffect(() => {
+    setTree(makeInitialTree());
+  }, [organizationId, repoFullName, defaultBranch, integrationId]);
 
   useEffect(() => {
     if (open) {
       setDraftPath(initialPath);
-      // Seed from the parent's committed ecosystem so clicking Select without
-      // re-picking a row still surfaces a real ecosystem instead of `undefined`.
+      // Seed from the parent's committed ecosystem/framework so clicking Select without
+      // re-picking a row still surfaces real values instead of `undefined`.
       setDraftEcosystem(initialEcosystem);
+      setDraftFramework(initialFramework ?? undefined);
     }
-  }, [open, initialPath, initialEcosystem]);
+  }, [open, initialPath, initialEcosystem, initialFramework]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -83,10 +97,13 @@ export function RepoPathPickerDialog({
             defaultBranch={defaultBranch}
             integrationId={integrationId}
             selectedPath={draftPath}
-            onSelect={(p, e) => {
+            onSelect={(p, e, f) => {
               setDraftPath(p);
               setDraftEcosystem(e);
+              setDraftFramework(f);
             }}
+            tree={tree}
+            setTree={setTree}
             rootName={rootName}
             rootFramework={rootFramework}
             rootEcosystem={rootEcosystem}
@@ -109,7 +126,7 @@ export function RepoPathPickerDialog({
             type="button"
             variant="white"
             onClick={() => {
-              onConfirm(draftPath, draftEcosystem);
+              onConfirm(draftPath, draftEcosystem, draftFramework);
               onOpenChange(false);
             }}
           >

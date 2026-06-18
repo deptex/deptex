@@ -1,0 +1,52 @@
+# Newtonsoft.Json (Json.NET) framework spec — Deptex cross-file taint engine.
+#
+# CVE-targeted deserialization spec for Json.NET. CVE-2024-21907 is a
+# denial-of-service: `JsonConvert.DeserializeObject(...)` recurses without a
+# `MaxDepth` cap, so a deeply-nested attacker-supplied JSON payload drives a
+# StackOverflow / excessive resource consumption. Affected: Newtonsoft.Json
+# < 13.0.1 (the fixture pins 12.0.3); OSV reports CVE-2024-21907 /
+# GHSA-5crp-9r3c-p9vr on that range.
+#
+# Why a dedicated spec (mirrors commons-text.yaml / lodash.yaml).
+#   `dotnet-stdlib.yaml` already carries a framework-GENERIC
+#   `JsonConvert.DeserializeObject(*)` deserialization sink with NO osv_id —
+#   it flags the call conservatively but stamps no CVE. This spec adds the
+#   CVE-TARGETED variant (same callee, same `deserialization` class, plus an
+#   `osv_id`) so that a tainted flow reaching the call promotes the project's
+#   CVE-2024-21907 PDV to `confirmed` via the reachability classifier. The
+#   engine's sink fan-out (matchSinkVariants in propagate-core.ts) emits one
+#   flow per distinct osv_id sharing a vulnerable surface, so the generic and
+#   CVE-targeted rows coexist.
+#
+# vuln_class mapping.
+#   `deserialization` — same bucket the generic Json.NET / BinaryFormatter
+#   sinks use in dotnet-stdlib.yaml. CVE-2024-21907 is a DoS via uncapped
+#   recursive deserialization; there is no dedicated `dos` class in the closed
+#   enum, and `deserialization` is the semantically-closest existing bucket
+#   (the unsafe operation IS the deserialize call).
+#
+# Pattern shapes (see ../spec.ts for grammar):
+#   - `JsonConvert.DeserializeObject(*)` matches the static call whose callee
+#     text equals `JsonConvert.DeserializeObject`. The C# IR lowerer strips
+#     generic type args before emitting callee text (stripGenericsFromCallee),
+#     so the generic form `JsonConvert.DeserializeObject<T>(...)` lowers to the
+#     same callee text and is covered by this single pattern.
+
+framework: newtonsoft.json
+language: csharp
+version: "*"
+
+sources: []
+
+sinks:
+  # `JsonConvert.DeserializeObject(...)` — and the generic
+  # `JsonConvert.DeserializeObject<T>(...)` form, which lowers to the same
+  # callee text after generic-stripping. Argument 0 is the JSON string; a
+  # tainted (attacker-controlled) payload here is the DoS primitive.
+  - pattern: "JsonConvert.DeserializeObject(*)"
+    vuln_class: deserialization
+    argument_indices: [0]
+    osv_id: CVE-2024-21907
+    description: Newtonsoft.Json JsonConvert.DeserializeObject — uncapped recursive deserialization of attacker-controlled JSON (CVE-2024-21907 DoS / StackOverflow when no MaxDepth is set)
+
+sanitizers: []

@@ -1747,6 +1747,9 @@ export const api = {
       path: string;
       type: 'tree' | 'file' | 'submodule';
       ecosystem?: string;
+      /** Framework resolved from the folder's manifest contents (e.g. "nextjs"), when detectable.
+       * Upgrades the per-folder badge from a generic ecosystem icon to the real framework. */
+      framework?: string;
       /** True if the folder contains a Dockerfile / Containerfile / compose file at its root. */
       hasDocker?: boolean;
       isLinked?: boolean;
@@ -2440,6 +2443,15 @@ export const api = {
     perPage = 50
   ): Promise<PaginatedResponse<SemgrepFinding>> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/semgrep-findings?page=${page}&per_page=${perPage}`);
+  },
+
+  /** First-party data-flow findings (taint-engine source→sink paths in the
+   *  user's own code). Not paginated — a project has a handful at most. */
+  async getCodeFlowFindings(
+    organizationId: string,
+    projectId: string,
+  ): Promise<{ data: DataFlowFinding[]; total: number }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/code-flow-findings`);
   },
 
   async getProjectSecretFindings(
@@ -4532,11 +4544,20 @@ export interface DastFindingDTO {
   handler_file_path: string | null;
   handler_function_name: string | null;
   handler_line: number | null;
+  /** The handler's source window (captured at extraction), rendered as the
+   *  receiving code in the finding's expanded view. */
+  handler_code_snippet: string | null;
   linked_sca_osv_id: string | null;
   linked_sca_project_dependency_id: string | null;
   linked_sast_finding_id?: string | null;
   cross_link_methods?: string[] | null;
   confirmed_exploitable: boolean;
+  /**
+   * Deptex priority score (0-100), derived on read from severity and lifted
+   * into the critical band for confirmed-exploitable / KEV hits. Lets the
+   * unified findings table sort DAST alongside SCA / container / IaC findings.
+   */
+  depscore: number | null;
   /** CISA Known-Exploited flag — true only for KEV-tagged Nuclei findings. */
   kev: boolean;
   status: DastFindingStatus;
@@ -5162,6 +5183,34 @@ export interface SemgrepFinding {
   depscore: number | null;
   status?: string;
   created_at: string;
+}
+
+/** A first-party data-flow finding: the taint engine's source→sink path in the
+ *  user's OWN code (no dependency CVE). Returned by getCodeFlowFindings; the
+ *  title / severity / depscore are derived server-side from the persisted
+ *  vuln_class (see backend lib/code-flow-findings.ts). */
+export interface DataFlowFinding {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  vuln_class: string | null;
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  depscore: number;
+  entry_point_file: string | null;
+  entry_point_line: number | null;
+  entry_point_method: string | null;
+  entry_point_tag: string | null;
+  entry_point_code: string | null;
+  sink_file: string | null;
+  sink_line: number | null;
+  sink_method: string | null;
+  sink_code: string | null;
+  flow_length: number | null;
+  flow_nodes: ReachableFlowNode[];
+  flow_signature_hash: string | null;
+  created_at: string | null;
+  project_name?: string;
 }
 
 export interface SecretFinding {

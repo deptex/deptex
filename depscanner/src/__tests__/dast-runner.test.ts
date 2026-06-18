@@ -198,6 +198,38 @@ describe('parseZapReport', () => {
     expect(parseZapReport({ site: [] })).toEqual([]);
   });
 
+  it('drops passive best-practice / informational noise but keeps real findings', () => {
+    const report = {
+      site: [
+        {
+          '@name': 'https://t.example.com',
+          alerts: [
+            { name: 'CSP Header Not Set', riskcode: '2', confidence: '3', pluginid: '10038', instances: [{ uri: '/a', method: 'GET' }] },
+            { name: 'Server Leaks Version Information', riskcode: '1', confidence: '2', pluginid: '10036', instances: [{ uri: '/a', method: 'GET' }] },
+            { name: 'SQL Injection', riskcode: '3', confidence: '2', cweid: '89', pluginid: '40018', instances: [{ uri: '/a?id=1', method: 'GET', attack: "1' OR '1'='1" }] },
+          ],
+        },
+      ],
+    };
+    const findings = parseZapReport(report);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].vulnerability_type).toBe('SQL Injection');
+  });
+
+  it('keeps a denylisted rule when it was actively exploited (has a payload)', () => {
+    const report = {
+      site: [
+        {
+          '@name': 'x',
+          alerts: [
+            { name: 'Cache-control', riskcode: '1', confidence: '2', pluginid: '10015', instances: [{ uri: '/a', method: 'GET', attack: 'injected' }] },
+          ],
+        },
+      ],
+    };
+    expect(parseZapReport(report)).toHaveLength(1);
+  });
+
   it('treats riskcode 4 as critical', () => {
     const report = {
       site: [{ '@name': 'x', alerts: [{ name: 'crit', riskcode: '4', confidence: '4', instances: [{ uri: '/a', method: 'GET' }] }] }],

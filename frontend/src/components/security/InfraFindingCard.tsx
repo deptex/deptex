@@ -1,26 +1,14 @@
+import { ExternalLink } from 'lucide-react';
+import { type ContainerFinding, type IaCFinding } from '../../lib/api';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { CodeBlockCard } from './VulnerabilityOrgSidebarExpandedContent';
+import { iacRuleInfo, iacViolationToken, checkovRuleDocUrl } from './infra-format';
 import { cn } from '../../lib/utils';
-import { frameworkLabel, type ContainerFinding, type IaCFinding } from '../../lib/api';
-import { CodeSnippetBlock, getLangInfo } from './VulnerabilityOrgSidebarExpandedContent';
 
 type IaCRow = { type: 'iac'; data: IaCFinding };
 type ContainerRow = { type: 'container'; data: ContainerFinding };
 
 type Props = IaCRow | ContainerRow;
-
-function severityClass(sev: string | null): string {
-  switch ((sev ?? '').toUpperCase()) {
-    case 'CRITICAL':
-      return 'bg-red-500/10 text-red-400 border-red-500/20';
-    case 'HIGH':
-      return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
-    case 'MEDIUM':
-      return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    case 'LOW':
-      return 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20';
-    default:
-      return 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20';
-  }
-}
 
 // Format a normalized compliance benchmark key (e.g. cis_aws_v1_4 → 'CIS AWS V1.4')
 // for display in the badge strip. Acronyms are upper-cased; v1_4 becomes V1.4.
@@ -42,36 +30,45 @@ function formatBenchmarkLabel(key: string): string {
 }
 
 export default function InfraFindingCard(props: Props) {
-  const sev = props.data.severity;
-  const ruleDocUrl = props.data.rule_doc_url;
-  const sevBadge = sev ? (
-    <span
-      className={cn(
-        'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
-        severityClass(sev)
-      )}
-    >
-      {sev}
-    </span>
-  ) : null;
-
   if (props.type === 'iac') {
     const f = props.data;
+    const info = iacRuleInfo(f.rule_id, f.severity, f.message);
+    const ruleUrl = f.rule_doc_url || checkovRuleDocUrl(f.rule_id);
+    // Checkov community checks ship an empty description; fall back to the
+    // rule's real impact line so the body is never blank.
+    const descriptionText = f.description?.trim() || info.impact;
+
+    // Highlight the actual violated line (e.g. `privileged: true` / `hostPath:`),
+    // not the resource-block start the scanner anchors on. k8s snippets begin at
+    // the resource's `start_line`; Dockerfile snippets are the whole file from
+    // line 1 (so the flagged instruction shows in full context).
+    const isDockerfile = f.framework === 'dockerfile';
+    const snippetStart = isDockerfile ? 1 : (f.start_line ?? 1);
+    let highlightLine: number | null = null;
+    const token = iacViolationToken(f.rule_id);
+    if (token && f.code_snippet) {
+      const idx = f.code_snippet.split('\n').findIndex((l) => l.includes(token));
+      if (idx >= 0) highlightLine = snippetStart + idx;
+    } else if (isDockerfile && f.code_snippet && f.start_line != null) {
+      // Trivy's Dockerfile rules (DS-*) carry no token but anchor precisely on the
+      // offending instruction (`USER root`, the flagged `RUN` block) — highlight
+      // that real file line within the whole-file snippet. (k8s missing-control
+      // rules have no such line and fall through to no code block.)
+      highlightLine = f.start_line;
+    }
+
     const complianceEntries = f.compliance_refs
       ? Object.entries(f.compliance_refs).filter(([, ids]) => ids.length > 0)
       : [];
+
     return (
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {sevBadge}
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-            {frameworkLabel(f.framework)}
-          </span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-            {f.scanner === 'checkov' ? 'Checkov' : 'Trivy'}
-          </span>
-          {f.cwe_ids != null && f.cwe_ids.length > 0 &&
-            f.cwe_ids.slice(0, 3).map((cwe) => (
+        {/* No severity / scanner / platform badges: the depscore already conveys
+            priority, and "Kubernetes / Checkov" just repeats what the file and
+            title already say. */}
+        {f.cwe_ids != null && f.cwe_ids.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {f.cwe_ids.slice(0, 3).map((cwe) => (
               <span
                 key={cwe}
                 className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20"
@@ -79,6 +76,11 @@ export default function InfraFindingCard(props: Props) {
                 {cwe}
               </span>
             ))}
+          </div>
+        )}
+
+        <div className="text-xs text-foreground-secondary leading-relaxed">
+          {descriptionText}
         </div>
 
         {complianceEntries.length > 0 && (
@@ -87,79 +89,55 @@ export default function InfraFindingCard(props: Props) {
               Compliance
             </span>
             {complianceEntries.map(([key, ids]) => (
-              <span
-                key={key}
-                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-300 border border-blue-500/20"
-                title={ids.join(', ')}
-              >
-                {formatBenchmarkLabel(key)} · {ids.length}
-              </span>
+              <Tooltip key={key}>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-300 border border-blue-500/20 cursor-help">
+                    {formatBenchmarkLabel(key)} · {ids.length}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs font-normal normal-case">
+                  {ids.join(', ')}
+                </TooltipContent>
+              </Tooltip>
             ))}
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
-              Rule
-            </div>
-            {ruleDocUrl ? (
-              <a
-                href={ruleDocUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm font-medium text-foreground hover:underline"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {f.rule_id}
-              </a>
-            ) : (
-              <div className="text-sm font-medium text-foreground">{f.rule_id}</div>
-            )}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
+            Rule
           </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">
-              File
-            </div>
-            <div className="text-sm font-mono text-foreground">
-              {f.file_path}
-              {f.start_line != null && (
-                <span className="text-muted-foreground">:{f.start_line}</span>
-              )}
-            </div>
-          </div>
+          {ruleUrl ? (
+            <a
+              href={ruleUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm font-mono text-foreground hover:underline inline-flex items-center gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {f.rule_id}
+              <ExternalLink className="h-3 w-3 text-muted-foreground" />
+            </a>
+          ) : (
+            <span className="text-sm font-mono text-foreground">{f.rule_id}</span>
+          )}
         </div>
 
-        {(f.description || f.message) && (
-          <div className="text-xs text-foreground-secondary leading-relaxed">
-            {f.description ?? f.message}
-          </div>
-        )}
-
-        {f.code_snippet && (
-          <div className="rounded-lg border border-border overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0a0a0b] border-b border-zinc-800/50">
-              {(() => {
-                const li = getLangInfo(f.file_path);
-                return (
-                  <span
-                    className={cn(
-                      'font-mono text-[10px] font-bold tracking-tight select-none',
-                      li.color
-                    )}
-                  >
-                    {li.label}
-                  </span>
-                );
-              })()}
-              <span className="text-[11px] text-foreground truncate">{f.file_path}</span>
-            </div>
-            <CodeSnippetBlock
-              file={f.file_path}
-              line={f.start_line}
-              code={f.code_snippet}
-            />
-          </div>
+        {/* Show the manifest with the offending line highlighted ONLY when we can
+            pin the exact violated line (a dangerous value is present in the
+            snippet). When the violation is a MISSING control there's no line to
+            point at — and the captured snippet is just the resource-block header,
+            so dumping it un-highlighted only confuses. In that case show nothing
+            extra: the description carries the issue, and Aegis owns the fix. */}
+        {highlightLine != null && f.code_snippet && (
+          // No `:line` in the header — the gutter already shows line numbers and
+          // the violated line is highlighted, so repeating it reads as clutter.
+          <CodeBlockCard
+            file={f.file_path}
+            firstLine={snippetStart}
+            code={f.code_snippet}
+            highlight={highlightLine}
+          />
         )}
       </div>
     );
@@ -167,32 +145,36 @@ export default function InfraFindingCard(props: Props) {
 
   const f = props.data;
   const cveOrOsv = f.cve_id ?? f.osv_id ?? f.vulnerability_id;
+  const ruleDocUrl = f.rule_doc_url;
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {sevBadge}
-        {f.cvss_score != null && (
-          <span
-            className={cn(
-              'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
-              f.cvss_score >= 9
-                ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                : f.cvss_score >= 7
-                ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
-                : f.cvss_score >= 4
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
-            )}
-          >
-            CVSS {f.cvss_score.toFixed(1)}
-          </span>
-        )}
-        {f.is_kev && (
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/25">
-            KEV
-          </span>
-        )}
-      </div>
+      {/* Container CVE: depscore conveys priority, so no standalone severity pill
+          — keep the specifics (CVSS, KEV) that severity alone can't say. */}
+      {(f.cvss_score != null || f.is_kev) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {f.cvss_score != null && (
+            <span
+              className={cn(
+                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+                f.cvss_score >= 9
+                  ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                  : f.cvss_score >= 7
+                  ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+                  : f.cvss_score >= 4
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+              )}
+            >
+              CVSS {f.cvss_score.toFixed(1)}
+            </span>
+          )}
+          {f.is_kev && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/25">
+              KEV
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <div>

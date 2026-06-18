@@ -21,7 +21,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type LicenseViolation } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -81,7 +81,6 @@ import {
   VulnerabilityOrgSidebarExpandedContent,
 } from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
 import VulnerabilityExpandableTable, { type SecurityTableRow } from '../../components/security/VulnerabilityExpandableTable';
-import { DastFindingsSection } from '../../components/dast/DastFindingsSection';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 import { supabase } from '../../lib/supabase';
 
@@ -356,9 +355,19 @@ export default function OrganizationOverviewPage() {
   const [projectVulnerabilities, setProjectVulnerabilities] = useState<ProjectVulnerability[] | null>(null);
   const [projectSecrets, setProjectSecrets] = useState<SecretFinding[]>([]);
   const [projectSemgrep, setProjectSemgrep] = useState<SemgrepFinding[]>([]);
+  // The rest of the unified findings table: IaC misconfigs, container CVEs,
+  // malicious packages, and DAST runtime findings — fetched resiliently so one
+  // failing scanner endpoint never blanks the others (same pattern as the full
+  // org findings page).
+  const [projectIacFindings, setProjectIacFindings] = useState<IaCFinding[]>([]);
+  const [projectContainerFindings, setProjectContainerFindings] = useState<ContainerFinding[]>([]);
+  const [projectBaseImageRecs, setProjectBaseImageRecs] = useState<BaseImageRecommendation[]>([]);
+  const [projectMaliciousFindings, setProjectMaliciousFindings] = useState<MaliciousFinding[]>([]);
+  const [projectDastFindings, setProjectDastFindings] = useState<DastFindingDTO[]>([]);
+  const [projectCodeFlows, setProjectCodeFlows] = useState<DataFlowFinding[]>([]);
   const [expandedProjectVulnRowId, setExpandedProjectVulnRowId] = useState<string | null>(null);
   const [projectVulnDetailByRowId, setProjectVulnDetailByRowId] = useState<Record<string, { loading: boolean; error: string | null; data: VulnerabilityDetail | null }>>({});
-  const [projectSidebarTab, setProjectSidebarTab] = useState<'vulnerabilities' | 'dependencies' | 'compliance' | 'settings'>('vulnerabilities');
+  const [projectSidebarTab, setProjectSidebarTab] = useState<'findings' | 'dependencies' | 'compliance' | 'settings'>('findings');
   // osv_id to deep-open in the Findings tab — set when a finding is clicked from
   // the dependencies supply-chain table; consumed by VulnerabilityExpandableTable.
   const [projectFindingToOpen, setProjectFindingToOpen] = useState<string | null>(null);
@@ -383,17 +392,14 @@ export default function OrganizationOverviewPage() {
   const [teamSidebarMembers, setTeamSidebarMembers] = useState<TeamMember[]>([]);
   const [teamSidebarProjects, setTeamSidebarProjects] = useState<Project[]>([]);
   const [teamSidebarSecuritySummary, setTeamSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
-  const [teamSidebarVulns, setTeamSidebarVulns] = useState<ProjectVulnerability[]>([]);
-  const [teamSidebarVulnsLoading, setTeamSidebarVulnsLoading] = useState(false);
-  const [teamSidebarVulnsError, setTeamSidebarVulnsError] = useState(false);
-  const [teamSidebarVulnsTotal, setTeamSidebarVulnsTotal] = useState(0);
-  const [teamSidebarVulnsPage, setTeamSidebarVulnsPage] = useState(1);
-  const [teamSidebarSecrets, setTeamSidebarSecrets] = useState<(SecretFinding & { project_name: string })[]>([]);
-  const [teamSidebarSecretsTotal, setTeamSidebarSecretsTotal] = useState(0);
-  const [teamSidebarSemgrep, setTeamSidebarSemgrep] = useState<(SemgrepFinding & { project_name: string })[]>([]);
-  const [teamSidebarSemgrepTotal, setTeamSidebarSemgrepTotal] = useState(0);
-  const [teamSidebarLicenseViolations, setTeamSidebarLicenseViolations] = useState<LicenseViolation[]>([]);
-  const [teamSidebarLicenseTotal, setTeamSidebarLicenseTotal] = useState(0);
+  // The team Findings tab loads ALL finding types across every project in the team
+  // (fanned out per-project, identical to the project Findings tab) so the team view
+  // is exactly the union of its projects' findings — same collapses, same triage.
+  const [teamSidebarFindingRows, setTeamSidebarFindingRows] = useState<SecurityTableRow[]>([]);
+  const [teamSidebarBaseImageRecs, setTeamSidebarBaseImageRecs] = useState<BaseImageRecommendation[]>([]);
+  const [teamSidebarFindingsLoading, setTeamSidebarFindingsLoading] = useState(false);
+  // Surface load failures — a blank list with no error reads as "no findings", which is a lie.
+  const [teamSidebarFindingsError, setTeamSidebarFindingsError] = useState(false);
   const [teamSidebarOrgMembers, setTeamSidebarOrgMembers] = useState<OrganizationMember[]>([]);
   const [teamSidebarRoles, setTeamSidebarRoles] = useState<TeamRole[]>([]);
   const [teamSidebarDataLoading, setTeamSidebarDataLoading] = useState(false);
@@ -565,8 +571,11 @@ export default function OrganizationOverviewPage() {
     } else if (sidebarParam === 'project') {
       const pid = searchParams.get('projectId');
       const tabRaw = searchParams.get('tab');
-      const validProjectTabs = new Set(['vulnerabilities', 'dependencies', 'settings']); // 'compliance' parked for MVP
-      const tab = (tabRaw && validProjectTabs.has(tabRaw) ? tabRaw : 'vulnerabilities') as 'vulnerabilities' | 'dependencies' | 'compliance' | 'settings';
+      // Accept the legacy 'vulnerabilities' tab key as an alias for 'findings' so
+      // old bookmarked URLs still resolve to the right tab.
+      const validProjectTabs = new Set(['findings', 'dependencies', 'settings']); // 'compliance' parked for MVP
+      const tabResolved = tabRaw === 'vulnerabilities' ? 'findings' : tabRaw;
+      const tab = (tabResolved && validProjectTabs.has(tabResolved) ? tabResolved : 'findings') as 'findings' | 'dependencies' | 'compliance' | 'settings';
       const subtab = searchParams.get('subtab') ?? 'general';
       if (pid) {
         const projectInfo = rawTeamsWithProjects.flatMap(t => t.projects).find(p => p.projectId === pid);
@@ -1582,8 +1591,8 @@ export default function OrganizationOverviewPage() {
   /** From the dependencies supply-chain table: switch to the Findings tab and
    *  deep-open the clicked finding's card (one home for finding detail). */
   const handleOpenProjectFinding = useCallback((osvId: string) => {
-    setProjectSidebarTab('vulnerabilities');
-    setSidebarParams({ tab: 'vulnerabilities', subtab: null });
+    setProjectSidebarTab('findings');
+    setSidebarParams({ tab: 'findings', subtab: null });
     setProjectFindingToOpen(osvId);
   }, [setSidebarParams]);
 
@@ -1691,10 +1700,10 @@ export default function OrganizationOverviewPage() {
       setProjectSidebarProject(null);
       setExpandedProjectVulnRowId(null);
       setProjectVulnDetailByRowId({});
-      setProjectSidebarTab('vulnerabilities');
+      setProjectSidebarTab('findings');
       setProjectSettingsSubTab('general');
       setProjectFindingToOpen(null);
-      setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'vulnerabilities', subtab: null, teamId: null });
+      setSidebarParams({ sidebar: 'project', projectId: project.id, tab: 'findings', subtab: null, teamId: null });
       setProjectSidebarOpen(true);
       requestAnimationFrame(() => setProjectSidebarVisible(true));
     };
@@ -1846,10 +1855,10 @@ export default function OrganizationOverviewPage() {
           setProjectSidebarProject(null);
           setExpandedProjectVulnRowId(null);
           setProjectVulnDetailByRowId({});
-          setProjectSidebarTab('vulnerabilities');
+          setProjectSidebarTab('findings');
           setProjectSettingsSubTab('general');
           setProjectFindingToOpen(null);
-          setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'vulnerabilities', subtab: null, teamId: null });
+          setSidebarParams({ sidebar: 'project', projectId: d.projectId!, tab: 'findings', subtab: null, teamId: null });
           setProjectSidebarOpen(true);
           requestAnimationFrame(() => setProjectSidebarVisible(true));
         };
@@ -2341,14 +2350,14 @@ export default function OrganizationOverviewPage() {
       setTeamSidebarRoles([]);
       setTeamSidebarPermissions(null);
       setTeamSidebarTeamData(null);
-      setTeamSidebarVulns([]);
-      setTeamSidebarVulnsTotal(0);
+      setTeamSidebarFindingRows([]);
+      setTeamSidebarBaseImageRecs([]);
       return;
     }
     let cancelled = false;
     // Clear stale data from previous team immediately
-    setTeamSidebarVulns([]);
-    setTeamSidebarVulnsTotal(0);
+    setTeamSidebarFindingRows([]);
+    setTeamSidebarBaseImageRecs([]);
     setTeamSidebarDataLoading(true);
     setTeamSidebarError(false);
     // Note: getOrganizationMembers is NOT loaded here — it only feeds the Add-Member dialog, so it's
@@ -2418,58 +2427,131 @@ export default function OrganizationOverviewPage() {
     return () => { cancelled = true; };
   }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, toast]);
 
-  // Load team security findings (vulns + secrets + semgrep + license) for the Findings tab
-  const loadTeamVulns = useCallback(async (p: number) => {
-    if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
-    setTeamSidebarVulnsLoading(true);
-    setTeamSidebarVulnsError(false);
-    setTeamSidebarVulns([]);
-    setTeamSidebarSecrets([]);
-    setTeamSidebarSemgrep([]);
-    setTeamSidebarLicenseViolations([]);
-    try {
-      const [vulnRes, secretRes, semgrepRes, licenseRes] = await Promise.all([
-        api.getTeamVulnerabilities(orgId, selectedTeamId, { page: p, per_page: 50, show_ignored: true }),
-        api.getTeamSecretFindings(orgId, selectedTeamId, { page: 1, per_page: 50, show_ignored: true }),
-        api.getTeamSemgrepFindings(orgId, selectedTeamId, { page: 1, per_page: 50, show_ignored: true }),
-        api.getTeamLicenseViolations(orgId, selectedTeamId, { page: 1, per_page: 50 }),
-      ]);
-      setTeamSidebarVulns(vulnRes.data);
-      setTeamSidebarVulnsTotal(vulnRes.total);
-      setTeamSidebarVulnsPage(vulnRes.page);
-      setTeamSidebarSecrets(secretRes.data);
-      setTeamSidebarSecretsTotal(secretRes.total);
-      setTeamSidebarSemgrep(semgrepRes.data);
-      setTeamSidebarSemgrepTotal(semgrepRes.total);
-      setTeamSidebarLicenseViolations(licenseRes.data);
-      setTeamSidebarLicenseTotal(licenseRes.total);
-    } catch {
-      // Surface the failure — blank lists with no error read as "no findings", which is a lie.
-      setTeamSidebarVulnsError(true);
-      setTeamSidebarVulns([]);
-      setTeamSidebarVulnsTotal(0);
-      setTeamSidebarSecrets([]);
-      setTeamSidebarSecretsTotal(0);
-      setTeamSidebarSemgrep([]);
-      setTeamSidebarSemgrepTotal(0);
-      setTeamSidebarLicenseViolations([]);
-      setTeamSidebarLicenseTotal(0);
-    } finally {
-      setTeamSidebarVulnsLoading(false);
+  // Load every finding type for ONE project into unified table rows — the exact
+  // same set the project Findings tab assembles (SCA + secrets + semgrep + IaC +
+  // container + DAST + malicious), so a team is just the union of its projects.
+  // Each row is stamped with project_id/project_name so the collapses (container,
+  // IaC hardening) group per-project and the table can attribute each finding.
+  const loadProjectFindingRows = useCallback(async (
+    oid: string,
+    project: { id: string; name?: string | null },
+  ): Promise<{ rows: SecurityTableRow[]; baseImageRecs: BaseImageRecommendation[] }> => {
+    const pid = project.id;
+    const projectName = project.name ?? undefined;
+    const [vulnsR, secretsR, semgrepR, iacR, containerR, maliciousR, recsR] = await Promise.allSettled([
+      api.getProjectVulnerabilities(oid, pid),
+      api.getProjectSecretFindings(oid, pid, 1, 100),
+      api.getProjectSemgrepFindings(oid, pid, 1, 100),
+      api.getProjectIaCFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.getProjectContainerFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.maliciousFindings.list(oid, pid, 1, 100),
+      api.getBaseImageRecommendations(oid, pid),
+    ]);
+
+    const rows: SecurityTableRow[] = [];
+
+    // SCA: one row per (dependency, CVE), keeping the highest depscore — mirrors
+    // the project tab's dedupedProjectVulnerabilities.
+    if (vulnsR.status === 'fulfilled') {
+      const vulns = (vulnsR.value ?? []) as ProjectVulnerability[];
+      const rowScore = (v: ProjectVulnerability) => {
+        const c = v.contextual_depscore;
+        if (c != null && Number.isFinite(Number(c))) return Number(c);
+        const d = v.depscore;
+        if (d != null && Number.isFinite(Number(d))) return Number(d);
+        return -1;
+      };
+      const byKey = new Map<string, ProjectVulnerability>();
+      for (const v of vulns) {
+        const key = `${v.dependency_id}:${v.osv_id}`;
+        const prev = byKey.get(key);
+        if (!prev || rowScore(v) > rowScore(prev)) byKey.set(key, { ...v, project_name: projectName ?? v.project_name });
+      }
+      for (const v of byKey.values()) rows.push({ type: 'vulnerability', data: v });
     }
-  }, [orgId, selectedTeamId]);
+    if (secretsR.status === 'fulfilled') {
+      for (const s of secretsR.value?.data ?? []) rows.push({ type: 'secret', data: { ...s, project_id: pid, project_name: projectName } });
+    }
+    if (semgrepR.status === 'fulfilled') {
+      for (const s of semgrepR.value?.data ?? []) rows.push({ type: 'semgrep', data: { ...s, project_id: pid, project_name: projectName } });
+    }
+    if (iacR.status === 'fulfilled') {
+      for (const f of iacR.value?.data ?? []) rows.push({ type: 'iac', data: { ...f, project_id: pid, project_name: projectName } });
+    }
+    if (containerR.status === 'fulfilled') {
+      for (const f of containerR.value?.data ?? []) rows.push({ type: 'container', data: { ...f, project_id: pid, project_name: projectName } });
+    }
+    if (maliciousR.status === 'fulfilled') {
+      for (const f of maliciousR.value?.data ?? []) rows.push({ type: 'malicious', data: { ...f, project_id: pid, project_name: projectName } });
+    }
+    // DAST is per-target: resolve the latest scan's target, then load its findings.
+    try {
+      const jobs = await api.getDastJobs(pid, { limit: 5 });
+      const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
+      const dast = targetId ? await api.getDastFindings(pid, { limit: 200, targetId }) : [];
+      for (const f of dast) rows.push({ type: 'dast', data: { ...f, project_name: projectName } });
+    } catch { /* no DAST target for this project */ }
+
+    // First-party data-flow findings — the taint engine's source→sink paths in
+    // the project's own code. One cheap request; empty for most projects.
+    try {
+      const cf = await api.getCodeFlowFindings(oid, pid);
+      for (const f of cf.data ?? []) rows.push({ type: 'taint_flow', data: { ...f, project_name: projectName } });
+    } catch { /* no code-flow findings for this project */ }
+
+    const baseImageRecs = recsR.status === 'fulfilled' ? (recsR.value.recommendations ?? []) : [];
+    return { rows, baseImageRecs };
+  }, []);
+
+  // Load the team Findings tab: fan out loadProjectFindingRows across every project
+  // in the team and concat. The team project list comes from the security-summary
+  // RPC (authoritative + race-free), so it covers projects whose only findings are
+  // IaC/container/DAST — not just ones with SCA rows.
+  const loadTeamFindings = useCallback(async () => {
+    if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    setTeamSidebarFindingsLoading(true);
+    setTeamSidebarFindingsError(false);
+    setTeamSidebarFindingRows([]);
+    setTeamSidebarBaseImageRecs([]);
+    try {
+      const summary = await api
+        .getTeamSecuritySummary(orgId, selectedTeamId)
+        .catch(() => ({ projects: [] as ProjectSecuritySummary[] }));
+      const teamProjects = (summary.projects ?? []).map((p) => ({ id: p.project_id, name: p.project_name }));
+      if (teamProjects.length === 0) {
+        setTeamSidebarFindingRows([]);
+        setTeamSidebarBaseImageRecs([]);
+        return;
+      }
+      const perProject = await Promise.all(teamProjects.map((p) => loadProjectFindingRows(orgId, p)));
+      const rows: SecurityTableRow[] = [];
+      const recs: BaseImageRecommendation[] = [];
+      for (const r of perProject) {
+        rows.push(...r.rows);
+        recs.push(...r.baseImageRecs);
+      }
+      setTeamSidebarFindingRows(rows);
+      setTeamSidebarBaseImageRecs(recs);
+    } catch {
+      setTeamSidebarFindingsError(true);
+      setTeamSidebarFindingRows([]);
+      setTeamSidebarBaseImageRecs([]);
+    } finally {
+      setTeamSidebarFindingsLoading(false);
+    }
+  }, [orgId, selectedTeamId, loadProjectFindingRows]);
 
   // Findings load once per team per sidebar-open. Without the ref, swapping to another tab and
-  // back re-fires the effect (teamSidebarTab is a dep) and loadTeamVulns blanks the lists before
-  // refetching — the tab visibly "reloads". Pagination + status changes call loadTeamVulns directly.
+  // back re-fires the effect (teamSidebarTab is a dep) and loadTeamFindings blanks the list before
+  // refetching — the tab visibly "reloads". A status change refreshes via loadTeamFindings directly.
   const teamFindingsLoadedForRef = useRef<string | null>(null);
   useEffect(() => {
     if (!teamSidebarOpen) { teamFindingsLoadedForRef.current = null; return; }
     if (teamSidebarTab !== 'findings' || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
     if (teamFindingsLoadedForRef.current === selectedTeamId) return;
     teamFindingsLoadedForRef.current = selectedTeamId;
-    void loadTeamVulns(1);
-  }, [teamSidebarTab, teamSidebarOpen, selectedTeamId, loadTeamVulns]);
+    void loadTeamFindings();
+  }, [teamSidebarTab, teamSidebarOpen, selectedTeamId, loadTeamFindings]);
 
   // When a project is created that belongs to the currently open team sidebar, add it to the sidebar's project list
   useEffect(() => {
@@ -2691,6 +2773,43 @@ export default function OrganizationOverviewPage() {
     return counts;
   }, [teamSidebarMembers]);
 
+  /**
+   * Load the non-SCA finding types for the project sidebar's unified findings
+   * table — IaC, container, malicious, and DAST. Resilient (allSettled) so a
+   * single failing scanner endpoint never blanks the others; DAST is per-target
+   * so we learn the latest scan's target before loading its findings. Shared by
+   * the open effect and the post-mutation refresh.
+   */
+  const loadProjectExtraFindings = useCallback(async (
+    oid: string,
+    pid: string,
+    isCancelled?: () => boolean,
+  ) => {
+    const [iac, container, malicious, baseImageRecs, codeFlows] = await Promise.allSettled([
+      api.getProjectIaCFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.getProjectContainerFindings(oid, pid, { perPage: 100, status: 'open' }),
+      api.maliciousFindings.list(oid, pid, 1, 100),
+      api.getBaseImageRecommendations(oid, pid),
+      api.getCodeFlowFindings(oid, pid),
+    ]);
+    if (isCancelled?.()) return;
+    setProjectIacFindings(iac.status === 'fulfilled' ? iac.value.data ?? [] : []);
+    setProjectContainerFindings(container.status === 'fulfilled' ? container.value.data ?? [] : []);
+    setProjectMaliciousFindings(malicious.status === 'fulfilled' ? malicious.value.data ?? [] : []);
+    setProjectBaseImageRecs(baseImageRecs.status === 'fulfilled' ? baseImageRecs.value.recommendations ?? [] : []);
+    setProjectCodeFlows(codeFlows.status === 'fulfilled' ? codeFlows.value.data ?? [] : []);
+    try {
+      const jobs = await api.getDastJobs(pid, { limit: 5 });
+      if (isCancelled?.()) return;
+      const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
+      const dast = targetId ? await api.getDastFindings(pid, { limit: 200, targetId }) : [];
+      if (isCancelled?.()) return;
+      setProjectDastFindings(dast);
+    } catch {
+      if (!isCancelled?.()) setProjectDastFindings([]);
+    }
+  }, []);
+
   // Fetch project stats, vulnerabilities, full project and org when project sidebar opens
   useEffect(() => {
     if (!orgId || !selectedProjectId || !projectSidebarOpen) return;
@@ -2700,11 +2819,20 @@ export default function OrganizationOverviewPage() {
     setProjectVulnerabilities(null);
     setProjectSecrets([]);
     setProjectSemgrep([]);
+    setProjectIacFindings([]);
+    setProjectContainerFindings([]);
+    setProjectBaseImageRecs([]);
+    setProjectMaliciousFindings([]);
+    setProjectDastFindings([]);
+    setProjectCodeFlows([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
     setProjectSidebarProjectLoading(true);
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
+    // Non-SCA finding types load independently so they never block (or get
+    // blocked by) the core stats/vulns request.
+    void loadProjectExtraFindings(orgId, selectedProjectId, () => cancelled);
     Promise.all([
       api.getProjectStats(orgId, selectedProjectId),
       api.getProjectVulnerabilities(orgId, selectedProjectId),
@@ -2769,7 +2897,12 @@ export default function OrganizationOverviewPage() {
     ...dedupedProjectVulnerabilities.map((v) => ({ type: 'vulnerability' as const, data: v })),
     ...projectSecrets.map((s) => ({ type: 'secret' as const, data: s })),
     ...projectSemgrep.map((s) => ({ type: 'semgrep' as const, data: s })),
-  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep]);
+    ...projectIacFindings.map((f) => ({ type: 'iac' as const, data: f })),
+    ...projectContainerFindings.map((f) => ({ type: 'container' as const, data: f })),
+    ...projectDastFindings.map((f) => ({ type: 'dast' as const, data: f })),
+    ...projectMaliciousFindings.map((f) => ({ type: 'malicious' as const, data: f })),
+    ...projectCodeFlows.map((f) => ({ type: 'taint_flow' as const, data: f })),
+  ], [dedupedProjectVulnerabilities, projectSecrets, projectSemgrep, projectIacFindings, projectContainerFindings, projectDastFindings, projectMaliciousFindings, projectCodeFlows]);
 
   const toggleProjectVulnerabilityRow = useCallback(async (rowId: string, osvId: string) => {
     setExpandedProjectVulnRowId((prev) => (prev === rowId ? null : rowId));
@@ -3202,22 +3335,16 @@ export default function OrganizationOverviewPage() {
 
               {/* Findings Tab */}
               {teamSidebarTab === 'findings' && (() => {
-                const securityRows: SecurityTableRow[] = [
-                  ...teamSidebarVulns.map(v => ({ type: 'vulnerability' as const, data: v })),
-                  ...teamSidebarSecrets.map(s => ({ type: 'secret' as const, data: s })),
-                  ...teamSidebarSemgrep.map(s => ({ type: 'semgrep' as const, data: s })),
-                  ...teamSidebarLicenseViolations.map(l => ({ type: 'license' as const, data: l })),
-                ];
-                const totalFindings = teamSidebarVulnsTotal + teamSidebarSecretsTotal + teamSidebarSemgrepTotal + teamSidebarLicenseTotal;
+                const securityRows = teamSidebarFindingRows;
                 return (
                   <div className="space-y-4">
-                    {teamSidebarVulnsError ? (
+                    {teamSidebarFindingsError ? (
                       <SidebarErrorState
                         title="Couldn't load findings"
                         context="this team's findings"
-                        onRetry={() => void loadTeamVulns(1)}
+                        onRetry={() => void loadTeamFindings()}
                       />
-                    ) : teamSidebarVulnsLoading && securityRows.length === 0 ? (
+                    ) : teamSidebarFindingsLoading && securityRows.length === 0 ? (
                       <OrganizationVulnerabilitiesTableSkeleton />
                     ) : securityRows.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -3228,47 +3355,17 @@ export default function OrganizationOverviewPage() {
                         <p className="text-sm text-foreground-secondary max-w-[240px]">
                           {teamSidebarProjects.length === 0
                             ? "This team doesn't have any projects yet."
-                            : "All projects in this team are clean — no vulnerabilities, secrets, code findings, or license violations."}
+                            : "All projects in this team are clean — no open findings across any scanner."}
                         </p>
                       </div>
                     ) : (
-                      <>
-                        <VulnerabilityExpandableTable
-                          organizationId={orgId!}
-                          rows={securityRows}
-                          onStatusChange={() => void loadTeamVulns(1)}
-                          canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
-                        />
-                        {Math.ceil(teamSidebarVulnsTotal / 50) > 1 && (
-                          <div className="flex items-center justify-between gap-3 pt-2">
-                            <span className="text-xs text-foreground-secondary">
-                              Page {teamSidebarVulnsPage} of {Math.ceil(teamSidebarVulnsTotal / 50)}
-                            </span>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-8"
-                                disabled={teamSidebarVulnsLoading || teamSidebarVulnsPage <= 1}
-                                onClick={() => void loadTeamVulns(teamSidebarVulnsPage - 1)}
-                              >
-                                Previous
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-8"
-                                disabled={teamSidebarVulnsLoading || teamSidebarVulnsPage >= Math.ceil(teamSidebarVulnsTotal / 50)}
-                                onClick={() => void loadTeamVulns(teamSidebarVulnsPage + 1)}
-                              >
-                                Next
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                      </>
+                      <VulnerabilityExpandableTable
+                        organizationId={orgId!}
+                        rows={securityRows}
+                        baseImageRecommendations={teamSidebarBaseImageRecs}
+                        onStatusChange={() => void loadTeamFindings()}
+                        canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+                      />
                     )}
                   </div>
                 );
@@ -3809,7 +3906,7 @@ export default function OrganizationOverviewPage() {
               <div className="flex-shrink-0 px-5 border-b border-border">
                 <div className="flex items-center gap-6">
                   {/* MVP scope cut: 'compliance' tab parked (compliance feature shelved). */}
-                  {(['vulnerabilities', 'dependencies', 'settings'] as const).map((tab) => (
+                  {(['findings', 'dependencies', 'settings'] as const).map((tab) => (
                     <button
                       key={tab}
                       type="button"
@@ -3819,7 +3916,7 @@ export default function OrganizationOverviewPage() {
                         projectSidebarTab === tab ? 'text-foreground' : 'text-foreground-secondary hover:text-foreground'
                       )}
                     >
-                      {tab === 'vulnerabilities' ? 'Findings' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
                       {projectSidebarTab === tab && (
                         <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground rounded-full" />
                       )}
@@ -3830,10 +3927,10 @@ export default function OrganizationOverviewPage() {
               <div
                 className={cn(
                   'flex-1 min-h-0 flex flex-col overflow-y-auto px-5',
-                  projectSidebarTab === 'vulnerabilities' ? 'py-5' : 'pb-5 pt-0'
+                  projectSidebarTab === 'findings' ? 'py-5' : 'pb-5 pt-0'
                 )}
               >
-{projectSidebarTab === 'vulnerabilities' && (
+{projectSidebarTab === 'findings' && (
                   <div className="space-y-4">
                     {projectStats?.malicious_packages?.scan_status === 'partial' && (
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -3878,6 +3975,7 @@ export default function OrganizationOverviewPage() {
                         organizationId={orgId!}
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
+                        baseImageRecommendations={projectBaseImageRecs}
                         openFindingId={projectFindingToOpen}
                         onStatusChange={() => {
                           if (orgId && selectedProjectId) {
@@ -3892,14 +3990,13 @@ export default function OrganizationOverviewPage() {
                                 setProjectSemgrep(g?.data ?? []);
                               })
                               .catch(() => {});
+                            // Refresh IaC / container / malicious / DAST too so a
+                            // suppress / risk-accept on any of them reflects.
+                            void loadProjectExtraFindings(orgId, selectedProjectId);
                           }
                         }}
                         canManageFindings={Boolean(organization?.permissions?.manage_teams_and_projects)}
                       />
-                    )}
-
-                    {orgId && selectedProjectId && (
-                      <DastFindingsSection organizationId={orgId} projectId={selectedProjectId} />
                     )}
                   </div>
                 )}
@@ -3949,12 +4046,12 @@ export default function OrganizationOverviewPage() {
                     onProjectTransferred={handleProjectTransferred}
                   />
                 )}
-                {projectSidebarTab !== 'vulnerabilities' && projectSidebarProjectLoading && (
+                {projectSidebarTab !== 'findings' && projectSidebarProjectLoading && (
                   <div className="flex items-center justify-center py-12">
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                   </div>
                 )}
-                {projectSidebarTab !== 'vulnerabilities' && !projectSidebarProjectLoading && !projectSidebarProject && (
+                {projectSidebarTab !== 'findings' && !projectSidebarProjectLoading && !projectSidebarProject && (
                   <div className="py-8 text-center text-sm text-muted-foreground">Could not load project.</div>
                 )}
               </div>

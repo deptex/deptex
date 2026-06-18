@@ -2,7 +2,7 @@
 
 Greenfield React SPA reference fixture. Pure-frontend; no server, no DAST
 cell. Exercises the dependency / reachability / IaC / container / secrets
-/ malicious-pkg / Semgrep scanners through a realistic single-page app
+/ Semgrep scanners through a realistic single-page app
 that imports a small set of widely-used libraries and exposes one
 intentional client-side taint sink.
 
@@ -16,8 +16,10 @@ intentional client-side taint sink.
   declared but only `axios` is imported. `moment` is unreferenced → the
   tree-sitter usage extractor reports zero usages → classifier marks
   it unreachable.
-- **Historical-malicious:** `event-stream==3.3.6` (per
-  `.github/dependabot.yml` exclusion).
+- **Malicious-pkg (deferred):** `event-stream==3.3.6` was seeded but is
+  unpublished on npm (404), which aborts the whole install and makes the
+  fixture unscannable — removed from `package.json`. Malicious-package
+  detection is exercised separately.
 - **No DAST cell.** The Dockerfile serves the static build via an
   nginx stub purely so the container + IaC scanners have something to
   bite on. Static SPAs have no meaningful DAST surface in this corpus.

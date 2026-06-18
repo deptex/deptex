@@ -1,3 +1,5 @@
 django==2.2.0
-pyyaml==5.1
-ctx==0.1.2
+# Reachable dependency-CVE seed: PyYAML 5.3.1 → CVE-2020-14343 (yaml.load RCE,
+# Text4Shell-style). The import_config view flows a request param into
+# yaml.load, so the taint engine confirms this dep CVE as reachable.
+PyYAML==5.3.1

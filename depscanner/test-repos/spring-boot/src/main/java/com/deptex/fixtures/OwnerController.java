@@ -1,5 +1,6 @@
 package com.deptex.fixtures;
 
+import org.apache.commons.text.StringSubstitutor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,5 +31,15 @@ public class OwnerController {
     public Map<String, Object> findById(@RequestParam("id") long id) {
         // UNREACHABLE: parameterised query.
         return jdbc.queryForMap("SELECT * FROM owners WHERE id = ?", id);
+    }
+
+    @GetMapping("/greet")
+    public String greet(@RequestParam String greeting) {
+        // REACHABLE DEPENDENCY CVE (commons-text Text4Shell, CVE-2022-42889):
+        // the tainted greeting flows into StringSubstitutor.replace, whose
+        // default ${script:...} lookup executes attacker-controlled code on
+        // commons-text 1.9.
+        StringSubstitutor interpolator = new StringSubstitutor();
+        return interpolator.replace(greeting);
     }
 }

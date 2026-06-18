@@ -6,7 +6,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Core" Version="2.2.5" />
     <PackageReference Include="System.Data.SqlClient" Version="4.8.5" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+    <!-- Vulnerable: CVE-2024-21907 (uncapped recursive deserialization DoS); reachable via ImportController.Settings. -->
+    <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
     <!-- Unreachable: declared but not referenced from Controllers/. -->
     <PackageReference Include="System.Text.RegularExpressions" Version="4.3.0" />
   </ItemGroup>

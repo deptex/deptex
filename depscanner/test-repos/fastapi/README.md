@@ -13,7 +13,9 @@ categories.
   into `text()` concatenation.
 - **Unreachable handler:** `main.py:list_users()` — pure ORM query with
   no user-controlled string.
-- **Historical-malicious:** `ctx==0.1.2`.
+- **Malicious-pkg (deferred):** `ctx==0.1.2` was seeded but is removed from
+  PyPI (404) — removed from `requirements.txt`. Malicious-package detection
+  is exercised separately.
 
 See `.deptex/SOURCE.md` for provenance, `.deptex/expected.yaml` for the
 canonical expected-finding list, and `.deptex/deploy.sh` to boot the

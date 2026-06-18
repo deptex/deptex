@@ -33,6 +33,16 @@
       <artifactId>mysql-connector-java</artifactId>
       <version>8.0.16</version>
     </dependency>
+    <!-- REACHABLE DEPENDENCY CVE: commons-text 1.9 is vulnerable to Text4Shell
+         (CVE-2022-42889). StringSubstitutor.replace evaluates ${script:...}
+         lookups, so a tainted argument is an RCE primitive. OwnerController
+         flows ?greeting= straight into it, so the taint engine confirms the
+         CVE is reachable and promotes it to a top dependency finding. -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-text</artifactId>
+      <version>1.9</version>
+    </dependency>
     <!-- Unreachable dep: declared but never referenced from src/. -->
     <dependency>
       <groupId>commons-collections</groupId>

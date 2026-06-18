@@ -104,6 +104,34 @@ families:
         alternatives: *node18
       - source_image: node:21
         alternatives: *node22
+      # End-of-life Node majors (14/16 reached EOL in 2023; 12 in 2022). These
+      # are the biggest CVE offenders in the wild — the Debian base layer is
+      # years stale. Recommend a bump to the active LTS, which clears the vast
+      # majority of base-image CVEs. (Exact-tag match, so list common pins.)
+      - source_image: node:14
+        alternatives: &node_eol
+          - image: node:20-slim
+            provider: official_slim
+            has_shell: true
+            libc_family: glibc
+            drop_in_score: 70
+            cve_count: 9
+            notes: "This Node major is end-of-life — its Debian base layer is years stale. Bump to the active LTS (Node 20) to clear the vast majority of base-image CVEs; keeps glibc + a shell."
+          - image: cgr.dev/chainguard/node:20
+            provider: chainguard
+            has_shell: false
+            libc_family: glibc
+            drop_in_score: 58
+            cve_count: 0
+            notes: "Distroless-style hardened Node 20 — near-zero CVEs, but no shell (exec-form CMD only)."
+      - source_image: node:14.0
+        alternatives: *node_eol
+      - source_image: node:16
+        alternatives: *node_eol
+      - source_image: node:16.0
+        alternatives: *node_eol
+      - source_image: node:12
+        alternatives: *node_eol
 
   # ----- Python ------------------------------------------------------------
   - family: python

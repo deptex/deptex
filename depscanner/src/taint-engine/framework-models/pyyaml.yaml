@@ -1,0 +1,76 @@
+# PyYAML framework spec — Deptex cross-file taint engine.
+#
+# Targets CVE-2020-14343 (and the closely related CVE-2020-1747): PyYAML
+# before 5.4 ships a `FullLoader` whose `python/object/new` /
+# `python/object/apply` constructors are NOT neutered, so `yaml.load(data)`
+# (and the `full_load` / `unsafe_load` aliases) execute arbitrary Python when
+# fed an attacker-controlled document. Any tainted bytes reaching one of those
+# loaders is an arbitrary-code-execution primitive — the classic
+# "deserialization of untrusted YAML" sink.
+#
+# Why a dedicated spec (the flask/django/fastapi yamls already list a generic
+# `yaml.load(*)` deserialization sink):
+#   The generic sinks carry NO `osv_id`, so a reachable `yaml.load` flow lands
+#   as a first-party `deserialization` finding but never promotes the PyYAML
+#   *dependency* CVE that dep-scan/OSV reports on the pinned `PyYAML==5.3.1`.
+#   This spec adds the SAME loader surface WITH `osv_id: CVE-2020-14343`. The
+#   propagator's sink fan-out (matchSinkVariants in propagate-core.ts) gathers
+#   every osv_id-carrying sink that matches the same callee + vuln_class once
+#   the first match is itself CVE-targeted, so the engine stamps a reachable
+#   `yaml.load(userdata)` flow with CVE-2020-14343. The reachability classifier
+#   then promotes the PyYAML PDV from `module`/`data_flow` to `confirmed`
+#   (reachable) — exactly the commons-text / lodash mechanism, applied to
+#   Python.
+#
+# vuln_class mapping.
+#   `deserialization` — the loader reconstructs arbitrary Python objects from
+#   the serialized document, the canonical insecure-deserialization shape (same
+#   bucket the generic `yaml.load` / `pickle.loads` sinks already use).
+#
+# Matching note.
+#   The propagator matches a call by its last segment, so `yaml.load(*)` fires
+#   on `yaml.load(userdata)` regardless of the import alias. `full_load` /
+#   `unsafe_load` are the named-loader aliases of the same vulnerable surface.
+#
+# Sources are NOT redeclared here — the flask / django / fastapi specs already
+# pre-taint `request.*` inputs, so a flow from a request param into
+# `yaml.load(...)` resolves with no additional source wiring.
+#
+# Sanitizers.
+#   `yaml.safe_load` is the safe loader and is already modeled as a
+#   `deserialization` sanitizer in flask.yaml / django.yaml; not redeclared
+#   here.
+
+framework: pyyaml
+language: python
+version: "*"
+
+sources: []
+
+sinks:
+  # `yaml.load(data)` with the default / FullLoader — arbitrary code execution
+  # on PyYAML < 5.4 (CVE-2020-14343). Last-segment match fires on any import
+  # alias (`yaml.load`, `pyyaml.load`, ...).
+  - pattern: yaml.load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    osv_id: CVE-2020-14343
+    description: PyYAML yaml.load (default/FullLoader) — untrusted YAML executes arbitrary Python (CVE-2020-14343)
+
+  # `yaml.full_load(data)` — the named FullLoader entry point, same vulnerable
+  # constructor surface as the default `yaml.load`.
+  - pattern: yaml.full_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    osv_id: CVE-2020-14343
+    description: PyYAML yaml.full_load — FullLoader constructs arbitrary Python objects from untrusted YAML (CVE-2020-14343)
+
+  # `yaml.unsafe_load(data)` — the explicitly-unsafe UnsafeLoader, broadest
+  # gadget surface; same CVE family.
+  - pattern: yaml.unsafe_load(*)
+    vuln_class: deserialization
+    argument_indices: [0]
+    osv_id: CVE-2020-14343
+    description: PyYAML yaml.unsafe_load — UnsafeLoader deserializes arbitrary Python from untrusted YAML (CVE-2020-14343)
+
+sanitizers: []

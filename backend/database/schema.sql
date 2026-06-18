@@ -1114,7 +1114,8 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   engine text NOT NULL DEFAULT 'zap'::text,
   linked_sast_finding_id uuid,
   cross_link_methods text[] DEFAULT ARRAY[]::text[],
-  kev boolean NOT NULL DEFAULT false
+  kev boolean NOT NULL DEFAULT false,
+  handler_code_snippet text
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_targets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1248,7 +1249,8 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   middleware_chain text[],
   metadata jsonb,
   created_at timestamp with time zone DEFAULT now(),
-  request_params jsonb
+  request_params jsonb,
+  code_snippet text
 );
 CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1474,7 +1476,8 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   rule_id text,
   flow_signature_hash text,
   entry_point_code text,
-  sink_code text
+  sink_code text,
+  vuln_class text
 );
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -5668,14 +5671,22 @@ AS $function$
     COALESCE(v.critical_count, 0) AS critical_count,
     COALESCE(v.reachable_count, 0) AS reachable_count,
     COALESCE(v.worst_depscore, 0) AS worst_depscore,
-    COALESCE(v.band_critical, 0) AS band_critical,
-    COALESCE(v.band_high, 0) AS band_high,
-    COALESCE(v.band_medium, 0) AS band_medium,
-    COALESCE(v.band_low, 0) AS band_low,
+    COALESCE(v.band_critical, 0) + COALESCE(iac.crit, 0) + COALESCE(cont.crit, 0)
+      + COALESCE(dast.crit, 0) + COALESCE(sec.crit, 0) + COALESCE(sg.crit, 0) + COALESCE(mal.crit, 0)
+      + COALESCE(cf.crit, 0) AS band_critical,
+    COALESCE(v.band_high, 0) + COALESCE(iac.high, 0) + COALESCE(cont.high, 0)
+      + COALESCE(dast.high, 0) + COALESCE(sec.high, 0) + COALESCE(sg.high, 0) + COALESCE(mal.high, 0)
+      + COALESCE(cf.high, 0) AS band_high,
+    COALESCE(v.band_medium, 0) + COALESCE(iac.med, 0) + COALESCE(cont.med, 0)
+      + COALESCE(dast.med, 0) + COALESCE(sec.med, 0) + COALESCE(sg.med, 0) + COALESCE(mal.med, 0)
+      + COALESCE(cf.med, 0) AS band_medium,
+    COALESCE(v.band_low, 0) + COALESCE(iac.low, 0) + COALESCE(cont.low, 0)
+      + COALESCE(dast.low, 0) + COALESCE(sec.low, 0) + COALESCE(sg.low, 0) + COALESCE(mal.low, 0)
+      + COALESCE(cf.low, 0) AS band_low,
     COALESCE(ig.ignored_count, 0) AS ignored_count,
-    COALESCE(sg.semgrep_count, 0) AS semgrep_count,
-    COALESCE(sec.secret_count, 0) AS secret_count,
-    COALESCE(sec.verified_secret_count, 0) AS verified_secret_count,
+    COALESCE(sgc.semgrep_count, 0) AS semgrep_count,
+    COALESCE(secc.secret_count, 0) AS secret_count,
+    COALESCE(secc.verified_secret_count, 0) AS verified_secret_count,
     COALESCE(c.has_container, false) AS has_container,
     COALESCE(d.has_dast, false) AS has_dast,
     sj.last_scan_at AS last_scan_at
@@ -5722,16 +5733,195 @@ AS $function$
       )
   ) ig ON true
   LEFT JOIN LATERAL (
-    SELECT count(*) AS semgrep_count
+    SELECT
+      count(*) FILTER (WHERE b = 'critical') AS crit,
+      count(*) FILTER (WHERE b = 'high') AS high,
+      count(*) FILTER (WHERE b = 'medium') AS med,
+      count(*) FILTER (WHERE b = 'low') AS low
+    FROM (
+      SELECT CASE lower(COALESCE(f.severity, ''))
+               WHEN 'critical' THEN 'critical' WHEN 'high' THEN 'high'
+               WHEN 'medium' THEN 'medium' WHEN 'moderate' THEN 'medium'
+               WHEN 'low' THEN 'low' ELSE 'low' END AS b
+      FROM project_iac_findings f
+      WHERE f.project_id = p.id
+        AND f.extraction_run_id = ANY(p_active_run_ids)
+        AND COALESCE(f.suppressed, false) = false
+        AND COALESCE(f.risk_accepted, false) = false
+        AND (
+          upper(f.rule_id) IN (
+            'CKV_K8S_16','CKV_K8S_17','CKV_K8S_18','CKV_K8S_19','CKV_K8S_20','CKV_K8S_23',
+            'KSV-0023','KSV023','AVD-KSV-0023','KSV-0121'
+          )
+          OR (f.framework = 'dockerfile' AND lower(COALESCE(f.severity, '')) IN ('high', 'critical'))
+        )
+    ) q
+  ) iac ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE b = 'critical') AS crit,
+      count(*) FILTER (WHERE b = 'high') AS high,
+      count(*) FILTER (WHERE b = 'medium') AS med,
+      count(*) FILTER (WHERE b = 'low') AS low
+    FROM (
+      SELECT CASE
+               WHEN COALESCE(pcf.depscore, 0) >= 90 THEN 'critical'
+               WHEN COALESCE(pcf.depscore, 0) >= 70 THEN 'high'
+               WHEN COALESCE(pcf.depscore, 0) >= 40 THEN 'medium' ELSE 'low' END AS b
+      FROM project_container_findings pcf
+      WHERE pcf.project_id = p.id
+        AND pcf.extraction_run_id = ANY(p_active_run_ids)
+        AND pcf.is_kev = true
+        AND COALESCE(pcf.suppressed, false) = false
+      UNION ALL
+      SELECT CASE
+               WHEN m >= 90 THEN 'critical' WHEN m >= 70 THEN 'high'
+               WHEN m >= 40 THEN 'medium' ELSE 'low' END AS b
+      FROM (
+        SELECT max(COALESCE(pcf.depscore, 0)) AS m
+        FROM project_container_findings pcf
+        WHERE pcf.project_id = p.id
+          AND pcf.extraction_run_id = ANY(p_active_run_ids)
+          AND pcf.is_kev = false
+          AND COALESCE(pcf.suppressed, false) = false
+        GROUP BY pcf.image_reference
+      ) g
+    ) q
+  ) cont ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE ds >= 90) AS crit,
+      count(*) FILTER (WHERE ds >= 70 AND ds < 90) AS high,
+      count(*) FILTER (WHERE ds >= 40 AND ds < 70) AS med,
+      count(*) FILTER (WHERE ds < 40) AS low
+    FROM (
+      SELECT CASE WHEN g.kev THEN GREATEST(g.ds_raw, 96)
+                  WHEN g.exploitable THEN GREATEST(g.ds_raw, 90)
+                  ELSE g.ds_raw END AS ds
+      FROM (
+        SELECT DISTINCT ON (s.handler_file_path, s.fam) s.ds_raw, s.exploitable, s.kev
+        FROM (
+          SELECT
+            df.handler_file_path,
+            CASE
+              WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.rule_id,'')||' '||COALESCE(df.message,'')) ~ '(sql ?injection|sqli)' THEN 'sqli'
+              WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.rule_id,'')||' '||COALESCE(df.message,'')) ~ '(template ?injection|ssti|cross.?site.?script|\yxss\y)' THEN 'output-injection'
+              WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.rule_id,'')||' '||COALESCE(df.message,'')) ~ '(path ?traversal|directory ?traversal|local file inclusion|\ylfi\y)' THEN 'path-traversal'
+              WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.rule_id,'')||' '||COALESCE(df.message,'')) ~ '(command ?injection|os ?command)' THEN 'command-injection'
+              ELSE 'rule:'||lower(COALESCE(df.rule_id, df.vulnerability_type, 'other'))
+            END AS fam,
+            LEAST(100, GREATEST(0,
+              (CASE lower(COALESCE(df.severity, ''))
+                 WHEN 'critical' THEN 90 WHEN 'high' THEN 72 WHEN 'medium' THEN 48
+                 WHEN 'low' THEN 26 WHEN 'info' THEN 10 ELSE 48 END)
+              + (CASE lower(COALESCE(df.confidence, ''))
+                   WHEN 'confirmed' THEN 10 WHEN 'high' THEN 6 WHEN 'low' THEN -12 ELSE 0 END)
+              + (CASE
+                   WHEN lower(COALESCE(df.vulnerability_type, '')) ~ '(sql injection|command injection|code injection|template injection|ldap injection|xpath|path traversal|remote os command|remote code|server side request|ssrf|xxe|xml external|deserial)' THEN 10
+                   WHEN lower(COALESCE(df.vulnerability_type, '')) ~ '(cross.?site.?scripting|xss|cross.?site.?request|csrf|open redirect)' THEN 4
+                   WHEN lower(COALESCE(df.vulnerability_type, '')) ~ '(header|cache|cookie|csp|content security policy|clickjack|x-powered-by|information disclosure|source code disclosure|strict-transport|spectre|site isolation|storable|cacheable|permissions policy|sec-fetch|mime|x-content-type|charset|timestamp|comment)' THEN -8
+                   ELSE 0 END)
+            )) AS ds_raw,
+            (df.linked_sca_osv_id IS NOT NULL) AS exploitable,
+            COALESCE(df.kev, false) AS kev,
+            ((CASE lower(COALESCE(df.severity,'')) WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) * 10
+             + (CASE
+                  WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.message,'')) ~ '(template ?injection|ssti|sql ?injection|sqli|command ?injection)' THEN 3
+                  WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.message,'')) ~ '(persistent|stored)' THEN 2
+                  WHEN lower(COALESCE(df.vulnerability_type,'')||' '||COALESCE(df.message,'')) ~ '(cross.?site.?script|\yxss\y)' THEN 1
+                  ELSE 0 END)) AS canon
+          FROM project_dast_findings df
+          WHERE df.project_id = p.id
+            AND COALESCE(df.status, 'open') = 'open'
+            AND df.dast_run_id = (
+              SELECT df2.dast_run_id FROM project_dast_findings df2
+              WHERE df2.project_id = p.id ORDER BY df2.created_at DESC LIMIT 1
+            )
+            AND (
+              (df.payload_redacted IS NOT NULL AND btrim(df.payload_redacted) <> '')
+              OR lower(COALESCE(df.severity, '')) IN ('high', 'critical')
+            )
+        ) s
+        ORDER BY s.handler_file_path, s.fam, s.canon DESC
+      ) g
+    ) f
+  ) dast ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE COALESCE(psf.depscore, 0) >= 90) AS crit,
+      count(*) FILTER (WHERE COALESCE(psf.depscore, 0) >= 70 AND COALESCE(psf.depscore, 0) < 90) AS high,
+      count(*) FILTER (WHERE COALESCE(psf.depscore, 0) >= 40 AND COALESCE(psf.depscore, 0) < 70) AS med,
+      count(*) FILTER (WHERE COALESCE(psf.depscore, 0) < 40) AS low
+    FROM project_secret_findings psf
+    WHERE psf.project_id = p.id AND psf.extraction_run_id = ANY(p_active_run_ids)
+  ) sec ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE COALESCE(sf.depscore, 0) >= 90) AS crit,
+      count(*) FILTER (WHERE COALESCE(sf.depscore, 0) >= 70 AND COALESCE(sf.depscore, 0) < 90) AS high,
+      count(*) FILTER (WHERE COALESCE(sf.depscore, 0) >= 40 AND COALESCE(sf.depscore, 0) < 70) AS med,
+      count(*) FILTER (WHERE COALESCE(sf.depscore, 0) < 40) AS low
     FROM project_semgrep_findings sf
     WHERE sf.project_id = p.id AND sf.extraction_run_id = ANY(p_active_run_ids)
   ) sg ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE ds >= 90) AS crit,
+      count(*) FILTER (WHERE ds >= 70 AND ds < 90) AS high,
+      count(*) FILTER (WHERE ds >= 40 AND ds < 70) AS med,
+      count(*) FILTER (WHERE ds < 40) AS low
+    FROM (
+      SELECT COALESCE(pmf.depscore, CASE WHEN lower(COALESCE(pmf.severity, '')) = 'critical' THEN 95 ELSE 0 END) AS ds
+      FROM project_malicious_findings pmf
+      WHERE pmf.project_id = p.id
+        AND pmf.extraction_run_id = ANY(p_active_run_ids)
+        AND COALESCE(pmf.suppressed, false) = false
+        AND COALESCE(pmf.risk_accepted, false) = false
+    ) q
+  ) mal ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      count(*) FILTER (WHERE ds >= 90) AS crit,
+      count(*) FILTER (WHERE ds >= 70 AND ds < 90) AS high,
+      count(*) FILTER (WHERE ds >= 40 AND ds < 70) AS med,
+      count(*) FILTER (WHERE ds < 40) AS low
+    FROM (
+      SELECT CASE lower(COALESCE(prf.vuln_class, ''))
+               WHEN 'sql_injection' THEN 92
+               WHEN 'command_injection' THEN 92
+               WHEN 'code_injection' THEN 92
+               WHEN 'deserialization' THEN 92
+               WHEN 'xss' THEN 78
+               WHEN 'ssrf' THEN 78
+               WHEN 'path_traversal' THEN 78
+               WHEN 'file_upload' THEN 78
+               WHEN 'prototype_pollution' THEN 78
+               WHEN 'auth_bypass' THEN 78
+               ELSE 55
+             END AS ds
+      FROM project_reachable_flows prf
+      WHERE prf.project_id = p.id
+        AND prf.extraction_run_id = ANY(p_active_run_ids)
+        AND prf.reachability_source = 'taint_engine'
+        AND prf.osv_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM project_reachable_flow_suppressions s
+          WHERE s.project_id = p.id
+            AND s.flow_signature_hash = prf.flow_signature_hash
+        )
+    ) q
+  ) cf ON true
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS semgrep_count
+    FROM project_semgrep_findings sf
+    WHERE sf.project_id = p.id AND sf.extraction_run_id = ANY(p_active_run_ids)
+  ) sgc ON true
   LEFT JOIN LATERAL (
     SELECT count(*) AS secret_count,
            count(*) FILTER (WHERE psf.is_verified) AS verified_secret_count
     FROM project_secret_findings psf
     WHERE psf.project_id = p.id AND psf.extraction_run_id = ANY(p_active_run_ids)
-  ) sec ON true
+  ) secc ON true
   LEFT JOIN LATERAL (
     SELECT EXISTS (
       SELECT 1 FROM project_container_findings pcf
@@ -7118,6 +7308,7 @@ CREATE INDEX idx_pnb_run_os_pkg ON public.project_native_bindings USING btree (e
 CREATE INDEX idx_pnb_run_soname ON public.project_native_bindings USING btree (extraction_run_id, soname text_pattern_ops);
 CREATE INDEX idx_policy_eval_jobs_org ON public.policy_evaluation_jobs USING btree (organization_id);
 CREATE INDEX idx_policy_eval_jobs_status ON public.policy_evaluation_jobs USING btree (organization_id, status);
+CREATE INDEX idx_prf_first_party ON public.project_reachable_flows USING btree (project_id, extraction_run_id) WHERE ((osv_id IS NULL) AND (reachability_source = 'taint_engine'::text));
 CREATE INDEX idx_prf_project_dep ON public.project_reachable_flows USING btree (project_id, dependency_id);
 CREATE INDEX idx_prf_project_entry ON public.project_reachable_flows USING btree (project_id, entry_point_file);
 CREATE INDEX idx_prf_project_extraction_run ON public.project_reachable_flows USING btree (project_id, extraction_run_id);

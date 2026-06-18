@@ -29,6 +29,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { toDataFlowFinding } from '../lib/code-flow-findings';
 import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
@@ -1170,12 +1171,14 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
       folderTargets.map(async (folder) => {
         const children = await provider.listDirectory(repo_full_name, default_branch, folder.path);
         let ecosystem: string | undefined;
+        // Track the manifest path so we can read it once to resolve the framework — this
+        // upgrades a generic ecosystem badge ("JavaScript") to the real framework ("Next.js")
+        // and lets the create payload persist the right framework for a monorepo sub-path.
+        let manifestPath: string | undefined;
         let hasDocker = false;
         for (const [fname, eco] of Object.entries(MANIFEST_FILES)) {
-          if (children.some((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname)) {
-            ecosystem = eco;
-            break;
-          }
+          const hit = children.find((c) => c.type === 'blob' && (c.path.split('/').pop() || '') === fname);
+          if (hit) { ecosystem = eco; manifestPath = hit.path; break; }
         }
         if (!ecosystem) {
           for (const c of children) {
@@ -1184,7 +1187,7 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
             const dot = childName.lastIndexOf('.');
             if (dot === -1) continue;
             const eco = MANIFEST_EXTENSIONS[childName.slice(dot)];
-            if (eco) { ecosystem = eco; break; }
+            if (eco) { ecosystem = eco; manifestPath = c.path; break; }
           }
         }
         for (const c of children) {
@@ -1192,7 +1195,19 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
           const childName = c.path.split('/').pop() || '';
           if (isDockerFile(childName)) { hasDocker = true; break; }
         }
-        return { path: folder.path, ecosystem, hasDocker };
+        // Resolve the framework from the manifest contents. Best-effort: a read failure
+        // just falls back to the ecosystem badge.
+        let framework: string | undefined;
+        if (ecosystem && manifestPath) {
+          try {
+            const content = await provider.getFileContent(repo_full_name, manifestPath, default_branch);
+            const detected = detectFrameworkForEcosystem(ecosystem, content);
+            if (detected && detected !== 'unknown') framework = detected;
+          } catch {
+            /* manifest unreadable — leave framework undefined */
+          }
+        }
+        return { path: folder.path, ecosystem, framework, hasDocker };
       })
     );
     for (let i = 0; i < probes.length; i++) {
@@ -1200,6 +1215,7 @@ router.get('/:id/repositories/list-dir', async (req: AuthRequest, res) => {
       if (r.status !== 'fulfilled') continue;
       const target = folderTargets[i];
       if (r.value.ecosystem) target.ecosystem = r.value.ecosystem;
+      if (r.value.framework) target.framework = r.value.framework;
       if (r.value.hasDocker) target.hasDocker = true;
     }
 
@@ -10203,6 +10219,63 @@ router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, 
   } catch (error: any) {
     console.error('Error fetching secret findings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch secret findings' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/code-flow-findings
+//
+// First-party data-flow findings: the taint engine's source→sink flows that
+// live entirely in the user's own code (reachability_source='taint_engine' AND
+// osv_id IS NULL). CVE-attributed flows are excluded here — those already
+// surface on their dependency's SCA finding. Gated on project access only
+// (these are code findings, like Semgrep — no manage permission required).
+router.get('/:id/projects/:projectId/code-flow-findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+    if (!activeExtractionId) {
+      return res.json({ data: [], total: 0 });
+    }
+
+    // Flows + the user's suppressed flow hashes for this project, in parallel.
+    // A suppressed flow is hidden from the findings surface the same way a
+    // suppressed dep-flow drops out of the vulnerability detail (phase49).
+    const [flowsRes, supRes] = await Promise.all([
+      supabase
+        .from('project_reachable_flows')
+        .select(
+          'id, project_id, extraction_run_id, vuln_class, entry_point_file, entry_point_line, entry_point_method, entry_point_tag, entry_point_code, sink_file, sink_line, sink_method, sink_code, flow_length, flow_nodes, flow_signature_hash, created_at',
+        )
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeExtractionId)
+        .eq('reachability_source', 'taint_engine')
+        .is('osv_id', null)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('project_reachable_flow_suppressions')
+        .select('flow_signature_hash')
+        .eq('project_id', projectId),
+    ]);
+
+    if (flowsRes.error) throw flowsRes.error;
+    const suppressed = new Set(
+      (supRes.data ?? []).map((r: any) => r.flow_signature_hash).filter(Boolean),
+    );
+
+    const data = (flowsRes.data ?? [])
+      .filter((row: any) => !row.flow_signature_hash || !suppressed.has(row.flow_signature_hash))
+      .map((row: any) => toDataFlowFinding(row));
+
+    res.json({ data, total: data.length });
+  } catch (error: any) {
+    console.error('Error fetching code-flow findings:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch code-flow findings' });
   }
 });
 

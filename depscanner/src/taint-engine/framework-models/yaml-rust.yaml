@@ -1,0 +1,46 @@
+# yaml-rust framework spec — Deptex cross-file taint engine.
+#
+# Targets RUSTSEC-2018-0006: yaml-rust's `YamlLoader::load_from_str` recurses
+# while parsing deeply-nested YAML, so a crafted document (e.g. thousands of
+# stacked `[` / `{` openers, or alias bombs) drives unbounded recursion and
+# stack exhaustion — a denial-of-service primitive. Any attacker-controlled
+# bytes flowing into `YamlLoader::load_from_str(...)` are the trigger.
+#
+# vuln_class mapping rationale.
+#   `redos` — the closest existing bucket for an algorithmic-complexity /
+#   resource-exhaustion DoS driven by attacker-shaped input. yaml-rust's
+#   uncontrolled recursion is the same "input chosen to blow up the parser's
+#   runtime/stack" shape as a catastrophic-backtracking regex; rather than add
+#   a dedicated `dos` class (which would mean touching the closed enum in
+#   spec.ts and both mirrors), we reuse `redos`, matching how the bundled Rust
+#   specs already file `Regex::new` complexity DoS under `redos`.
+#
+# Sources are NOT redeclared here — axum's `Query<T>.0` / `into_inner()` /
+# `Json<T>` extractors are pre-tainted by axum.yaml. The cross-spec load order
+# means a flow from `let q = query.into_inner();` into
+# `YamlLoader::load_from_str(&q.doc)` resolves with no additional source wiring.
+
+framework: yaml-rust
+language: rust
+version: "*"
+
+sources: []
+
+sinks:
+  # `YamlLoader::load_from_str(*)` — associated-function call site. The Rust IR
+  # lowers `YamlLoader::load_from_str(x)` to calleeText `YamlLoader::load_from_str`
+  # (scoped_identifier), so the full-form pattern matches via `calleeText === p`.
+  - pattern: "YamlLoader::load_from_str(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: RUSTSEC-2018-0006
+    description: yaml-rust YamlLoader::load_from_str — uncontrolled recursion parsing untrusted YAML drives stack-exhaustion DoS (RUSTSEC-2018-0006)
+  # Bare last-segment form — covers a `use yaml_rust::yaml::YamlLoader;` site
+  # whose callee text is the unqualified `load_from_str` (last-segment matcher).
+  - pattern: "load_from_str(*)"
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: RUSTSEC-2018-0006
+    description: yaml-rust load_from_str (unqualified) — same uncontrolled-recursion DoS surface (RUSTSEC-2018-0006)
+
+sanitizers: []
