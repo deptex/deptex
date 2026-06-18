@@ -7,5 +7,11 @@ ruby "2.7.0"
 gem "rails", "6.0.0"
 gem "rack", "2.0.6"
 
+# Reachable dependency CVE: rexml 3.2.4 carries CVE-2021-28965 (XML
+# parse-amplification DoS). app/controllers/documents_controller.rb flows a
+# request param straight into REXML::Document.new(...), so the in-house taint
+# engine confirms the CVE as reachable.
+gem "rexml", "3.2.4"
+
 # Unreachable: declared in Gemfile but never required from app/.
 gem "nokogiri", "1.10.4"

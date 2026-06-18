@@ -132,6 +132,10 @@ function seedMulti(fsk: FakeStorage, pdvs: PdvShape[], usageStrings: string[] = 
       is_direct: p.isDirect,
       files_importing_count: p.filesImporting,
       environment: p.environment ?? null,
+      // name/namespace live on project_dependencies — the classifier resolves
+      // depName from here (the dependencies table has no namespace column).
+      name: p.depName,
+      namespace: null,
     })),
   );
   // Dedup by depId so a callgraph-matching jackson-style dep is registered

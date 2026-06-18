@@ -69,6 +69,14 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
       // a naive scan picks up URLs + tokens from our own intermediates. Ship
       // an exclude file scoped to those known paths — relative matchers that
       // work regardless of the workspace's absolute location.
+      //
+      // Also exclude vendored dependency trees. cdxgen installs deps during
+      // SBOM generation, so the workspace ends up holding node_modules/,
+      // vendor/, site-packages/ etc. Secrets there belong to third-party
+      // packages, not the user's code, and they're a large false-positive
+      // surface (e.g. a GitHub avatar-URL hash in a dep's README that
+      // TruffleHog's `github` detector flags as a token). Every secret
+      // scanner skips these by default; we do too.
       const excludeFile = path.join(workspaceRoot, '.deptex-trufflehog-excludes');
       fs.writeFileSync(
         excludeFile,
@@ -82,6 +90,12 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
           '.results/',
           '.buckets/',
           '.pglite-buckets/',
+          // vendored dependency trees (regex matched against the full path)
+          'node_modules/',
+          'vendor/',
+          '.venv/',
+          'venv/',
+          'site-packages/',
         ].join('\n') + '\n',
         'utf8',
       );

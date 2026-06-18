@@ -1,0 +1,54 @@
+# REXML framework spec — Deptex cross-file taint engine.
+#
+# Targets CVE-2021-28965: Ruby's bundled REXML gem (≤ 3.2.4) is vulnerable
+# to a denial-of-service / unbounded-resource-consumption flaw when parsing
+# attacker-crafted XML. A document built from untrusted bytes via
+# `REXML::Document.new(...)` drives the parser into the pathological state,
+# so any tainted bytes flowing into that constructor are the DoS primitive.
+#
+# vuln_class mapping rationale.
+#   `redos` — the closed enum has no dedicated DoS / resource-exhaustion
+#   bucket, and the engine's DoS-shaped flows (catastrophic-backtracking
+#   regex parsing, Rack::MediaType.type) are already filed under `redos`
+#   (see rails.yaml / sinatra.yaml). The REXML parse-amplification CVE is
+#   the same "untrusted input drives a parser into super-linear work"
+#   shape, so it shares that bucket rather than adding a new enum member
+#   (which would touch spec.ts plus the backend + frontend mirrors).
+#
+# Sink shape.
+#   The Ruby IR lowerer normalizes `Foo::bar` receivers to `Foo.bar` before
+#   matching (ruby/ir.ts), so `REXML::Document.new(xml)` is seen by the
+#   matcher as the callee text `REXML.Document.new`. The primary pattern is
+#   therefore written in the dotted form `REXML.Document.new(*)` to match
+#   exactly. `Document.new(*)` is listed as a secondary form for fixtures
+#   that `include REXML` and call the bare `Document.new(...)`.
+#
+# Sources are NOT redeclared here — Rails/Sinatra `params`, Rack env, and
+# the request-object accessors are all pre-tainted by the per-framework Ruby
+# specs. The cross-spec load order means a flow from `params[:xml]` into
+# `REXML::Document.new(...)` resolves with no additional source wiring.
+
+framework: rexml
+language: ruby
+version: "*"
+
+sources: []
+
+sinks:
+  # `REXML::Document.new(...)` — parses attacker-controlled XML. Index 0 is
+  # the document source (string / IO). Any tainted bytes there reach the
+  # vulnerable parser (CVE-2021-28965). Receiver normalized `::` -> `.` by
+  # the Ruby lowerer, so the dotted callee text `REXML.Document.new` matches.
+  - pattern: REXML.Document.new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: CVE-2021-28965
+    description: REXML::Document.new — untrusted XML drives the parser into unbounded resource consumption (CVE-2021-28965)
+  # Bare `Document.new(...)` form for fixtures that `include REXML`.
+  - pattern: Document.new(*)
+    vuln_class: redos
+    argument_indices: [0]
+    osv_id: CVE-2021-28965
+    description: REXML Document.new (bare, after `include REXML`) — same CVE-2021-28965 parse-amplification surface
+
+sanitizers: []

@@ -308,6 +308,35 @@ describe('parseTrivyImageOutput', () => {
     const parsed = parseTrivyImageOutput(sample, 'nginx:1.25', 'trivy@0.50.4');
     expect(parsed.imageDigest).toBe('sha256:deadbeef');
   });
+
+  it('never stores a null severity: UNKNOWN derives from CVSS, else floors at LOW', () => {
+    // Trivy emits UNKNOWN for CVEs the feed has not rated. Storing null leaves
+    // the row unable to band/sort (BAD_DATA). Derive from CVSS when present,
+    // otherwise floor at LOW — we have a real CVE, just no assigned severity.
+    const sample = JSON.stringify({
+      Metadata: { ImageID: 'sha256:deadbeef' },
+      Results: [
+        {
+          Class: 'os-pkgs',
+          Type: 'debian',
+          Vulnerabilities: [
+            // UNKNOWN + a CVSS score → band from the score (7.5 → HIGH).
+            { VulnerabilityID: 'CVE-2024-A', PkgName: 'pkga', InstalledVersion: '1', Severity: 'UNKNOWN', CVSS: { nvd: { V3Score: 7.5 } } },
+            // UNKNOWN + no CVSS → floor at LOW (never null).
+            { VulnerabilityID: 'CVE-2024-B', PkgName: 'pkgb', InstalledVersion: '1', Severity: 'UNKNOWN' },
+            // Missing Severity entirely + no CVSS → floor at LOW.
+            { VulnerabilityID: 'CVE-2024-C', PkgName: 'pkgc', InstalledVersion: '1' },
+          ],
+        },
+      ],
+    });
+    const { findings } = parseTrivyImageOutput(sample, 'debian:12', 'trivy@0.50.4');
+    const byPkg = Object.fromEntries(findings.map((f) => [f.os_package_name, f.severity]));
+    expect(byPkg.pkga).toBe('HIGH');
+    expect(byPkg.pkgb).toBe('LOW');
+    expect(byPkg.pkgc).toBe('LOW');
+    expect(findings.every((f) => f.severity !== null)).toBe(true);
+  });
 });
 
 // =============================================================================

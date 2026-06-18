@@ -123,6 +123,10 @@ function seed(
       is_direct: opts.isDirect ?? true,
       files_importing_count: opts.filesImporting ?? 1,
       environment: opts.environment ?? null,
+      // name/namespace live on project_dependencies (dependencies has no
+      // namespace) — the classifier resolves depName from here.
+      name: opts.depName ?? 'mocha',
+      namespace: null,
     },
   ]);
   fsk.set('dependencies', [{ id: DEP_ID, name: opts.depName ?? 'mocha' }]);
@@ -283,5 +287,53 @@ describe('updateReachabilityLevels — dependency scope', () => {
     const { level, details } = verdictOf(fsk);
     expect(level).toBe('unreachable');
     expect(details?.verdict).toBe('orphan_transitive_unreachable');
+  });
+});
+
+describe('updateReachabilityLevels — framework-driven app (zero usage slices)', () => {
+  // A Next.js `app/` page that only renders JSX makes zero direct dep calls, so
+  // usage extraction produces no slices — but the AST still parsed. Import
+  // absence is then real evidence, not an extraction failure: a declared dep no
+  // file imports is `unreachable`, while the framework runtime (used by
+  // convention, never imported) must stay `module` so its CVEs aren't buried.
+
+  it('classifies a genuinely-unused direct npm dep `unreachable` even with zero usage slices', async () => {
+    const fsk = new FakeStorage();
+    // The dompurify case: in package.json, imported by no file, app calls no deps.
+    seed(fsk, { environment: 'prod', isDirect: true, filesImporting: 0, depName: 'dompurify', usageStrings: [] });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log as any, undefined, {
+      ecosystem: 'npm',
+    });
+    const { level, details } = verdictOf(fsk);
+    expect(level).toBe('unreachable');
+    expect(details?.reason).toContain('imported by no source file');
+  });
+
+  it('never buries the framework runtime: `next` with zero imports stays `module`', async () => {
+    const fsk = new FakeStorage();
+    seed(fsk, { environment: 'prod', isDirect: true, filesImporting: 0, depName: 'next', usageStrings: [] });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log as any, undefined, {
+      ecosystem: 'npm',
+    });
+    expect(verdictOf(fsk).level).toBe('module');
+  });
+
+  it('exempts `react`/`react-dom` (JSX runtime used without an explicit import)', async () => {
+    const fsk = new FakeStorage();
+    seed(fsk, { environment: 'prod', isDirect: true, filesImporting: 0, depName: 'react-dom', usageStrings: [] });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log as any, undefined, {
+      ecosystem: 'npm',
+    });
+    expect(verdictOf(fsk).level).toBe('module');
+  });
+
+  it('preserves the fail-open: an extraction crash (astParsedSuccessfully=false) floors at `module`', async () => {
+    const fsk = new FakeStorage();
+    seed(fsk, { environment: 'prod', isDirect: true, filesImporting: 0, depName: 'dompurify', usageStrings: [] });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log as any, undefined, {
+      ecosystem: 'npm',
+      astParsedSuccessfully: false,
+    });
+    expect(verdictOf(fsk).level).toBe('module');
   });
 });
