@@ -102,7 +102,7 @@ export default function ProjectsContent() {
                 <td className="px-4 py-3 text-foreground font-medium">Scoring</td>
                 <td className="px-4 py-3 text-foreground/90">
                   Compute the project health score and per-vulnerability{" "}
-                  <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">depscore</code> based on CVSS, EPSS, reachability, CISA KEV status, and asset tier.
+                  <code className="rounded bg-background-subtle px-1.5 py-0.5 text-xs font-mono">depscore</code> based on CVSS, EPSS, reachability, CISA KEV status, and project importance.
                 </td>
               </tr>
             </tbody>

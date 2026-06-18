@@ -88,7 +88,7 @@ const docMeta: Record<string, DocMeta> = {
   },
   aegis: {
     title: "Aegis",
-    description: "Autonomous security agent: chat, tasks, automations, Slack bot, and PR review.",
+    description: "Autonomous security agent: chat, tasks, automations, and Slack bot.",
   },
 };
 
@@ -106,7 +106,7 @@ const introductionOffers = [
   "AI-powered vulnerability fixing with automated PR creation (Aider) and human review",
   "Dependency Score (package reputation) and Depscore (context-aware vulnerability risk) for prioritization",
   "Live extraction logs and real-time progress via Supabase Realtime",
-  "SLSA provenance verification and malicious package detection (e.g. Socket.dev)",
+  "SLSA provenance verification and malicious package detection",
   "SBOM generation and compliance tracking for frameworks and license policies",
   "Autonomous Security Agent (Aegis) to chat, run tasks, automations, and Slack bot",
   "Organizations and teams with roles, permissions, and scoped visibility",

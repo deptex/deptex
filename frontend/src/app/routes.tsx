@@ -22,7 +22,6 @@ import InvitePage from "./pages/InvitePage";
 import JoinPage from "./pages/JoinPage";
 import AccountSettingsPage from "./pages/AccountSettingsPage";
 import PlatformFeaturesPage from "./pages/PlatformFeaturesPage";
-import ProjectHealthPage from "./pages/ProjectHealthPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
 import GetDemoPage from "./pages/GetDemoPage";
 import OpenSourcePage from "./pages/OpenSourcePage";
@@ -333,20 +332,8 @@ export const router = createBrowserRouter([
         element: <Navigate to="/platform-features/customizable-compliance" replace />,
       },
       {
-        path: "anomaly-detection",
-        element: <Navigate to="/platform-features/advanced-upstream-insights" replace />,
-      },
-      {
         path: "repository-tracking",
         element: <Navigate to="/docs/quick-start" replace />,
-      },
-      {
-        path: "project-health",
-        element: (
-          <PublicRoute>
-            <ProjectHealthPage />
-          </PublicRoute>
-        ),
       },
       {
         path: "integrations",

@@ -135,7 +135,7 @@ function TeamGroupNodeComponent({ data }: NodeProps) {
       )}
 
       {/* Card body — icon tile left, text right (matches org card family) */}
-      <div className={`relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-xl border border-border bg-background-card-header shadow-lg shadow-slate-500/5 pl-2.5 ${hasStatusRollup ? 'pr-9' : 'pr-2.5'}`}>
+      <div className={`relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-xl border border-border bg-background-card-header pl-2.5 ${hasStatusRollup ? 'pr-9' : 'pr-2.5'}`}>
         <TeamGroupChip />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-foreground truncate leading-tight tracking-tight">

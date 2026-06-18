@@ -1,7 +1,7 @@
 # Deptex
 
-The AI-powered Open Source Security Platform.  
-Automate dependency intelligence, vulnerability analysis, and supply-chain anomaly detection.
+The AI-powered, source-available security platform.  
+Automate dependency intelligence, vulnerability analysis, and supply-chain security.
 
 ---
 
@@ -65,8 +65,8 @@ flowchart TB
 | **Extraction Worker** | Clones repos, runs cdxgen for SBOM generation, dep-scan for vulnerability detection, and AST analysis. Produces dependency trees and metadata. |
 | **Ingestion Engine** | Processes SBOMs, normalizes packages across ecosystems, builds the dependency graph, and stores everything in PostgreSQL. |
 | **Vulnerability Processing** | Matches dependencies to CVEs (via GHSA and NVD), analyzes reachability, and computes impact. Powers the vulnerability dashboard. |
-| **Aegis AI** | Autonomous security agent — PR comments, patch suggestions, background audits. (Cloud) |
-| **Watchtower** | Upstream anomaly detection for supply-chain risks. (Cloud) |
+| **Aegis AI** | Autonomous security agent — investigates findings, plans fixes you approve, opens draft PRs. (Cloud) |
+| **Watchtower** | Daily upstream monitoring — new releases and advisories. (Cloud) |
 
 ### Key features
 
@@ -74,8 +74,8 @@ flowchart TB
 - **License auditing** — Policy enforcement
 - **Dependency graph** — Transitive analysis, reachability
 - **SBOM** — Automatic generation, drift detection
-- **Watchtower** — Upstream anomaly detection (Cloud)
-- **Aegis AI** — PR reviews, patch suggestions, background audits (Cloud)
+- **Watchtower** — Upstream release & advisory monitoring (Cloud)
+- **Aegis AI** — Investigation, fix planning, draft-PR remediation (Cloud)
 
 ---
 

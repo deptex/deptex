@@ -35,7 +35,6 @@ export default function TransferImpactAssessmentPage() {
             <li>Pseudonymization of identifiers where feasible</li>
             <li>Contractual commitments from sub-processors</li>
             <li>Data minimization — only metadata required for security analysis is retained</li>
-            <li>Configurable deployment regions for Enterprise customers</li>
           </ul>
 
           <h2 className="text-lg font-semibold text-foreground">5. Contact</h2>

@@ -32,3 +32,6 @@ dist-ssr
 # Temporary files
 temp-open-saas
 
+
+# landing video: dummy take is local-only; remove this line when the real take lands
+public/videos/landing/finding-journey.webm

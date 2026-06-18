@@ -18,15 +18,15 @@ const FEATURES = [
   {
     slug: "ai-security-agent",
     label: "AI Security Agent",
-    intro: "Your AI security engineer. Chat in natural language, run tasks and automations, and get PR reviews and Slack support—with your own AI provider and full control.",
+    intro: "Your AI security engineer. Chat in natural language, run tasks and automations, and get fixes as draft pull requests you approve.",
     docsSlug: "aegis",
     cards: [
-      { title: "Plan with AI", icon: ListChecks, description: "Multi-step plans you can pause, approve, or cancel. Security sprints and fix batches." },
-      { title: "Chat & command center", icon: MessageSquare, description: "50+ tools, streaming answers, and persistent threads for vulnerability and policy questions." },
-      { title: "Tasks & approvals", icon: ClipboardCheck, description: "Human-in-the-loop for high-impact actions. Approve from the console or in Slack." },
+      { title: "Plan with AI", icon: ListChecks, description: "Multi-step plans you can approve, revise, or reject before anything runs." },
+      { title: "Chat & command center", icon: MessageSquare, description: "24 tools, streaming answers, and persistent threads for vulnerability and policy questions." },
+      { title: "Tasks & approvals", icon: ClipboardCheck, description: "Human-in-the-loop for high-impact actions. Approve every dangerous step from the console." },
       { title: "Automations & memory", icon: Calendar, description: "Cron schedules, event triggers, and semantic memory so context persists." },
-      { title: "Slack & PR review", icon: GitPullRequest, description: "@mention Aegis in Slack. PR security reviews with risk and policy checks." },
-      { title: "Models & cost control", icon: Key, description: "Pick which models Aegis can use. Usage logging and monthly cost caps per org." },
+      { title: "Guardrails", icon: GitPullRequest, description: "Draft PRs always, hard caps on every run, and honest refusals when no safe fix exists." },
+      { title: "Models & cost control", icon: Key, description: "Pick which models Aegis can use. Usage logging and prepaid spend controls per org." },
     ],
     icon: Bot,
   },
@@ -103,11 +103,8 @@ export default function PlatformFeaturesPage() {
             Deptex brings dependency security, compliance, and AI automation into one place. Pick a feature below to see what it does.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <Button
-              asChild
-              className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold text-sm px-4 py-2 rounded-lg"
-            >
-              <Link to="/login">Get started</Link>
+            <Button asChild variant="green">
+              <Link to="/login">Try for free</Link>
             </Button>
             <Button
               asChild

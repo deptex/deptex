@@ -10,7 +10,7 @@ const REPO = {
   description:
     "Deptex helps organizations manage open-source risk by tracking dependencies, enforcing security policies, and automatically remediating vulnerabilities with AI",
   contributingUrl: "https://github.com/deptex/deptex/blob/main/CONTRIBUTING.md",
-  codeOfConductUrl: "https://github.com/deptex/deptex/blob/main/CODE_OF_CONDUCT.md",
+  licenseUrl: "https://github.com/deptex/deptex/blob/main/LICENSE",
 };
 
 function formatStars(count: number): string {
@@ -41,10 +41,12 @@ export default function OpenSourcePage() {
           {/* Left: Open Source hero */}
           <div className="text-center lg:text-left">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-foreground">
-              Open Source
+              Open code
             </h1>
             <p className="text-xl text-foreground-secondary mb-8 leading-relaxed">
-              Deptex’s core platform is open source. We welcome anyone who wants to contribute.
+              The whole Deptex platform is source-available in one repository: read it, run it locally,
+              self-host it. Every release converts to Apache 2.0 after two years. We welcome anyone who
+              wants to contribute.
             </p>
             <div className="flex flex-wrap justify-center lg:justify-start gap-6">
               <a
@@ -57,13 +59,13 @@ export default function OpenSourcePage() {
                 <span>How to contribute</span>
               </a>
               <a
-                href={REPO.codeOfConductUrl}
+                href={REPO.licenseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-foreground-secondary hover:text-foreground transition-colors"
               >
                 <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
-                <span>Code of Conduct</span>
+                <span>License (FSL → Apache 2.0)</span>
               </a>
             </div>
           </div>

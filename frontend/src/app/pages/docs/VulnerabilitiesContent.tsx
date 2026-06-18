@@ -37,12 +37,12 @@ export default function VulnerabilitiesContent() {
         <div className="space-y-3 text-foreground/90 leading-relaxed">
           <p>
             The Depscore contextualizes vulnerability severity for your environment. It combines CVSS base impact with
-            threat factors (EPSS probability, CISA KEV), your project&rsquo;s asset tier (Crown Jewels, External, Internal, Non-Production),
+            threat factors (EPSS probability, CISA KEV), your project&rsquo;s importance setting (a 0.5&ndash;2.0 multiplier),
             and reachability (whether the vulnerable code is actually used). Transitive and dev-only dependencies carry reduced weight.
           </p>
           <p>
-            The same CVE can score very differently depending on context — an unreachable vuln on a non-prod dev dependency
-            scores much lower than a reachable KEV-listed vuln on a Crown Jewels project. Depscore helps you prioritize
+            The same CVE can score very differently depending on context — an unreachable vuln on a dev dependency
+            scores much lower than a reachable KEV-listed vuln on a high-importance project. Depscore helps you prioritize
             remediation on what matters.
           </p>
         </div>

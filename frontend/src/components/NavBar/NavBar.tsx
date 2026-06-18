@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Menu, ScanSearch, Scale, Bell, Telescope, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
+import { ChevronDown, ChevronRight, Menu, ScanSearch, Scale, Bell, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
@@ -27,7 +27,7 @@ const navigationItems: NavItem[] = [
       { 
         name: "AI Security Agent", 
         to: "/platform-features/ai-security-agent", 
-        description: "50+ tools, automations & PR review",
+        description: "Chat, tasks & draft-PR fixes",
         icon: (
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 shrink-0 transition-colors duration-150" aria-hidden>
             <path d="M12 2L4 6v5c0 5 4 8 8 10 4-2 8-5 8-10V6l-8-4z" />
@@ -53,21 +53,15 @@ const navigationItems: NavItem[] = [
         description: "Define notifications as code",
         icon: <Bell className="h-5 w-5" />
       },
-      { 
-        name: "Advanced Upstream Insights", 
-        to: "/platform-features/advanced-upstream-insights", 
-        description: "Supply-chain forensics & contributor anomalies",
-        icon: <Telescope className="h-5 w-5" />
-      },
     ],
   },
   {
     name: "Resources",
     items: [
       { 
-        name: "Open Source", 
-        to: "/open-source", 
-        description: "Core platform — one repo",
+        name: "Open code",
+        to: "/open-source",
+        description: "The whole platform, source-available",
         icon: <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
       },
       { 
@@ -339,12 +333,8 @@ export default function NavBar() {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button
-                asChild
-                size="sm"
-                className="bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold rounded-lg h-8 px-3.5"
-              >
-                <Link to="/login">Get started</Link>
+              <Button asChild variant="green">
+                <Link to="/login">Try for free</Link>
               </Button>
             )}
           </div>
