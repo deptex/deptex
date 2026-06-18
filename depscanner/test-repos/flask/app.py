@@ -4,7 +4,10 @@ import os
 from flask import Flask, request, send_from_directory
 from werkzeug.utils import safe_join
 
+from vuln_routes import vuln_bp
+
 app = Flask(__name__)
+app.register_blueprint(vuln_bp)
 
 UPLOAD_DIR = "/var/data/uploads"
 

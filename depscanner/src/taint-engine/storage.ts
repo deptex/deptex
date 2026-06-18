@@ -259,6 +259,10 @@ export async function writeFlows(
       // path, which writes its own rows separately.
       osv_id: flow.osv_id ?? null,
       rule_id: null,
+      // The propagator's vuln_class for this flow (sql_injection / xss / …).
+      // Carried straight through so first-party flows (osv_id null) are
+      // self-describing as findings — there's no CVE to borrow a title from.
+      vuln_class: flow.vuln_class,
       flow_nodes: flowNodesWithVerdict,
       entry_point_file: flow.entry_point_file,
       entry_point_method: flow.entry_point_method,

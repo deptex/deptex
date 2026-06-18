@@ -3,7 +3,10 @@
 from fastapi import FastAPI, Query
 from sqlalchemy import create_engine, text
 
+from vulns import router as vulns_router
+
 app = FastAPI()
+app.include_router(vulns_router)
 engine = create_engine("sqlite:///./test.db")
 
 

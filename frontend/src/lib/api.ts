@@ -2446,6 +2446,15 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/semgrep-findings?page=${page}&per_page=${perPage}`);
   },
 
+  /** First-party data-flow findings (taint-engine source→sink paths in the
+   *  user's own code). Not paginated — a project has a handful at most. */
+  async getCodeFlowFindings(
+    organizationId: string,
+    projectId: string,
+  ): Promise<{ data: DataFlowFinding[]; total: number }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/code-flow-findings`);
+  },
+
   async getProjectSecretFindings(
     organizationId: string,
     projectId: string,
@@ -5174,6 +5183,34 @@ export interface SemgrepFinding {
   depscore: number | null;
   status?: string;
   created_at: string;
+}
+
+/** A first-party data-flow finding: the taint engine's source→sink path in the
+ *  user's OWN code (no dependency CVE). Returned by getCodeFlowFindings; the
+ *  title / severity / depscore are derived server-side from the persisted
+ *  vuln_class (see backend lib/code-flow-findings.ts). */
+export interface DataFlowFinding {
+  id: string;
+  project_id: string;
+  extraction_run_id: string;
+  vuln_class: string | null;
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  depscore: number;
+  entry_point_file: string | null;
+  entry_point_line: number | null;
+  entry_point_method: string | null;
+  entry_point_tag: string | null;
+  entry_point_code: string | null;
+  sink_file: string | null;
+  sink_line: number | null;
+  sink_method: string | null;
+  sink_code: string | null;
+  flow_length: number | null;
+  flow_nodes: ReachableFlowNode[];
+  flow_signature_hash: string | null;
+  created_at: string | null;
+  project_name?: string;
 }
 
 export interface SecretFinding {
