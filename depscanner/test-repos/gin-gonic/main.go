@@ -13,6 +13,19 @@ func main() {
 	r.GET("/run", runCommand)
 	r.GET("/files", listFiles)
 
+	r.GET("/users", lookupUser)
+	r.GET("/docs/:name", readDoc)
+	r.POST("/notes", writeNote)
+	r.GET("/fetch", fetchURL)
+	r.GET("/proxy", proxyRequest)
+	r.GET("/next", redirectNext)
+	r.GET("/profile", renderProfile)
+	r.GET("/filter", compileFilter)
+	r.GET("/audit", auditLog)
+	r.POST("/config", loadConfig)
+	r.POST("/ping", pingHost)
+	r.GET("/records", formatRecord)
+
 	_ = r.Run(":4007")
 }
 

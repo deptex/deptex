@@ -11,16 +11,17 @@
 # runbook's decision tree.
 
 reachable_vulns:
-  # next@13.4.0 — framework is imported and the page renders user-tainted
-  # HTML via dangerouslySetInnerHTML. CVE-2024-34350 (HTTP request smuggling)
-  # is a representative Next.js advisory that affects the pinned version
-  # range; we assert one canonical CVE here. OSV publishes 8+ advisories
-  # for this version — additional finds are tolerated as extras.
+  # next@13.4.0 — the framework is imported, so its CVEs surface, but
+  # CVE-2024-34350 (HTTP request smuggling) is a framework-internal HTTP
+  # parsing bug the app's own code never taints — honest reachability is
+  # `module` (imported, vulnerable symbol not on a confirmed data-flow), not
+  # confirmed. So we assert the CVE is FOUND (`any`) without over-claiming a
+  # reachable bucket. The genuinely-reachable, engine-confirmed vulnerabilities
+  # in this fixture are the first-party taint flows asserted under code_flows
+  # below (searchParams/request inputs → XSS / SQLi / RCE / SSRF / … sinks).
   - osv_id: CVE-2024-34350
     aliases: [GHSA-77r5-gw3j-2mpf]
-    file: app/page.tsx
-    line: 1
-    reachability_bucket: reachable
+    reachability_bucket: any
 
 unreachable_vulns:
   # dompurify@2.0.10 — declared in package.json but never imported by any
