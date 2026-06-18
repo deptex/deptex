@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react';
 import { useOutletContext, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { cn } from '../../lib/utils';
-import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Radar, Boxes } from 'lucide-react';
+import { Settings, Shield, Users, X, Search, Crown, UserPlus, FolderOpen, Folder, Copy, Lock, Check, Loader2, GitBranch, RefreshCw, GitCommit, AlertTriangle, Globe, Boxes } from 'lucide-react';
 import { DastScanningTab } from '../../components/dast/DastScanningTab';
 import ScannersPanel from '../../components/security/ScannersPanel';
 import {
@@ -1057,8 +1057,8 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     },
     {
       id: 'scanning',
-      label: 'Scanning',
-      icon: <Radar className="h-4 w-4 tab-icon-shake" />,
+      label: 'DAST',
+      icon: <Globe className="h-4 w-4 tab-icon-shake" />,
     },
     {
       id: 'scanners',
