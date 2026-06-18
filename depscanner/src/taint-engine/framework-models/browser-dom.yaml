@@ -1,0 +1,95 @@
+# Browser / DOM spec — client-side taint for single-page apps (React, Vue,
+# vanilla JS bundles). Server frameworks model the request as the trust
+# boundary; in the browser the trust boundary is attacker-controllable DOM
+# state: the URL, referrer, name, cookies, and Web Storage. A value read from
+# one of these and passed to a DOM/JS execution sink is classic DOM-based XSS
+# or client-side code injection.
+#
+# Generic JS sinks (eval, Function, fetch, RegExp, JSON.parse, dangerouslySet-
+# InnerHTML, lodash _.template/_.merge) live in node-stdlib.yaml / lodash.yaml /
+# nextjs.yaml and are matched against these sources the same way the engine
+# matches any source against any spec's sinks. This file adds the DOM-specific
+# sources plus the handful of DOM sinks that are call-shaped (assignment sinks
+# like `el.innerHTML = x` are not call expressions and are out of scope).
+
+framework: browser-dom
+version: "*"
+
+sources:
+  # ---- URL ----
+  - pattern: window.location.search
+    taint_kind: http_input
+    description: URL query string (window.location.search)
+  - pattern: window.location.hash
+    taint_kind: http_input
+    description: URL fragment (window.location.hash)
+  - pattern: window.location.href
+    taint_kind: http_input
+    description: Full URL (window.location.href)
+  - pattern: window.location.pathname
+    taint_kind: http_input
+    description: URL path (window.location.pathname)
+  - pattern: location.search
+    taint_kind: http_input
+    description: URL query string (location.search)
+  - pattern: location.hash
+    taint_kind: http_input
+    description: URL fragment (location.hash)
+  - pattern: location.href
+    taint_kind: http_input
+    description: Full URL (location.href)
+  - pattern: document.URL
+    taint_kind: http_input
+    description: document.URL
+  - pattern: document.documentURI
+    taint_kind: http_input
+    description: document.documentURI
+  - pattern: document.referrer
+    taint_kind: http_input
+    description: Referrer header reflected into the DOM
+  - pattern: document.cookie
+    taint_kind: http_input
+    description: document.cookie (attacker-influenced via other XSS / subdomains)
+  - pattern: window.name
+    taint_kind: http_input
+    description: window.name (survives cross-origin navigation; attacker-set)
+
+  # ---- Web Storage (call-shape accessors) ----
+  - pattern: localStorage.getItem(*)
+    taint_kind: http_input
+    description: localStorage.getItem — attacker-influenced persisted value
+  - pattern: sessionStorage.getItem(*)
+    taint_kind: http_input
+    description: sessionStorage.getItem
+  - pattern: URLSearchParams.get(*)
+    taint_kind: http_input
+    description: URLSearchParams.get — typically reads from location.search
+
+  # ---- postMessage ----
+  - pattern: event.data
+    taint_kind: http_input
+    description: window message event payload (postMessage)
+
+sinks:
+  - pattern: document.write(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: document.write — raw HTML injection (DOM XSS)
+  - pattern: document.writeln(*)
+    vuln_class: xss
+    argument_indices: [0]
+    description: document.writeln — raw HTML injection (DOM XSS)
+  - pattern: location.assign(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: location.assign — navigation to an attacker-controlled URL
+  - pattern: location.replace(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: location.replace — navigation to an attacker-controlled URL
+  - pattern: window.open(*)
+    vuln_class: open_redirect
+    argument_indices: [0]
+    description: window.open — opens an attacker-controlled URL
+
+sanitizers: []
