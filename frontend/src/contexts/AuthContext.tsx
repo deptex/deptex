@@ -7,6 +7,7 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInWithGoogleIdToken: (idToken: string) => Promise<void>;
   signInWithGitHub: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -85,6 +86,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Used by the login page's Google ID-token flow: the frontend runs Google
+  // OAuth on our own client/domain (so the consent screen shows deptex.dev, not
+  // the supabase.co callback), exchanges the code for an id_token server-side,
+  // then trades that id_token for a Supabase session here.
+  const signInWithGoogleIdToken = async (idToken: string) => {
+    const { error } = await supabase.auth.signInWithIdToken({
+      provider: 'google',
+      token: idToken,
+    });
+    if (error) {
+      console.error('Error signing in with Google ID token:', error);
+      throw error;
+    }
+  };
+
   const signInWithGitHub = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'github',
@@ -120,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         loading,
         signInWithGoogle,
+        signInWithGoogleIdToken,
         signInWithGitHub,
         signOut,
       }}
