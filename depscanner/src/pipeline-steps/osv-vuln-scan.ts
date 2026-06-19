@@ -267,7 +267,7 @@ export async function runOsvFallback(opts: {
 }): Promise<{ wrote: boolean; vulnCount: number; reason?: string }> {
   const { reportsDir, jobEcosystem, logger } = opts;
 
-  let sbomFile: string | null = null;
+  const sbomCandidates: string[] = [];
   let existingVdrHasVulns = false;
   let extraPurlsFile: string | null = null;
   try {
@@ -281,8 +281,8 @@ export async function runOsvFallback(opts: {
             existingVdrHasVulns = true;
           }
         } catch { /* malformed VDR — treat as empty */ }
-      } else if (entry.name.endsWith('.cdx.json') && !sbomFile) {
-        sbomFile = full;
+      } else if (entry.name.endsWith('.cdx.json')) {
+        sbomCandidates.push(full);
       } else if (entry.name === 'osv-extra-purls.json') {
         extraPurlsFile = full;
       }
@@ -294,21 +294,38 @@ export async function runOsvFallback(opts: {
   if (existingVdrHasVulns && !opts.force) {
     return { wrote: false, vulnCount: 0, reason: 'dep-scan VDR non-empty; skipping fallback' };
   }
-  if (!sbomFile) {
+  if (sbomCandidates.length === 0) {
     return { wrote: false, vulnCount: 0, reason: 'no SBOM file found in reportsDir' };
   }
 
-  let sbom: SbomDocument;
-  try {
-    sbom = JSON.parse(fs.readFileSync(sbomFile, 'utf8')) as SbomDocument;
-  } catch (e) {
-    return { wrote: false, vulnCount: 0, reason: `SBOM parse failed: ${(e as Error).message}` };
+  // dep-scan can crash AFTER emitting an empty `.cdx.json` (bad `-t`, VDB
+  // corruption), while the pipeline's own SBOM — copied in as
+  // `_pipeline-sbom.cdx.json` by the dep-scan step — carries the full
+  // dependency set. Picking the FIRST cdx on disk would let an empty dep-scan
+  // SBOM starve the fallback to zero PURLs, so choose whichever candidate
+  // yields the most PURLs.
+  let sbom: SbomDocument | null = null;
+  let sbomPurls: string[] = [];
+  for (const cand of sbomCandidates) {
+    let parsed: SbomDocument;
+    try {
+      parsed = JSON.parse(fs.readFileSync(cand, 'utf8')) as SbomDocument;
+    } catch {
+      continue;
+    }
+    const bomRef =
+      (parsed as unknown as { metadata?: { component?: { 'bom-ref'?: string } } })?.metadata?.component?.['bom-ref']
+      ?? null;
+    const purls = extractPurlsFromSbom(parsed, bomRef);
+    if (purls.length > sbomPurls.length) {
+      sbom = parsed;
+      sbomPurls = purls;
+    }
   }
 
-  const projectBomRef =
-    (sbom as unknown as { metadata?: { component?: { 'bom-ref'?: string } } })?.metadata?.component?.['bom-ref']
-    ?? null;
-  const sbomPurls = extractPurlsFromSbom(sbom, projectBomRef);
+  if (!sbom) {
+    return { wrote: false, vulnCount: 0, reason: 'no parseable SBOM file found in reportsDir' };
+  }
 
   // v3 extension: union in any purls the transitive resolver added in the
   // SBOM step (gomod/pypi shallow-SBOM workaround). cdxgen for those ecos

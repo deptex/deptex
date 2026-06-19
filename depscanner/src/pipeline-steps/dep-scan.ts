@@ -315,17 +315,16 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   // walk below picks up unchanged.
   // The OSV fallback reads a CycloneDX SBOM from reportsDir to harvest PURLs.
   // dep-scan normally writes one there, but when it crashes (bad -t, VDB
-  // corruption, OOM) it may never emit the .cdx.json — leaving the fallback
-  // with no PURLs to query. The pipeline's own SBOM step already produced a
-  // complete SBOM at workspaceRoot/sbom.json, so seed reportsDir with it when
-  // dep-scan left nothing behind. This makes the fallback robust to dep-scan
-  // crashing after a valid SBOM was generated upstream.
+  // corruption, OOM) it may emit only an EMPTY .cdx.json — or none at all —
+  // leaving the fallback with no PURLs to query. The pipeline's own SBOM step
+  // already produced a complete SBOM at workspaceRoot/sbom.json, so always
+  // seed reportsDir with it: runOsvFallback picks whichever cdx yields the most
+  // PURLs, so the empty dep-scan SBOM can't starve the fallback. This makes the
+  // fallback robust to dep-scan crashing after a valid SBOM was generated
+  // upstream.
   try {
-    const hasCdx = fs
-      .readdirSync(reportsDir, { withFileTypes: true })
-      .some((d) => d.isFile() && d.name.endsWith('.cdx.json'));
     const pipelineSbom = path.join(workspaceRoot, 'sbom.json');
-    if (!hasCdx && fs.existsSync(pipelineSbom)) {
+    if (fs.existsSync(pipelineSbom)) {
       fs.copyFileSync(pipelineSbom, path.join(reportsDir, '_pipeline-sbom.cdx.json'));
     }
   } catch { /* best-effort: reportsDir always exists by here, sbom.json may not */ }
