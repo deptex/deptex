@@ -46,7 +46,8 @@ export interface TransitiveResolverResult {
     | 'pip-dry-run-report'
     | 'pipdeptree-venv'
     | 'composer-lock-parse'
-    | 'gemfile-lock-parse';
+    | 'gemfile-lock-parse'
+    | 'nuget-lock-parse';
 }
 
 /** One record in a `go list -m -json all` stream. */
