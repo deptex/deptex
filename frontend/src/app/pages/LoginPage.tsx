@@ -1,11 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Loader2, Lock, Scale, Bell, ScanSearch } from 'lucide-react';
+import { Loader2, ScanSearch, KeyRound, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
+
+// Google Identity Services is loaded from a <script> at runtime, so it isn't
+// in the module graph — declare the minimal surface we touch.
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
 
 const TYPE_MS = 60;
 const BACKSPACE_MS = 40;
@@ -19,11 +28,10 @@ const AegisIcon = () => (
 );
 
 const CYCLING_ITEMS: { phrase: string; icon: React.ReactNode }[] = [
-  { phrase: "Try our custom policy as code", icon: <Scale className="h-5 w-5 shrink-0" /> },
-  { phrase: "Check out our integrations — connect anything you want", icon: <Bell className="h-5 w-5 shrink-0" /> },
-  { phrase: "Aegis AI that investigates, fixes, and reports", icon: <AegisIcon /> },
-  { phrase: "Dependency intelligence with reachability", icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
-  { phrase: "SBOM and compliance made simple", icon: <Scale className="h-5 w-5 shrink-0" /> },
+  { phrase: "Every finding scored by what's actually reachable", icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
+  { phrase: "Aegis investigates, writes the fix, and opens a PR", icon: <AegisIcon /> },
+  { phrase: "Leaked secrets, caught and live-verified", icon: <KeyRound className="h-5 w-5 shrink-0" /> },
+  { phrase: "Malicious packages flagged before they reach you", icon: <ShieldAlert className="h-5 w-5 shrink-0" /> },
 ];
 
 function LoginTypewriterBlock() {
@@ -72,41 +80,65 @@ function LoginTypewriterBlock() {
 }
 
 export default function LoginPage() {
-  const { signInWithGoogle, signInWithGitHub, loading } = useAuth();
-  const [searchParams] = useSearchParams();
+  const { signInWithGoogleIdToken, signInWithGitHub, loading } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const ssoError = searchParams.get('sso_error');
-  const showSSO = searchParams.get('sso') === '1';
-
-  const [ssoEmail, setSsoEmail] = useState('');
-  const [ssoLoading, setSsoLoading] = useState(false);
-  const [ssoCheckError, setSsoCheckError] = useState<string | null>(null);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [githubLoading, setGitHubLoading] = useState(false);
 
-  // Clear SSO form state when user goes back to main sign-in (e.g. via browser back)
+  const busy = googleLoading || githubLoading;
+
+  // Load Google Identity Services once so the Google button can open its popup.
   useEffect(() => {
-    if (!showSSO) {
-      setSsoEmail('');
-      setSsoCheckError(null);
+    if (document.querySelector(`script[src="${GIS_SRC}"]`)) return;
+    const s = document.createElement('script');
+    s.src = GIS_SRC;
+    s.async = true;
+    s.defer = true;
+    document.head.appendChild(s);
+  }, []);
+
+  // Google sign-in via the GIS popup code flow: Google runs on OUR client (so the
+  // consent screen is branded to deptex.dev, not supabase.co), returns an auth
+  // code, our backend swaps it for an id_token, and Supabase trades that for a
+  // session. Keeps the gray button — a fully custom button can't use the simpler
+  // client-side id_token flow.
+  const handleGoogleSignIn = () => {
+    const oauth2 = window.google?.accounts?.oauth2;
+    if (!GOOGLE_CLIENT_ID || !oauth2) {
+      console.error('Google sign-in unavailable: set VITE_GOOGLE_CLIENT_ID and wait for GIS to load.');
+      return;
     }
-  }, [showSSO]);
-
-  const openSSOView = () => {
-    const next = new URLSearchParams(searchParams);
-    next.set('sso', '1');
-    navigate({ pathname: location.pathname, search: next.toString() });
-  };
-
-  const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
-    try {
-      await signInWithGoogle();
-    } catch (error) {
-      console.error('Failed to sign in with Google:', error);
-      setGoogleLoading(false);
-    }
+
+    const codeClient = oauth2.initCodeClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: 'openid email profile',
+      ux_mode: 'popup',
+      callback: async (resp: { code?: string }) => {
+        if (!resp.code) {
+          setGoogleLoading(false);
+          return;
+        }
+        try {
+          const r = await fetch(`${API_BASE}/api/auth/google/exchange`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: resp.code }),
+          });
+          const data = await r.json();
+          if (!r.ok || !data.id_token) throw new Error(data.error || 'exchange_failed');
+          await signInWithGoogleIdToken(data.id_token);
+          navigate('/organizations', { replace: true });
+        } catch (error) {
+          console.error('Failed to sign in with Google:', error);
+          setGoogleLoading(false);
+        }
+      },
+      // Fires when the user closes/cancels the popup or it's blocked.
+      error_callback: () => setGoogleLoading(false),
+    });
+
+    codeClient.requestCode();
   };
 
   const handleGitHubSignIn = async () => {
@@ -119,42 +151,18 @@ export default function LoginPage() {
     }
   };
 
-  const handleSSOContinue = async () => {
-    if (!ssoEmail || !ssoEmail.includes('@')) {
-      setSsoCheckError('Please enter a valid email address');
-      return;
-    }
-    setSsoLoading(true);
-    setSsoCheckError(null);
-
-    try {
-      const resp = await fetch(`${API_BASE}/api/sso/check?email=${encodeURIComponent(ssoEmail)}`);
-      const data = await resp.json();
-
-      if (data.has_sso) {
-        window.location.href = `${API_BASE}/api/sso/login?email=${encodeURIComponent(ssoEmail)}`;
-      } else {
-        setSsoCheckError('No SSO configured for this domain. Use Google or GitHub to sign in.');
-        setSsoLoading(false);
-      }
-    } catch {
-      setSsoCheckError('Failed to check SSO configuration');
-      setSsoLoading(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <Loader2 className="h-8 w-8 animate-spin text-foreground-muted" aria-hidden />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen flex bg-background">
-      {/* Left: branding - dark green, one-third width */}
-      <div className="hidden lg:flex lg:w-1/3 flex-col justify-between p-12 xl:p-16 bg-[#012a18] border-r border-white/10">
+      {/* Left: branding - emerald, one-third width */}
+      <div className="hidden lg:flex lg:w-1/3 flex-col justify-center p-12 xl:p-16 bg-emerald-900 border-r border-white/10">
         <div>
           <h2 className="text-2xl xl:text-3xl font-semibold text-white mb-4 max-w-md">
             You're signing in to Deptex
@@ -164,9 +172,6 @@ export default function LoginPage() {
           </p>
           <LoginTypewriterBlock />
         </div>
-        <p className="text-sm text-white/60">
-          Source-available. Self-hostable. One repo.
-        </p>
       </div>
 
       {/* Right: sign-in */}
@@ -184,105 +189,51 @@ export default function LoginPage() {
             Sign in to your account to continue
           </p>
 
-          {ssoError && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
-              SSO login failed. Please try again or use another sign-in method.
-            </div>
-          )}
-
-          {!showSSO ? (
-            <>
-              <div className="space-y-3">
-                <Button
-                  onClick={handleGoogleSignIn}
-                  disabled={googleLoading || githubLoading}
-                  className="w-full bg-background-card border border-border hover:bg-background-subtle text-foreground h-11"
-                  size="lg"
+          <div className="space-y-3">
+            <Button
+              variant="outline"
+              onClick={handleGoogleSignIn}
+              disabled={busy}
+              className="relative w-full h-11 rounded-lg text-[15px] text-foreground [&_svg]:size-5"
+            >
+              <span className={`inline-flex items-center gap-2.5 ${googleLoading ? 'invisible' : ''}`}>
+                <svg
+                  className="h-5 w-5 shrink-0"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden
                 >
-                  {googleLoading ? (
-                    <Loader2 className="mr-2.5 h-5 w-5 shrink-0 animate-spin" aria-hidden />
-                  ) : (
-                    <svg
-                      className="mr-2.5 h-5 w-5 shrink-0"
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                      aria-hidden
-                    >
-                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-                    </svg>
-                  )}
-                  Continue with Google
-                </Button>
-
-                <Button
-                  onClick={handleGitHubSignIn}
-                  disabled={googleLoading || githubLoading}
-                  className="w-full bg-background-card border border-border hover:bg-background-subtle text-foreground h-11"
-                  size="lg"
-                >
-                  {githubLoading ? (
-                    <Loader2 className="mr-2.5 h-5 w-5 shrink-0 animate-spin" aria-hidden />
-                  ) : (
-                    <img src="/images/integrations/github.png" alt="" className="mr-2.5 h-5 w-5 shrink-0 rounded-full" aria-hidden />
-                  )}
-                  Continue with GitHub
-                </Button>
-              </div>
-
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border"></div>
-                </div>
-                <div className="relative flex justify-center text-xs uppercase tracking-wider">
-                  <span className="bg-background px-2 text-foreground-muted">or</span>
-                </div>
-              </div>
-
-              <Button
-                onClick={openSSOView}
-                className="w-full bg-background-card border border-border hover:bg-background-subtle text-foreground h-11"
-                size="lg"
-              >
-                <Lock className="mr-2.5 h-5 w-5 shrink-0" />
-                Sign in with SSO
-              </Button>
-            </>
-          ) : (
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="login-work-email" className="demo-page-label block text-sm font-medium mb-1.5">
-                  Work email
-                </label>
-                <input
-                  id="login-work-email"
-                  type="email"
-                  value={ssoEmail}
-                  onChange={(e) => setSsoEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSSOContinue()}
-                  placeholder="you@company.com"
-                  className="demo-page-input w-full px-3 py-2.5 rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all placeholder:text-white/[0.2]"
-                  autoFocus
-                />
-              </div>
-
-              {ssoCheckError && (
-                <p className="text-sm text-red-400">{ssoCheckError}</p>
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+                </svg>
+                Continue with Google
+              </span>
+              {googleLoading && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                </span>
               )}
+            </Button>
 
-              <Button
-                onClick={handleSSOContinue}
-                disabled={ssoLoading || !ssoEmail}
-                className="w-full h-11 bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 font-semibold"
-                size="lg"
-              >
-                {ssoLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin shrink-0" /> : <Lock className="mr-2 h-4 w-4 shrink-0" />}
-                Sign in
-              </Button>
-            </div>
-          )}
+            <Button
+              variant="outline"
+              onClick={handleGitHubSignIn}
+              disabled={busy}
+              className="relative w-full h-11 rounded-lg text-[15px] text-foreground [&_svg]:size-5"
+            >
+              <span className={`inline-flex items-center gap-2.5 ${githubLoading ? 'invisible' : ''}`}>
+                <img src="/images/integrations/github.png" alt="" className="h-5 w-5 shrink-0 rounded-full" aria-hidden />
+                Continue with GitHub
+              </span>
+              {githubLoading && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                </span>
+              )}
+            </Button>
+          </div>
 
           <p className="mt-8 text-sm text-foreground-secondary">
             By continuing, you agree to Deptex's{' '}
