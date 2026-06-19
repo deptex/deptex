@@ -221,10 +221,26 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   } catch { /* best-effort: a missing/partial SBOM just means no caller purls */ }
 
   // Captured when dep-scan crashes / its binary is missing, so the degraded
-  // Captured when dep-scan crashes / its binary is missing, so the degraded
   // flag (set after the OSV fallback) carries the real cause to admin + logs.
   let depScanFailureDetail: string | null = null;
 
+  // When OSV fallback is FORCED (the dogfood / OSS-corpus worker sets
+  // DEPTEX_OSV_FALLBACK=force), skip the dep-scan subprocess entirely. dep-scan
+  // crashes on several ecosystems and — worse — can spend many minutes
+  // rebuilding its ~30GB VDB, which fills the volume and ENOSPC-fails the OSV
+  // fallback's own VDR write. The fallback already has the full dependency set
+  // via `pipelinePurls`, so it is a complete, fast, disk-cheap substitute here.
+  const fallbackMode = osvFallbackMode();
+  const skipDepScan = fallbackMode === 'force';
+  if (skipDepScan) {
+    fs.mkdirSync(reportsDir, { recursive: true });
+    depScanFailureDetail =
+      'dep-scan skipped (DEPTEX_OSV_FALLBACK=force) — OSV-API is the vulnerability source';
+    await log.info(
+      'vuln_scan',
+      'Checking dependencies for known vulnerabilities via OSV (dep-scan skipped under forced fallback)',
+    );
+  } else {
   await runStage({
     name: 'dep_scan',
     timeoutMs: 45 * 60_000,
@@ -330,6 +346,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       }
     },
   });
+  }
 
   // === OSV-API fallback (mid-step, before VDR discovery) ===
   // dep-scan's bundled VDB has a silent per-ecosystem lookup gap (confirmed
@@ -354,7 +371,6 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     }
   } catch { /* best-effort: reportsDir always exists by here, sbom.json may not */ }
 
-  const fallbackMode = osvFallbackMode();
   if (fallbackMode !== 'off') {
     try {
       const result = await runOsvFallback({
@@ -371,6 +387,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         callerPurls: pipelinePurls,
       });
       if (result.wrote && result.vulnCount > 0) {
+        depScanSucceeded = true;
+      } else if (skipDepScan && result.wrote) {
+        // dep-scan was deliberately skipped, so a clean OSV query (even one that
+        // legitimately found zero vulns) IS the vulnerability scan — don't let
+        // the "fail loudly" guard below treat a vuln-free project as a failure.
         depScanSucceeded = true;
       } else if (!result.wrote && result.reason) {
         // Surface the skip reason to the run log (not just worker stdout) so a
