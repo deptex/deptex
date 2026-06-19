@@ -2413,18 +2413,26 @@ async function handlePullRequestEvent(payload: any): Promise<void> {
       }
 
       // 8G.2: Track PR
-      await supabase.from('project_pull_requests').upsert({
-        project_id: projectId, pr_number: prNumber, title: pr?.title, author_login: pr?.user?.login,
-        author_avatar_url: pr?.user?.avatar_url, status: 'open', check_result: blocked ? 'failed' : 'passed',
-        check_summary: checkSummary, deps_added: depsAdded, deps_updated: depsUpdated,
-        deps_removed: depsRemoved, transitive_changes: transitiveChanges,
-        blocked_by: Object.keys(blockedBy).length > 0 ? blockedBy : null,
-        provider: 'github', provider_url: pr?.html_url,
-        base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
-        opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      }, { onConflict: 'project_id,pr_number,provider' }).catch((err: any) => {
+      // NB: postgrest query builders are thenables with no `.catch` method —
+      // `supabase.from(...).upsert(...).catch(...)` throws "catch is not a
+      // function" synchronously, which here bubbles up to the outer catch and
+      // surfaces as a bogus "Analysis failed" check-run error. Use try/catch so
+      // a PR-tracking upsert failure stays non-fatal. See reference: no .catch
+      // on PostgREST builders.
+      try {
+        await supabase.from('project_pull_requests').upsert({
+          project_id: projectId, pr_number: prNumber, title: pr?.title, author_login: pr?.user?.login,
+          author_avatar_url: pr?.user?.avatar_url, status: 'open', check_result: blocked ? 'failed' : 'passed',
+          check_summary: checkSummary, deps_added: depsAdded, deps_updated: depsUpdated,
+          deps_removed: depsRemoved, transitive_changes: transitiveChanges,
+          blocked_by: Object.keys(blockedBy).length > 0 ? blockedBy : null,
+          provider: 'github', provider_url: pr?.html_url,
+          base_branch: targetBranch, head_branch: pr?.head?.ref, head_sha: headSha,
+          opened_at: pr?.created_at, last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }, { onConflict: 'project_id,pr_number,provider' });
+      } catch (err: any) {
         console.warn('[PR check] Failed to upsert PR tracking:', err?.message);
-      });
+      }
 
       results.push({
         projectId, projectName, workspace, section: lines.join('\n'),
