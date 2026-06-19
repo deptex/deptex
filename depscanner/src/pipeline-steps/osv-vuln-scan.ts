@@ -264,8 +264,19 @@ export async function runOsvFallback(opts: {
   logger: Pick<PipelineLogger, 'info' | 'warn'>;
   /** Force-on; bypasses the "skip when dep-scan VDR is non-empty" guard. */
   force?: boolean;
+  /**
+   * PURLs the caller captured from the pipeline's own SBOM *before* dep-scan
+   * ran. dep-scan can run for many minutes and crash, leaving reportsDir with
+   * no usable SBOM (and it can churn the workspace), so passing the
+   * pre-captured purls directly guarantees the OSV query still runs against the
+   * real dependency set. Unioned with whatever SBOM/extra-purls are on disk.
+   */
+  callerPurls?: string[];
 }): Promise<{ wrote: boolean; vulnCount: number; reason?: string }> {
   const { reportsDir, jobEcosystem, logger } = opts;
+  const callerPurls = (opts.callerPurls ?? []).filter(
+    (p): p is string => typeof p === 'string' && p.startsWith('pkg:'),
+  );
 
   const sbomCandidates: string[] = [];
   let existingVdrHasVulns = false;
@@ -294,8 +305,8 @@ export async function runOsvFallback(opts: {
   if (existingVdrHasVulns && !opts.force) {
     return { wrote: false, vulnCount: 0, reason: 'dep-scan VDR non-empty; skipping fallback' };
   }
-  if (sbomCandidates.length === 0) {
-    return { wrote: false, vulnCount: 0, reason: 'no SBOM file found in reportsDir' };
+  if (sbomCandidates.length === 0 && callerPurls.length === 0 && !extraPurlsFile) {
+    return { wrote: false, vulnCount: 0, reason: 'no SBOM file or caller PURLs available' };
   }
 
   // dep-scan can crash AFTER emitting an empty `.cdx.json` (bad `-t`, VDB
@@ -323,7 +334,9 @@ export async function runOsvFallback(opts: {
     }
   }
 
-  if (!sbom) {
+  // No parseable on-disk SBOM is fine as long as the caller supplied purls (or
+  // a transitive-resolver sidecar exists) — those carry the dependency set.
+  if (!sbom && callerPurls.length === 0 && !extraPurlsFile) {
     return { wrote: false, vulnCount: 0, reason: 'no parseable SBOM file found in reportsDir' };
   }
 
@@ -346,7 +359,7 @@ export async function runOsvFallback(opts: {
 
   const seen = new Set(sbomPurls);
   const purls = [...sbomPurls];
-  for (const p of extraPurls) {
+  for (const p of [...extraPurls, ...callerPurls]) {
     if (!seen.has(p)) {
       seen.add(p);
       purls.push(p);

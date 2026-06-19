@@ -196,6 +196,31 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   const scanStart = Date.now();
   const reportsDir = path.join(workspaceRoot, 'depscan-reports');
   let depScanSucceeded = false;
+
+  // Capture the pipeline's own SBOM purls NOW, before dep-scan runs. dep-scan
+  // can run for many minutes and crash (bad `-t`, VDB corruption, OOM), and its
+  // run can churn the workspace — so reading sbom.json here, while it's pristine,
+  // guarantees the OSV-API fallback below always has the real dependency set to
+  // query even when dep-scan leaves reportsDir empty. cdxgen writes
+  // `pkg:<type>/<name>@<version>` purls; we pass them straight through.
+  let pipelinePurls: string[] = [];
+  try {
+    const pipelineSbomPath = path.join(workspaceRoot, 'sbom.json');
+    if (fs.existsSync(pipelineSbomPath)) {
+      const doc = JSON.parse(fs.readFileSync(pipelineSbomPath, 'utf8')) as {
+        components?: Array<{ purl?: unknown }>;
+      };
+      const seen = new Set<string>();
+      for (const c of doc.components ?? []) {
+        if (typeof c?.purl === 'string' && c.purl.startsWith('pkg:') && !seen.has(c.purl)) {
+          seen.add(c.purl);
+          pipelinePurls.push(c.purl);
+        }
+      }
+    }
+  } catch { /* best-effort: a missing/partial SBOM just means no caller purls */ }
+
+  // Captured when dep-scan crashes / its binary is missing, so the degraded
   // Captured when dep-scan crashes / its binary is missing, so the degraded
   // flag (set after the OSV fallback) carries the real cause to admin + logs.
   let depScanFailureDetail: string | null = null;
@@ -340,14 +365,20 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         // still skips the redundant query unless DEPTEX_OSV_FALLBACK=force.
         logger: log,
         force: fallbackMode === 'force' || !depScanSucceeded,
+        // The pipeline SBOM purls captured before dep-scan ran — guarantees the
+        // OSV query sees the real dependency set even if dep-scan emptied/churned
+        // reportsDir or the workspace.
+        callerPurls: pipelinePurls,
       });
       if (result.wrote && result.vulnCount > 0) {
         depScanSucceeded = true;
       } else if (!result.wrote && result.reason) {
-        // Common: dep-scan VDR was already non-empty. Log at debug only.
-        if (process.env.DEPTEX_CLI_MODE !== '1') {
-          console.log(`[osv-fallback] skipped: ${result.reason}`);
-        }
+        // Surface the skip reason to the run log (not just worker stdout) so a
+        // "0 CVEs but deps resolved" outcome is diagnosable after the fact.
+        await log.warn(
+          'vuln_scan_osv',
+          `OSV fallback found nothing (${result.reason}); pipeline purls captured: ${pipelinePurls.length}`,
+        );
       }
     } catch (e) {
       // Network errors here must NOT fail the whole scan — dep-scan's own
