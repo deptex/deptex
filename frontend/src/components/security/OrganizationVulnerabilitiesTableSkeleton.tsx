@@ -42,17 +42,17 @@ export default function OrganizationVulnerabilitiesTableSkeleton() {
           <colgroup>
             <col className="w-16" />
             <col />
-            <col className="w-[18rem]" />
             <col className="w-[8rem]" />
+            <col className="w-[18rem]" />
             <col className="w-[9rem]" />
           </colgroup>
           <thead className="bg-background-card-header border-b border-border">
             <tr>
               <th className="text-center px-2 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Finding</th>
+              <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Depscore</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Depscore</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
+              <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -80,6 +80,10 @@ export default function OrganizationVulnerabilitiesTableSkeleton() {
                     )} />
                   </div>
                 </td>
+                {/* Depscore badge */}
+                <td className="px-4 py-3 align-top">
+                  <div className="h-6 w-8 rounded-full bg-muted/50 animate-pulse mx-auto" />
+                </td>
                 {/* Project */}
                 <td className="px-4 py-3 align-top">
                   <div className={cn(
@@ -89,13 +93,9 @@ export default function OrganizationVulnerabilitiesTableSkeleton() {
                     i % 3 === 2 && 'w-[55%]',
                   )} />
                 </td>
-                {/* Depscore badge */}
-                <td className="px-4 py-3 align-top">
-                  <div className="h-6 w-8 rounded-full bg-muted/50 animate-pulse" />
-                </td>
                 {/* Status badge */}
                 <td className="px-4 py-3 align-top">
-                  <div className="h-4 w-16 rounded-md bg-muted/40 animate-pulse" />
+                  <div className="h-4 w-16 rounded-md bg-muted/40 animate-pulse mx-auto" />
                 </td>
               </tr>
             ))}

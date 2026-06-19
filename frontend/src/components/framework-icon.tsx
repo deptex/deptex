@@ -63,6 +63,33 @@ const icons: Record<string, React.ComponentType<{ size?: number; className?: str
     elixir: SiElixir,
     swift: SiSwift,
 
+    // ── Framework-detector IDs ──────────────────────────────────────────────
+    // The value stored on a project is the framework-detector's id (e.g.
+    // 'aspnet-core', 'spring', 'gin-gonic'), which doesn't always match the
+    // brand-name keys above — so without these aliases those projects fall back
+    // to the generic logo. Map each detector id to the closest brand / language
+    // icon Simple Icons ships; sub-frameworks with no brand mark of their own
+    // borrow their language's (e.g. Koa/Fastify → Node, chi/gorilla → Go).
+    'aspnet-core': SiDotnet,
+    'minimal-apis': SiDotnet,
+    spring: SiSpringboot,
+    fastify: SiNodedotjs,
+    koa: SiNodedotjs,
+    nestjs: SiNodedotjs,
+    'gin-gonic': SiGin,
+    'gorilla-mux': SiGo,
+    chi: SiGo,
+    nethttp: SiGo,
+    jaxrs: SiOpenjdk,
+    micronaut: SiOpenjdk,
+    aiohttp: SiPython,
+    starlette: SiPython,
+    tornado: SiPython,
+    grape: SiRuby,
+    slim: SiPhp,
+    warp: SiRust,
+    'aws-lambda': SiServerless,
+
     // IaC frameworks. Brand icons where Simple Icons ships them; generic
     // lucide-react glyphs as placeholders for AWS/Azure-derived formats
     // which Simple Icons no longer publishes.

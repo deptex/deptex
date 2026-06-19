@@ -398,6 +398,7 @@ export default function OrganizationFindingsPage() {
       const projectList = await api.getProjects(organizationId);
       setProjects(projectList);
       const nameById = new Map(projectList.map((p) => [p.id, p.name]));
+      const frameworkById = new Map(projectList.map((p) => [p.id, p.framework ?? null]));
 
       // Step 2: fire one org-wide vulns request + 5 per-project requests in parallel.
       // allSettled so a single broken endpoint doesn't blank the page. v2 backlog
@@ -464,7 +465,11 @@ export default function OrganizationFindingsPage() {
 
       if (vulnsResult.status === 'fulfilled') {
         for (const v of vulnsResult.value as ProjectVulnerability[]) {
-          rows.push({ type: 'vulnerability', data: v });
+          const stamped = {
+            ...v,
+            project_framework: (v as any).project_framework ?? frameworkById.get((v as any).project_id) ?? null,
+          };
+          rows.push({ type: 'vulnerability', data: stamped as ProjectVulnerability });
         }
       } else {
         console.error('Failed to load org vulnerabilities', vulnsResult.reason);
@@ -486,7 +491,7 @@ export default function OrganizationFindingsPage() {
           | DastFindingDTO
           | DataFlowFinding
         )[]) {
-          const stamped = { ...item, project_name: projectName };
+          const stamped = { ...item, project_name: projectName, project_framework: frameworkById.get(projectId) ?? null };
           switch (kind) {
             case 'secret':
               rows.push({ type: 'secret', data: stamped as SecretFinding & { project_name?: string } });
