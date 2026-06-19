@@ -1585,23 +1585,28 @@ async function handlePushEvent(payload: any): Promise<void> {
           return match.size > 0;
         }
       );
-      await supabase.from('project_commits').upsert({
-        project_id: row.project_id,
-        sha: commitSha,
-        message: (c.message || '').slice(0, 10000),
-        author_name: c.author?.name,
-        author_email: c.author?.email,
-        author_avatar_url: c.author?.avatar_url,
-        committed_at: c.timestamp,
-        manifest_changed: manifestChanged,
-        extraction_triggered: extractionTriggered,
-        extraction_status: extractionTriggered ? 'queued' : 'skipped',
-        files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
-        provider: 'github',
-        provider_url: c.url,
-      }, { onConflict: 'project_id,sha' }).catch((err: any) => {
+      // NB: PostgREST builders are thenables with no `.catch` method — chaining
+      // `.upsert(...).catch()` throws "catch is not a function" synchronously.
+      // Use try/catch so a commit-record failure stays non-fatal.
+      try {
+        await supabase.from('project_commits').upsert({
+          project_id: row.project_id,
+          sha: commitSha,
+          message: (c.message || '').slice(0, 10000),
+          author_name: c.author?.name,
+          author_email: c.author?.email,
+          author_avatar_url: c.author?.avatar_url,
+          committed_at: c.timestamp,
+          manifest_changed: manifestChanged,
+          extraction_triggered: extractionTriggered,
+          extraction_status: extractionTriggered ? 'queued' : 'skipped',
+          files_changed: (c.added?.length ?? 0) + (c.modified?.length ?? 0) + (c.removed?.length ?? 0),
+          provider: 'github',
+          provider_url: c.url,
+        }, { onConflict: 'project_id,sha' });
+      } catch (err: any) {
         console.warn('[webhook push] Commit record failed:', err?.message);
-      });
+      }
     }
 
     // Update webhook health
