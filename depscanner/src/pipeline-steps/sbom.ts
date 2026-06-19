@@ -55,8 +55,13 @@ function runCdxgen(workspacePath: string, ecosystem?: string): string {
     // extra evidence collectors). Keep them paired so the default path stays fully shallow.
     args.push('--profile', 'research', '--deep');
   }
-  if (ecosystem) {
-    args.push('-t', ecosystem);
+  // cdxgen resolves .NET projects only via auto-detection — passing `-t nuget`
+  // (or `-t dotnet`/`-t csharp`) yields an empty SBOM (no PackageReference /
+  // packages.lock.json resolution). For .NET, omit `-t` so cdxgen detects the
+  // project from its files. Every other ecosystem's type passes through.
+  const cdxgenType = ecosystem === 'nuget' || ecosystem === 'dotnet' ? undefined : ecosystem;
+  if (cdxgenType) {
+    args.push('-t', cdxgenType);
   }
   try {
     execSync(`npx ${args.join(' ')}`, {
