@@ -76,7 +76,7 @@ function ScanTerminal() {
 
 export default function OpenCodeSection() {
   return (
-    <section className="w-full">
+    <section className="w-full border-t border-white/[0.08]">
       <div className="mx-auto max-w-[1200px] px-6 py-24 md:py-32">
         <Reveal>
           <h2 className="text-3xl font-semibold leading-[1.1] tracking-[-0.02em] text-foreground md:text-4xl">
