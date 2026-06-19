@@ -27,8 +27,6 @@ import HeroSection from "../../components/landing/HeroSection";
 import VerifiedSection from "../../components/landing/VerifiedSection";
 import AegisSection from "../../components/landing/AegisSection";
 import BreadthWall from "../../components/landing/BreadthWall";
-import OpenCodeSection from "../../components/landing/OpenCodeSection";
-import StackBand from "../../components/landing/StackBand";
 import FinalCTA from "../../components/landing/FinalCTA";
 
 export default function HomePage() {
@@ -38,8 +36,6 @@ export default function HomePage() {
       <VerifiedSection />
       <AegisSection />
       <BreadthWall />
-      <OpenCodeSection />
-      <StackBand />
       <FinalCTA />
     </div>
   );
