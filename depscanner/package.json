@@ -87,7 +87,7 @@
     "sbom",
     "dep-scan"
   ],
-  "license": "LicenseRef-FSL-1.1-ALv2",
+  "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@aws-sdk/client-ecr": "^3.1043.0",
     "@cyclonedx/cdxgen": "^11.0.0",

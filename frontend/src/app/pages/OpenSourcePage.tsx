@@ -44,9 +44,9 @@ export default function OpenSourcePage() {
               Open code
             </h1>
             <p className="text-xl text-foreground-secondary mb-8 leading-relaxed">
-              The whole Deptex platform is source-available in one repository: read it, run it locally,
-              self-host it. Every release converts to Apache 2.0 after two years. We welcome anyone who
-              wants to contribute.
+              The whole Deptex platform is open source in one repository: read it, run it locally,
+              self-host it. It's licensed under AGPL-3.0 — yours to use, modify, and self-host freely.
+              We welcome anyone who wants to contribute.
             </p>
             <div className="flex flex-wrap justify-center lg:justify-start gap-6">
               <a
@@ -65,7 +65,7 @@ export default function OpenSourcePage() {
                 className="flex items-center gap-2 text-foreground-secondary hover:text-foreground transition-colors"
               >
                 <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
-                <span>License (FSL → Apache 2.0)</span>
+                <span>License (AGPL-3.0)</span>
               </a>
             </div>
           </div>

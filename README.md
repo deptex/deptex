@@ -81,7 +81,7 @@ flowchart TB
 
 ## License model
 
-Deptex is source-available under the [Functional Source License 1.1 (FSL-1.1-ALv2)](./LICENSE). You may use, modify, and self-host the code for any purpose other than providing it to others as a hosted/managed service that competes with Deptex. Each version converts to Apache License 2.0 on its second anniversary.
+Deptex is **open source** under the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE) — use, modify, self-host, and redistribute it freely. AGPL's network copyleft means anyone who runs a modified version as a service must make their source available under the same license. Organizations that need different terms can obtain a commercial license; contributions are accepted under a [CLA](./CLA.md) so we can offer both.
 
 Running it yourself? See [**docs/self-hosting.md**](./docs/self-hosting.md).
 
@@ -97,5 +97,5 @@ Running it yourself? See [**docs/self-hosting.md**](./docs/self-hosting.md).
 
 ## License
 
-Licensed under the [Functional Source License 1.1, ALv2 Future License](./LICENSE). Copyright 2026 Henry Ruckman-Utting.
+Licensed under the [GNU Affero General Public License v3.0](./LICENSE) (AGPL-3.0-or-later). Copyright © 2026 Henry Ruckman-Utting. Contributions are accepted under the [Contributor License Agreement](./CLA.md).
 

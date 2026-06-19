@@ -4,8 +4,9 @@ This guide stands up a working Deptex instance on your own infrastructure. You
 end up with: local Postgres (via Supabase), local Redis for async jobs, the
 backend API on `:3001`, the frontend on `:3000`, and a GitHub App you control.
 
-License: [FSL-1.1-ALv2](../LICENSE). Source-available, converts to Apache 2.0
-two years after each release. You can self-host for internal use freely.
+License: [AGPL-3.0](../LICENSE). Open source — self-host, modify, and redistribute
+freely. If you run a modified version as a network service, AGPL's copyleft requires
+you to make your source available under the same license.
 
 ---
 
