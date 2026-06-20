@@ -45,7 +45,14 @@ export default function FrameworkBand() {
             <p className="shrink-0 text-2xl font-semibold leading-tight tracking-[-0.01em]">
               <span className="text-foreground-secondary">Use Deptex with</span>
               <br />
-              <span className="text-foreground">{hovered ?? "any stack"}</span>
+              {/* key tied to the value → remounts + replays the enter anim on
+                  every swap: the new word rises up and fades in (Supabase). */}
+              <span
+                key={hovered ?? "any-stack"}
+                className="inline-block text-foreground animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out"
+              >
+                {hovered ?? "any stack"}
+              </span>
             </p>
             <div
               className="flex flex-wrap items-center gap-x-7 gap-y-5"
