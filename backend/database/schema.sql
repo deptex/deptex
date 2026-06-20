@@ -6207,6 +6207,110 @@ CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
 AS '$libdir/vector', $function$subvector$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.trg_container_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.container_fingerprint, concat_ws('|', NEW.image_reference, coalesce(NEW.osv_id, NEW.cve_id, NEW.os_package_name)))]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('container', NULL, NULL, NEW.is_kev, NULL, NULL, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_dast_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      NEW.rule_id,
+      NEW.vulnerability_type,
+      CASE WHEN NEW.handler_file_path IS NOT NULL
+           THEN concat_ws('|', NEW.handler_file_path, NEW.handler_function_name)
+           ELSE concat_ws('|', NEW.endpoint_url, NEW.http_method) END]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('dast', NULL, NULL, NULL, NULL, NEW.severity, NEW.payload_redacted);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_iac_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.iac_fingerprint, concat_ws('|', NEW.scanner, NEW.rule_id, NEW.file_path, NEW.start_line_key::text))]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('iac', NULL, NULL, NULL, NEW.rule_id, NEW.severity, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_malicious_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      (SELECT pd.name FROM project_dependencies pd WHERE pd.id = NEW.project_dependency_id),
+      NEW.rule_id, NEW.scanner]);
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_pdv_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      (SELECT pd.name FROM project_dependencies pd WHERE pd.id = NEW.project_dependency_id),
+      NEW.osv_id]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('vulnerability', NEW.reachability_level, NEW.is_reachable, NULL, NULL, NULL, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_secret_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[NEW.detector_type, NEW.file_path, NEW.redacted_value]);
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_semgrep_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.semgrep_fingerprint, concat_ws('|', NEW.rule_id, NEW.file_path, NEW.start_line::text))]);
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
 CREATE OR REPLACE FUNCTION public.update_aegis_chat_threads_updated_at()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -7656,9 +7760,16 @@ CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
+CREATE TRIGGER trg_container_finding_status BEFORE INSERT OR UPDATE ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION trg_container_finding_status();
+CREATE TRIGGER trg_dast_finding_status BEFORE INSERT OR UPDATE ON public.project_dast_findings FOR EACH ROW EXECUTE FUNCTION trg_dast_finding_status();
+CREATE TRIGGER trg_iac_finding_status BEFORE INSERT OR UPDATE ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION trg_iac_finding_status();
+CREATE TRIGGER trg_malicious_finding_status BEFORE INSERT OR UPDATE ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION trg_malicious_finding_status();
 CREATE TRIGGER trg_org_policy_rules_updated_at BEFORE UPDATE ON public.organization_policy_rules FOR EACH ROW EXECUTE FUNCTION update_org_policy_rules_updated_at();
 CREATE TRIGGER trg_organizations_after_insert_billing AFTER INSERT ON public.organizations FOR EACH ROW EXECUTE FUNCTION create_organization_billing_row();
+CREATE TRIGGER trg_pdv_finding_status BEFORE INSERT OR UPDATE ON public.project_dependency_vulnerabilities FOR EACH ROW EXECUTE FUNCTION trg_pdv_finding_status();
 CREATE TRIGGER trg_project_repositories_fill_organization_id BEFORE INSERT OR UPDATE ON public.project_repositories FOR EACH ROW EXECUTE FUNCTION fill_project_repositories_organization_id();
+CREATE TRIGGER trg_secret_finding_status BEFORE INSERT OR UPDATE ON public.project_secret_findings FOR EACH ROW EXECUTE FUNCTION trg_secret_finding_status();
+CREATE TRIGGER trg_semgrep_finding_status BEFORE INSERT OR UPDATE ON public.project_semgrep_findings FOR EACH ROW EXECUTE FUNCTION trg_semgrep_finding_status();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
 CREATE TRIGGER update_aegis_chat_threads_updated_at BEFORE UPDATE ON public.aegis_chat_threads FOR EACH ROW EXECUTE FUNCTION update_aegis_chat_threads_updated_at();
 CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();

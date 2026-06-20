@@ -20,6 +20,7 @@ import * as path from 'path';
 
 const SCHEMA_FILE = path.resolve(__dirname, '../../backend/database/schema.sql');
 const PHASE55_FILE = path.resolve(__dirname, '../../backend/database/phase55_findings_status_foundation.sql');
+const PHASE55C_FILE = path.resolve(__dirname, '../../backend/database/phase55c_finding_status_triggers.sql');
 
 let failures = 0;
 let passed = 0;
@@ -193,6 +194,29 @@ async function main() {
   console.log('\nApplying phase55 AGAIN (idempotency)...');
   await db.exec(phase55);
   await assertState(db, 'after 2nd apply');
+
+  // Triggers (phase55c): a fresh scan's inserts must auto-stamp finding_key +
+  // auto_ignored without re-running the backfill, and an auto-ignored finding
+  // must auto-reopen when its reachability later improves.
+  const phase55c = fs.readFileSync(PHASE55C_FILE, 'utf8');
+  console.log('\nApplying phase55c (triggers)...');
+  await db.exec(phase55c);
+
+  console.log('\n  [triggers] fresh insert + auto-reopen');
+  await db.exec(`INSERT INTO project_dependency_vulnerabilities (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, reachability_level, is_reachable)
+    VALUES ('${PROJ}','${DEP}','CVE-TRIGGER','high','${RUN}','open','unreachable',true);`);
+  const trig = await one(db, `SELECT finding_key, auto_ignored, auto_ignore_reason FROM project_dependency_vulnerabilities WHERE osv_id='CVE-TRIGGER'`);
+  assert(typeof trig.finding_key === 'string' && (trig.finding_key as string).length === 64, 'trigger stamps finding_key on a fresh insert (no backfill)');
+  assert(trig.auto_ignored === true && trig.auto_ignore_reason === 'not_reachable', 'trigger stamps auto_ignored on a fresh insert');
+  await db.exec(`UPDATE project_dependency_vulnerabilities SET reachability_level='confirmed' WHERE osv_id='CVE-TRIGGER';`);
+  const reopened = await one(db, `SELECT auto_ignored, finding_key FROM project_dependency_vulnerabilities WHERE osv_id='CVE-TRIGGER'`);
+  assert(reopened.auto_ignored === false, 'trigger auto-reopens when reachability becomes confirmed');
+  assert(reopened.finding_key === trig.finding_key, 'finding_key is stable across updates (computed on INSERT only)');
+  await db.exec(`INSERT INTO project_container_findings (project_id, organization_id, extraction_run_id, image_reference, image_digest, image_source, os_package_name, os_package_version, osv_id, is_kev, depscore, status, container_fingerprint)
+    VALUES ('${PROJ}','${ORG}','${RUN}','debian:11','sha256:bbb','dockerfile_base','curl','7.1','CVE-TRIG2',false,55,'open','cfp_trig');`);
+  const ctrig = await one(db, `SELECT auto_ignore_reason, finding_key FROM project_container_findings WHERE osv_id='CVE-TRIG2'`);
+  assert(ctrig.auto_ignore_reason === 'base_image', 'trigger stamps container non-KEV as base_image on a fresh insert');
+  assert(typeof ctrig.finding_key === 'string', 'trigger stamps container finding_key on a fresh insert');
 
   // The divergence fix must also surface in the COUNT path: the open IaC set
   // now includes the unmapped HIGH rule (CKV_K8S_16 + CKV_AWS_23), not just the
