@@ -5,6 +5,10 @@ let fsExistsSync: (p: string) => boolean = () => true;
 let fsReadFileSync: (p: string, enc?: string) => string = () => '[]';
 let fsMkdirSync: (p: string, opts?: { recursive?: boolean }) => void = () => {};
 let fsReaddirSync: (p: string, opts?: { withFileTypes?: boolean }) => unknown[] = () => [];
+// Steps that write intermediate files (e.g. TruffleHog's
+// .deptex-trufflehog-excludes) must not touch the real disk under the
+// non-existent fake-repo dir — stub writes to a no-op by default.
+let fsWriteFileSync: (p: string, data: string, enc?: string) => void = () => {};
 
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
@@ -14,6 +18,7 @@ jest.mock('fs', () => {
     readFileSync: (p: string, enc?: string) => fsReadFileSync(p, enc),
     mkdirSync: (p: string, opts?: { recursive?: boolean }) => fsMkdirSync(p, opts),
     readdirSync: (p: string, opts?: { withFileTypes?: boolean }) => fsReaddirSync(p, opts),
+    writeFileSync: (p: string, data: string, enc?: string) => fsWriteFileSync(p, data, enc),
   };
 });
 
@@ -281,7 +286,7 @@ describe('runPipeline', () => {
     expect(mockLog.warn).toHaveBeenCalledWith('vuln_scan', expect.stringContaining('dep-scan not installed'));
   });
 
-  it('semgrep OOM (exit 137) with no output -> pipeline HARD-FAILS', async () => {
+  it('semgrep OOM (exit 137) with no output -> degrades gracefully, pipeline continues', async () => {
     const repoPath = path.join(process.cwd(), 'fake-repo');
     mockCloneByProvider.mockResolvedValue(repoPath);
     mockExecSync.mockImplementation((cmd: string) => {
@@ -293,7 +298,7 @@ describe('runPipeline', () => {
       return undefined;
     });
     // dep-scan + every spawned scanner exits cleanly (close 0) so the run
-    // reaches semgrep; semgrep then OOMs with no output and hard-fails.
+    // reaches semgrep; semgrep then OOMs with no output.
     mockSpawn.mockImplementation(() => {
       const child: { stdout: { on: jest.Mock }; stderr: { on: jest.Mock }; on: jest.Mock; kill: jest.Mock } = {
         stdout: { on: jest.fn() }, stderr: { on: jest.fn() }, on: jest.fn(), kill: jest.fn(),
@@ -304,14 +309,21 @@ describe('runPipeline', () => {
       });
       return child;
     });
-    // semgrep.json is absent — an OOM-killed semgrep wrote no output, so the step
-    // rethrows and (severity: 'error') the whole scan hard-fails.
+    // semgrep.json is absent — an OOM-killed semgrep wrote no output. SAST is
+    // supplementary: rather than discard a scan that already resolved deps,
+    // dep-CVEs, secrets, IaC and container findings, a Semgrep crash degrades
+    // to "no static-analysis findings this run" and the pipeline continues to
+    // completion (reaches finalize). The old "hard-fail" assertion was
+    // intentionally inverted when Semgrep was made non-fatal.
     fsExistsSync = (p: string) => !String(p).endsWith('semgrep.json');
     fsReadFileSync = (p: string) => (String(p).endsWith('sbom.json') ? SBOM_WITH_DEPS : '{"vulnerabilities":[]}');
     fsMkdirSync = () => {};
     fsReaddirSync = () => [];
     pushSupabaseResponses();
-    await expect(runPipeline(baseJob, mockLog)).rejects.toThrow(/out of memory/i);
-    expect(mockLog.error).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
+    const result = await runPipeline(baseJob, mockLog);
+    expect(result.finalizeSummary).toBeDefined();
+    // The OOM is logged as a warning (degraded), not a hard error.
+    expect(mockLog.warn).toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
+    expect(mockLog.error).not.toHaveBeenCalledWith('semgrep', expect.stringContaining('out of memory'));
   });
 });

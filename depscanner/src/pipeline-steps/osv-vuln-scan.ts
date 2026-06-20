@@ -264,10 +264,21 @@ export async function runOsvFallback(opts: {
   logger: Pick<PipelineLogger, 'info' | 'warn'>;
   /** Force-on; bypasses the "skip when dep-scan VDR is non-empty" guard. */
   force?: boolean;
+  /**
+   * PURLs the caller captured from the pipeline's own SBOM *before* dep-scan
+   * ran. dep-scan can run for many minutes and crash, leaving reportsDir with
+   * no usable SBOM (and it can churn the workspace), so passing the
+   * pre-captured purls directly guarantees the OSV query still runs against the
+   * real dependency set. Unioned with whatever SBOM/extra-purls are on disk.
+   */
+  callerPurls?: string[];
 }): Promise<{ wrote: boolean; vulnCount: number; reason?: string }> {
   const { reportsDir, jobEcosystem, logger } = opts;
+  const callerPurls = (opts.callerPurls ?? []).filter(
+    (p): p is string => typeof p === 'string' && p.startsWith('pkg:'),
+  );
 
-  let sbomFile: string | null = null;
+  const sbomCandidates: string[] = [];
   let existingVdrHasVulns = false;
   let extraPurlsFile: string | null = null;
   try {
@@ -281,8 +292,8 @@ export async function runOsvFallback(opts: {
             existingVdrHasVulns = true;
           }
         } catch { /* malformed VDR — treat as empty */ }
-      } else if (entry.name.endsWith('.cdx.json') && !sbomFile) {
-        sbomFile = full;
+      } else if (entry.name.endsWith('.cdx.json')) {
+        sbomCandidates.push(full);
       } else if (entry.name === 'osv-extra-purls.json') {
         extraPurlsFile = full;
       }
@@ -294,21 +305,40 @@ export async function runOsvFallback(opts: {
   if (existingVdrHasVulns && !opts.force) {
     return { wrote: false, vulnCount: 0, reason: 'dep-scan VDR non-empty; skipping fallback' };
   }
-  if (!sbomFile) {
-    return { wrote: false, vulnCount: 0, reason: 'no SBOM file found in reportsDir' };
+  if (sbomCandidates.length === 0 && callerPurls.length === 0 && !extraPurlsFile) {
+    return { wrote: false, vulnCount: 0, reason: 'no SBOM file or caller PURLs available' };
   }
 
-  let sbom: SbomDocument;
-  try {
-    sbom = JSON.parse(fs.readFileSync(sbomFile, 'utf8')) as SbomDocument;
-  } catch (e) {
-    return { wrote: false, vulnCount: 0, reason: `SBOM parse failed: ${(e as Error).message}` };
+  // dep-scan can crash AFTER emitting an empty `.cdx.json` (bad `-t`, VDB
+  // corruption), while the pipeline's own SBOM — copied in as
+  // `_pipeline-sbom.cdx.json` by the dep-scan step — carries the full
+  // dependency set. Picking the FIRST cdx on disk would let an empty dep-scan
+  // SBOM starve the fallback to zero PURLs, so choose whichever candidate
+  // yields the most PURLs.
+  let sbom: SbomDocument | null = null;
+  let sbomPurls: string[] = [];
+  for (const cand of sbomCandidates) {
+    let parsed: SbomDocument;
+    try {
+      parsed = JSON.parse(fs.readFileSync(cand, 'utf8')) as SbomDocument;
+    } catch {
+      continue;
+    }
+    const bomRef =
+      (parsed as unknown as { metadata?: { component?: { 'bom-ref'?: string } } })?.metadata?.component?.['bom-ref']
+      ?? null;
+    const purls = extractPurlsFromSbom(parsed, bomRef);
+    if (purls.length > sbomPurls.length) {
+      sbom = parsed;
+      sbomPurls = purls;
+    }
   }
 
-  const projectBomRef =
-    (sbom as unknown as { metadata?: { component?: { 'bom-ref'?: string } } })?.metadata?.component?.['bom-ref']
-    ?? null;
-  const sbomPurls = extractPurlsFromSbom(sbom, projectBomRef);
+  // No parseable on-disk SBOM is fine as long as the caller supplied purls (or
+  // a transitive-resolver sidecar exists) — those carry the dependency set.
+  if (!sbom && callerPurls.length === 0 && !extraPurlsFile) {
+    return { wrote: false, vulnCount: 0, reason: 'no parseable SBOM file found in reportsDir' };
+  }
 
   // v3 extension: union in any purls the transitive resolver added in the
   // SBOM step (gomod/pypi shallow-SBOM workaround). cdxgen for those ecos
@@ -329,7 +359,7 @@ export async function runOsvFallback(opts: {
 
   const seen = new Set(sbomPurls);
   const purls = [...sbomPurls];
-  for (const p of extraPurls) {
+  for (const p of [...extraPurls, ...callerPurls]) {
     if (!seen.has(p)) {
       seen.add(p);
       purls.push(p);

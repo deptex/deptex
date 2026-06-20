@@ -142,7 +142,7 @@ const faqItems: FaqItem[] = [
     category: "General",
     question: "Is Deptex open source?",
     answer:
-      "Deptex is source-available under the Functional Source License (FSL-1.1-ALv2). The entire platform lives in one public repository, and each release converts to Apache 2.0 two years after publication. There is no enterprise edition and no withheld code.",
+      "Yes. Deptex is open source under the GNU Affero General Public License v3.0 (AGPL-3.0). The entire platform lives in one public repository — you can read, audit, modify, and self-host every part of it. Organizations that need different licensing terms can obtain a commercial license.",
   },
   {
     category: "General",

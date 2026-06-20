@@ -102,17 +102,17 @@ export default function OpenCodeSection() {
                   One repo. The whole platform.
                 </h3>
                 <p className="mt-2 text-[15px] leading-relaxed text-foreground-secondary">
-                  Scanner, taint engine, fix agent, every migration:
-                  source-available in a single repository. No enterprise
-                  edition, no withheld code.
+                  Scanner, taint engine, fix agent, every migration: open
+                  source in a single repository. No enterprise edition, no
+                  withheld code.
                 </p>
               </div>
 
               <div>
                 <p className="text-[15px] leading-relaxed text-foreground-secondary">
-                  FSL-licensed. Every release becomes{" "}
-                  <span className="text-accent-text">Apache 2.0</span> on its
-                  second anniversary.
+                  Licensed under{" "}
+                  <span className="text-accent-text">AGPL-3.0</span> — real open
+                  source you can read, audit, and self-host.
                 </p>
                 <div className="mt-1.5">
                   <RepoLink path="LICENSE" label="Read the license" />

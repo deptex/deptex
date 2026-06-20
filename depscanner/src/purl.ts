@@ -32,6 +32,34 @@ const ECOSYSTEM_TO_PURL_TYPE: Record<string, string> = Object.fromEntries(
 );
 
 /**
+ * The `dependencies.ecosystem` column records the OSV/registry ecosystem name,
+ * which for several ecosystems differs from the PURL type spelling: a rubygem
+ * is stored as `rubygems` (purl type `gem`), a Go module as `gomod` (purl type
+ * `golang`), a .NET package as `dotnet` (purl type `nuget`). Without this
+ * normalization `buildPurl('rubygems', …)` returns null, so a CVE-tagged taint
+ * flow on that dep never resolves to a dependency_id and the classifier can
+ * never promote it past `module`. Keys are lowercase.
+ */
+const ECOSYSTEM_ALIASES: Record<string, string> = {
+  rubygems: 'gem',
+  rubygem: 'gem',
+  gomod: 'golang',
+  go: 'golang',
+  pip: 'pypi',
+  python: 'pypi',
+  crates: 'cargo',
+  'crates.io': 'cargo',
+  packagist: 'composer',
+  dotnet: 'nuget',
+};
+
+/** Normalize an OSV/registry ecosystem name to its canonical PURL ecosystem. */
+export function normalizeEcosystem(ecosystem: string): string {
+  const key = ecosystem.toLowerCase();
+  return ECOSYSTEM_ALIASES[key] ?? key;
+}
+
+/**
  * Build a purl string from our canonical (ecosystem, name, version) shape.
  * Mirrors dep-scan's output format so rows we synthesize here collide on the
  * project_reachable_flows UNIQUE when they should.
@@ -44,7 +72,7 @@ export function buildPurl(
   name: string,
   version: string | null,
 ): string | null {
-  const type = ECOSYSTEM_TO_PURL_TYPE[ecosystem];
+  const type = ECOSYSTEM_TO_PURL_TYPE[normalizeEcosystem(ecosystem)];
   if (!type || !name) return null;
   let body = name;
   if (type === 'maven' && name.includes(':')) {
