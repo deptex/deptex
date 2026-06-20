@@ -38,6 +38,9 @@ import {
 
 interface OrganizationContextType {
   organization: Organization | null;
+  /** Effective permissions resolved by OrganizationLayout (fresh DB role perms,
+   *  then cache, then org payload). `organization.permissions` is often null. */
+  userPermissions?: Record<string, boolean> | null;
 }
 
 const PER_PAGE_PER_TYPE = 100;
@@ -372,7 +375,7 @@ function FunnelTooltip({
 
 export default function OrganizationFindingsPage() {
   const { id: orgId } = useParams<{ id: string }>();
-  const { organization } = useOutletContext<OrganizationContextType>();
+  const { organization, userPermissions } = useOutletContext<OrganizationContextType>();
   const organizationId = organization?.id ?? orgId ?? '';
 
   const [loading, setLoading] = useState(true);
@@ -1125,7 +1128,7 @@ export default function OrganizationFindingsPage() {
           <VulnerabilityExpandableTable
             organizationId={organizationId}
             rows={allRows}
-            canManageFindings={!!organization?.permissions?.manage_findings}
+            canManageFindings={!!userPermissions?.manage_findings}
             onStatusChange={() => void load()}
           />
         )}
