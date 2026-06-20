@@ -10903,12 +10903,14 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     const severityFilter = (req.query.severity as string) || '';
     const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
 
+    // Return open + ignored rows (the table filters Open/Ignored/All client-side
+    // via the stored status); resolved rows stay hidden.
     let countQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
 
     const { count: totalCount, error: countError } = await countQuery;
@@ -10920,11 +10922,11 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
       )
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
 
     const { data: rows, error: dataError } = await dataQuery

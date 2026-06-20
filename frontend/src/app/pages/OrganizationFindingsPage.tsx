@@ -1125,7 +1125,7 @@ export default function OrganizationFindingsPage() {
           <VulnerabilityExpandableTable
             organizationId={organizationId}
             rows={allRows}
-            canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+            canManageFindings={!!organization?.permissions?.manage_findings}
             onStatusChange={() => void load()}
           />
         )}

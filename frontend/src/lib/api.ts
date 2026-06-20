@@ -68,6 +68,7 @@ export interface RolePermissions {
   view_activity: boolean;
   manage_compliance: boolean;
   manage_statuses?: boolean;
+  manage_findings?: boolean;
   interact_with_security_agent?: boolean;
   interact_with_aegis: boolean;
   manage_aegis: boolean;
@@ -2423,15 +2424,23 @@ export const api = {
     );
   },
 
-  async updateFindingStatus(
+  /**
+   * Unified finding-status endpoint (findings-status foundation). Resolves
+   * (project_id, finding_key) to the active-run row(s) and sets the stored
+   * status + ignore reason/note. Supersedes the per-type ignore endpoints.
+   */
+  async setFindingStatus(
     organizationId: string,
-    findingType: 'vulnerability' | 'secret' | 'semgrep',
-    findingId: string,
-    status: 'open' | 'ignored'
-  ): Promise<{ success: boolean; status: string }> {
+    projectId: string,
+    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast',
+    findingKey: string,
+    status: 'open' | 'ignored',
+    reason?: 'false_positive' | 'wont_fix' | 'accepted_risk',
+    note?: string,
+  ): Promise<{ success: boolean; status: string; updated: number }> {
     return fetchWithAuth(
-      `/api/organizations/${organizationId}/findings/${findingType}/${findingId}/status`,
-      { method: 'PATCH', body: JSON.stringify({ status }) }
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status, reason, note }) },
     );
   },
 
@@ -4644,6 +4653,13 @@ export interface ProjectVulnerability {
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
   project_name?: string;
+  /** Findings-status foundation (phase55): stable handle + unified disposition. */
+  finding_key?: string | null;
+  status?: 'open' | 'ignored' | 'resolved';
+  auto_ignored?: boolean;
+  auto_ignore_reason?: string | null;
+  suppressed?: boolean;
+  risk_accepted?: boolean;
 }
 
 export interface ProjectPermissions {
