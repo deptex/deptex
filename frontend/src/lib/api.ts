@@ -2432,7 +2432,7 @@ export const api = {
   async setFindingStatus(
     organizationId: string,
     projectId: string,
-    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast',
+    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious',
     findingKey: string,
     status: 'open' | 'ignored',
     reason?: 'false_positive' | 'wont_fix' | 'accepted_risk',
@@ -5227,6 +5227,9 @@ export interface DataFlowFinding {
   flow_signature_hash: string | null;
   created_at: string | null;
   project_name?: string;
+  /** True when the user has suppressed this flow (by signature) — drives the
+   *  Ignored state + Restore in the findings table. */
+  flow_suppressed?: boolean;
 }
 
 export interface SecretFinding {
@@ -5547,6 +5550,12 @@ export interface MaliciousFinding {
   risk_accepted_at: string | null;
   risk_accepted_reason: string | null;
   created_at: string;
+  /** Findings-status foundation (phase55). Manual ignore resets on rescan until
+   *  malicious carry-forward lands (PR-B). */
+  status?: 'open' | 'ignored' | 'resolved';
+  finding_key?: string | null;
+  ignore_reason?: string | null;
+  ignore_note?: string | null;
   package_name?: string | null;
   ecosystem?: string | null;
   package_version?: string | null;

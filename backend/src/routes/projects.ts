@@ -10268,9 +10268,13 @@ router.get('/:id/projects/:projectId/code-flow-findings', async (req: AuthReques
       (supRes.data ?? []).map((r: any) => r.flow_signature_hash).filter(Boolean),
     );
 
-    const data = (flowsRes.data ?? [])
-      .filter((row: any) => !row.flow_signature_hash || !suppressed.has(row.flow_signature_hash))
-      .map((row: any) => toDataFlowFinding(row));
+    // Return suppressed flows too, flagged — the findings table filters Open vs
+    // Ignored client-side and lets the user restore them. (The count RPC still
+    // excludes suppressed flows, so the pills stay correct.)
+    const data = (flowsRes.data ?? []).map((row: any) => ({
+      ...toDataFlowFinding(row),
+      flow_suppressed: Boolean(row.flow_signature_hash && suppressed.has(row.flow_signature_hash)),
+    }));
 
     res.json({ data, total: data.length });
   } catch (error: any) {

@@ -484,6 +484,10 @@ const STATUS_FINDING_TYPES = {
   iac: { table: 'project_iac_findings', run: 'extraction', legacy: true },
   container: { table: 'project_container_findings', run: 'extraction', legacy: true },
   dast: { table: 'project_dast_findings', run: 'dast', legacy: false },
+  // Malicious carries no carry-forward yet (PR-B), so a manual ignore resets on
+  // the next scan. Status-only (NOT the legacy suppressed path) to avoid the
+  // is_malicious recompute / allowlist desync.
+  malicious: { table: 'project_malicious_findings', run: 'extraction', legacy: false },
 } as const;
 type StatusFindingType = keyof typeof STATUS_FINDING_TYPES;
 const IGNORE_REASONS = ['false_positive', 'wont_fix', 'accepted_risk'] as const;
