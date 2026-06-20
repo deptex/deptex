@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Menu, ScanSearch, Scale, Bell, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -96,35 +96,15 @@ const navigationItems: NavItem[] = [
 ];
 
 const GITHUB_REPO_URL = "https://github.com/deptex/deptex";
-const GITHUB_API_REPO = "https://api.github.com/repos/deptex/deptex";
-
-function formatStars(count: number): string {
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-  return count.toLocaleString();
-}
 
 export default function NavBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  const [githubStars, setGithubStars] = useState<number | null>(null);
   const { user, signOut } = useAuth();
   const avatarUrl = getAvatarUrl(user);
   const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
   const [dropdownTimeout, setDropdownTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(GITHUB_API_REPO)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Failed to fetch"))))
-      .then((data) => {
-        if (!cancelled && typeof data.stargazers_count === "number") {
-          setGithubStars(data.stargazers_count);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   return (
     <header className="h-14 fixed left-0 right-0 top-0 z-50 flex items-center border-b border-border bg-background px-6">
@@ -261,15 +241,10 @@ export default function NavBar() {
               href={GITHUB_REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+              className="flex items-center rounded-md p-1.5 text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
               aria-label="Deptex on GitHub"
             >
               <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
-              {githubStars !== null ? (
-                <span>{formatStars(githubStars)}</span>
-              ) : (
-                <span className="tabular-nums">—</span>
-              )}
             </a>
 
             {user ? (
