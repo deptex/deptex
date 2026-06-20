@@ -21,7 +21,7 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
-import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
+import { checkProjectAccess, checkProjectManagePermission, checkOrgManageFindingsPermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 
 // Mirror of `IAC_FRAMEWORKS` in `depscanner/src/scanners/types.ts`.
@@ -466,6 +466,130 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
   } catch (error: any) {
     console.error('[scanner-findings] summary error:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch scanner summary' });
+  }
+});
+
+// ============================================================
+// Unified finding status (ignore / un-ignore across finding types)
+// ============================================================
+
+/** Finding types whose status the unified endpoint can set, with how to resolve
+ *  their active-run rows and whether they carry the legacy suppressed/risk_accepted
+ *  columns. `malicious` lacks carry-forward (PR-B) and `taint_flow` uses its own
+ *  flow-suppression model, so both are intentionally excluded. */
+const STATUS_FINDING_TYPES = {
+  vulnerability: { table: 'project_dependency_vulnerabilities', run: 'extraction', legacy: true },
+  secret: { table: 'project_secret_findings', run: 'extraction', legacy: false },
+  semgrep: { table: 'project_semgrep_findings', run: 'extraction', legacy: false },
+  iac: { table: 'project_iac_findings', run: 'extraction', legacy: true },
+  container: { table: 'project_container_findings', run: 'extraction', legacy: true },
+  dast: { table: 'project_dast_findings', run: 'dast', legacy: false },
+} as const;
+type StatusFindingType = keyof typeof STATUS_FINDING_TYPES;
+const IGNORE_REASONS = ['false_positive', 'wont_fix', 'accepted_risk'] as const;
+
+router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    const cfg = STATUS_FINDING_TYPES[type as StatusFindingType];
+    if (!cfg) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+
+    const { status, reason, note } = req.body ?? {};
+    if (status !== 'open' && status !== 'ignored') {
+      return res.status(400).json({ error: 'status must be "open" or "ignored"' });
+    }
+    if (status === 'ignored' && reason !== undefined && reason !== null && !IGNORE_REASONS.includes(reason)) {
+      return res.status(400).json({ error: `reason must be one of: ${IGNORE_REASONS.join(', ')}` });
+    }
+    const trimmedNote = typeof note === 'string' ? note.trim().slice(0, RISK_ACCEPTED_REASON_MAX_LEN) || null : null;
+
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
+    }
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+
+    const now = new Date().toISOString();
+    const ignoring = status === 'ignored';
+    const acceptedRisk = ignoring && reason === 'accepted_risk';
+
+    // Unified status + ignore_* columns, mirrored onto the legacy
+    // suppressed/risk_accepted columns so every reader (the count RPC, the legacy
+    // detail panels) stays consistent until the legacy columns are retired.
+    const update: Record<string, unknown> = {
+      status,
+      ignore_reason: ignoring ? reason ?? null : null,
+      ignore_note: ignoring ? trimmedNote : null,
+      ignored_by: ignoring ? userId : null,
+      ignored_at: ignoring ? now : null,
+    };
+    if (cfg.legacy) {
+      update.suppressed = ignoring && !acceptedRisk;
+      update.suppressed_by = ignoring && !acceptedRisk ? userId : null;
+      update.suppressed_at = ignoring && !acceptedRisk ? now : null;
+      update.risk_accepted = acceptedRisk;
+      update.risk_accepted_by = acceptedRisk ? userId : null;
+      update.risk_accepted_at = acceptedRisk ? now : null;
+      update.risk_accepted_reason = acceptedRisk ? trimmedNote : null;
+    } else if (type === 'dast') {
+      update.risk_accepted_by = acceptedRisk ? userId : null;
+      update.risk_accepted_at = acceptedRisk ? now : null;
+      update.risk_accepted_reason = acceptedRisk ? trimmedNote : null;
+    }
+
+    let query = supabase
+      .from(cfg.table)
+      .update(update, { count: 'exact' })
+      .eq('project_id', projectId)
+      .eq('finding_key', findingKey);
+    if (cfg.run === 'extraction') {
+      const activeRun = await getActiveExtractionId(supabase, projectId);
+      if (!activeRun) return res.status(404).json({ error: 'No active scan for this project' });
+      query = query.eq('extraction_run_id', activeRun);
+    } else {
+      const { data: targets } = await supabase
+        .from('project_dast_targets')
+        .select('active_dast_run_id')
+        .eq('project_id', projectId);
+      const runs = (targets ?? []).map((t: any) => t.active_dast_run_id).filter(Boolean);
+      if (runs.length === 0) return res.status(404).json({ error: 'No active DAST run for this project' });
+      query = query.in('dast_run_id', runs);
+    }
+
+    const { data: updated, error, count } = await query.select('id');
+    if (error) throw error;
+    if ((count ?? 0) === 0) {
+      return res.status(404).json({ error: 'Finding not found in the active scan' });
+    }
+
+    // Best-effort audit log (write-only in PR-A; postgrest builders have no
+    // .catch, so use .then(ok, err) for fire-and-forget — see memory).
+    await supabase
+      .from('project_finding_status_events')
+      .insert(
+        (updated ?? []).map((row: any) => ({
+          organization_id: id,
+          project_id: projectId,
+          finding_type: type,
+          finding_key: findingKey,
+          finding_id: row.id,
+          to_status: status,
+          reason: ignoring ? reason ?? null : null,
+          note: ignoring ? trimmedNote : null,
+          actor_user_id: userId,
+        })),
+      )
+      .then(undefined, (e: any) => console.error('[finding-status] event log failed:', e?.message));
+
+    res.json({ success: true, status, updated: count });
+  } catch (error: any) {
+    console.error('[scanner-findings] finding status error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update finding status' });
   }
 });
 

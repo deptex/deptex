@@ -305,3 +305,35 @@ export async function checkOrgManageIntegrationsPermission(
 
   return orgRole?.permissions?.manage_integrations === true;
 }
+
+/**
+ * Whether `userId` may set finding status (ignore / un-ignore findings) for the
+ * given organization. Org owners always pass; otherwise the org-role permissions
+ * must include `manage_findings`. The unified finding-status endpoint spans all
+ * finding types, so the permission is org-scoped (not the per-project
+ * `manage_projects`/`manage_teams_and_projects` the legacy per-type endpoints use).
+ */
+export async function checkOrgManageFindingsPermission(
+  userId: string,
+  organizationId: string,
+): Promise<boolean> {
+  const { data: membership } = await supabase
+    .from('organization_members')
+    .select('role')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!membership) return false;
+  // `owner` is the only structural role — never match other role *names*.
+  if (membership.role === 'owner') return true;
+
+  const { data: orgRole } = await supabase
+    .from('organization_roles')
+    .select('permissions')
+    .eq('organization_id', organizationId)
+    .eq('name', membership.role)
+    .single();
+
+  return orgRole?.permissions?.manage_findings === true;
+}
