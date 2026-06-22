@@ -274,9 +274,46 @@ async function main() {
   const oldRunGone = await one(db, `SELECT count(*)::int AS n FROM project_malicious_findings WHERE extraction_run_id='${RUN}'`);
   assert(oldRunGone.n === 0, 'first-run malicious rows are reaped (2-run invariant now holds for malicious)');
 
+  // phase57: finding_tracker_links constraints + cascade.
+  console.log('\n  [tracker] finding_tracker_links constraints + cascade');
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key, external_url)
+    VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','jira','10001','SEC-1','https://x/browse/SEC-1');`);
+  const tl1 = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc'`);
+  assert(tl1.n === 1, 'tracker link inserts');
+
+  let dupLink = false;
+  try {
+    await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','jira','10002');`);
+  } catch { dupLink = true; }
+  assert(dupLink, 'a second jira link for the same finding is rejected (one per provider)');
+
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','github','42','#42');`);
+  const tl2 = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc'`);
+  assert(tl2.n === 2, 'a different provider links to the same finding');
+
+  let badProvider = false;
+  try {
+    await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_xyz','asana','1');`);
+  } catch { badProvider = true; }
+  assert(badProvider, 'unknown provider rejected by CHECK');
+
+  let badType = false;
+  try {
+    await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','bogus','fk_xyz','jira','1');`);
+  } catch { badType = true; }
+  assert(badType, 'unknown finding_type rejected by CHECK');
+
+  // Cascade: a fresh project with no other dependents proves ON DELETE CASCADE.
+  const PROJ2 = '55555555-5555-5555-5555-555555555555';
+  await db.exec(`INSERT INTO projects (id, organization_id, name, created_at) VALUES ('${PROJ2}','${ORG}','proj2', NOW());`);
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ2}','secret','fk_p2','linear','L-1');`);
+  await db.exec(`DELETE FROM projects WHERE id='${PROJ2}';`);
+  const cascade = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE project_id='${PROJ2}'`);
+  assert(cascade.n === 0, 'tracker links cascade-delete with their project');
+
   await db.close();
   console.log(`\n${'='.repeat(48)}`);
-  console.log(`phase55 backfill harness: ${passed} passed, ${failures} failed (${Date.now() - t0}ms)`);
+  console.log(`findings-status + tracker harness: ${passed} passed, ${failures} failed (${Date.now() - t0}ms)`);
   if (failures > 0) process.exit(1);
   console.log('PASSED');
 }
