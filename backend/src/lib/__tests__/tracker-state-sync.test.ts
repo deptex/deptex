@@ -60,4 +60,23 @@ describe('syncOrgTrackerLinkStates — Linear poll', () => {
     expect(await syncOrgTrackerLinkStates(ORG)).toBe(0);
     expect(queryBuilder.update).not.toHaveBeenCalled();
   });
+
+  it('marks a Jira issue whose status category is done as done', async () => {
+    setTableResponse('finding_tracker_links', 'then', {
+      data: [{ id: 'j1', project_id: 'p1', provider: 'jira', external_id: '10001', external_state: 'open' }],
+      error: null,
+    });
+    // jira creds (cloud) + a 'done' status category
+    setTableResponse('organization_integrations', 'maybeSingle', {
+      data: { access_token: 'jira_tok', metadata: { cloud_id: 'cloud-1' } },
+      error: null,
+    });
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ fields: { status: { statusCategory: { key: 'done' } } } }),
+    });
+
+    expect(await syncOrgTrackerLinkStates(ORG)).toBe(1);
+    expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ external_state: 'done' }));
+  });
 });

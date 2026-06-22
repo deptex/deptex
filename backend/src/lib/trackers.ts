@@ -365,22 +365,56 @@ async function syncLinearLinks(organizationId: string, links: SyncLink[]): Promi
   return changed;
 }
 
+async function syncJiraLinks(organizationId: string, links: SyncLink[]): Promise<number> {
+  if (!links.length) return 0;
+  let conn: { access_token: string; metadata: Record<string, any> };
+  let base: string;
+  let cloud: boolean;
+  try {
+    conn = await getOrgIntegration(organizationId, 'jira');
+    ({ base, cloud } = jiraBaseUrl(conn.metadata));
+  } catch {
+    return 0; // Jira disconnected / misconfigured — leave the links as-is
+  }
+  const apiPath = cloud ? '/rest/api/3/issue' : '/rest/api/2/issue';
+  let changed = 0;
+  for (const l of links) {
+    try {
+      const res = await fetch(`${base}${apiPath}/${encodeURIComponent(l.external_id)}?fields=status`, {
+        headers: { Authorization: `Bearer ${conn.access_token}`, Accept: 'application/json' },
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as any;
+      const category = data?.fields?.status?.statusCategory?.key; // 'new' | 'indeterminate' | 'done'
+      const newState = category === 'done' ? 'done' : 'open';
+      if (newState !== l.external_state) {
+        await setLinkState(l.id, newState);
+        changed++;
+      }
+    } catch {
+      // A single fetch failing shouldn't abort the rest.
+    }
+  }
+  return changed;
+}
+
 /**
- * Refresh the open/done state of an org's GitHub + Linear tracker links by
+ * Refresh the open/done state of an org's GitHub + Linear + Jira tracker links by
  * polling each provider's API. This is the path that works in prod (and local
  * dev) without webhooks; the GitHub issues webhook is a real-time optimization
- * on top. Jira polling is a follow-on. Returns the number of links that changed.
+ * on top. Returns the number of links that changed.
  */
 export async function syncOrgTrackerLinkStates(organizationId: string): Promise<number> {
   const { data: links } = await supabase
     .from('finding_tracker_links')
     .select('id, project_id, provider, external_id, external_state')
     .eq('organization_id', organizationId)
-    .in('provider', ['github', 'linear']);
+    .in('provider', ['github', 'linear', 'jira']);
   if (!links?.length) return 0;
   const typed = links as SyncLink[];
   let changed = 0;
   changed += await syncGithubLinks(typed.filter((l) => l.provider === 'github'));
   changed += await syncLinearLinks(organizationId, typed.filter((l) => l.provider === 'linear'));
+  changed += await syncJiraLinks(organizationId, typed.filter((l) => l.provider === 'jira'));
   return changed;
 }
