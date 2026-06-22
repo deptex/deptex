@@ -5,7 +5,7 @@ jest.mock('../../lib/supabase', () => ({
   createUserClient: jest.fn(),
 }));
 
-import { handleIssueStateEvent } from '../integrations';
+import { handleIssueStateEvent, handleLinearIssueEvent } from '../integrations';
 
 describe('handleIssueStateEvent — GitHub issue close/reopen → tracker link state', () => {
   beforeEach(() => {
@@ -55,6 +55,34 @@ describe('handleIssueStateEvent — GitHub issue close/reopen → tracker link s
 
   it('ignores malformed payloads', async () => {
     await handleIssueStateEvent({ action: 'closed', issue: {}, repository: {} });
+    expect(queryBuilder.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleLinearIssueEvent — Linear webhook → tracker link state', () => {
+  beforeEach(() => {
+    clearTableRegistry();
+    jest.clearAllMocks();
+  });
+
+  it('marks a completed Linear issue as done, matched by issue id', async () => {
+    await handleLinearIssueEvent({ type: 'Issue', action: 'update', data: { id: 'lin-1', state: { type: 'completed' } } });
+    expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ external_state: 'done' }));
+    expect(queryBuilder.eq).toHaveBeenCalledWith('external_id', 'lin-1');
+  });
+
+  it('marks a started Linear issue as open', async () => {
+    await handleLinearIssueEvent({ type: 'Issue', action: 'update', data: { id: 'lin-1', state: { type: 'started' } } });
+    expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ external_state: 'open' }));
+  });
+
+  it('ignores non-Issue events', async () => {
+    await handleLinearIssueEvent({ type: 'Comment', action: 'create', data: { id: 'c-1' } });
+    expect(queryBuilder.update).not.toHaveBeenCalled();
+  });
+
+  it('ignores payloads without a state', async () => {
+    await handleLinearIssueEvent({ type: 'Issue', action: 'update', data: { id: 'lin-1' } });
     expect(queryBuilder.update).not.toHaveBeenCalled();
   });
 });

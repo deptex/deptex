@@ -1648,6 +1648,70 @@ function verifyGitHubWebhookSignature(req: express.Request): boolean {
   }
 }
 
+/**
+ * Verify a Linear webhook via the Linear-Signature header (HMAC-SHA256 of the
+ * raw body with the OAuth app's webhook signing secret).
+ */
+function verifyLinearWebhookSignature(req: express.Request): boolean {
+  const secret = process.env.LINEAR_WEBHOOK_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('CRITICAL: LINEAR_WEBHOOK_SECRET not set in production. Rejecting webhook.');
+      return false;
+    }
+    console.warn('LINEAR_WEBHOOK_SECRET not set; skipping verification (dev mode only).');
+    return true;
+  }
+  const signature = req.headers['linear-signature'] as string | undefined;
+  const rawBody = (req as any).rawBody;
+  if (!signature || typeof rawBody !== 'string') return false;
+  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const sigBuf = Buffer.from(signature, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  try {
+    return crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A Linear issue changed — refresh the resolved state of any finding_tracker_links
+ * pointing at it. Linear issue ids are globally unique, so no project scoping is
+ * needed. state.type completed/canceled = done; everything else = open.
+ */
+export async function handleLinearIssueEvent(payload: any): Promise<void> {
+  if (payload?.type !== 'Issue') return;
+  const issueId = payload?.data?.id;
+  const stateType = payload?.data?.state?.type as string | undefined;
+  if (!issueId || !stateType) return;
+  const newState = stateType === 'completed' || stateType === 'canceled' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('provider', 'linear')
+    .eq('external_id', String(issueId));
+}
+
+export async function linearWebhookHandler(req: express.Request, res: express.Response) {
+  try {
+    if (!verifyLinearWebhookSignature(req)) {
+      return res.status(401).json({ error: 'Invalid webhook signature' });
+    }
+    // Ack fast so Linear doesn't retry; process after.
+    res.json({ received: true });
+    try {
+      await handleLinearIssueEvent(req.body);
+    } catch (err: any) {
+      console.error('Linear webhook processing error:', err?.message);
+    }
+  } catch (error: any) {
+    console.error('Linear webhook error:', error);
+    if (!res.headersSent) res.status(200).json({ received: true, error: error.message });
+  }
+}
+
 async function deduplicateWebhookDelivery(deliveryId: string | undefined): Promise<boolean> {
   if (!deliveryId) return false;
   try {
@@ -1992,6 +2056,7 @@ async function handlePullRequestClosedEvent(payload: any) {
 
 // Also mount on router for backwards compatibility
 router.post('/webhooks/github', githubWebhookHandler);
+router.post('/webhooks/linear', linearWebhookHandler);
 
 // ============================================================
 // PR Guardrails: helpers and handlePullRequestEvent
