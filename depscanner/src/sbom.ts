@@ -89,6 +89,25 @@ function namespaceFromPurl(purl: string): string | null {
 }
 
 /**
+ * Strip a non-canonical leading `v` from an SBOM version string.
+ *
+ * Go module versions are canonically v-prefixed (`v1.5.0`,
+ * `gopkg.in/yaml.v2@v2.2.2`) and OSV / dep-scan match on that exact form, so Go
+ * is left untouched. For every other ecosystem a leading `v` before a digit is
+ * non-canonical (e.g. Packagist tags like `v5.2.16`); left in place it splits
+ * one package into two `project_dependencies` rows — `v5.2.16` from the SBOM
+ * and `5.2.16` from the transitive resolver (which already strips it) — which
+ * doubles every CVE attached to the package. Only strips when a digit follows
+ * the `v` so versions that genuinely start with a letter are never mangled.
+ * Leaves versions with no purl untouched (unknown ecosystem — don't guess).
+ */
+export function normalizeSbomVersion(version: string, purl: string | undefined): string {
+  if (!purl) return version;
+  if (parsePurl(purl)?.type?.toLowerCase() === 'golang') return version;
+  return version.replace(/^[vV](?=\d)/, '');
+}
+
+/**
  * Map bom-ref to name@version for building edges.
  */
 export function getBomRefToNameVersion(sbom: CycloneDxSbom): Map<string, { name: string; version: string }> {
@@ -103,6 +122,7 @@ export function getBomRefToNameVersion(sbom: CycloneDxSbom): Map<string, { name:
       if (!name) name = nameFromPurl(c.purl);
       if (!version) version = versionFromPurl(c.purl);
     }
+    if (version) version = normalizeSbomVersion(version, c.purl);
     if (name && version) {
       map.set(ref, { name, version });
     }
@@ -206,6 +226,7 @@ export function parseSbom(sbom: CycloneDxSbom): {
       if (!name) name = nameFromPurl(comp.purl);
       if (!version) version = versionFromPurl(comp.purl);
     }
+    if (version) version = normalizeSbomVersion(version, comp.purl);
     if (!name || !version) {
       droppedVersionlessCount++;
       continue;
