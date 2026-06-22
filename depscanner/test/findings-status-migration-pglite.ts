@@ -296,6 +296,30 @@ async function main() {
   const tf = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_type='taint_flow'`);
   assert(tf.n === 1, 'taint_flow link (filed by flow_signature_hash) is accepted');
 
+  // phase58: a GitHub issue-close webhook flips external_state to 'done', scoped
+  // to the project connected to the event's repo (issue numbers collide across
+  // repos, so the join on project_repositories.repo_full_name is load-bearing).
+  console.log('\n  [tracker] external_state github webhook sync (repo-scoped)');
+  const PROJ3 = '66666666-6666-6666-6666-666666666666';
+  await db.exec(`INSERT INTO projects (id, organization_id, name, created_at) VALUES ('${PROJ3}','${ORG}','proj3', NOW());`);
+  await db.exec(`INSERT INTO project_repositories (project_id, repo_full_name, repo_id, installation_id, default_branch, provider) VALUES
+    ('${PROJ}','deptex/app','111','999','main','github'),
+    ('${PROJ3}','other/repo','222','999','main','github');`);
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key, external_state) VALUES
+    ('${ORG}','${PROJ}','vulnerability','fk_gh','github','7','#7','open'),
+    ('${ORG}','${PROJ3}','vulnerability','fk_gh3','github','7','#7','open');`);
+  await db.exec(`
+    UPDATE finding_tracker_links l
+    SET external_state='done', external_state_synced_at=now()
+    FROM project_repositories pr
+    WHERE l.provider='github' AND l.external_id='7'
+      AND pr.project_id=l.project_id AND pr.provider='github' AND pr.repo_full_name='deptex/app';
+  `);
+  const ghDone = await one(db, `SELECT external_state FROM finding_tracker_links WHERE finding_key='fk_gh'`);
+  assert(ghDone.external_state === 'done', 'github issue close flips the matching project link to done');
+  const ghOther = await one(db, `SELECT external_state FROM finding_tracker_links WHERE finding_key='fk_gh3'`);
+  assert(ghOther.external_state === 'open', 'same issue number in a different repo is NOT flipped (repo-scoped)');
+
   let badProvider = false;
   try {
     await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_xyz','asana','1');`);

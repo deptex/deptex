@@ -1721,6 +1721,34 @@ async function updateWebhookDeliveryStatus(
   } catch {}
 }
 
+/**
+ * A GitHub issue was closed or reopened — refresh the resolved state of any
+ * finding_tracker_links pointing at it. Scoped to links whose project is
+ * connected to the event's repo so issue numbers don't collide across repos.
+ */
+export async function handleIssueStateEvent(payload: any): Promise<void> {
+  const repoFullName: string | undefined = payload?.repository?.full_name;
+  const issueNumber = payload?.issue?.number;
+  const state: string | undefined = payload?.issue?.state; // 'open' | 'closed'
+  if (!repoFullName || issueNumber == null) return;
+
+  const { data: repos } = await supabase
+    .from('project_repositories')
+    .select('project_id')
+    .eq('provider', 'github')
+    .eq('repo_full_name', repoFullName);
+  const projectIds = (repos ?? []).map((r: any) => r.project_id);
+  if (projectIds.length === 0) return;
+
+  const newState = state === 'closed' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('provider', 'github')
+    .eq('external_id', String(issueNumber))
+    .in('project_id', projectIds);
+}
+
 export async function githubWebhookHandler(req: express.Request, res: express.Response) {
   try {
     // 8Q.2: Rate limiting
@@ -1780,6 +1808,12 @@ export async function githubWebhookHandler(req: express.Request, res: express.Re
           }
           if (payload?.action === 'closed') {
             await handlePullRequestClosedEvent(payload);
+          }
+          break;
+
+        case 'issues':
+          if (['closed', 'reopened'].includes(payload?.action)) {
+            await handleIssueStateEvent(payload);
           }
           break;
 

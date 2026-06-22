@@ -332,7 +332,9 @@ CREATE TABLE IF NOT EXISTS public.finding_tracker_links (
   external_url text,
   title text,
   created_by uuid,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  external_state text,
+  external_state_synced_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.flow_node_executions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

@@ -732,7 +732,7 @@ router.get('/:id/projects/:projectId/tracker-links', async (req: AuthRequest, re
     if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
     const { data, error } = await supabase
       .from('finding_tracker_links')
-      .select('id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -758,7 +758,7 @@ router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
     if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
     const { data, error } = await supabase
       .from('finding_tracker_links')
-      .select('id, project_id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .select('id, project_id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
       .eq('organization_id', id)
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -839,8 +839,10 @@ router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async
         external_url: result.externalUrl,
         title,
         created_by: userId,
+        external_state: 'open', // a freshly-filed ticket is open; GitHub keeps it fresh via webhook
+        external_state_synced_at: new Date().toISOString(),
       })
-      .select('id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
       .single();
     if (insErr) {
       // The ticket exists even if we couldn't store the link (e.g. a race on the
