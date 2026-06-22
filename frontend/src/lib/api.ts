@@ -2469,11 +2469,6 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/tracker-links`);
   },
 
-  /** Poll GitHub for the current state of the org's links (works without webhooks). */
-  async syncTrackerLinks(organizationId: string): Promise<{ synced: number }> {
-    return fetchWithAuth(`/api/organizations/${organizationId}/tracker-links/sync`, { method: 'POST' });
-  },
-
   /** Destinations within a provider — Jira projects / Linear teams. */
   async getTrackerDestinations(
     organizationId: string,

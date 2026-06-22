@@ -30,7 +30,6 @@ import {
   createJiraIssue,
   createLinearIssue,
   createGithubIssue,
-  syncOrgTrackerLinkStates,
   TrackerError,
   type TrackerProvider,
   type TrackerResult,
@@ -767,27 +766,6 @@ router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('[scanner-findings] org tracker-links error:', error);
     res.status(500).json({ error: error.message || 'Failed to list tracker links' });
-  }
-});
-
-// Refresh GitHub link states by polling (the path that works without webhooks /
-// in local dev). Org-membership gated; returns how many links changed.
-router.post('/:id/tracker-links/sync', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('user_id')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-    const synced = await syncOrgTrackerLinkStates(id);
-    res.json({ synced });
-  } catch (error: any) {
-    console.error('[scanner-findings] tracker-links sync error:', error);
-    res.status(500).json({ error: error.message || 'Failed to sync tracker links' });
   }
 });
 
