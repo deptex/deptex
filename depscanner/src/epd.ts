@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { Storage } from './storage';
 import { MAX_VOTE_THRESHOLD, UNCERTAIN_UPPER } from './taint-engine/confidence-thresholds';
 import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from './ai-telemetry';
+import { REACHABILITY_LEVEL_WEIGHTS } from './depscore';
 
 export type ReachabilityStatus = 'reachable' | 'unreachable' | 'unknown';
 export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
@@ -1079,7 +1080,21 @@ export async function applyEpdScoringFallback(
     const reachabilityLevel = (row.reachability_level as string | null) ?? null;
     const projectDependencyId = row.project_dependency_id as string;
     const dependencyId = depIdByProjectDependencyId.get(projectDependencyId);
-    const baseScore = Number(row.base_depscore_no_reachability ?? row.depscore ?? 0);
+    // Contextual depscore must be a *dampening* of the reachability-weighted
+    // score — never exceeding it — and must preserve tier ordering (a `module`
+    // CVE must not out-rank a `confirmed` CVE on the same package). The EPD
+    // factor (entry-point exposure × depth decay) is derived per-package from
+    // the flow set, so feeding the raw base_depscore_no_reachability let a
+    // high-CVSS module CVE inherit a sibling flow's factor and inflate above
+    // the confirmed one. Fold the reachability-tier weight in here so
+    // contextual = base_no_reach × tierWeight × epd_factor.
+    const baseNoReach = Number(row.base_depscore_no_reachability ?? row.depscore ?? 0);
+    const tierWeight = reachabilityLevel === 'unreachable'
+      ? 0
+      : reachabilityLevel
+        ? (REACHABILITY_LEVEL_WEIGHTS[reachabilityLevel] ?? 0.5)
+        : 1.0;
+    const baseScore = baseNoReach * tierWeight;
 
     // Phase 6.5 / M5 — primary path: aggregate per-flow AI verdicts.
     const perFlowList = dependencyId ? (perFlowByDependencyId.get(dependencyId) ?? []) : [];
