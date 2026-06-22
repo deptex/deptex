@@ -591,7 +591,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
             vulnRows.push({
               project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
               extraction_run_id: runId,
-              severity, summary, aliases: null, fixed_versions, is_reachable: isReachable,
+              severity, summary,
+              aliases: Array.isArray((v as { aliases?: unknown }).aliases)
+                ? ((v as { aliases?: string[] }).aliases as string[])
+                : null,
+              fixed_versions, is_reachable: isReachable,
               epss_score: epssFromVdrNum, cvss_score: cvssFromVdr, cisa_kev: false,
               depscore: null, published_at: v.published ?? null,
               base_depscore_no_reachability: null,

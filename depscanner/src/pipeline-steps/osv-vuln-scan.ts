@@ -93,6 +93,12 @@ interface VdrVulnerability {
   affects?: Array<{ ref?: string; versions?: Array<{ version?: string; status?: string }> }>;
   properties?: Array<{ name?: string; value?: string }>;
   published?: string;
+  /** Every other id this advisory is known by (CVE/GHSA/RUSTSEC/PYSEC/…),
+   *  minus the canonical `id`. dep-scan.ts persists these onto the PDV's
+   *  `aliases` column so the reachability classifier can match a taint flow
+   *  keyed on an alias (e.g. RUSTSEC-2018-0006) against a PDV keyed on the
+   *  CVE (e.g. CVE-2018-20993). */
+  aliases?: string[];
 }
 
 /** Heuristic: CVSS string from severity[0].score, e.g. "CVSS:3.1/AV:N/...". */
@@ -242,6 +248,13 @@ function pickCanonicalId(detail: OsvVulnDetail): string {
 function vulnToVdrEntry(detail: OsvVulnDetail, queriedPurl: string): VdrVulnerability {
   const canonical = pickCanonicalId(detail);
   const { severity } = normalizeSeverity(detail);
+  // Carry every id this advisory is known by (its OSV-native id + all aliases)
+  // minus the canonical id, so the PDV's `aliases` column lets the reachability
+  // classifier bridge a flow keyed on a GHSA/RUSTSEC alias to a PDV keyed on
+  // the CVE. Without this, alias-keyed reachable flows never promote.
+  const aliasSet = new Set<string>([detail.id, ...(Array.isArray(detail.aliases) ? detail.aliases : [])]);
+  aliasSet.delete(canonical);
+  const aliases = [...aliasSet].filter((a) => typeof a === 'string' && a.length > 0);
   return {
     id: canonical,
     description: detail.summary ?? detail.details ?? undefined,
@@ -249,6 +262,7 @@ function vulnToVdrEntry(detail: OsvVulnDetail, queriedPurl: string): VdrVulnerab
     affects: buildAffectsForVdr(detail, queriedPurl),
     properties: [{ name: 'depscan:insights', value: 'osv-fallback' }],
     published: detail.published,
+    aliases: aliases.length > 0 ? aliases : undefined,
   };
 }
 
