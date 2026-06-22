@@ -7631,6 +7631,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         contextual_depscore: vuln.contextual_depscore ?? null,
         entry_point_classification: vuln.entry_point_classification ?? null,
         epd_status: vuln.epd_status ?? null,
+        // Unified-status fields — without finding_key the status cell has no
+        // handle, so the ⋯ actions menu can't render on a dependency CVE row.
+        finding_key: vuln.finding_key ?? null,
+        status: vuln.status ?? null,
+        auto_ignored: vuln.auto_ignored ?? false,
+        auto_ignore_reason: vuln.auto_ignore_reason ?? null,
+        ignore_reason: vuln.ignore_reason ?? null,
+        ignore_note: vuln.ignore_note ?? null,
+        suppressed: vuln.suppressed ?? false,
+        risk_accepted: vuln.risk_accepted ?? false,
       }),
     }));
 
