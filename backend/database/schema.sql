@@ -1292,6 +1292,18 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   request_params jsonb,
   code_snippet text
 );
+CREATE TABLE IF NOT EXISTS public.project_finding_group_suppressions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  group_type text NOT NULL,
+  group_key text NOT NULL,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_finding_status_events (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -6919,6 +6931,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
@@ -7015,6 +7028,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_un
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppres_project_id_group_type_group_k_key UNIQUE (project_id, group_type, group_key);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_extraction_run_id_scope_package_ide_key UNIQUE (extraction_run_id, scope, package_identifier, soname, install_path);
@@ -7128,6 +7142,8 @@ ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_dete
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_group_type_check CHECK ((group_type = ANY (ARRAY['container_group'::text, 'iac_group'::text])));
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_ignore_reason_check CHECK ((ignore_reason = ANY (ARRAY['false_positive'::text, 'wont_fix'::text, 'accepted_risk'::text])));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT piaf_risk_accepted_reason_length_check CHECK (((risk_accepted_reason IS NULL) OR (length(risk_accepted_reason) <= 4096)));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text, 'helm'::text, 'cloudformation'::text, 'arm'::text, 'bicep'::text, 'serverless'::text, 'github_actions'::text])));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
@@ -7326,6 +7342,8 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dep
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_runtime_confirmed_dast_findi FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7499,6 +7517,8 @@ CREATE INDEX idx_extraction_step_errors_step_code ON public.extraction_step_erro
 CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at DESC);
 CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
 CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
+CREATE INDEX idx_finding_group_suppressions_org ON public.project_finding_group_suppressions USING btree (organization_id);
+CREATE INDEX idx_finding_group_suppressions_project ON public.project_finding_group_suppressions USING btree (project_id);
 CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_finding ON public.finding_tracker_links USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_org ON public.finding_tracker_links USING btree (organization_id);

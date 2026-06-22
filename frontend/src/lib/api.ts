@@ -227,8 +227,19 @@ export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
 
 export type TrackerProvider = 'jira' | 'linear' | 'github';
 export type TrackerFindingType =
-  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow';
+  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow'
+  | 'container_group' | 'iac_group';
 export interface TrackerDestination { id: string; name: string }
+
+/** Ignore disposition for a collapsed group row (container_group / iac_group),
+ *  which has no backing finding store of its own. */
+export interface FindingGroupSuppression {
+  project_id: string;
+  group_type: 'container_group' | 'iac_group';
+  group_key: string;
+  ignore_reason: 'false_positive' | 'wont_fix' | 'accepted_risk' | null;
+  ignore_note: string | null;
+}
 export interface FindingTrackerLink {
   id: string;
   project_id?: string;
@@ -2450,7 +2461,7 @@ export const api = {
   async setFindingStatus(
     organizationId: string,
     projectId: string,
-    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious',
+    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'container_group' | 'iac_group',
     findingKey: string,
     status: 'open' | 'ignored',
     reason?: 'false_positive' | 'wont_fix' | 'accepted_risk',
@@ -2467,6 +2478,11 @@ export const api = {
   /** All tracker links across the org's projects (org-wide findings table). */
   async getOrgTrackerLinks(organizationId: string): Promise<{ links: FindingTrackerLink[] }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/tracker-links`);
+  },
+
+  /** Group-level Ignore for the collapsed rows, across the org's projects. */
+  async getOrgGroupSuppressions(organizationId: string): Promise<{ suppressions: FindingGroupSuppression[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/group-suppressions`);
   },
 
   /** Destinations within a provider — Jira projects / Linear teams. */

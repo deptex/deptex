@@ -24,6 +24,7 @@ import {
   type DastFindingDTO,
   type DataFlowFinding,
   type FindingTrackerLink,
+  type FindingGroupSuppression,
 } from '../../lib/api';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
@@ -386,12 +387,17 @@ export default function OrganizationFindingsPage() {
   // and name fallbacks when a finding row doesn't carry `project_name`.
   const [projects, setProjects] = useState<Project[]>([]);
   const [trackerLinks, setTrackerLinks] = useState<FindingTrackerLink[]>([]);
+  const [groupSuppressions, setGroupSuppressions] = useState<FindingGroupSuppression[]>([]);
 
   const loadTrackerLinks = useCallback(async () => {
     if (!organizationId) return;
     try {
-      const { links } = await api.getOrgTrackerLinks(organizationId);
+      const [{ links }, { suppressions }] = await Promise.all([
+        api.getOrgTrackerLinks(organizationId),
+        api.getOrgGroupSuppressions(organizationId),
+      ]);
       setTrackerLinks(links);
+      setGroupSuppressions(suppressions);
     } catch {
       // Tracker links are non-critical chrome — a failure shouldn't blank the page.
     }
@@ -1147,8 +1153,9 @@ export default function OrganizationFindingsPage() {
             canManageFindings={!!userPermissions?.manage_findings}
             canTriggerFix={!!userPermissions?.trigger_fix}
             trackerLinks={trackerLinks}
+            groupSuppressions={groupSuppressions}
             onTrackerChange={() => void loadTrackerLinks()}
-            onStatusChange={() => void load()}
+            onStatusChange={() => { void load(); void loadTrackerLinks(); }}
           />
         )}
       </div>

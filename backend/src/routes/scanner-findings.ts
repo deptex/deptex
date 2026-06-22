@@ -504,12 +504,19 @@ const STATUS_FINDING_TYPES = {
 type StatusFindingType = keyof typeof STATUS_FINDING_TYPES;
 const IGNORE_REASONS = ['false_positive', 'wont_fix', 'accepted_risk'] as const;
 
+/** Synthetic "collapsed" rows with no backing finding store of their own — the
+ *  out-of-date base-image group and the container/k8s hardening group. Their
+ *  Ignore lives in project_finding_group_suppressions, keyed by the stable
+ *  synthetic group key (`cig:…` / `iacg:…`) the UI already uses. */
+const GROUP_FINDING_TYPES = new Set<string>(['container_group', 'iac_group']);
+
 router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id, projectId, type, findingKey } = req.params;
+    const isGroup = GROUP_FINDING_TYPES.has(type);
     const cfg = STATUS_FINDING_TYPES[type as StatusFindingType];
-    if (!cfg) {
+    if (!isGroup && !cfg) {
       return res.status(400).json({ error: `Unsupported finding type: ${type}` });
     }
 
@@ -529,6 +536,40 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
     if (!(await checkOrgManageFindingsPermission(userId, id))) {
       return res.status(403).json({ error: 'Requires manage_findings permission' });
     }
+
+    // Group rows (container_group / iac_group) have no backing finding store, so
+    // their Ignore disposition is a row in project_finding_group_suppressions
+    // keyed by the synthetic group key. Ignoring sets it aside; opening removes it.
+    if (isGroup) {
+      if (status === 'ignored') {
+        const { error } = await supabase
+          .from('project_finding_group_suppressions')
+          .upsert(
+            {
+              organization_id: id,
+              project_id: projectId,
+              group_type: type,
+              group_key: findingKey,
+              ignore_reason: reason ?? null,
+              ignore_note: trimmedNote,
+              ignored_by: userId,
+              ignored_at: new Date().toISOString(),
+            },
+            { onConflict: 'project_id,group_type,group_key' },
+          );
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('project_finding_group_suppressions')
+          .delete()
+          .eq('project_id', projectId)
+          .eq('group_type', type)
+          .eq('group_key', findingKey);
+        if (error) throw error;
+      }
+      return res.json({ success: true, status, updated: 1 });
+    }
+    if (!cfg) return res.status(400).json({ error: `Unsupported finding type: ${type}` });
 
     const now = new Date().toISOString();
     const ignoring = status === 'ignored';
@@ -630,9 +671,14 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
 // Finding -> external tracker links (Jira / Linear / GitHub)
 // ============================================================
 
-/** Finding types that can be filed to a tracker: the unified status types plus
- *  data-flow (taint_flow), which resolves by flow_signature_hash. */
-const TRACKER_FINDING_TYPES = new Set<string>([...Object.keys(STATUS_FINDING_TYPES), 'taint_flow']);
+/** Finding types that can be filed to a tracker: the unified status types, plus
+ *  data-flow (taint_flow, resolves by flow_signature_hash) and the two collapsed
+ *  group rows (one ticket upgrades the whole base image / hardens the manifest). */
+const TRACKER_FINDING_TYPES = new Set<string>([
+  ...Object.keys(STATUS_FINDING_TYPES),
+  'taint_flow',
+  ...GROUP_FINDING_TYPES,
+]);
 
 /** Does the (finding_key) resolve to a row in the active run for its type?
  *  taint_flow resolves by flow_signature_hash against project_reachable_flows. */
@@ -649,6 +695,19 @@ async function findingExistsInActiveRun(
       .select('project_id', { count: 'exact', head: true })
       .eq('project_id', projectId)
       .eq('flow_signature_hash', findingKey)
+      .eq('extraction_run_id', activeRun);
+    return (count ?? 0) > 0;
+  }
+  // Collapsed group rows have no per-row store — validate the project actually
+  // has findings of that family in the active run (enough to block phantom keys).
+  if (type === 'container_group' || type === 'iac_group') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    const table = type === 'container_group' ? 'project_container_findings' : 'project_iac_findings';
+    const { count } = await supabase
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
       .eq('extraction_run_id', activeRun);
     return (count ?? 0) > 0;
   }
@@ -766,6 +825,50 @@ router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('[scanner-findings] org tracker-links error:', error);
     res.status(500).json({ error: error.message || 'Failed to list tracker links' });
+  }
+});
+
+// Group-level Ignore for the collapsed rows (container_group / iac_group). The
+// findings table reads these once and stamps the matching group row as ignored.
+router.get('/:id/projects/:projectId/group-suppressions', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('project_finding_group_suppressions')
+      .select('project_id, group_type, group_key, ignore_reason, ignore_note')
+      .eq('project_id', projectId);
+    if (error) throw error;
+    res.json({ suppressions: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] group-suppressions error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list group suppressions' });
+  }
+});
+
+// All group suppressions across the org's projects (org-wide findings table).
+router.get('/:id/group-suppressions', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('project_finding_group_suppressions')
+      .select('project_id, group_type, group_key, ignore_reason, ignore_note')
+      .eq('organization_id', id);
+    if (error) throw error;
+    res.json({ suppressions: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org group-suppressions error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list group suppressions' });
   }
 });
 
