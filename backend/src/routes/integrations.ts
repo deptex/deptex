@@ -16,6 +16,8 @@ import {
   type CheckRunOutput,
 } from '../lib/github';
 import { queueExtractionJob } from '../lib/extraction-jobs';
+import { registerJiraWebhook, refreshAllJiraWebhooks } from '../lib/trackers';
+import { isValidInternalKey } from '../middleware/internal-key';
 import { invalidateProjectCaches } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
@@ -1712,6 +1714,46 @@ export async function linearWebhookHandler(req: express.Request, res: express.Re
   }
 }
 
+/**
+ * A Jira issue changed — refresh the resolved state of this org's jira links.
+ * Jira issue ids are unique per site, so we scope by the org from the URL.
+ * status.statusCategory.key === 'done' = done; everything else = open.
+ */
+export async function handleJiraIssueEvent(organizationId: string, payload: any): Promise<void> {
+  const issueId = payload?.issue?.id;
+  const category = payload?.issue?.fields?.status?.statusCategory?.key;
+  if (!issueId || !category) return;
+  const newState = category === 'done' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('organization_id', organizationId)
+    .eq('provider', 'jira')
+    .eq('external_id', String(issueId));
+}
+
+export async function jiraWebhookHandler(req: express.Request, res: express.Response) {
+  try {
+    // Jira dynamic webhooks aren't HMAC-signed — verify the shared secret carried
+    // in the callback URL, and scope the update by the org id from the path.
+    const secret = process.env.JIRA_WEBHOOK_SECRET;
+    const token = req.query.token as string | undefined;
+    if (!secret || token !== secret) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const { orgId } = req.params;
+    res.json({ received: true });
+    try {
+      await handleJiraIssueEvent(orgId, req.body);
+    } catch (err: any) {
+      console.error('Jira webhook processing error:', err?.message);
+    }
+  } catch (error: any) {
+    console.error('Jira webhook error:', error);
+    if (!res.headersSent) res.status(200).json({ received: true, error: error.message });
+  }
+}
+
 async function deduplicateWebhookDelivery(deliveryId: string | undefined): Promise<boolean> {
   if (!deliveryId) return false;
   try {
@@ -2057,6 +2099,22 @@ async function handlePullRequestClosedEvent(payload: any) {
 // Also mount on router for backwards compatibility
 router.post('/webhooks/github', githubWebhookHandler);
 router.post('/webhooks/linear', linearWebhookHandler);
+router.post('/webhooks/jira/:orgId', jiraWebhookHandler);
+
+// Internal: daily cron refreshes Jira dynamic webhooks before their 30-day expiry.
+router.post('/internal/refresh-jira-webhooks', async (req, res) => {
+  const headerKey = req.headers['x-internal-api-key'] as string | undefined;
+  if (!isValidInternalKey(headerKey)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await refreshAllJiraWebhooks();
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('[jira-webhook-refresh]', error?.message);
+    res.status(500).json({ error: error?.message || 'refresh failed' });
+  }
+});
 
 // ============================================================
 // PR Guardrails: helpers and handlePullRequestEvent
@@ -3336,7 +3394,9 @@ router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
     const backendUrl = getBackendUrl();
     const frontendUrl = getFrontendUrl();
     const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
-    const scopes = 'read:jira-work write:jira-work read:jira-user';
+    // offline_access → a refresh token (3LO access tokens expire ~1h);
+    // manage:jira-webhook → register the issue-update webhook.
+    const scopes = 'read:jira-work write:jira-work read:jira-user manage:jira-webhook offline_access';
     const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
     if (project_id && typeof project_id === 'string') {
       statePayload.projectId = project_id;
@@ -3490,6 +3550,8 @@ router.get('/jira/org-callback', async (req, res) => {
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
       }
       try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'jira', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
+      // Register the issue-update webhook (best-effort; never blocks the connect).
+      try { await registerJiraWebhook(orgId); } catch (e: any) { console.error('Jira webhook registration failed:', e?.message); }
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {

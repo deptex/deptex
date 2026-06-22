@@ -5,7 +5,7 @@ jest.mock('../../lib/supabase', () => ({
   createUserClient: jest.fn(),
 }));
 
-import { handleIssueStateEvent, handleLinearIssueEvent } from '../integrations';
+import { handleIssueStateEvent, handleLinearIssueEvent, handleJiraIssueEvent } from '../integrations';
 
 describe('handleIssueStateEvent — GitHub issue close/reopen → tracker link state', () => {
   beforeEach(() => {
@@ -83,6 +83,30 @@ describe('handleLinearIssueEvent — Linear webhook → tracker link state', () 
 
   it('ignores payloads without a state', async () => {
     await handleLinearIssueEvent({ type: 'Issue', action: 'update', data: { id: 'lin-1' } });
+    expect(queryBuilder.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleJiraIssueEvent — Jira webhook → tracker link state', () => {
+  beforeEach(() => {
+    clearTableRegistry();
+    jest.clearAllMocks();
+  });
+
+  it('marks a done-category Jira issue as done, scoped by org + issue id', async () => {
+    await handleJiraIssueEvent('org-1', { issue: { id: '10001', fields: { status: { statusCategory: { key: 'done' } } } } });
+    expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ external_state: 'done' }));
+    expect(queryBuilder.eq).toHaveBeenCalledWith('organization_id', 'org-1');
+    expect(queryBuilder.eq).toHaveBeenCalledWith('external_id', '10001');
+  });
+
+  it('marks an in-progress Jira issue as open', async () => {
+    await handleJiraIssueEvent('org-1', { issue: { id: '10001', fields: { status: { statusCategory: { key: 'indeterminate' } } } } });
+    expect(queryBuilder.update).toHaveBeenCalledWith(expect.objectContaining({ external_state: 'open' }));
+  });
+
+  it('ignores payloads missing the status category', async () => {
+    await handleJiraIssueEvent('org-1', { issue: { id: '10001', fields: {} } });
     expect(queryBuilder.update).not.toHaveBeenCalled();
   });
 });

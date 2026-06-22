@@ -137,16 +137,68 @@ function jiraBaseUrl(meta: Record<string, any>): { base: string; cloud: boolean 
   throw new TrackerError('Jira integration is missing cloud_id / base_url. Reconnect Jira.', true);
 }
 
+interface JiraToken {
+  accessToken: string;
+  base: string;
+  cloud: boolean;
+  cloudId?: string;
+  metadata: Record<string, any>;
+}
+
+/**
+ * Get a usable Jira access token for an org. Atlassian 3LO access tokens expire
+ * after ~1 hour, so every Jira call must mint a fresh one from the stored
+ * refresh token (and persist the rotated refresh token, or we lock ourselves
+ * out). NOTE: concurrent callers can race on the rotated refresh token; the
+ * picker -> create flow is sequential, so this is acceptable for now.
+ */
+async function getValidJiraToken(organizationId: string): Promise<JiraToken> {
+  const { data: conn } = await supabase
+    .from('organization_integrations')
+    .select('refresh_token, metadata')
+    .eq('organization_id', organizationId)
+    .eq('provider', 'jira')
+    .maybeSingle();
+  if (!conn?.refresh_token) {
+    throw new TrackerError('Jira is not connected. Connect it under Organization Settings > Integrations.', false);
+  }
+  const res = await fetch('https://auth.atlassian.com/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      client_id: process.env.JIRA_CLIENT_ID,
+      client_secret: process.env.JIRA_CLIENT_SECRET,
+      refresh_token: conn.refresh_token,
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as any;
+  if (!data.access_token) {
+    throw new TrackerError('Could not refresh the Jira token — reconnect Jira.', true);
+  }
+  await supabase
+    .from('organization_integrations')
+    .update({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token ?? conn.refresh_token,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('organization_id', organizationId)
+    .eq('provider', 'jira');
+  const metadata = (conn.metadata ?? {}) as Record<string, any>;
+  const { base, cloud } = jiraBaseUrl(metadata);
+  return { accessToken: data.access_token, base, cloud, cloudId: metadata.cloud_id, metadata };
+}
+
 export async function listJiraProjects(
   organizationId: string,
 ): Promise<Array<{ key: string; name: string }>> {
-  const conn = await getOrgIntegration(organizationId, 'jira');
-  const { base, cloud } = jiraBaseUrl(conn.metadata);
+  const { accessToken, base, cloud } = await getValidJiraToken(organizationId);
   const url = cloud
     ? `${base}/rest/api/3/project/search?maxResults=100`
     : `${base}/rest/api/2/project`;
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${conn.access_token}`, Accept: 'application/json' },
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
   if (!res.ok) throw new TrackerError(`Jira project list failed (${res.status}).`);
   const data = (await res.json()) as any;
@@ -158,13 +210,12 @@ export async function createJiraIssue(
   organizationId: string,
   params: { projectKey?: string; summary: string; description: string; issueType?: string },
 ): Promise<TrackerResult> {
-  const conn = await getOrgIntegration(organizationId, 'jira');
-  const { base, cloud } = jiraBaseUrl(conn.metadata);
-  const projectKey = params.projectKey || conn.metadata.project_key;
+  const { accessToken, base, cloud, metadata } = await getValidJiraToken(organizationId);
+  const projectKey = params.projectKey || metadata.project_key;
   if (!projectKey) {
     throw new TrackerError('No Jira project selected. Pick a Jira project to file into.', true);
   }
-  const issueType = params.issueType ?? conn.metadata.issue_type ?? 'Task';
+  const issueType = params.issueType ?? metadata.issue_type ?? 'Task';
 
   const body = cloud
     ? {
@@ -192,7 +243,7 @@ export async function createJiraIssue(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${conn.access_token}`,
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(body),
   });
@@ -203,9 +254,77 @@ export async function createJiraIssue(
       : data.errorMessages?.join(', ') ?? `Jira API error (${res.status})`;
     throw new TrackerError(msg);
   }
-  const siteUrl: string | undefined = conn.metadata.site_url || conn.metadata.url;
+  const siteUrl: string | undefined = metadata.site_url || metadata.url;
   const browseUrl = siteUrl ? `${String(siteUrl).replace(/\/+$/, '')}/browse/${data.key}` : null;
   return { provider: 'jira', externalId: String(data.id ?? data.key), externalKey: data.key, externalUrl: browseUrl };
+}
+
+/**
+ * Register a dynamic Jira webhook for an org (jira:issue_updated) so issue status
+ * changes update the chip in real time. Atlassian doesn't HMAC-sign these, so the
+ * callback URL carries a shared secret we verify. The webhook expires after 30
+ * days — refreshAllJiraWebhooks (daily cron) keeps it alive. Best-effort: a
+ * failure here must not break the Jira connect.
+ */
+export async function registerJiraWebhook(organizationId: string): Promise<void> {
+  const secret = process.env.JIRA_WEBHOOK_SECRET;
+  if (!secret) return; // not configured — webhooks off, nothing to do
+  let tok: JiraToken;
+  try {
+    tok = await getValidJiraToken(organizationId);
+  } catch {
+    return;
+  }
+  if (!tok.cloudId) return;
+  const backendUrl = (process.env.BACKEND_URL || process.env.API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const callbackUrl = `${backendUrl}/api/integrations/webhooks/jira/${organizationId}?token=${encodeURIComponent(secret)}`;
+  const res = await fetch(`https://api.atlassian.com/ex/jira/${tok.cloudId}/rest/api/3/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok.accessToken}`, Accept: 'application/json' },
+    body: JSON.stringify({ url: callbackUrl, webhooks: [{ events: ['jira:issue_updated'], jqlFilter: 'project IS NOT EMPTY' }] }),
+  });
+  const data = (await res.json().catch(() => ({}))) as any;
+  const webhookId = data?.webhookRegistrationResult?.[0]?.createdWebhookId;
+  if (webhookId != null) {
+    await supabase
+      .from('organization_integrations')
+      .update({ metadata: { ...tok.metadata, webhook_id: webhookId }, updated_at: new Date().toISOString() })
+      .eq('organization_id', organizationId)
+      .eq('provider', 'jira');
+  }
+}
+
+/**
+ * Refresh every org's Jira dynamic webhook (they expire after 30 days). Run from
+ * the daily cron — daily re-up is well within the window. Returns how many were
+ * refreshed.
+ */
+export async function refreshAllJiraWebhooks(): Promise<{ refreshed: number; total: number }> {
+  const { data: rows } = await supabase
+    .from('organization_integrations')
+    .select('organization_id, metadata')
+    .eq('provider', 'jira');
+  let refreshed = 0;
+  let total = 0;
+  for (const row of rows ?? []) {
+    const meta = (row.metadata ?? {}) as Record<string, any>;
+    const webhookId = meta.webhook_id;
+    if (webhookId == null) continue;
+    total++;
+    try {
+      const tok = await getValidJiraToken(row.organization_id);
+      if (!tok.cloudId) continue;
+      const res = await fetch(`https://api.atlassian.com/ex/jira/${tok.cloudId}/rest/api/3/webhook/refresh`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok.accessToken}`, Accept: 'application/json' },
+        body: JSON.stringify({ webhookIds: [webhookId] }),
+      });
+      if (res.ok) refreshed++;
+    } catch {
+      // skip — next daily run retries
+    }
+  }
+  return { refreshed, total };
 }
 
 // ---------------------------------------------------------------------------

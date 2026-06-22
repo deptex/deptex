@@ -167,6 +167,7 @@ router.post('/daily', async (req, res) => {
     '/api/workers/watchtower-daily-poll',
     '/api/internal/malicious/retention-prune',
     '/api/internal/malicious/maintainer-signal-sync',
+    '/api/integrations/internal/refresh-jira-webhooks',
   ];
   const results: JobResult[] = [];
   for (const path of jobs) {
