@@ -23,6 +23,17 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { checkProjectAccess, checkProjectManagePermission, checkOrgManageFindingsPermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import {
+  getConnectedProviders,
+  listJiraProjects,
+  listLinearTeams,
+  createJiraIssue,
+  createLinearIssue,
+  createGithubIssue,
+  TrackerError,
+  type TrackerProvider,
+  type TrackerResult,
+} from '../lib/trackers';
 
 // Mirror of `IAC_FRAMEWORKS` in `depscanner/src/scanners/types.ts`.
 // Backend's tsconfig rootDir is ./src so cross-package import isn't possible;
@@ -612,6 +623,217 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
   } catch (error: any) {
     console.error('[scanner-findings] finding status error:', error);
     res.status(500).json({ error: error.message || 'Failed to update finding status' });
+  }
+});
+
+// ============================================================
+// Finding -> external tracker links (Jira / Linear / GitHub)
+// ============================================================
+
+/** Does the (finding_key) resolve to a row in the active run for its type? */
+async function findingExistsInActiveRun(
+  projectId: string,
+  type: StatusFindingType,
+  findingKey: string,
+): Promise<boolean> {
+  const cfg = STATUS_FINDING_TYPES[type];
+  let q = supabase
+    .from(cfg.table)
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId)
+    .eq('finding_key', findingKey);
+  if (cfg.run === 'extraction') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    q = q.eq('extraction_run_id', activeRun);
+  } else {
+    const { data: targets } = await supabase
+      .from('project_dast_targets')
+      .select('active_dast_run_id')
+      .eq('project_id', projectId);
+    const runs = (targets ?? []).map((t: any) => t.active_dast_run_id).filter(Boolean);
+    if (runs.length === 0) return false;
+    q = q.in('dast_run_id', runs);
+  }
+  const { count } = await q;
+  return (count ?? 0) > 0;
+}
+
+const TITLE_MAX = 255;
+const DESC_MAX = 16384;
+
+// Which providers are connected for this project (drives the picker).
+router.get('/:id/projects/:projectId/tracker-providers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const providers = await getConnectedProviders(id, projectId);
+    res.json({ providers });
+  } catch (error: any) {
+    console.error('[scanner-findings] tracker-providers error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker providers' });
+  }
+});
+
+// Destinations within a provider (Jira projects / Linear teams). GitHub files to
+// the project's connected repo, so it has a single implicit destination.
+router.get('/:id/projects/:projectId/tracker-destinations/:provider', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, provider } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    let destinations: Array<{ id: string; name: string }> = [];
+    if (provider === 'jira') {
+      destinations = (await listJiraProjects(id)).map((p) => ({ id: p.key, name: `${p.key} — ${p.name}` }));
+    } else if (provider === 'linear') {
+      destinations = await listLinearTeams(id);
+    } else if (provider === 'github') {
+      destinations = []; // implicit: the project's repo
+    } else {
+      return res.status(400).json({ error: `Unsupported provider: ${provider}` });
+    }
+    res.json({ destinations });
+  } catch (error: any) {
+    if (error instanceof TrackerError) return res.status(error.connected ? 502 : 409).json({ error: error.message });
+    console.error('[scanner-findings] tracker-destinations error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list destinations' });
+  }
+});
+
+// All tracker links for the project's findings (the row chips read this once).
+router.get('/:id/projects/:projectId/tracker-links', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('finding_tracker_links')
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ links: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] tracker-links error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker links' });
+  }
+});
+
+// Create a ticket for a finding and store the link.
+router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    if (!STATUS_FINDING_TYPES[type as StatusFindingType]) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+    const provider = String(req.body?.provider ?? '') as TrackerProvider;
+    if (!['jira', 'linear', 'github'].includes(provider)) {
+      return res.status(400).json({ error: 'provider must be jira, linear, or github' });
+    }
+    const title = String(req.body?.title ?? '').trim().slice(0, TITLE_MAX);
+    const description = String(req.body?.description ?? '').trim().slice(0, DESC_MAX);
+    if (!title) return res.status(400).json({ error: 'title is required' });
+
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+
+    if (!(await findingExistsInActiveRun(projectId, type as StatusFindingType, findingKey))) {
+      return res.status(404).json({ error: 'Finding not found in the active scan' });
+    }
+
+    // One link per (finding, provider) — block a duplicate ticket up-front.
+    const { data: existing } = await supabase
+      .from('finding_tracker_links')
+      .select('id, provider, external_key, external_url')
+      .eq('project_id', projectId)
+      .eq('finding_type', type)
+      .eq('finding_key', findingKey)
+      .eq('provider', provider)
+      .maybeSingle();
+    if (existing) {
+      return res.status(409).json({ error: `Already linked to ${provider}`, link: existing });
+    }
+
+    let result: TrackerResult;
+    if (provider === 'jira') {
+      const projectKey = String(req.body?.projectKey ?? '').trim();
+      if (!projectKey) return res.status(400).json({ error: 'projectKey is required for Jira' });
+      result = await createJiraIssue(id, {
+        projectKey,
+        summary: title,
+        description,
+        issueType: req.body?.issueType ? String(req.body.issueType) : undefined,
+      });
+    } else if (provider === 'linear') {
+      const teamId = String(req.body?.teamId ?? '').trim();
+      if (!teamId) return res.status(400).json({ error: 'teamId is required for Linear' });
+      result = await createLinearIssue(id, { teamId, title, description });
+    } else {
+      result = await createGithubIssue(projectId, { title, body: description });
+    }
+
+    const { data: link, error: insErr } = await supabase
+      .from('finding_tracker_links')
+      .insert({
+        organization_id: id,
+        project_id: projectId,
+        finding_type: type,
+        finding_key: findingKey,
+        provider,
+        external_id: result.externalId,
+        external_key: result.externalKey,
+        external_url: result.externalUrl,
+        title,
+        created_by: userId,
+      })
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .single();
+    if (insErr) {
+      // The ticket exists even if we couldn't store the link (e.g. a race on the
+      // unique index). Surface the created ticket so the user isn't left guessing.
+      console.error('[scanner-findings] tracker link insert failed:', insErr.message);
+      return res.status(201).json({ success: true, link: { provider, external_key: result.externalKey, external_url: result.externalUrl, title }, persisted: false });
+    }
+    res.status(201).json({ success: true, link, persisted: true });
+  } catch (error: any) {
+    if (error instanceof TrackerError) return res.status(error.connected ? 502 : 409).json({ error: error.message });
+    console.error('[scanner-findings] create tracker error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create ticket' });
+  }
+});
+
+// Remove a tracker link (does NOT close the external ticket).
+router.delete('/:id/projects/:projectId/findings/:type/:findingKey/tracker/:linkId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, linkId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    const { error, count } = await supabase
+      .from('finding_tracker_links')
+      .delete({ count: 'exact' })
+      .eq('id', linkId)
+      .eq('project_id', projectId);
+    if (error) throw error;
+    if ((count ?? 0) === 0) return res.status(404).json({ error: 'Link not found' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[scanner-findings] delete tracker error:', error);
+    res.status(500).json({ error: error.message || 'Failed to remove link' });
   }
 });
 

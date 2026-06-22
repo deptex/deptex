@@ -320,6 +320,20 @@ CREATE TABLE IF NOT EXISTS public.feedback (
   body text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.finding_tracker_links (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  finding_type text NOT NULL,
+  finding_key text NOT NULL,
+  provider text NOT NULL,
+  external_id text NOT NULL,
+  external_key text,
+  external_url text,
+  title text,
+  created_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.flow_node_executions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   flow_run_id uuid NOT NULL,
@@ -6841,6 +6855,7 @@ ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerab
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_pkey PRIMARY KEY (id);
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_pkey PRIMARY KEY (id);
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_pkey PRIMARY KEY (id);
@@ -6957,6 +6972,7 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_depen
 ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_child_version_id_key UNIQUE (parent_version_id, child_version_id);
 ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_unique UNIQUE (project_id, finding_type, finding_key, provider);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
@@ -7043,6 +7059,8 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_errors_severity CHECK ((severity = ANY (ARRAY['warn'::text, 'error'::text])));
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_provider_chk CHECK ((provider = ANY (ARRAY['jira'::text, 'linear'::text, 'github'::text])));
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_type_chk CHECK ((finding_type = ANY (ARRAY['vulnerability'::text, 'secret'::text, 'semgrep'::text, 'iac'::text, 'container'::text, 'dast'::text, 'malicious'::text, 'taint_flow'::text])));
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_status_check CHECK ((status = ANY (ARRAY['success'::text, 'failed'::text, 'skipped'::text])));
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'dry_run'::text])));
 ALTER TABLE public.flows ADD CONSTRAINT flows_flow_type_check CHECK ((flow_type = ANY (ARRAY['notification'::text, 'pr_check'::text, 'policy'::text, 'status'::text])));
@@ -7188,6 +7206,9 @@ ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_project_id_fke
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_extraction_job_id_fkey FOREIGN KEY (extraction_job_id) REFERENCES scan_jobs(id) ON DELETE CASCADE;
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7477,6 +7498,8 @@ CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at 
 CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
 CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
 CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);
+CREATE INDEX idx_finding_tracker_links_finding ON public.finding_tracker_links USING btree (project_id, finding_type, finding_key);
+CREATE INDEX idx_finding_tracker_links_org ON public.finding_tracker_links USING btree (organization_id);
 CREATE INDEX idx_flow_node_executions_run ON public.flow_node_executions USING btree (flow_run_id, executed_at);
 CREATE INDEX idx_flow_runs_flow_started ON public.flow_runs USING btree (flow_id, started_at DESC);
 CREATE INDEX idx_flow_runs_org_started ON public.flow_runs USING btree (organization_id, started_at DESC);
