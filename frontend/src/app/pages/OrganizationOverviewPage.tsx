@@ -21,7 +21,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -346,6 +346,7 @@ export default function OrganizationOverviewPage() {
   const [projectSidebarOpen, setProjectSidebarOpen] = useState(false);
   const [projectSidebarVisible, setProjectSidebarVisible] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [trackerLinks, setTrackerLinks] = useState<FindingTrackerLink[]>([]);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedProjectFramework, setSelectedProjectFramework] = useState<string | null>(null);
   const [selectedProjectIsExtracting, setSelectedProjectIsExtracting] = useState(false);
@@ -2506,6 +2507,23 @@ export default function OrganizationOverviewPage() {
   // Load the team Findings tab: fan out loadProjectFindingRows across every project
   // in the team and concat. The team project list comes from the security-summary
   // RPC (authoritative + race-free), so it covers projects whose only findings are
+  // Tracker links across the org — drives the linked-ticket chips on findings.
+  // One org-wide fetch covers both the project panel and the team sidebar (each
+  // row matches by its own project_id).
+  const loadTrackerLinks = useCallback(async () => {
+    if (!orgId) return;
+    try {
+      const { links } = await api.getOrgTrackerLinks(orgId);
+      setTrackerLinks(links);
+    } catch {
+      // Non-critical chrome — never blank the page on a tracker fetch failure.
+    }
+  }, [orgId]);
+
+  useEffect(() => {
+    void loadTrackerLinks();
+  }, [loadTrackerLinks]);
+
   // IaC/container/DAST — not just ones with SCA rows.
   const loadTeamFindings = useCallback(async () => {
     if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
@@ -3365,6 +3383,9 @@ export default function OrganizationOverviewPage() {
                         baseImageRecommendations={teamSidebarBaseImageRecs}
                         onStatusChange={() => void loadTeamFindings()}
                         canManageFindings={!!organization?.permissions?.manage_teams_and_projects}
+                        canTriggerFix={!!organization?.permissions?.trigger_fix}
+                        trackerLinks={trackerLinks}
+                        onTrackerChange={() => void loadTrackerLinks()}
                       />
                     )}
                   </div>
@@ -3975,6 +3996,9 @@ export default function OrganizationOverviewPage() {
                         organizationId={orgId!}
                         projectId={selectedProjectId ?? undefined}
                         rows={projectSecurityRows}
+                        canTriggerFix={!!organization?.permissions?.trigger_fix}
+                        trackerLinks={trackerLinks}
+                        onTrackerChange={() => void loadTrackerLinks()}
                         baseImageRecommendations={projectBaseImageRecs}
                         openFindingId={projectFindingToOpen}
                         onStatusChange={() => {
