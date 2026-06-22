@@ -13,6 +13,7 @@ import {
   GitPullRequest,
   Key,
 } from "lucide-react";
+import DependencyScanningPage from "../../components/landing/feature-pages/DependencyScanningPage";
 
 const FEATURES = [
   {
@@ -89,6 +90,10 @@ export default function PlatformFeaturesPage() {
     return <Navigate to={`/platform-features/${slugList[0]}`} replace />;
   }
   const currentSlug = featureSlug as FeatureSlug;
+
+  // Dedicated full pages take over their slug entirely (no shared shell/tabs).
+  if (currentSlug === "dependency-scanning") return <DependencyScanningPage />;
+
   const feature = FEATURES.find((f) => f.slug === currentSlug)!;
   const FeatureIcon = feature.icon;
   const heroImage = FEATURE_HERO_IMAGES[currentSlug];
