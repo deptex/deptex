@@ -227,6 +227,53 @@ async function main() {
   const rpc = await one(db, `SELECT * FROM security_summary_counts(ARRAY['${PROJ}']::uuid[], ARRAY['${RUN}']::text[])`);
   assert(rpc !== undefined && Number(rpc.band_critical) >= 0, 'security_summary_counts runs without error');
 
+  // phase56: malicious carry-forward + is_malicious recompute + reap. Malicious
+  // findings are inserted by insert_malicious_findings_with_recompute (not
+  // finalize), so the carry-forward lives there, keyed on the trigger-stamped
+  // finding_key.
+  console.log('\n  [malicious] carry-forward + is_malicious recompute + reap');
+  const RUN2 = 'run_phase56_002';
+
+  // Baseline: an open malicious finding marks the dependency malicious.
+  await db.exec(`SELECT recompute_dependency_is_malicious(ARRAY['${DEP}']::uuid[]);`);
+  const baseMal = await one(db, `SELECT is_malicious FROM dependencies WHERE id='${DEP}'`);
+  assert(baseMal.is_malicious === true, 'an open malicious finding marks dependencies.is_malicious');
+
+  // A manual status ignore + recompute clears the flag (the desync fix).
+  await db.exec(`UPDATE project_malicious_findings SET status='ignored', ignore_reason='false_positive', ignored_at=NOW() WHERE rule_id='mal.rule.1' AND extraction_run_id='${RUN}';`);
+  await db.exec(`SELECT recompute_dependency_is_malicious(ARRAY['${DEP}']::uuid[]);`);
+  const ignoredMal = await one(db, `SELECT is_malicious FROM dependencies WHERE id='${DEP}'`);
+  assert(ignoredMal.is_malicious === false, 'ignoring the only active malicious finding clears dependencies.is_malicious');
+
+  // Rescan: the same finding reappears in a new run via the insert RPC — the
+  // manual ignore must carry forward (matched on finding_key) and the dep stays
+  // un-flagged.
+  await db.query(`SELECT insert_malicious_findings_with_recompute($1::jsonb)`, [JSON.stringify([
+    { project_id: PROJ, organization_id: ORG, extraction_run_id: RUN2, project_dependency_id: DEP, dependency_id: DEP, rule_id: 'mal.rule.1', scanner: 'guarddog', severity: 'critical', message: 'x', depscore: 90 },
+  ])]);
+  const carried = await one(db, `SELECT status, ignore_reason FROM project_malicious_findings WHERE rule_id='mal.rule.1' AND extraction_run_id='${RUN2}'`);
+  assert(carried?.status === 'ignored', 'manual ignore carries forward onto the new run (finding_key match)');
+  assert(carried?.ignore_reason === 'false_positive', 'ignore_reason carries forward onto the new run');
+  const stillNotMal = await one(db, `SELECT is_malicious FROM dependencies WHERE id='${DEP}'`);
+  assert(stillNotMal.is_malicious === false, 'is_malicious stays false after a rescan of a carried-ignore finding');
+
+  // A genuinely new malicious finding does not inherit the ignore and re-flags.
+  await db.query(`SELECT insert_malicious_findings_with_recompute($1::jsonb)`, [JSON.stringify([
+    { project_id: PROJ, organization_id: ORG, extraction_run_id: RUN2, project_dependency_id: DEP, dependency_id: DEP, rule_id: 'mal.rule.NEW', scanner: 'guarddog', severity: 'critical', message: 'y', depscore: 90 },
+  ])]);
+  const fresh = await one(db, `SELECT status FROM project_malicious_findings WHERE rule_id='mal.rule.NEW' AND extraction_run_id='${RUN2}'`);
+  assert(fresh?.status === 'open', 'a brand-new malicious finding starts open (no spurious carry)');
+  const reMal = await one(db, `SELECT is_malicious FROM dependencies WHERE id='${DEP}'`);
+  assert(reMal.is_malicious === true, 'a new active malicious finding re-flags dependencies.is_malicious');
+
+  // Reap: advance the run window so the first run's malicious rows fall out.
+  await db.exec(`UPDATE projects SET active_extraction_run_id='${RUN2}', previous_extraction_run_id=NULL WHERE id='${PROJ}';`);
+  const reap = await one(db, `SELECT reap_old_extractions('${PROJ}'::uuid) AS r`);
+  const reapJson = reap.r as Record<string, unknown>;
+  assert(Number(reapJson.malicious_deleted) >= 1, 'reap_old_extractions deletes malicious rows outside the active+previous window');
+  const oldRunGone = await one(db, `SELECT count(*)::int AS n FROM project_malicious_findings WHERE extraction_run_id='${RUN}'`);
+  assert(oldRunGone.n === 0, 'first-run malicious rows are reaped (2-run invariant now holds for malicious)');
+
   await db.close();
   console.log(`\n${'='.repeat(48)}`);
   console.log(`phase55 backfill harness: ${passed} passed, ${failures} failed (${Date.now() - t0}ms)`);

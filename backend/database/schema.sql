@@ -3975,7 +3975,7 @@ CREATE OR REPLACE FUNCTION public.fail_exhausted_scan_jobs()
 AS $function$
   UPDATE scan_jobs
   SET status        = 'failed',
-      error         = type || ' job failed after ' || attempts || ' attempts (machine crash or timeout)',
+      error         = 'The ' || type || ' worker crashed before finishing (it stopped responding).',
       completed_at  = NOW()
   WHERE status = 'processing'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
@@ -4968,6 +4968,8 @@ AS $function$
 DECLARE
   v_inserted integer := 0;
   v_dep_ids uuid[];
+  v_new_ids uuid[];
+  v_project_ids uuid[];
 BEGIN
   WITH inserted AS (
     INSERT INTO public.project_malicious_findings (
@@ -4995,10 +4997,36 @@ BEGIN
     FROM jsonb_array_elements(p_findings) AS f
     ON CONFLICT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id)
       DO NOTHING
-    RETURNING dependency_id
+    RETURNING id, dependency_id, project_id
   )
-  SELECT array_agg(DISTINCT dependency_id), count(*)::integer
-    INTO v_dep_ids, v_inserted FROM inserted;
+  SELECT array_agg(DISTINCT dependency_id),
+         array_agg(id),
+         array_agg(DISTINCT project_id),
+         count(*)::integer
+    INTO v_dep_ids, v_new_ids, v_project_ids, v_inserted
+  FROM inserted;
+
+  IF v_new_ids IS NOT NULL AND array_length(v_new_ids, 1) > 0 THEN
+    UPDATE public.project_malicious_findings cur
+    SET status        = prev.status,
+        ignore_reason = prev.ignore_reason,
+        ignore_note   = prev.ignore_note,
+        ignored_by    = prev.ignored_by,
+        ignored_at    = prev.ignored_at
+    FROM (
+      SELECT DISTINCT ON (p.project_id, p.finding_key)
+             p.project_id, p.finding_key, p.status,
+             p.ignore_reason, p.ignore_note, p.ignored_by, p.ignored_at
+      FROM public.project_malicious_findings p
+      WHERE p.project_id = ANY(v_project_ids)
+        AND p.status = 'ignored'
+        AND NOT (p.id = ANY(v_new_ids))
+      ORDER BY p.project_id, p.finding_key, p.created_at DESC
+    ) prev
+    WHERE cur.id = ANY(v_new_ids)
+      AND cur.project_id = prev.project_id
+      AND cur.finding_key = prev.finding_key;
+  END IF;
 
   IF v_dep_ids IS NOT NULL AND array_length(v_dep_ids, 1) > 0 THEN
     PERFORM public.recompute_dependency_is_malicious(v_dep_ids);
@@ -5398,11 +5426,13 @@ DECLARE
   v_secret_deleted INTEGER := 0;
   v_iac_deleted INTEGER := 0;
   v_container_deleted INTEGER := 0;
+  v_malicious_deleted INTEGER := 0;
   v_flows_deleted INTEGER := 0;
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
+  v_mal_dep_ids uuid[];
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -5446,6 +5476,22 @@ BEGIN
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_container_deleted = ROW_COUNT;
+
+  WITH del AS (
+    DELETE FROM project_malicious_findings
+    WHERE project_id = p_project_id
+      AND extraction_run_id IS NOT NULL
+      AND extraction_run_id <> v_active
+      AND (v_previous IS NULL OR extraction_run_id <> v_previous)
+    RETURNING dependency_id
+  )
+  SELECT array_agg(DISTINCT dependency_id), count(*)::integer
+    INTO v_mal_dep_ids, v_malicious_deleted
+  FROM del;
+
+  IF v_mal_dep_ids IS NOT NULL AND array_length(v_mal_dep_ids, 1) > 0 THEN
+    PERFORM public.recompute_dependency_is_malicious(v_mal_dep_ids);
+  END IF;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
@@ -5495,6 +5541,7 @@ BEGIN
     'secret_deleted', v_secret_deleted,
     'iac_deleted', v_iac_deleted,
     'container_deleted', v_container_deleted,
+    'malicious_deleted', v_malicious_deleted,
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
@@ -5647,6 +5694,7 @@ BEGIN
       WHERE f.dependency_id = d.id
         AND f.suppressed = false
         AND f.risk_accepted = false
+        AND f.status NOT IN ('ignored', 'resolved')
     )
     OR EXISTS (
       SELECT 1 FROM public.known_malicious_packages k

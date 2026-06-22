@@ -484,9 +484,10 @@ const STATUS_FINDING_TYPES = {
   iac: { table: 'project_iac_findings', run: 'extraction', legacy: true },
   container: { table: 'project_container_findings', run: 'extraction', legacy: true },
   dast: { table: 'project_dast_findings', run: 'dast', legacy: false },
-  // Malicious carries no carry-forward yet (PR-B), so a manual ignore resets on
-  // the next scan. Status-only (NOT the legacy suppressed path) to avoid the
-  // is_malicious recompute / allowlist desync.
+  // Malicious is status-only (NOT the legacy suppressed path) to keep the manual
+  // ignore layer orthogonal to the allowlist auto-suppression. A status change
+  // triggers a recompute of dependencies.is_malicious below (phase56), and the
+  // ignore now carries across scans via insert_malicious_findings_with_recompute.
   malicious: { table: 'project_malicious_findings', run: 'extraction', legacy: false },
 } as const;
 type StatusFindingType = keyof typeof STATUS_FINDING_TYPES;
@@ -565,10 +566,27 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
       query = query.in('dast_run_id', runs);
     }
 
-    const { data: updated, error, count } = await query.select('id');
+    const { data: updated, error, count } = await query.select(
+      type === 'malicious' ? 'id, dependency_id' : 'id',
+    );
     if (error) throw error;
     if ((count ?? 0) === 0) {
       return res.status(404).json({ error: 'Finding not found in the active scan' });
+    }
+
+    // A malicious status change flips dependencies.is_malicious (phase56): an
+    // ignored/resolved finding no longer counts as active malicious.
+    if (type === 'malicious') {
+      const depIds = Array.from(
+        new Set((updated ?? []).map((row: any) => row.dependency_id).filter(Boolean)),
+      );
+      if (depIds.length > 0) {
+        await supabase
+          .rpc('recompute_dependency_is_malicious', { p_dependency_ids: depIds })
+          .then(undefined, (e: any) =>
+            console.error('[finding-status] is_malicious recompute failed:', e?.message),
+          );
+      }
     }
 
     // Best-effort audit log (write-only in PR-A; postgrest builders have no
