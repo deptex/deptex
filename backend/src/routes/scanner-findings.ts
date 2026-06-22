@@ -630,13 +630,30 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
 // Finding -> external tracker links (Jira / Linear / GitHub)
 // ============================================================
 
-/** Does the (finding_key) resolve to a row in the active run for its type? */
+/** Finding types that can be filed to a tracker: the unified status types plus
+ *  data-flow (taint_flow), which resolves by flow_signature_hash. */
+const TRACKER_FINDING_TYPES = new Set<string>([...Object.keys(STATUS_FINDING_TYPES), 'taint_flow']);
+
+/** Does the (finding_key) resolve to a row in the active run for its type?
+ *  taint_flow resolves by flow_signature_hash against project_reachable_flows. */
 async function findingExistsInActiveRun(
   projectId: string,
-  type: StatusFindingType,
+  type: string,
   findingKey: string,
 ): Promise<boolean> {
-  const cfg = STATUS_FINDING_TYPES[type];
+  if (type === 'taint_flow') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    const { count } = await supabase
+      .from('project_reachable_flows')
+      .select('project_id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('flow_signature_hash', findingKey)
+      .eq('extraction_run_id', activeRun);
+    return (count ?? 0) > 0;
+  }
+  const cfg = STATUS_FINDING_TYPES[type as StatusFindingType];
+  if (!cfg) return false;
   let q = supabase
     .from(cfg.table)
     .select('id', { count: 'exact', head: true })
@@ -757,7 +774,7 @@ router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async
   try {
     const userId = req.user!.id;
     const { id, projectId, type, findingKey } = req.params;
-    if (!STATUS_FINDING_TYPES[type as StatusFindingType]) {
+    if (!TRACKER_FINDING_TYPES.has(type)) {
       return res.status(400).json({ error: `Unsupported finding type: ${type}` });
     }
     const provider = String(req.body?.provider ?? '') as TrackerProvider;
@@ -774,7 +791,7 @@ router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async
       return res.status(403).json({ error: 'Requires manage_findings permission' });
     }
 
-    if (!(await findingExistsInActiveRun(projectId, type as StatusFindingType, findingKey))) {
+    if (!(await findingExistsInActiveRun(projectId, type, findingKey))) {
       return res.status(404).json({ error: 'Finding not found in the active scan' });
     }
 

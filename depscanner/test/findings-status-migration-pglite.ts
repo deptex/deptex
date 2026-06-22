@@ -291,6 +291,11 @@ async function main() {
   const tl2 = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc'`);
   assert(tl2.n === 2, 'a different provider links to the same finding');
 
+  // Data-flow findings file by flow_signature_hash, stored as finding_type=taint_flow.
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key) VALUES ('${ORG}','${PROJ}','taint_flow','flowhash_1','linear','L-9','ENG-9');`);
+  const tf = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_type='taint_flow'`);
+  assert(tf.n === 1, 'taint_flow link (filed by flow_signature_hash) is accepted');
+
   let badProvider = false;
   try {
     await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_xyz','asana','1');`);

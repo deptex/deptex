@@ -227,7 +227,7 @@ export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
 
 export type TrackerProvider = 'jira' | 'linear' | 'github';
 export type TrackerFindingType =
-  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious';
+  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow';
 export interface TrackerDestination { id: string; name: string }
 export interface FindingTrackerLink {
   id: string;
