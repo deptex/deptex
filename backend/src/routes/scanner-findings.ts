@@ -30,7 +30,7 @@ import {
   createJiraIssue,
   createLinearIssue,
   createGithubIssue,
-  syncOrgGithubLinkStates,
+  syncOrgTrackerLinkStates,
   TrackerError,
   type TrackerProvider,
   type TrackerResult,
@@ -783,7 +783,7 @@ router.post('/:id/tracker-links/sync', async (req: AuthRequest, res) => {
       .eq('user_id', userId)
       .maybeSingle();
     if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-    const synced = await syncOrgGithubLinkStates(id);
+    const synced = await syncOrgTrackerLinkStates(id);
     res.json({ synced });
   } catch (error: any) {
     console.error('[scanner-findings] tracker-links sync error:', error);

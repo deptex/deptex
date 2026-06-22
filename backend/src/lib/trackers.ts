@@ -288,58 +288,99 @@ export async function createGithubIssue(
 // State sync (poll)
 // ---------------------------------------------------------------------------
 
-/**
- * Refresh the open/done state of an org's GitHub tracker links by polling the
- * GitHub API. This is the universal path that works without webhooks (local dev,
- * pre-deploy); the issues webhook is the prod real-time optimization on top.
- * Linear/Jira polling is a follow-on. Returns the number of links whose state
- * changed.
- */
-export async function syncOrgGithubLinkStates(organizationId: string): Promise<number> {
-  const { data: links } = await supabase
-    .from('finding_tracker_links')
-    .select('id, project_id, external_id, external_state')
-    .eq('organization_id', organizationId)
-    .eq('provider', 'github');
-  if (!links?.length) return 0;
+interface SyncLink {
+  id: string;
+  project_id: string;
+  provider: string;
+  external_id: string;
+  external_state: string | null;
+}
 
+async function setLinkState(id: string, state: 'open' | 'done'): Promise<void> {
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: state, external_state_synced_at: new Date().toISOString() })
+    .eq('id', id);
+}
+
+async function syncGithubLinks(links: SyncLink[]): Promise<number> {
+  if (!links.length) return 0;
   // Resolve the repo + installation token once per project.
-  const byProject = new Map<string, Array<{ id: string; external_id: string; external_state: string | null }>>();
-  for (const l of links as any[]) {
+  const byProject = new Map<string, SyncLink[]>();
+  for (const l of links) {
     const arr = byProject.get(l.project_id) ?? [];
-    arr.push({ id: l.id, external_id: l.external_id, external_state: l.external_state });
+    arr.push(l);
     byProject.set(l.project_id, arr);
   }
-
   let changed = 0;
   for (const [projectId, projLinks] of byProject) {
     let target: { installationId: string; repoFullName: string };
-    try {
-      target = await getGithubTarget(projectId);
-    } catch {
-      continue; // repo disconnected — leave the links as-is
-    }
     let token: string;
     try {
+      target = await getGithubTarget(projectId);
       token = await createInstallationToken(target.installationId);
     } catch {
-      continue;
+      continue; // repo disconnected / token failure — leave the links as-is
     }
     for (const l of projLinks) {
       try {
         const issue = await getGithubIssueApi(token, target.repoFullName, Number(l.external_id));
         const newState = issue.state === 'closed' ? 'done' : 'open';
         if (newState !== l.external_state) {
-          await supabase
-            .from('finding_tracker_links')
-            .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
-            .eq('id', l.id);
+          await setLinkState(l.id, newState);
           changed++;
         }
       } catch {
-        // A single issue fetch failing shouldn't abort the rest.
+        // A single fetch failing shouldn't abort the rest.
       }
     }
   }
+  return changed;
+}
+
+async function syncLinearLinks(organizationId: string, links: SyncLink[]): Promise<number> {
+  if (!links.length) return 0;
+  let conn: { access_token: string; metadata: Record<string, any> };
+  try {
+    conn = await getOrgIntegration(organizationId, 'linear');
+  } catch {
+    return 0; // Linear disconnected — leave the links as-is
+  }
+  const query = `query IssueState($id: String!) { issue(id: $id) { state { type } } }`;
+  let changed = 0;
+  for (const l of links) {
+    try {
+      const data = await linearGraphQL(conn.access_token, query, { id: l.external_id });
+      const type = data?.issue?.state?.type as string | undefined;
+      // Linear workflow-state types: backlog | unstarted | started | completed | canceled
+      const newState = type === 'completed' || type === 'canceled' ? 'done' : 'open';
+      if (newState !== l.external_state) {
+        await setLinkState(l.id, newState);
+        changed++;
+      }
+    } catch {
+      // A single fetch failing shouldn't abort the rest.
+    }
+  }
+  return changed;
+}
+
+/**
+ * Refresh the open/done state of an org's GitHub + Linear tracker links by
+ * polling each provider's API. This is the path that works in prod (and local
+ * dev) without webhooks; the GitHub issues webhook is a real-time optimization
+ * on top. Jira polling is a follow-on. Returns the number of links that changed.
+ */
+export async function syncOrgTrackerLinkStates(organizationId: string): Promise<number> {
+  const { data: links } = await supabase
+    .from('finding_tracker_links')
+    .select('id, project_id, provider, external_id, external_state')
+    .eq('organization_id', organizationId)
+    .in('provider', ['github', 'linear']);
+  if (!links?.length) return 0;
+  const typed = links as SyncLink[];
+  let changed = 0;
+  changed += await syncGithubLinks(typed.filter((l) => l.provider === 'github'));
+  changed += await syncLinearLinks(organizationId, typed.filter((l) => l.provider === 'linear'));
   return changed;
 }
