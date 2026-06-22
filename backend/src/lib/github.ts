@@ -803,6 +803,32 @@ export async function createIssue(
   return data;
 }
 
+/**
+ * Fetch a single GitHub issue (used to poll its open/closed state for the
+ * finding -> tracker chip when webhooks aren't available, e.g. local dev).
+ */
+export async function getIssue(
+  installationToken: string,
+  repoFullName: string,
+  issueNumber: number
+): Promise<{ number: number; state: 'open' | 'closed' }> {
+  const response = await fetch(
+    `${GITHUB_API_BASE}/repos/${repoFullName}/issues/${issueNumber}`,
+    {
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-App',
+      },
+    }
+  );
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch issue: ${response.status} ${errorText}`);
+  }
+  return (await response.json()) as { number: number; state: 'open' | 'closed' };
+}
+
 export async function listIssueComments(
   installationToken: string,
   repoFullName: string,

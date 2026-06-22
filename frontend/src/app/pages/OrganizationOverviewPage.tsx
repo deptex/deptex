@@ -2515,6 +2515,12 @@ export default function OrganizationOverviewPage() {
     try {
       const { links } = await api.getOrgTrackerLinks(orgId);
       setTrackerLinks(links);
+      // Refresh GitHub ticket states (works without webhooks); re-read if changed.
+      const { synced } = await api.syncTrackerLinks(orgId);
+      if (synced > 0) {
+        const refreshed = await api.getOrgTrackerLinks(orgId);
+        setTrackerLinks(refreshed.links);
+      }
     } catch {
       // Non-critical chrome — never blank the page on a tracker fetch failure.
     }

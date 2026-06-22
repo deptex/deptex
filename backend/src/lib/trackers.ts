@@ -14,7 +14,7 @@
  */
 
 import { supabase } from './supabase';
-import { createInstallationToken, createIssue as createGithubIssueApi } from './github';
+import { createInstallationToken, createIssue as createGithubIssueApi, getIssue as getGithubIssueApi } from './github';
 
 export type TrackerProvider = 'jira' | 'linear' | 'github';
 
@@ -282,4 +282,64 @@ export async function createGithubIssue(
     externalKey: `#${issue.number}`,
     externalUrl: issue.html_url,
   };
+}
+
+// ---------------------------------------------------------------------------
+// State sync (poll)
+// ---------------------------------------------------------------------------
+
+/**
+ * Refresh the open/done state of an org's GitHub tracker links by polling the
+ * GitHub API. This is the universal path that works without webhooks (local dev,
+ * pre-deploy); the issues webhook is the prod real-time optimization on top.
+ * Linear/Jira polling is a follow-on. Returns the number of links whose state
+ * changed.
+ */
+export async function syncOrgGithubLinkStates(organizationId: string): Promise<number> {
+  const { data: links } = await supabase
+    .from('finding_tracker_links')
+    .select('id, project_id, external_id, external_state')
+    .eq('organization_id', organizationId)
+    .eq('provider', 'github');
+  if (!links?.length) return 0;
+
+  // Resolve the repo + installation token once per project.
+  const byProject = new Map<string, Array<{ id: string; external_id: string; external_state: string | null }>>();
+  for (const l of links as any[]) {
+    const arr = byProject.get(l.project_id) ?? [];
+    arr.push({ id: l.id, external_id: l.external_id, external_state: l.external_state });
+    byProject.set(l.project_id, arr);
+  }
+
+  let changed = 0;
+  for (const [projectId, projLinks] of byProject) {
+    let target: { installationId: string; repoFullName: string };
+    try {
+      target = await getGithubTarget(projectId);
+    } catch {
+      continue; // repo disconnected — leave the links as-is
+    }
+    let token: string;
+    try {
+      token = await createInstallationToken(target.installationId);
+    } catch {
+      continue;
+    }
+    for (const l of projLinks) {
+      try {
+        const issue = await getGithubIssueApi(token, target.repoFullName, Number(l.external_id));
+        const newState = issue.state === 'closed' ? 'done' : 'open';
+        if (newState !== l.external_state) {
+          await supabase
+            .from('finding_tracker_links')
+            .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+            .eq('id', l.id);
+          changed++;
+        }
+      } catch {
+        // A single issue fetch failing shouldn't abort the rest.
+      }
+    }
+  }
+  return changed;
 }
