@@ -551,7 +551,8 @@ function normalizeContainerSeverity(rawSeverity: string | undefined, cvss: numbe
 export function parseTrivyImageOutput(
   stdout: string,
   imageReference: string,
-  version: string
+  version: string,
+  kevCveSet?: Set<string>
 ): { findings: ContainerFinding[]; imageDigest: string } {
   let parsed: TrivyImageReport | null = null;
   try {
@@ -596,7 +597,10 @@ export function parseTrivyImageOutput(
         severity: normalizeContainerSeverity(v.Severity, cvss),
         cvss_score: cvss,
         epss_score: null,
-        is_kev: false,
+        // CISA-KEV enrichment: container CVEs were never checked against the
+        // KEV catalog (is_kev was hardcoded false), so a known-exploited base
+        // image CVE looked identical to any other. Match the canonical CVE id.
+        is_kev: cveId ? (kevCveSet?.has(cveId) ?? false) : false,
         fix_versions: v.FixedVersion ? v.FixedVersion.split(',').map((s) => s.trim()) : [],
         layer_digest: v.Layer?.Digest ?? null,
         description: v.Description ?? v.Title ?? null,
@@ -663,7 +667,8 @@ export async function runTrivyImage(
     warnings.push(`trivy_image_exit_${result.exitCode}`);
     return { findings: [], imageDigest: '', version: `trivy@${version}`, warnings };
   }
-  const parsed = parseTrivyImageOutput(result.stdout, opts.imageRef, `trivy@${version}`);
+  const kevCveSet = await fetchCisaKevCveSet();
+  const parsed = parseTrivyImageOutput(result.stdout, opts.imageRef, `trivy@${version}`, kevCveSet);
   if (!parsed.imageDigest) {
     // Trivy returned neither RepoDigests nor ImageID — the image is
     // identifiable only by its mutable tag, which we refuse to use as a
@@ -681,6 +686,27 @@ export async function runTrivyImage(
 // ============================================================
 // Helpers
 // ============================================================
+
+/** Best-effort CISA Known-Exploited-Vulnerabilities catalog fetch. Returns the
+ *  set of KEV CVE ids; an empty set on any failure (network/timeout/parse) so
+ *  KEV enrichment never blocks or fails a container scan. Mirrors the inline
+ *  fetch dep-scan.ts uses for dependency-CVE KEV. */
+async function fetchCisaKevCveSet(): Promise<Set<string>> {
+  const set = new Set<string>();
+  try {
+    const res = await fetch(
+      'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json',
+      { signal: AbortSignal.timeout(15000) },
+    );
+    if (res.ok) {
+      const json = (await res.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
+      for (const entry of json.vulnerabilities ?? []) {
+        if (entry.cveID) set.add(entry.cveID);
+      }
+    }
+  } catch { /* non-fatal: KEV enrichment is best-effort */ }
+  return set;
+}
 
 let cachedVersion: string | null = null;
 // undefined = not yet probed; null = probed but DB block absent (caching
