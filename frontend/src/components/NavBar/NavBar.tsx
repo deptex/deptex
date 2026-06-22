@@ -59,9 +59,9 @@ const navigationItems: NavItem[] = [
     name: "Resources",
     items: [
       { 
-        name: "Open code",
+        name: "Open source",
         to: "/open-source",
-        description: "The whole platform, source-available",
+        description: "The whole platform, open source (AGPL-3.0)",
         icon: <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
       },
       { 

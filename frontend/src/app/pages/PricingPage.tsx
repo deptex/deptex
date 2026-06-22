@@ -1,82 +1,90 @@
 import { useNavigate } from 'react-router-dom';
 import { Check } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { PricingCalculator } from '../../components/billing/PricingCalculator';
+import { PricingUsageGraph } from '../../components/landing/PricingUsageGraph';
+import { Reveal } from '../../components/landing/primitives';
 
-const INCLUDED: string[] = [
-  'Continuous dependency + supply-chain scanning',
-  'Reachability analysis (8 languages)',
-  'Aegis — autonomous security agent',
-  'Auto-fix PRs for vulnerabilities',
-  'Policy-as-code engine',
-  'IaC + container scanning',
-  'Malicious package detection',
-  'SSO, MFA, IP allowlists, audit logs',
-  'Unlimited projects, members, teams',
+const FEATURES: string[] = [
+  '$5 in free credit, then cost-plus usage',
+  'All Deptex features',
+  'Unlimited projects, members & teams',
 ];
 
 export default function PricingPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-5xl px-6 py-16 sm:py-24">
-        <header className="text-center">
-          <p className="text-sm font-medium uppercase tracking-wider text-foreground-secondary">
-            Pricing
-          </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
-            $5 free. Then pay as you go.
-          </h1>
-          <p className="mt-4 text-lg text-foreground-secondary">
-            Every feature, every org, no tiers. Prepaid credit covers AI usage and worker time at
-            cost-plus pricing.
-          </p>
-          <div className="mt-8 flex justify-center gap-3">
-            <Button variant="green" size="lg" onClick={() => navigate('/login')}>
-              Try for free
-            </Button>
-            <Button variant="outline" size="lg" onClick={() => navigate('/docs')}>
-              See the docs
-            </Button>
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto max-w-6xl px-6 pt-28 pb-24 lg:pt-32">
+        {/* Hero — value prop left, animated usage graph right */}
+        <header className="grid items-center gap-12 lg:grid-cols-2">
+          <div className="text-center lg:text-left">
+            <Reveal>
+              <p className="text-sm font-medium uppercase tracking-[0.18em] text-accent-text">
+                Pricing
+              </p>
+            </Reveal>
+            <Reveal delayMs={60}>
+              <h1 className="mt-4 text-4xl font-bold leading-[1.08] tracking-[-0.02em] sm:text-5xl">
+                Pay only for what you use.
+              </h1>
+            </Reveal>
+            <Reveal delayMs={120}>
+              <p className="mt-5 max-w-xl text-lg leading-relaxed text-foreground lg:mx-0">
+                No seats, no tiers. Start with $5 in free credit, then pay cost-plus for
+                only the AI and worker time you use.
+              </p>
+            </Reveal>
           </div>
+          <Reveal delayMs={120} className="w-full">
+            <PricingUsageGraph />
+          </Reveal>
         </header>
 
-        <section className="mt-16">
-          <h2 className="text-center text-sm font-medium uppercase tracking-wider text-foreground-secondary">
-            What's included
-          </h2>
-          <div className="mt-6 rounded-xl border border-border bg-background-card p-8">
-            <ul className="grid gap-3 sm:grid-cols-2">
-              {INCLUDED.map((line) => (
-                <li key={line} className="flex items-start gap-3 text-sm text-foreground">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                  <span>{line}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
+        {/* Plan card — one plan, everything included (Railway-style) */}
+        <Reveal delayMs={80}>
+          <section className="mt-16">
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-8 lg:p-10">
+              <div className="grid gap-10 lg:grid-cols-2 lg:items-center">
+                {/* Price + CTA */}
+                <div>
+                  <h2 className="text-xl font-bold">Pay as you go</h2>
+                  <div className="mt-4">
+                    <span className="text-5xl font-bold tracking-tight">$0</span>
+                  </div>
+                  <div className="mt-7">
+                    <Button variant="green" onClick={() => navigate('/login')}>
+                      Try for free
+                    </Button>
+                  </div>
+                </div>
 
-        <section className="mt-16">
-          <h2 className="text-center text-2xl font-semibold tracking-tight text-foreground">
-            Estimate your monthly bill
-          </h2>
-          <p className="mt-2 text-center text-sm text-foreground-secondary">
-            Drag the sliders. Numbers update live.
-          </p>
-          <div className="mt-8">
-            <PricingCalculator />
-          </div>
-        </section>
+                {/* Features */}
+                <div>
+                  <ul className="space-y-3.5">
+                    {FEATURES.map((f) => (
+                      <li key={f} className="flex items-start gap-3 text-sm text-foreground">
+                        <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-foreground-secondary">
+                          <Check className="h-3 w-3" />
+                        </span>
+                        <span className="leading-snug">{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </section>
+        </Reveal>
 
+        {/* Enterprise / self-host */}
         <section className="mt-16 text-center text-sm text-foreground-secondary">
           <p>
             Need an enterprise contract or help self-hosting?{' '}
             <button
               type="button"
               onClick={() => navigate('/contact-enterprise')}
-              className="text-foreground underline"
+              className="text-foreground underline underline-offset-4 transition-colors hover:text-accent-text"
             >
               Get in touch
             </button>

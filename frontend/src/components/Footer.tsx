@@ -66,7 +66,7 @@ export default function Footer() {
               </li>
               <li>
                 <Link to="/open-source" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Open code
+                  Open source
                 </Link>
               </li>
               <li>
