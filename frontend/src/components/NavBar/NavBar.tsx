@@ -177,16 +177,16 @@ export default function NavBar() {
                             setDropdownTimeout(timeout);
                           }}
                         >
-                          <div className="rounded-lg border border-border/80 bg-[#0a0c0e] shadow-xl ring-1 ring-black/20 p-1.5 min-w-[20rem]">
+                          <div className="rounded-lg border border-border bg-background shadow-lg p-1.5 min-w-[20rem]">
                               {item.items.map((subItem) => (
                                 <Link
                                   key={subItem.name}
                                   to={subItem.to}
-                                  className="flex items-center gap-3 rounded-md px-2.5 py-2.5 text-sm text-foreground transition-colors duration-150 group/item hover:bg-[#12141a]"
+                                  className="flex items-center gap-3 rounded-md px-2.5 py-2.5 text-sm text-foreground transition-colors duration-150 group/item hover:bg-background-subtle"
                                   onClick={() => setOpenDropdown(null)}
                                 >
                                   {subItem.icon && (
-                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[#0a0c0e] border border-border/60 text-foreground-secondary group-hover/item:text-foreground transition-colors duration-150">
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-background border border-border text-foreground-secondary group-hover/item:text-foreground transition-colors duration-150">
                                       {subItem.icon}
                                     </div>
                                   )}
