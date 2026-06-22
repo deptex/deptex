@@ -23,6 +23,7 @@ import {
   type MaliciousFinding,
   type DastFindingDTO,
   type DataFlowFinding,
+  type FindingTrackerLink,
 } from '../../lib/api';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
@@ -384,6 +385,17 @@ export default function OrganizationFindingsPage() {
   // Projects state — used by the Top Projects leaderboard for framework icons
   // and name fallbacks when a finding row doesn't carry `project_name`.
   const [projects, setProjects] = useState<Project[]>([]);
+  const [trackerLinks, setTrackerLinks] = useState<FindingTrackerLink[]>([]);
+
+  const loadTrackerLinks = useCallback(async () => {
+    if (!organizationId) return;
+    try {
+      const { links } = await api.getOrgTrackerLinks(organizationId);
+      setTrackerLinks(links);
+    } catch {
+      // Tracker links are non-critical chrome — a failure shouldn't blank the page.
+    }
+  }, [organizationId]);
 
   // Findings by Type donut — single piece of state. Hover commits the
   // active wedge (no separate click gesture needed) and the active wedge
@@ -534,6 +546,10 @@ export default function OrganizationFindingsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadTrackerLinks();
+  }, [loadTrackerLinks]);
 
   // App globally hides body/html scrollbars in Main.css. Restore them on this
   // route via a scoped class — same trick as Compliance.
@@ -1129,6 +1145,9 @@ export default function OrganizationFindingsPage() {
             organizationId={organizationId}
             rows={allRows}
             canManageFindings={!!userPermissions?.manage_findings}
+            canTriggerFix={!!userPermissions?.trigger_fix}
+            trackerLinks={trackerLinks}
+            onTrackerChange={() => void loadTrackerLinks()}
             onStatusChange={() => void load()}
           />
         )}

@@ -224,6 +224,22 @@ export interface OrganizationMember {
 
 // Aegis Fix Agent types — mirror the backend's plan-types.ts.
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+
+export type TrackerProvider = 'jira' | 'linear' | 'github';
+export type TrackerFindingType =
+  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious';
+export interface TrackerDestination { id: string; name: string }
+export interface FindingTrackerLink {
+  id: string;
+  project_id?: string;
+  finding_type: string;
+  finding_key: string;
+  provider: TrackerProvider;
+  external_key: string | null;
+  external_url: string | null;
+  title: string | null;
+  created_at: string;
+}
 export type FixStatus =
   | 'planning'
   | 'awaiting_approval'
@@ -2441,6 +2457,52 @@ export const api = {
     return fetchWithAuth(
       `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/status`,
       { method: 'PATCH', body: JSON.stringify({ status, reason, note }) },
+    );
+  },
+
+  // --- Finding -> external tracker links (Jira / Linear / GitHub) ---
+
+  /** All tracker links across the org's projects (org-wide findings table). */
+  async getOrgTrackerLinks(organizationId: string): Promise<{ links: FindingTrackerLink[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/tracker-links`);
+  },
+
+  /** Destinations within a provider — Jira projects / Linear teams. */
+  async getTrackerDestinations(
+    organizationId: string,
+    projectId: string,
+    provider: TrackerProvider,
+  ): Promise<{ destinations: TrackerDestination[] }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/tracker-destinations/${provider}`,
+    );
+  },
+
+  /** File a ticket for a finding and persist the link. */
+  async createFindingTicket(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType,
+    findingKey: string,
+    body: { provider: TrackerProvider; title: string; description?: string; projectKey?: string; issueType?: string; teamId?: string },
+  ): Promise<{ success: boolean; link: FindingTrackerLink; persisted?: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/tracker`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  },
+
+  /** Remove a tracker link (does not close the external ticket). */
+  async deleteTrackerLink(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType,
+    findingKey: string,
+    linkId: string,
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/tracker/${linkId}`,
+      { method: 'DELETE' },
     );
   },
 

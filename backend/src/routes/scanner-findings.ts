@@ -726,6 +726,32 @@ router.get('/:id/projects/:projectId/tracker-links', async (req: AuthRequest, re
   }
 });
 
+// All tracker links across the org's projects (the org-wide findings table maps
+// chips by project_id + finding_type + finding_key in a single call).
+router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('finding_tracker_links')
+      .select('id, project_id, finding_type, finding_key, provider, external_key, external_url, title, created_at')
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ links: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org tracker-links error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker links' });
+  }
+});
+
 // Create a ticket for a finding and store the link.
 router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async (req: AuthRequest, res) => {
   try {
