@@ -38,18 +38,18 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link to="/platform-features/vulnerability-intelligence" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Vulnerability Intelligence
+                <Link to="/platform-features/dependency-scanning" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Dependency scanning
                 </Link>
               </li>
               <li>
-                <Link to="/platform-features/customizable-compliance" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Customizable Compliance
+                <Link to="/platform-features/code-scanning" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Code scanning
                 </Link>
               </li>
               <li>
-                <Link to="/platform-features/customizable-notifications" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
-                  Customizable Notifications
+                <Link to="/platform-features/infrastructure-dast" className="text-sm text-foreground-secondary hover:text-foreground transition-colors">
+                  Infrastructure & DAST
                 </Link>
               </li>
             </ul>

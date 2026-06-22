@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Menu, ScanSearch, Scale, Bell, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
+import { ChevronDown, ChevronRight, Menu, Package, Braces, Layers, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
@@ -35,23 +35,23 @@ const navigationItems: NavItem[] = [
           </svg>
         )
       },
-      { 
-        name: "Vulnerability Intelligence", 
-        to: "/platform-features/vulnerability-intelligence", 
-        description: "Depscore, reachability & version recommendations",
-        icon: <ScanSearch className="h-5 w-5" />
+      {
+        name: "Dependency scanning",
+        to: "/platform-features/dependency-scanning",
+        description: "Reachability-scored CVEs & malicious packages",
+        icon: <Package className="h-5 w-5" />
       },
-      { 
-        name: "Customizable Compliance", 
-        to: "/platform-features/customizable-compliance", 
-        description: "Policy-as-code, SBOM & license compliance",
-        icon: <Scale className="h-5 w-5" />
+      {
+        name: "Code scanning",
+        to: "/platform-features/code-scanning",
+        description: "SAST & live-verified secrets",
+        icon: <Braces className="h-5 w-5" />
       },
-      { 
-        name: "Customizable Notifications", 
-        to: "/platform-features/customizable-notifications", 
-        description: "Define notifications as code",
-        icon: <Bell className="h-5 w-5" />
+      {
+        name: "Infrastructure & DAST",
+        to: "/platform-features/infrastructure-dast",
+        description: "IaC, containers & runtime testing",
+        icon: <Layers className="h-5 w-5" />
       },
     ],
   },

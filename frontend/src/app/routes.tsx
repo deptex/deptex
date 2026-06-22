@@ -325,11 +325,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerability-intelligence",
-        element: <Navigate to="/platform-features/vulnerability-intelligence" replace />,
+        element: <Navigate to="/platform-features/dependency-scanning" replace />,
       },
       {
         path: "sbom-compliance",
-        element: <Navigate to="/platform-features/customizable-compliance" replace />,
+        element: <Navigate to="/platform-features/dependency-scanning" replace />,
       },
       {
         path: "repository-tracking",

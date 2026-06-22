@@ -3,9 +3,9 @@ import { Button } from "../../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import {
   Bot,
-  ScanSearch,
-  Scale,
-  Bell,
+  Package,
+  Braces,
+  Layers,
   ListChecks,
   MessageSquare,
   ClipboardCheck,
@@ -31,53 +31,54 @@ const FEATURES = [
     icon: Bot,
   },
   {
-    slug: "vulnerability-intelligence",
-    label: "Vulnerability Intelligence",
-    intro: "Depscore, reachability, and smart version recommendations. See which vulnerabilities affect your code and get upgrade paths that stay compliant.",
+    slug: "dependency-scanning",
+    label: "Dependency scanning",
+    intro: "Every dependency CVE, scored by whether it's actually reachable in your code — not raw CVSS — plus malicious-package detection across 8 ecosystems.",
     docsSlug: "vulnerabilities",
     cards: [
-      { title: "Depscore", description: "Risk score per dependency and version—severity, EPSS, CISA KEV, and code-level reachability (data-flow, function, module)." },
-      { title: "Reachability analysis", description: "Understand which vulns are reachable in your code. Data-flow and usage slices from the atom engine." },
-      { title: "Version recommendations", description: "Safe upgrade candidates with OSV verification, release notes, and policy checks. Respects banned versions and org policy." },
-      { title: "Suppress & accept risk", description: "Suppress findings or accept risk with reason and audit trail. Keeps the graph clean while you track exceptions." },
+      { title: "Depscore", description: "A risk score per dependency and version — severity, EPSS, CISA KEV, and code-level reachability (data-flow, function, module)." },
+      { title: "Reachability analysis", description: "See which CVEs are actually reachable in your code. Data-flow and usage slices from the taint engine cut the noise." },
+      { title: "Malicious packages", description: "Malicious-package feeds, behavioral heuristics, and a capability fingerprint for every package you install." },
+      { title: "Version recommendations", description: "Safe upgrade candidates with OSV verification and release notes, respecting banned versions and org policy." },
+      { title: "Suppress & accept risk", description: "Suppress findings or accept risk with a reason and audit trail. Keeps the graph clean while you track exceptions." },
     ],
-    icon: ScanSearch,
+    icon: Package,
   },
   {
-    slug: "customizable-compliance",
-    label: "Customizable Compliance",
-    intro: "Policy-as-code, SBOM, and license compliance. Define rules in JavaScript; get legal notices, preflight checks, and AI-powered exception suggestions.",
-    docsSlug: "compliance",
+    slug: "code-scanning",
+    label: "Code scanning",
+    intro: "Static analysis and secret detection across your whole codebase — deduped, CWE-scored, and caught before they merge.",
+    docsSlug: "sast",
     cards: [
-      { title: "Policy-as-code", description: "Package policy, project status, and PR check code in the org. Run per-dependency and per-project with version history." },
-      { title: "SBOM & legal notice", description: "Export CycloneDX SBOM and generate license notices from your dependencies. Cached and rate-limited." },
-      { title: "Preflight & exceptions", description: "Check a hypothetical package against policy before adding. Apply for license exceptions with AI-generated policy tweaks." },
-      { title: "Registry search", description: "Search npm, Maven, Cargo, PyPI, and more from the app. See license and basic metadata before you add." },
+      { title: "SAST", description: "Static analysis across your whole workspace, deduped and CWE-scored, so risks are caught before they merge." },
+      { title: "Secret detection", description: "Leaked keys and tokens, caught and live-verified — a working credential outranks a dormant one." },
+      { title: "PR checks & merge gating", description: "Findings surface as PR checks with sticky comments; block merges on GitHub and GitLab." },
     ],
-    icon: Scale,
+    icon: Braces,
   },
   {
-    slug: "customizable-notifications",
-    label: "Customizable Notifications",
-    intro: "Define notifications as code. Event-driven rules with org, team, and project cascade; send to Slack, Jira, email, PagerDuty, and more.",
-    docsSlug: "notification-rules",
+    slug: "infrastructure-dast",
+    label: "Infrastructure & DAST",
+    intro: "Misconfigurations across Terraform, Kubernetes and Dockerfiles, image CVEs with base-image fixes, and active runtime testing of your live app.",
+    docsSlug: "dast",
     cards: [
-      { title: "Rules as code", description: "Trigger type and custom code in a sandbox. Syntax and shape validated on save; test and dry-run before going live." },
-      { title: "Destinations", description: "Slack, Discord, Jira, Linear, Asana, Email, custom webhooks, PagerDuty. OAuth and rate limits per destination." },
-      { title: "Delivery & history", description: "Track deliveries, retry failed, view history. In-app inbox and user preferences (email opt-out, muted events)." },
+      { title: "IaC misconfigurations", description: "Misconfigs across Terraform, Kubernetes, Helm, CloudFormation and Dockerfiles, mapped to the files that introduce them." },
+      { title: "Container & image CVEs", description: "Image CVEs with base-image upgrade advice, and a bridge linking OS-package CVEs to the code that loads them." },
+      { title: "DAST", description: "Your running app gets actively attacked, guided by an OpenAPI spec synthesized from your detected routes." },
     ],
-    icon: Bell,
+    icon: Layers,
   },
 ] as const;
 
 const slugList = FEATURES.map((f) => f.slug);
 type FeatureSlug = (typeof slugList)[number];
 
-const FEATURE_HERO_IMAGES: Record<FeatureSlug, string> = {
+// Optional: only the features with a real screenshot get a hero image. The
+// rest render single-column (no placeholder/misleading art).
+const FEATURE_HERO_IMAGES: Partial<Record<FeatureSlug, string>> = {
   "ai-security-agent": "/images/aisecurityimage.png",
-  "vulnerability-intelligence": "/images/vulnerabilitiesimage.png",
-  "customizable-compliance": "/images/complianceimage.png",
-  "customizable-notifications": "/images/notificationsimage.png",
+  "dependency-scanning": "/images/vulnerabilitiesimage.png",
+  // TODO: real screenshots for code-scanning + infrastructure-dast
 };
 
 export default function PlatformFeaturesPage() {
@@ -90,6 +91,7 @@ export default function PlatformFeaturesPage() {
   const currentSlug = featureSlug as FeatureSlug;
   const feature = FEATURES.find((f) => f.slug === currentSlug)!;
   const FeatureIcon = feature.icon;
+  const heroImage = FEATURE_HERO_IMAGES[currentSlug];
 
   return (
     <div className="min-h-screen bg-background">
@@ -100,7 +102,7 @@ export default function PlatformFeaturesPage() {
             Platform features
           </h1>
           <p className="text-lg text-foreground-secondary mb-8 leading-relaxed">
-            Deptex brings dependency security, compliance, and AI automation into one place. Pick a feature below to see what it does.
+            Deptex brings dependency, code, and infrastructure security into one place — with an AI agent that ships the fixes. Pick a feature below to see what it does.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <Button asChild variant="green">
@@ -135,12 +137,18 @@ export default function PlatformFeaturesPage() {
       {/* Selected feature: intro + cards */}
       <section className="container mx-auto px-4 py-12 lg:py-16">
         <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-12 items-center mb-12">
-            <img
-              src={FEATURE_HERO_IMAGES[currentSlug]}
-              alt={`${feature.label}`}
-              className="w-full max-w-md mx-auto lg:max-w-none rounded-lg object-contain"
-            />
+          <div
+            className={`grid grid-cols-1 gap-10 lg:gap-12 items-center mb-12 ${
+              heroImage ? "lg:grid-cols-2" : "max-w-2xl"
+            }`}
+          >
+            {heroImage && (
+              <img
+                src={heroImage}
+                alt={feature.label}
+                className="w-full max-w-md mx-auto lg:max-w-none rounded-lg object-contain"
+              />
+            )}
             <div>
               <h2 className="text-2xl font-semibold text-foreground mb-3">{feature.label}</h2>
               <p className="text-foreground/80 leading-relaxed max-w-xl">
