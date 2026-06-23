@@ -64,7 +64,8 @@ describe('code-flow-findings scoring', () => {
     });
     expect(dto.title).toMatch(/Cross-site scripting/);
     expect(dto.severity).toBe('high');
-    expect(dto.depscore).toBe(78);
+    // xss base 78, minus a depth nudge of 2 for a deep (10-hop) flow → 76.
+    expect(dto.depscore).toBe(76);
     expect(dto.vuln_class).toBe('xss');
     expect(dto.sink_method).toBe('dangerouslySetInnerHTML');
     expect(Array.isArray(dto.flow_nodes)).toBe(true);
@@ -78,10 +79,26 @@ describe('code-flow-findings scoring', () => {
   });
 
   // Drift guard: phase54_security_summary_code_flows.sql hard-codes these exact
-  // scores in its vuln_class CASE. If these change, update that migration too.
-  it('keeps the band scores the count-pills SQL mirrors', () => {
+  // *bare-class* scores in its vuln_class CASE. The depth nudge below is a
+  // TS-only, within-band spread the SQL doesn't mirror — so the bare-class
+  // values must stay put. If these change, update that migration too.
+  it('keeps the bare-class band scores the count-pills SQL mirrors', () => {
     expect(firstPartyFlowDepscore('sql_injection')).toBe(92);
     expect(firstPartyFlowDepscore('xss')).toBe(78);
     expect(firstPartyFlowDepscore('open_redirect')).toBe(55);
+  });
+
+  it('spreads same-class flows by path depth but never leaves the band', () => {
+    const shallow = firstPartyFlowDepscore('sql_injection', 2);  // direct path
+    const mid = firstPartyFlowDepscore('sql_injection', 5);
+    const deep = firstPartyFlowDepscore('sql_injection', 14);    // long winding path
+    expect(shallow).toBeGreaterThan(mid);
+    expect(mid).toBeGreaterThanOrEqual(deep);
+    expect(shallow).toBe(95);
+    expect(deep).toBeGreaterThanOrEqual(90); // clamped to the critical ramp floor
+    // a deep XSS dips but stays in the high band (never reads as critical/medium)
+    const deepXss = firstPartyFlowDepscore('xss', 14);
+    expect(deepXss).toBeGreaterThanOrEqual(70);
+    expect(deepXss).toBeLessThan(90);
   });
 });

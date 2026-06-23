@@ -96,9 +96,48 @@ export function flowSeverity(vulnClass: string | null | undefined): FlowSeverity
   return metaFor(vulnClass).band;
 }
 
-/** Depscore (0-100) for a first-party flow finding — pure function of vuln_class. */
-export function firstPartyFlowDepscore(vulnClass: string | null | undefined): number {
-  return BAND_SCORE[metaFor(vulnClass).band];
+/** Per-band clamp so the depth spread below never crosses a ramp boundary
+ *  (>=90 critical / >=70 high / >=40 medium). Keeps a flow's depscore colour
+ *  matching its severity band, and keeps the count-pills SQL — which bands the
+ *  bare vuln_class score (92/78/55) — in agreement with what the table shows. */
+const BAND_CLAMP: Record<FlowSeverityBand, [number, number]> = {
+  critical: [90, 99],
+  high: [70, 89],
+  medium: [40, 69],
+  low: [20, 39],
+};
+
+/** EPD-style depth nudge: a shorter, more direct source→sink path is a more
+ *  clear-cut, higher-confidence finding; a long winding path is a touch softer.
+ *  Mirrors EPD's alpha^depth decay for dependency CVEs, applied to first-party
+ *  flows so a page of same-class findings spreads out (e.g. 90–95 across critical
+ *  SQLi flows) instead of reading as a flat wall of one number. Null length
+ *  (no path info) = no nudge. */
+function flowDepthAdjust(flowLength: number | null | undefined): number {
+  if (flowLength == null || !Number.isFinite(flowLength)) return 0;
+  const n = Math.max(0, Math.floor(flowLength));
+  if (n <= 2) return 3;
+  if (n <= 3) return 2;
+  if (n <= 4) return 1;
+  if (n <= 6) return 0;
+  if (n <= 8) return -1;
+  if (n <= 11) return -2;
+  return -3;
+}
+
+/** Depscore (0-100) for a first-party flow finding. The base is a pure function
+ *  of `vuln_class` — the bare-class value the count-pills SQL mirrors (92/78/55).
+ *  An optional `flowLength` then spreads it *within the band* by path depth so a
+ *  list of same-class flows isn't a wall of one number. Always stays inside the
+ *  class's band ramp, so colour + pill counts stay consistent. */
+export function firstPartyFlowDepscore(
+  vulnClass: string | null | undefined,
+  flowLength?: number | null,
+): number {
+  const band = metaFor(vulnClass).band;
+  const [lo, hi] = BAND_CLAMP[band];
+  const raw = BAND_SCORE[band] + flowDepthAdjust(flowLength);
+  return Math.max(lo, Math.min(hi, raw));
 }
 
 /** The shape returned by GET .../code-flow-findings and consumed by the
@@ -137,7 +176,7 @@ export function toDataFlowFinding(row: Record<string, any>): DataFlowFinding {
     vuln_class: row.vuln_class ?? null,
     title: flowVulnClassLabel(row.vuln_class),
     severity: flowSeverity(row.vuln_class),
-    depscore: firstPartyFlowDepscore(row.vuln_class),
+    depscore: firstPartyFlowDepscore(row.vuln_class, row.flow_length),
     entry_point_file: row.entry_point_file ?? null,
     entry_point_line: row.entry_point_line ?? null,
     entry_point_method: row.entry_point_method ?? null,
