@@ -248,8 +248,12 @@ export default function NavBar() {
             </a>
 
             {user ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+              <>
+                <Button asChild variant="outline" className="!h-8 !rounded-lg !px-3 text-foreground">
+                  <Link to="/organizations">Dashboard</Link>
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                   <button className="flex items-center justify-center rounded-full border border-border bg-background-subtle overflow-hidden hover:bg-background-card transition-colors h-9 w-9">
                     <img
                       src={avatarUrl}
@@ -284,18 +288,12 @@ export default function NavBar() {
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild>
-                    <Link to="/organizations" className="cursor-pointer focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                      Organizations
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
                     <Link to="/settings" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
                       <Settings className="h-4 w-4" />
                       Settings
                     </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem 
+                  <DropdownMenuItem
                     onClick={async () => {
                       await signOut();
                       navigate('/');
@@ -306,7 +304,8 @@ export default function NavBar() {
                     Sign out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
-              </DropdownMenu>
+                </DropdownMenu>
+              </>
             ) : (
               <Button asChild variant="green">
                 <Link to="/login">Try for free</Link>

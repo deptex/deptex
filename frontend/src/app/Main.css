@@ -120,6 +120,16 @@
     border: none !important;
   }
 
+  /* Founder preference: never paint the browser's default focus outline
+     anywhere in the app. It appears as a white ring when focus is restored to a
+     trigger (e.g. Radix returning focus after a dropdown/popover closes).
+     Intentional focus styling uses Tailwind `ring-*` (box-shadow), so those are
+     untouched — only the default `outline` is removed. */
+  *:focus,
+  *:focus-visible {
+    outline: none !important;
+  }
+
   /* New Agent sidebar: horizontal scrolling suggestions, pause on hover */
   @keyframes aegis-scroll {
     from { transform: translateX(0); }

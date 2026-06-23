@@ -292,28 +292,19 @@ export const router = createBrowserRouter([
     element: <App />,
     children: [
       {
-        index: true,
-        element: (
-          <PublicRoute>
-            <HomePage />
-          </PublicRoute>
-        ),
+        // The landing homepage lives only at "/landing" — viewable whether or
+        // not you're authenticated. "/" itself renders no page; App.tsx routes
+        // it (dashboard if signed in, else "/landing").
+        path: "landing",
+        element: <HomePage />,
       },
       {
         path: "platform-features",
-        element: (
-          <PublicRoute>
-            <PlatformFeaturesPage />
-          </PublicRoute>
-        ),
+        element: <PlatformFeaturesPage />,
       },
       {
         path: "platform-features/:featureSlug",
-        element: (
-          <PublicRoute>
-            <PlatformFeaturesPage />
-          </PublicRoute>
-        ),
+        element: <PlatformFeaturesPage />,
       },
       {
         path: "ai-security-agent",
@@ -337,19 +328,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "integrations",
-        element: (
-          <PublicRoute>
-            <IntegrationsPage />
-          </PublicRoute>
-        ),
+        element: <IntegrationsPage />,
       },
       {
         path: "get-demo",
-        element: (
-          <PublicRoute>
-            <GetDemoPage />
-          </PublicRoute>
-        ),
+        element: <GetDemoPage />,
       },
       {
         path: "support",
@@ -389,11 +372,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "open-source",
-        element: (
-          <PublicRoute>
-            <OpenSourcePage />
-          </PublicRoute>
-        ),
+        element: <OpenSourcePage />,
       },
       {
         path: "solutions/*",
