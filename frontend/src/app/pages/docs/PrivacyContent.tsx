@@ -25,7 +25,7 @@ export default function PrivacyContent() {
         </div>
         <div className="p-6">
           <p className="text-foreground/90 leading-relaxed">
-            Your data is used to deliver Deptex features: dependency scanning, vulnerability alerts, compliance reporting, and integrations you configure.
+            Your data is used to deliver Deptex features: dependency and code scanning, vulnerability alerts, AI-assisted fixes, and integrations you configure.
             We do not sell your personal information.
           </p>
         </div>
