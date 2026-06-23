@@ -13,8 +13,14 @@
 -- (the depscanner worker already tolerates finalize taking up to ~10 min). Give the
 -- function its own budget, and add a composite index so the carry-forward join (and the
 -- reap that follows) stay index-driven on (project, run, fingerprint).
+--
+-- Note: a failed finalize never reaches the reap, so failed reruns of a container-heavy
+-- project STACK extra runs in the table (axum reached 3 runs / 33k rows), which made the
+-- reap's delete of the oldest run the dominant cost and pushed past 120s. 300s covers the
+-- worst realistic steady state (2 retained runs); a one-time DELETE cleared the orphaned
+-- stacked runs in prod.
 
-ALTER FUNCTION public.finalize_extraction(uuid, uuid, text) SET statement_timeout TO '120s';
+ALTER FUNCTION public.finalize_extraction(uuid, uuid, text) SET statement_timeout TO '300s';
 
 CREATE INDEX IF NOT EXISTS idx_pcf_carryforward
   ON public.project_container_findings (project_id, extraction_run_id, container_fingerprint)
