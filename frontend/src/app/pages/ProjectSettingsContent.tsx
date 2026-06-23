@@ -1656,6 +1656,19 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               : 'Repository root'}
                           </div>
                         </div>
+                        <Button
+                          variant="green"
+                          onClick={handleTriggerRescan}
+                          disabled={rescanning || !canEditSettings || isRepoDisconnected || isExtractionOngoing(connectedRepository?.status ?? '')}
+                          className="relative shrink-0"
+                        >
+                          <span className={rescanning ? 'invisible' : undefined}>Rescan</span>
+                          {rescanning && (
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            </span>
+                          )}
+                        </Button>
                       </div>
                     </div>
                   ) : (
@@ -1767,34 +1780,6 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                 {/* Recent Activity — Vercel-style deployments table */}
                 {connectedRepository && (
                   <div>
-                    <div className="flex items-end justify-between gap-4 mb-3">
-                      <div>
-                        <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
-                        <p className="text-sm text-foreground-secondary mt-0.5">Past scans for this repository.</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleTriggerRescan}
-                        disabled={
-                          rescanning ||
-                          !canEditSettings ||
-                          isRepoDisconnected ||
-                          isExtractionOngoing(connectedRepository?.status ?? '')
-                        }
-                        className="gap-2 relative shrink-0"
-                      >
-                        <span className={cn('flex items-center gap-2', rescanning && 'invisible')}>
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          Rescan now
-                        </span>
-                        {rescanning && (
-                          <span className="absolute inset-0 flex items-center justify-center">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          </span>
-                        )}
-                      </Button>
-                    </div>
                     <div className="rounded-lg border border-border bg-background-card overflow-hidden">
                       <table className="w-full">
                         <thead className="bg-background-card-header border-b border-border">
