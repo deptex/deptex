@@ -1657,10 +1657,10 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                           </div>
                         </div>
                         <Button
-                          variant="green"
+                          variant="outline"
                           onClick={handleTriggerRescan}
                           disabled={rescanning || !canEditSettings || isRepoDisconnected || isExtractionOngoing(connectedRepository?.status ?? '')}
-                          className="relative shrink-0"
+                          className="relative shrink-0 !h-8 !px-3 !rounded-lg"
                         >
                           <span className={rescanning ? 'invisible' : undefined}>Rescan</span>
                           {rescanning && (
