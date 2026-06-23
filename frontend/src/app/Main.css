@@ -23,21 +23,6 @@
 }
 
 @layer utilities {
-  /* Get Demo page: inputs use Vercel palette */
-  .demo-page-input,
-  input.demo-page-input,
-  textarea.demo-page-input {
-    background-color: var(--vercel-card) !important;
-    border: 1px solid var(--vercel-border);
-  }
-  .demo-page-input::placeholder,
-  input.demo-page-input::placeholder,
-  textarea.demo-page-input::placeholder {
-    color: var(--vercel-text-muted);
-  }
-  .demo-page-label {
-    color: var(--vercel-text-secondary);
-  }
 
   /* Chrome, Safari and Opera */
   .no-scrollbar::-webkit-scrollbar {
