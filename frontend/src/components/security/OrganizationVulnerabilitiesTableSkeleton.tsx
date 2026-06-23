@@ -32,7 +32,7 @@ export default function OrganizationVulnerabilitiesTableSkeleton({ showProjectCo
             <col className="w-[8rem]" />
             <col className="w-[18rem]" />
             {showProjectCol && <col className="w-[18rem]" />}
-            <col className="w-[11rem]" />
+            <col className="w-[12rem]" />
           </colgroup>
           <thead className="bg-background-card-header border-b border-border">
             <tr>

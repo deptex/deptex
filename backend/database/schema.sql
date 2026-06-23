@@ -4038,6 +4038,7 @@ $function$
 CREATE OR REPLACE FUNCTION public.finalize_extraction(p_job_id uuid, p_project_id uuid, p_extraction_run_id text)
  RETURNS jsonb
  LANGUAGE plpgsql
+ SET statement_timeout TO '300s'
 AS $function$
 DECLARE
   v_prev_active TEXT;
@@ -7004,7 +7005,7 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_depen
 ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_child_version_id_key UNIQUE (parent_version_id, child_version_id);
 ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
-ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_unique UNIQUE (project_id, finding_type, finding_key, provider);
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_unique UNIQUE (project_id, finding_type, finding_key, provider, external_id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
@@ -7629,6 +7630,7 @@ CREATE INDEX idx_pbir_current_digest ON public.project_base_image_recommendation
 CREATE INDEX idx_pbir_project_active ON public.project_base_image_recommendations USING btree (project_id) WHERE (is_dismissed = false);
 CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
 CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
+CREATE INDEX idx_pcf_carryforward ON public.project_container_findings USING btree (project_id, extraction_run_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);

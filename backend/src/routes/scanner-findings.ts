@@ -993,18 +993,9 @@ router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async
       return res.status(404).json({ error: 'Finding not found in the active scan' });
     }
 
-    // One link per (finding, provider) — block a duplicate ticket up-front.
-    const { data: existing } = await supabase
-      .from('finding_tracker_links')
-      .select('id, provider, external_key, external_url')
-      .eq('project_id', projectId)
-      .eq('finding_type', type)
-      .eq('finding_key', findingKey)
-      .eq('provider', provider)
-      .maybeSingle();
-    if (existing) {
-      return res.status(409).json({ error: `Already linked to ${provider}`, link: existing });
-    }
+    // Multiple issues per (finding, provider) are allowed — a finding can be
+    // tracked by several tickets in the same tool. The DB unique now keys on
+    // external_id, so only the exact same ticket can't be linked twice.
 
     let result: TrackerResult;
     if (provider === 'jira') {
