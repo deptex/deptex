@@ -872,6 +872,101 @@ router.get('/:id/group-suppressions', async (req: AuthRequest, res) => {
   }
 });
 
+// Every type that can carry a manual New/Open/Ignored status — the status-store
+// types plus taint_flow and the synthetic group rows.
+const ACK_FINDING_TYPES = new Set<string>([
+  ...Object.keys(STATUS_FINDING_TYPES),
+  'taint_flow',
+  ...GROUP_FINDING_TYPES,
+]);
+
+// Acknowledge a finding (the "Open" disposition) or clear it (back to New).
+// A row present = Open; absent = New. Keyed by the stable finding_key / flow
+// hash / synthetic group key, so the disposition survives rescans.
+router.put('/:id/projects/:projectId/findings/:type/:findingKey/acknowledge', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    if (!ACK_FINDING_TYPES.has(type)) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+    const acknowledged = req.body?.acknowledged === true;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    if (acknowledged) {
+      const { error } = await supabase
+        .from('project_finding_acknowledgements')
+        .upsert({
+          organization_id: id,
+          project_id: projectId,
+          finding_type: type,
+          finding_key: findingKey,
+          acknowledged_by: userId,
+          acknowledged_at: new Date().toISOString(),
+        }, { onConflict: 'project_id,finding_type,finding_key' });
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('project_finding_acknowledgements')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('finding_type', type)
+        .eq('finding_key', findingKey);
+      if (error) throw error;
+    }
+    res.json({ success: true, acknowledged });
+  } catch (error: any) {
+    console.error('[scanner-findings] acknowledge error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update acknowledgement' });
+  }
+});
+
+// Acknowledgements for one project's findings.
+router.get('/:id/projects/:projectId/acknowledgements', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('project_finding_acknowledgements')
+      .select('project_id, finding_type, finding_key')
+      .eq('project_id', projectId);
+    if (error) throw error;
+    res.json({ acknowledgements: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] acknowledgements error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list acknowledgements' });
+  }
+});
+
+// All acknowledgements across the org's projects (org-wide findings table).
+router.get('/:id/acknowledgements', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('project_finding_acknowledgements')
+      .select('project_id, finding_type, finding_key')
+      .eq('organization_id', id);
+    if (error) throw error;
+    res.json({ acknowledgements: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org acknowledgements error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list acknowledgements' });
+  }
+});
+
 // Create a ticket for a finding and store the link.
 router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async (req: AuthRequest, res) => {
   try {

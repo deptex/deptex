@@ -240,6 +240,12 @@ export interface FindingGroupSuppression {
   ignore_reason: 'false_positive' | 'wont_fix' | 'accepted_risk' | null;
   ignore_note: string | null;
 }
+/** A finding marked Open (acknowledged). Present = Open, absent = New. */
+export interface FindingAcknowledgement {
+  project_id: string;
+  finding_type: string;
+  finding_key: string;
+}
 export interface FindingTrackerLink {
   id: string;
   project_id?: string;
@@ -2483,6 +2489,26 @@ export const api = {
   /** Group-level Ignore for the collapsed rows, across the org's projects. */
   async getOrgGroupSuppressions(organizationId: string): Promise<{ suppressions: FindingGroupSuppression[] }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/group-suppressions`);
+  },
+
+  /** All "Open" acknowledgements across the org's projects (org-wide findings table). */
+  async getOrgAcknowledgements(organizationId: string): Promise<{ acknowledgements: FindingAcknowledgement[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/acknowledgements`);
+  },
+
+  /** Mark a finding Open (acknowledged=true) or back to New (false). Generic over
+   *  every finding type, including taint_flow and the collapsed group rows. */
+  async setFindingAcknowledged(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType | 'taint_flow',
+    findingKey: string,
+    acknowledged: boolean,
+  ): Promise<{ success: boolean; acknowledged: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/acknowledge`,
+      { method: 'PUT', body: JSON.stringify({ acknowledged }) },
+    );
   },
 
   /** Destinations within a provider — Jira projects / Linear teams. */

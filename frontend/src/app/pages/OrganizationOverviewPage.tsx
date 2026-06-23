@@ -21,7 +21,7 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression, type FindingAcknowledgement } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -157,17 +157,6 @@ function getReactFlowPaneSize(paneEl: HTMLElement | null): { width: number; heig
 
 export type ExpandFilter = 'all' | 'vulnerable' | 'not_allowed' | 'outdated';
 
-/** Fixed column widths for project sidebar vuln table — keep skeleton + data table aligned (no layout shift). */
-function OrgProjectVulnerabilitiesTableColgroup() {
-  return (
-    <colgroup>
-      <col className="w-[6.75rem]" />
-      <col />
-      <col className="w-[7.5rem]" />
-    </colgroup>
-  );
-}
-
 /** Loading skeleton for the team Settings tab — mirrors the loaded layout (w-32 subnav with two
  *  items, General heading, Team details card with name field + save footer, Danger Zone card) and
  *  fades downward. animate-pulse lives on the placeholder blocks only, never on bordered elements. */
@@ -228,61 +217,11 @@ function SidebarErrorState({ title, context, onRetry }: { title: string; context
   );
 }
 
-const ORG_PROJECT_VULN_TABLE_CLASS = 'w-full text-sm table-fixed';
-
-/** Skeleton for the project sidebar vulnerabilities table (matches loaded table chrome + columns). */
-function OrgProjectVulnerabilitiesTableSkeleton({ rowCount = 6 }: { rowCount?: number }) {
-  return (
-    <div
-      className="border border-border rounded-lg overflow-hidden"
-      aria-busy="true"
-      aria-label="Loading vulnerabilities"
-    >
-      <table className={ORG_PROJECT_VULN_TABLE_CLASS}>
-        <OrgProjectVulnerabilitiesTableColgroup />
-        <thead className="bg-background-card-header border-b border-border">
-          <tr>
-            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
-              Depscore
-            </th>
-            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase min-w-0">
-              Dependency
-            </th>
-            <th className="text-left px-4 py-2.5 text-xs font-semibold text-foreground-secondary uppercase">
-              Advisory
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {Array.from({ length: rowCount }, (_, i) => (
-            <tr key={i}>
-              <td className="px-4 py-2.5 align-middle">
-                <div
-                  className="h-4 rounded-md bg-muted/55 animate-pulse w-14"
-                />
-              </td>
-              <td className="px-4 py-2.5 align-middle min-w-0">
-                <div className="space-y-1.5 min-w-0 max-w-full">
-                  <div
-                    className={cn(
-                      'h-3.5 rounded-md bg-muted/50 animate-pulse max-w-full',
-                      i % 3 === 0 && 'w-[72%]',
-                      i % 3 === 1 && 'w-[88%]',
-                      i % 3 === 2 && 'w-[64%]',
-                    )}
-                  />
-                  <div className="h-3 max-w-[6rem] rounded-md bg-muted/40 animate-pulse" />
-                </div>
-              </td>
-              <td className="px-4 py-2.5 align-middle">
-                <div className="h-5 w-[4.75rem] rounded-md bg-muted/50 animate-pulse" />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+/** Skeleton for the project Findings tab — the unified findings table without a
+ *  Project column (single project). Delegates to the shared skeleton so it always
+ *  mirrors the real columns + downward fade. */
+function OrgProjectVulnerabilitiesTableSkeleton() {
+  return <OrganizationVulnerabilitiesTableSkeleton showProjectCol={false} />;
 }
 
 /**
@@ -348,6 +287,7 @@ export default function OrganizationOverviewPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [trackerLinks, setTrackerLinks] = useState<FindingTrackerLink[]>([]);
   const [groupSuppressions, setGroupSuppressions] = useState<FindingGroupSuppression[]>([]);
+  const [acknowledgements, setAcknowledgements] = useState<FindingAcknowledgement[]>([]);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedProjectFramework, setSelectedProjectFramework] = useState<string | null>(null);
   const [selectedProjectIsExtracting, setSelectedProjectIsExtracting] = useState(false);
@@ -2519,6 +2459,7 @@ export default function OrganizationOverviewPage() {
     // resolved-✓ external_state they carry) silently freeze at a stale snapshot.
     api.getOrgTrackerLinks(orgId).then(({ links }) => setTrackerLinks(links)).catch(() => {});
     api.getOrgGroupSuppressions(orgId).then(({ suppressions }) => setGroupSuppressions(suppressions)).catch(() => {});
+    api.getOrgAcknowledgements(orgId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [orgId]);
 
   useEffect(() => {
@@ -3387,7 +3328,9 @@ export default function OrganizationOverviewPage() {
                         canTriggerFix={!!organization?.permissions?.trigger_fix}
                         trackerLinks={trackerLinks}
                         groupSuppressions={groupSuppressions}
+                        acknowledgements={acknowledgements}
                         onTrackerChange={() => void loadTrackerLinks()}
+                        onAckChange={() => void loadTrackerLinks()}
                       />
                     )}
                   </div>
@@ -3988,7 +3931,7 @@ export default function OrganizationOverviewPage() {
                         }}
                       />
                     ) : (projectStatsLoading && !projectVulnerabilities) || selectedProjectRealtime.isLoading ? (
-                      <OrgProjectVulnerabilitiesTableSkeleton rowCount={8} />
+                      <OrgProjectVulnerabilitiesTableSkeleton />
                     ) : !projectSecurityRows.length ? (
                       <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">
                         No findings
@@ -4001,7 +3944,9 @@ export default function OrganizationOverviewPage() {
                         canTriggerFix={!!organization?.permissions?.trigger_fix}
                         trackerLinks={trackerLinks}
                         groupSuppressions={groupSuppressions}
+                        acknowledgements={acknowledgements}
                         onTrackerChange={() => void loadTrackerLinks()}
+                        onAckChange={() => void loadTrackerLinks()}
                         baseImageRecommendations={projectBaseImageRecs}
                         openFindingId={projectFindingToOpen}
                         onStatusChange={() => {

@@ -1292,6 +1292,15 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   request_params jsonb,
   code_snippet text
 );
+CREATE TABLE IF NOT EXISTS public.project_finding_acknowledgements (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  finding_type text NOT NULL,
+  finding_key text NOT NULL,
+  acknowledged_by uuid,
+  acknowledged_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_finding_group_suppressions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
@@ -6938,6 +6947,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
@@ -7035,6 +7045,7 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_un
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgeme_project_id_finding_type_findi_key UNIQUE (project_id, finding_type, finding_key);
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppres_project_id_group_type_group_k_key UNIQUE (project_id, group_type, group_key);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
@@ -7349,6 +7360,8 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dep
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_runtime_confirmed_dast_findi FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7524,6 +7537,8 @@ CREATE INDEX idx_extraction_step_errors_step_code ON public.extraction_step_erro
 CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at DESC);
 CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
 CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
+CREATE INDEX idx_finding_acks_org ON public.project_finding_acknowledgements USING btree (organization_id);
+CREATE INDEX idx_finding_acks_project ON public.project_finding_acknowledgements USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_group_suppressions_org ON public.project_finding_group_suppressions USING btree (organization_id);
 CREATE INDEX idx_finding_group_suppressions_project ON public.project_finding_group_suppressions USING btree (project_id);
 CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);

@@ -25,6 +25,7 @@ import {
   type DataFlowFinding,
   type FindingTrackerLink,
   type FindingGroupSuppression,
+  type FindingAcknowledgement,
 } from '../../lib/api';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
@@ -388,6 +389,7 @@ export default function OrganizationFindingsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [trackerLinks, setTrackerLinks] = useState<FindingTrackerLink[]>([]);
   const [groupSuppressions, setGroupSuppressions] = useState<FindingGroupSuppression[]>([]);
+  const [acknowledgements, setAcknowledgements] = useState<FindingAcknowledgement[]>([]);
 
   const loadTrackerLinks = useCallback(async () => {
     if (!organizationId) return;
@@ -396,6 +398,7 @@ export default function OrganizationFindingsPage() {
     // resolved-✓ external_state they carry) silently freeze at a stale snapshot.
     api.getOrgTrackerLinks(organizationId).then(({ links }) => setTrackerLinks(links)).catch(() => {});
     api.getOrgGroupSuppressions(organizationId).then(({ suppressions }) => setGroupSuppressions(suppressions)).catch(() => {});
+    api.getOrgAcknowledgements(organizationId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [organizationId]);
 
   // Findings by Type donut — single piece of state. Hover commits the
@@ -1149,7 +1152,9 @@ export default function OrganizationFindingsPage() {
             canTriggerFix={!!userPermissions?.trigger_fix}
             trackerLinks={trackerLinks}
             groupSuppressions={groupSuppressions}
+            acknowledgements={acknowledgements}
             onTrackerChange={() => void loadTrackerLinks()}
+            onAckChange={() => void loadTrackerLinks()}
             onStatusChange={() => { void load(); void loadTrackerLinks(); }}
           />
         )}
