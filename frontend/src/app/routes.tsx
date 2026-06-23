@@ -42,6 +42,7 @@ import AdminLayout from "./pages/admin/AdminLayout";
 import AdminOverviewPage from "./pages/admin/AdminOverviewPage";
 import AdminBillingPage from "./pages/admin/AdminBillingPage";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
+import DemoRequestsPage from "./pages/admin/DemoRequestsPage";
 
 // Forward the legacy /settings entry point to the user's account page within
 // their default organization. Falls back to /organizations when no default
@@ -122,6 +123,7 @@ export const router = createBrowserRouter([
       { index: true, element: <AdminOverviewPage /> },
       { path: "billing", element: <AdminBillingPage /> },
       { path: "extraction-failures", element: <ExtractionFailuresPage /> },
+      { path: "demo-requests", element: <DemoRequestsPage /> },
     ],
   },
   {

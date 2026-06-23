@@ -411,4 +411,47 @@ router.get('/extraction-trend', async (_req: AuthRequest, res) => {
   }
 });
 
+/**
+ * GET /api/admin/demo-requests
+ * Paginated list of demo_requests leads from the public Get Demo page, newest
+ * first. Query params: page (default 1), per_page (default 50, max 200).
+ */
+router.get('/demo-requests', async (req: AuthRequest, res) => {
+  try {
+    const pageRaw = parseInt(String(req.query.page ?? '1'), 10);
+    const perPageRaw = parseInt(String(req.query.per_page ?? '50'), 10);
+    const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+    const perPage = Math.min(
+      Math.max(Number.isFinite(perPageRaw) && perPageRaw > 0 ? perPageRaw : 50, 1),
+      200,
+    );
+
+    const from = (page - 1) * perPage;
+    const to = from + perPage - 1;
+
+    const { data, error, count } = await supabase
+      .from('demo_requests')
+      .select(
+        'id, first_name, last_name, email, company_name, dev_count, details, created_at',
+        { count: 'exact' },
+      )
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      fail(res, error, 'Failed to list demo requests');
+      return;
+    }
+
+    res.json({
+      data: data ?? [],
+      total: count ?? (data ?? []).length,
+      page,
+      per_page: perPage,
+    });
+  } catch (error: any) {
+    fail(res, error, 'Failed to list demo requests');
+  }
+});
+
 export default router;
