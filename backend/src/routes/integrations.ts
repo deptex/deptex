@@ -3783,8 +3783,18 @@ router.get('/linear/org-callback', async (req, res) => {
       installation_id: orgKey,
       display_name: displayName,
       access_token: tokenData.access_token,
+      // Linear OAuth access tokens expire; persist the refresh token + expiry so
+      // getValidLinearToken can mint a fresh one instead of locking us out a day
+      // later. (Personal API keys / long-lived tokens simply have no refresh.)
+      refresh_token: tokenData.refresh_token ?? null,
       status: 'connected',
-      metadata: { linear_org_id: orgKey, scope: tokenData.scope },
+      metadata: {
+        linear_org_id: orgKey,
+        scope: tokenData.scope,
+        expires_at: tokenData.expires_in
+          ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
+          : null,
+      },
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     } as any;
@@ -3814,6 +3824,10 @@ router.get('/linear/org-callback', async (req, res) => {
       }
       res.redirect(redirectOnSuccess);
     } else {
+      // The unique (org, provider) constraint was dropped for multi-provider, so a
+      // reconnect must REPLACE the prior Linear row, not add a duplicate (two rows
+      // would break the single-row .maybeSingle() reads in trackers.ts).
+      await supabase.from('organization_integrations').delete().eq('organization_id', orgId).eq('provider', 'linear');
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...linearInsert });
       if (dbError) {
         console.error('Linear org integration DB error:', dbError);

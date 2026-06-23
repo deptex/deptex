@@ -36,26 +36,6 @@ export class TrackerError extends Error {
 // Connection lookups
 // ---------------------------------------------------------------------------
 
-async function getOrgIntegration(
-  organizationId: string,
-  provider: 'jira' | 'linear',
-): Promise<{ access_token: string; metadata: Record<string, any> }> {
-  const { data, error } = await supabase
-    .from('organization_integrations')
-    .select('access_token, metadata, status')
-    .eq('organization_id', organizationId)
-    .eq('provider', provider)
-    .maybeSingle();
-  if (error) throw new TrackerError(error.message);
-  if (!data?.access_token) {
-    throw new TrackerError(
-      `${provider} is not connected. Connect it under Organization Settings > Integrations.`,
-      false,
-    );
-  }
-  return { access_token: data.access_token, metadata: (data.metadata ?? {}) as Record<string, any> };
-}
-
 /** Resolve the project's connected GitHub repo + the org App installation. */
 async function getGithubTarget(
   projectId: string,
@@ -347,10 +327,66 @@ async function linearGraphQL(token: string, query: string, variables: Record<str
   return data.data;
 }
 
+/**
+ * Get a usable Linear access token for an org. Linear OAuth access tokens expire,
+ * so when the stored one is past its expiry we mint a fresh one from the refresh
+ * token (and persist the rotation). Personal API keys (`lin_api_…`) and any token
+ * stored without an expiry are used as-is.
+ */
+async function getValidLinearToken(
+  organizationId: string,
+): Promise<{ access_token: string; metadata: Record<string, any> }> {
+  const { data, error } = await supabase
+    .from('organization_integrations')
+    .select('access_token, refresh_token, metadata')
+    .eq('organization_id', organizationId)
+    .eq('provider', 'linear')
+    .maybeSingle();
+  if (error) throw new TrackerError(error.message);
+  if (!data?.access_token) {
+    throw new TrackerError('Linear is not connected. Connect it under Organization Settings > Integrations.', false);
+  }
+  const metadata = (data.metadata ?? {}) as Record<string, any>;
+  const expiresAt = metadata.expires_at ? Date.parse(metadata.expires_at) : NaN;
+  const stillFresh = Number.isNaN(expiresAt) || expiresAt - Date.now() > 60_000;
+  if (stillFresh || !data.refresh_token || String(data.access_token).startsWith('lin_api_')) {
+    return { access_token: data.access_token, metadata };
+  }
+  const res = await fetch('https://api.linear.app/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: process.env.LINEAR_CLIENT_ID ?? '',
+      client_secret: process.env.LINEAR_CLIENT_SECRET ?? '',
+      refresh_token: data.refresh_token,
+    }),
+  });
+  const tok = (await res.json().catch(() => ({}))) as any;
+  if (!tok.access_token) {
+    throw new TrackerError('Could not refresh the Linear token — reconnect Linear.', true);
+  }
+  const newMeta = {
+    ...metadata,
+    expires_at: tok.expires_in ? new Date(Date.now() + Number(tok.expires_in) * 1000).toISOString() : null,
+  };
+  await supabase
+    .from('organization_integrations')
+    .update({
+      access_token: tok.access_token,
+      refresh_token: tok.refresh_token ?? data.refresh_token,
+      metadata: newMeta,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('organization_id', organizationId)
+    .eq('provider', 'linear');
+  return { access_token: tok.access_token, metadata: newMeta };
+}
+
 export async function listLinearTeams(
   organizationId: string,
 ): Promise<Array<{ id: string; name: string }>> {
-  const conn = await getOrgIntegration(organizationId, 'linear');
+  const conn = await getValidLinearToken(organizationId);
   const data = await linearGraphQL(conn.access_token, `{ teams { nodes { id name key } } }`, {});
   return (data?.teams?.nodes ?? []).map((t: any) => ({ id: t.id, name: t.key ? `${t.name} (${t.key})` : t.name }));
 }
@@ -359,7 +395,7 @@ export async function createLinearIssue(
   organizationId: string,
   params: { teamId?: string; title: string; description: string },
 ): Promise<TrackerResult> {
-  const conn = await getOrgIntegration(organizationId, 'linear');
+  const conn = await getValidLinearToken(organizationId);
   const teamId = params.teamId || conn.metadata.team_id;
   if (!teamId) {
     throw new TrackerError('No Linear team selected. Pick a Linear team to file into.', true);
