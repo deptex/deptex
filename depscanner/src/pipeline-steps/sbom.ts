@@ -30,6 +30,7 @@ import { resolveGoTransitives } from '../transitive-resolvers/go';
 import { resolvePypiTransitives } from '../transitive-resolvers/pypi';
 import { resolveComposerTransitives } from '../transitive-resolvers/composer';
 import { resolveRubygemsTransitives } from '../transitive-resolvers/rubygems';
+import { resolveNugetLock } from '../transitive-resolvers/nuget';
 import { retry, updateStep, setError, classifyCdxgenError } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -55,9 +56,26 @@ function runCdxgen(workspacePath: string, ecosystem?: string): string {
     // extra evidence collectors). Keep them paired so the default path stays fully shallow.
     args.push('--profile', 'research', '--deep');
   }
-  if (ecosystem) {
-    args.push('-t', ecosystem);
+  // cdxgen resolves .NET projects only via auto-detection — passing `-t nuget`
+  // (or `-t dotnet`/`-t csharp`) yields an empty SBOM (no PackageReference /
+  // packages.lock.json resolution). For .NET, omit `-t` so cdxgen detects the
+  // project from its files. Every other ecosystem's type passes through.
+  const cdxgenType = ecosystem === 'nuget' || ecosystem === 'dotnet' ? undefined : ecosystem;
+  if (cdxgenType) {
+    args.push('-t', cdxgenType);
   }
+  // .NET resolves PackageReference only via the dotnet SDK (`dotnet restore` →
+  // project.assets.json), which the depscanner image does not ship. cdxgen
+  // therefore routinely errors or emits nothing for nuget projects. Don't fail
+  // the whole scan: write a minimal empty SBOM and let doSbom's
+  // packages.lock.json resolver populate the dependency set instead.
+  const isDotnet = ecosystem === 'nuget' || ecosystem === 'dotnet';
+  const writeEmptySbom = () => {
+    fs.writeFileSync(
+      outPath,
+      JSON.stringify({ bomFormat: 'CycloneDX', specVersion: '1.5', components: [] }),
+    );
+  };
   try {
     execSync(`npx ${args.join(' ')}`, {
       cwd: workspacePath,
@@ -66,9 +84,17 @@ function runCdxgen(workspacePath: string, ecosystem?: string): string {
       maxBuffer: 50 * 1024 * 1024,
     });
   } catch (e: any) {
+    if (isDotnet) {
+      writeEmptySbom();
+      return outPath;
+    }
     throw new Error(`cdxgen failed: ${e.message}`);
   }
   if (!fs.existsSync(outPath)) {
+    if (isDotnet) {
+      writeEmptySbom();
+      return outPath;
+    }
     throw new Error(`cdxgen completed but did not create sbom.json at ${outPath}`);
   }
   return outPath;
@@ -295,6 +321,53 @@ export async function doSbom(ctx: PipelineContext): Promise<SbomOutput> {
         'sbom',
         `transitive_resolver_failed { ecosystem: ${jobEcosystem}, reason: ${msg} } — continuing with cdxgen-only SBOM`,
       );
+    }
+  }
+
+  // .NET fallback: cdxgen needs the dotnet SDK to resolve PackageReference and
+  // the depscanner image ships none, so cdxgen returns zero components even
+  // with a committed packages.lock.json (runCdxgen writes an empty SBOM rather
+  // than failing for nuget). Parse the lock file ourselves — it's deterministic
+  // and carries the full Direct/Transitive resolved tree. dep-scan also crashes
+  // on `-t nuget`, so write the OSV-extra-purls sidecar too: the OSV-API
+  // fallback in the dep_scan step is the only vuln source for .NET, and it reads
+  // that sidecar to know which packages to query.
+  const isDotnetEco = jobEcosystem === 'nuget' || jobEcosystem === 'dotnet';
+  if (isDotnetEco && dependencies.length === 0) {
+    try {
+      const result = await resolveNugetLock(workspaceRoot);
+      if (result && result.deps.length > 0) {
+        for (const dep of result.deps) dependencies.push(dep);
+        for (const rel of result.relationships) relationships.push(rel);
+        // The lock file carries explicit Direct/Transitive markers, so the
+        // direct set is trustworthy — let the classifier flag `unreachable`.
+        ctx.graphTrusted = true;
+        await log.info(
+          'sbom',
+          `nuget_lock_resolver_invoked { source: ${result.source}, added: ${result.deps.length} }`,
+        );
+        try {
+          const reportsDir = path.join(workspaceRoot, 'depscan-reports');
+          fs.mkdirSync(reportsDir, { recursive: true });
+          const extraPurls = result.deps
+            .filter((d) => d.name && d.version)
+            .map((d) => `pkg:nuget/${d.name}@${d.version}`);
+          fs.writeFileSync(
+            path.join(reportsDir, 'osv-extra-purls.json'),
+            JSON.stringify({ ecosystem: 'nuget', purls: extraPurls }, null, 2),
+          );
+        } catch (sidecarErr) {
+          await log.warn(
+            'sbom',
+            `nuget_sidecar_write_failed { reason: ${(sidecarErr as Error).message} }`,
+          );
+        }
+      } else {
+        await log.info('sbom', 'nuget_lock_resolver_skipped { reason: no_packages_lock_json }');
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await log.warn('sbom', `nuget_lock_resolver_failed { reason: ${msg} }`);
     }
   }
 

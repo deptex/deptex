@@ -4,6 +4,12 @@ Thank you for your interest in contributing to Deptex. This document explains ho
 
 ---
 
+## License & Contributor Agreement
+
+Deptex is licensed under the [GNU Affero General Public License v3.0](./LICENSE) (AGPL-3.0). By submitting a contribution you agree that it is licensed under AGPL-3.0 **and** you accept the [Contributor License Agreement](./CLA.md). The CLA lets Deptex offer the project under both AGPL-3.0 and commercial terms — you keep copyright of your contributions; you simply grant Deptex a broad license to use and relicense them. Please read [CLA.md](./CLA.md) before opening a pull request.
+
+---
+
 ## Code of Conduct
 
 Please be respectful and constructive in all interactions. We aim for a welcoming environment for everyone.

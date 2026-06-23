@@ -50,7 +50,7 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   await runStage({
     name: 'semgrep',
     timeoutMs: 20 * 60_000,
-    severity: 'error',
+    severity: 'warn',
     supabase,
     jobId: job.jobId,
     projectId,
@@ -60,9 +60,13 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
       const msg = e?.status === 137
         ? 'Static analysis ran out of memory'
         : `Static analysis failed: ${e?.message ?? 'unknown error'}`;
-      await log.error('semgrep', msg);
-      // severity: 'error' → rethrow; pipeline outer catch sets error state.
-      return { rethrow: true, throwAs: new ScanFailedError(msg) };
+      // SAST is supplementary: a Semgrep crash (OOM, registry/`--config auto`
+      // fetch failure, a file it can't parse) must NOT discard a scan that
+      // already resolved dependencies, dep-CVEs, secrets, IaC and container
+      // findings. Degrade to "no SAST findings this run" and let the pipeline
+      // continue instead of failing the whole extraction.
+      await log.warn('semgrep', `${msg} — continuing without static-analysis findings`);
+      return { rethrow: false };
     },
     fn: async () => {
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');

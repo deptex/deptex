@@ -1,39 +1,15 @@
-import { useState, useEffect } from "react";
-import { Star } from "lucide-react";
-
 const GITHUB_REPO_URL = "https://github.com/deptex/deptex";
-const GITHUB_API_REPO = "https://api.github.com/repos/deptex/deptex";
 
 const REPO = {
   name: "deptex",
   repo: "deptex/deptex",
   description:
-    "Deptex helps organizations manage open-source risk by tracking dependencies, enforcing security policies, and automatically remediating vulnerabilities with AI",
+    "AI-powered dependency security — reachability-scored scanning and autonomous fixes, end to end.",
   contributingUrl: "https://github.com/deptex/deptex/blob/main/CONTRIBUTING.md",
   licenseUrl: "https://github.com/deptex/deptex/blob/main/LICENSE",
 };
 
-function formatStars(count: number): string {
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-  return count.toLocaleString();
-}
-
 export default function OpenSourcePage() {
-  const [githubStars, setGithubStars] = useState<number | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(GITHUB_API_REPO)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Failed to fetch"))))
-      .then((data) => {
-        if (!cancelled && typeof data.stargazers_count === "number") {
-          setGithubStars(data.stargazers_count);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
   return (
     <div>
       <section className="container mx-auto px-4 pt-28 lg:pt-32 pb-8 lg:pb-10">
@@ -41,12 +17,11 @@ export default function OpenSourcePage() {
           {/* Left: Open Source hero */}
           <div className="text-center lg:text-left">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-foreground">
-              Open code
+              Open source
             </h1>
-            <p className="text-xl text-foreground-secondary mb-8 leading-relaxed">
-              The whole Deptex platform is source-available in one repository: read it, run it locally,
-              self-host it. Every release converts to Apache 2.0 after two years. We welcome anyone who
-              wants to contribute.
+            <p className="text-xl text-foreground mb-8 leading-relaxed">
+              The whole Deptex platform lives in one repository, licensed under AGPL-3.0 —
+              read it, run it locally, and self-host it freely. Contributions welcome.
             </p>
             <div className="flex flex-wrap justify-center lg:justify-start gap-6">
               <a
@@ -65,7 +40,7 @@ export default function OpenSourcePage() {
                 className="flex items-center gap-2 text-foreground-secondary hover:text-foreground transition-colors"
               >
                 <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
-                <span>License (FSL → Apache 2.0)</span>
+                <span>License (AGPL-3.0)</span>
               </a>
             </div>
           </div>
@@ -82,19 +57,11 @@ export default function OpenSourcePage() {
                 <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
                 <h2 className="text-xl font-semibold text-foreground">{REPO.name}</h2>
               </div>
-              <p className="mt-3 text-sm text-foreground-secondary leading-relaxed">
+              <p className="mt-3 text-sm text-foreground leading-relaxed">
                 {REPO.description}
               </p>
-              <div className="mt-6 flex items-center justify-between text-sm text-foreground-muted">
+              <div className="mt-6 flex items-center text-sm text-foreground-secondary">
                 <span>{REPO.repo}</span>
-                {githubStars !== null ? (
-                  <span className="flex items-center gap-1.5 tabular-nums">
-                    <Star className="h-4 w-4" aria-hidden />
-                    {formatStars(githubStars)}
-                  </span>
-                ) : (
-                  <span className="tabular-nums">—</span>
-                )}
               </div>
             </a>
           </div>

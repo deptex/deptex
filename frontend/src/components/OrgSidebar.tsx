@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Workflow,
   User,
+  Home,
   BookOpen,
   Mail,
   LogOut,
@@ -837,6 +838,16 @@ export default function OrgSidebar({
                   >
                     <User className="h-5 w-5" />
                     Account Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to="/landing"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
+                    onClick={() => setProfileOpen(false)}
+                  >
+                    <Home className="h-5 w-5" />
+                    Landing page
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>

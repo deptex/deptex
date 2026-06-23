@@ -42,6 +42,7 @@ import AdminLayout from "./pages/admin/AdminLayout";
 import AdminOverviewPage from "./pages/admin/AdminOverviewPage";
 import AdminBillingPage from "./pages/admin/AdminBillingPage";
 import ExtractionFailuresPage from "./pages/admin/ExtractionFailuresPage";
+import DemoRequestsPage from "./pages/admin/DemoRequestsPage";
 
 // Forward the legacy /settings entry point to the user's account page within
 // their default organization. Falls back to /organizations when no default
@@ -122,6 +123,7 @@ export const router = createBrowserRouter([
       { index: true, element: <AdminOverviewPage /> },
       { path: "billing", element: <AdminBillingPage /> },
       { path: "extraction-failures", element: <ExtractionFailuresPage /> },
+      { path: "demo-requests", element: <DemoRequestsPage /> },
     ],
   },
   {
@@ -292,28 +294,19 @@ export const router = createBrowserRouter([
     element: <App />,
     children: [
       {
-        index: true,
-        element: (
-          <PublicRoute>
-            <HomePage />
-          </PublicRoute>
-        ),
+        // The landing homepage lives only at "/landing" — viewable whether or
+        // not you're authenticated. "/" itself renders no page; App.tsx routes
+        // it (dashboard if signed in, else "/landing").
+        path: "landing",
+        element: <HomePage />,
       },
       {
         path: "platform-features",
-        element: (
-          <PublicRoute>
-            <PlatformFeaturesPage />
-          </PublicRoute>
-        ),
+        element: <PlatformFeaturesPage />,
       },
       {
         path: "platform-features/:featureSlug",
-        element: (
-          <PublicRoute>
-            <PlatformFeaturesPage />
-          </PublicRoute>
-        ),
+        element: <PlatformFeaturesPage />,
       },
       {
         path: "ai-security-agent",
@@ -325,11 +318,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "vulnerability-intelligence",
-        element: <Navigate to="/platform-features/vulnerability-intelligence" replace />,
+        element: <Navigate to="/platform-features/dependency-scanning" replace />,
       },
       {
         path: "sbom-compliance",
-        element: <Navigate to="/platform-features/customizable-compliance" replace />,
+        element: <Navigate to="/platform-features/dependency-scanning" replace />,
       },
       {
         path: "repository-tracking",
@@ -337,19 +330,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "integrations",
-        element: (
-          <PublicRoute>
-            <IntegrationsPage />
-          </PublicRoute>
-        ),
+        element: <IntegrationsPage />,
       },
       {
         path: "get-demo",
-        element: (
-          <PublicRoute>
-            <GetDemoPage />
-          </PublicRoute>
-        ),
+        element: <GetDemoPage />,
       },
       {
         path: "support",
@@ -389,11 +374,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "open-source",
-        element: (
-          <PublicRoute>
-            <OpenSourcePage />
-          </PublicRoute>
-        ),
+        element: <OpenSourcePage />,
       },
       {
         path: "solutions/*",

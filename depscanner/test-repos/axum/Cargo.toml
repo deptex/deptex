@@ -14,6 +14,6 @@ reqwest = "0.11"
 regex = "1.8"
 tracing = "0.1"
 # Reachable: RUSTSEC-2018-0006 — uncontrolled recursion in YamlLoader::load_from_str.
-yaml-rust = "0.4.0"
+yaml-rust = "=0.4.0"
 # Unreachable: declared but never imported by src/.
 time = "0.1.43"

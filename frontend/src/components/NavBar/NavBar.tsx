@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronRight, Menu, ScanSearch, Scale, Bell, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
-import { useState, useEffect } from "react";
+import { ChevronDown, ChevronRight, Menu, Package, Braces, Layers, Plug, HelpCircle, Settings, LogOut } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -35,23 +35,23 @@ const navigationItems: NavItem[] = [
           </svg>
         )
       },
-      { 
-        name: "Vulnerability Intelligence", 
-        to: "/platform-features/vulnerability-intelligence", 
-        description: "Depscore, reachability & version recommendations",
-        icon: <ScanSearch className="h-5 w-5" />
+      {
+        name: "Dependency scanning",
+        to: "/platform-features/dependency-scanning",
+        description: "Reachability-scored CVEs & malicious packages",
+        icon: <Package className="h-5 w-5" />
       },
-      { 
-        name: "Customizable Compliance", 
-        to: "/platform-features/customizable-compliance", 
-        description: "Policy-as-code, SBOM & license compliance",
-        icon: <Scale className="h-5 w-5" />
+      {
+        name: "Code scanning",
+        to: "/platform-features/code-scanning",
+        description: "SAST & live-verified secrets",
+        icon: <Braces className="h-5 w-5" />
       },
-      { 
-        name: "Customizable Notifications", 
-        to: "/platform-features/customizable-notifications", 
-        description: "Define notifications as code",
-        icon: <Bell className="h-5 w-5" />
+      {
+        name: "Infrastructure & DAST",
+        to: "/platform-features/infrastructure-dast",
+        description: "IaC, containers & runtime testing",
+        icon: <Layers className="h-5 w-5" />
       },
     ],
   },
@@ -59,9 +59,9 @@ const navigationItems: NavItem[] = [
     name: "Resources",
     items: [
       { 
-        name: "Open code",
+        name: "Open source",
         to: "/open-source",
-        description: "The whole platform, source-available",
+        description: "The whole platform, open source (AGPL-3.0)",
         icon: <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
       },
       { 
@@ -96,35 +96,15 @@ const navigationItems: NavItem[] = [
 ];
 
 const GITHUB_REPO_URL = "https://github.com/deptex/deptex";
-const GITHUB_API_REPO = "https://api.github.com/repos/deptex/deptex";
-
-function formatStars(count: number): string {
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-  return count.toLocaleString();
-}
 
 export default function NavBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  const [githubStars, setGithubStars] = useState<number | null>(null);
   const { user, signOut } = useAuth();
   const avatarUrl = getAvatarUrl(user);
   const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
   const [dropdownTimeout, setDropdownTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(GITHUB_API_REPO)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Failed to fetch"))))
-      .then((data) => {
-        if (!cancelled && typeof data.stargazers_count === "number") {
-          setGithubStars(data.stargazers_count);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   return (
     <header className="h-14 fixed left-0 right-0 top-0 z-50 flex items-center border-b border-border bg-background px-6">
@@ -135,7 +115,7 @@ export default function NavBar() {
         >
           <div className="flex items-center gap-6">
             <Link
-              to="/"
+              to="/landing"
               className="flex items-center hover:opacity-80 transition-opacity shrink-0"
             >
               <img
@@ -145,7 +125,7 @@ export default function NavBar() {
               />
             </Link>
 
-            <ul className="ml-4 hidden items-center gap-6 lg:flex">
+            <ul className="ml-4 hidden items-center gap-6 md:flex">
               {navigationItems.map((item) => (
                 <li key={item.name} className="relative">
                   {item.items ? (
@@ -197,16 +177,16 @@ export default function NavBar() {
                             setDropdownTimeout(timeout);
                           }}
                         >
-                          <div className="rounded-lg border border-border/80 bg-[#0a0c0e] shadow-xl ring-1 ring-black/20 p-1.5 min-w-[20rem]">
+                          <div className="rounded-lg border border-border bg-background shadow-lg p-1.5 min-w-[20rem]">
                               {item.items.map((subItem) => (
                                 <Link
                                   key={subItem.name}
                                   to={subItem.to}
-                                  className="flex items-center gap-3 rounded-md px-2.5 py-2.5 text-sm text-foreground transition-colors duration-150 group/item hover:bg-[#12141a]"
+                                  className="flex items-center gap-3 rounded-md px-2.5 py-2.5 text-sm text-foreground transition-colors duration-150 group/item hover:bg-background-subtle"
                                   onClick={() => setOpenDropdown(null)}
                                 >
                                   {subItem.icon && (
-                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[#0a0c0e] border border-border/60 text-foreground-secondary group-hover/item:text-foreground transition-colors duration-150">
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-background border border-border text-foreground-secondary group-hover/item:text-foreground transition-colors duration-150">
                                       {subItem.icon}
                                     </div>
                                   )}
@@ -240,113 +220,104 @@ export default function NavBar() {
             </ul>
           </div>
 
-          {/* Mobile Menu Button */}
-          <div className="flex lg:hidden">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="text-foreground-secondary hover:text-foreground inline-flex items-center justify-center rounded-md transition-colors"
-            >
-              <span className="sr-only">Open main menu</span>
-              <Menu
-                className="size-8 p-1"
-                aria-hidden="true"
-              />
-            </button>
-          </div>
-
-          {/* Desktop Actions */}
-          <div className="hidden items-center justify-end gap-4 lg:flex lg:flex-1">
+          {/* Right side — the avatar (logged in) or Try for free (logged out)
+              stays visible at every width; GitHub + Dashboard + nav collapse into
+              the burger below md, so the header is never just an empty burger. */}
+          <div className="flex items-center justify-end gap-3">
             <a
               href={GITHUB_REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+              className="hidden md:flex items-center rounded-md p-1.5 text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
               aria-label="Deptex on GitHub"
             >
               <img src="/images/integrations/github.png" alt="" className="h-5 w-5 rounded-full" aria-hidden />
-              {githubStars !== null ? (
-                <span>{formatStars(githubStars)}</span>
-              ) : (
-                <span className="tabular-nums">—</span>
-              )}
             </a>
 
             {user ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="flex items-center justify-center rounded-full border border-border bg-background-subtle overflow-hidden hover:bg-background-card transition-colors h-9 w-9">
-                    <img
-                      src={avatarUrl}
-                      alt={user?.email || 'User'}
-                      className="h-full w-full rounded-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.src = '/images/blank_profile_image.png';
+              <>
+                <Button asChild variant="outline" className="hidden md:inline-flex !h-8 !rounded-lg !px-3 text-foreground">
+                  <Link to="/organizations">Dashboard</Link>
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex items-center justify-center rounded-full border border-border bg-background-subtle overflow-hidden hover:bg-background-card transition-colors h-9 w-9">
+                      <img
+                        src={avatarUrl}
+                        alt={user?.email || 'User'}
+                        className="h-full w-full rounded-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.src = '/images/blank_profile_image.png';
+                        }}
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" sideOffset={8} className="w-72 p-1.5 rounded-xl">
+                    <DropdownMenuLabel className="p-0">
+                      <div className="flex items-center gap-3 px-3 py-2">
+                        <div className="flex-shrink-0">
+                          <img
+                            src={avatarUrl}
+                            alt={user?.email || 'User'}
+                            className="h-10 w-10 rounded-full object-cover border border-border"
+                            onError={(e) => {
+                              e.currentTarget.src = '/images/blank_profile_image.png';
+                            }}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                          {fullName && (
+                            <span className="text-sm font-medium text-foreground truncate">{fullName}</span>
+                          )}
+                          <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
+                        </div>
+                      </div>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link to="/settings" className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground">
+                        <Settings className="h-5 w-5" />
+                        Settings
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        await signOut();
+                        navigate('/');
                       }}
-                    />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel className="p-0">
-                    <div className="flex items-center gap-3 px-2 py-3">
-                      <div className="flex-shrink-0">
-                        <img
-                          src={avatarUrl}
-                          alt={user?.email || 'User'}
-                          className="h-10 w-10 rounded-full object-cover border border-border"
-                          onError={(e) => {
-                            e.currentTarget.src = '/images/blank_profile_image.png';
-                          }}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                        {fullName && (
-                          <span className="text-sm font-medium text-foreground truncate">{fullName}</span>
-                        )}
-                        <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
-                      </div>
-                    </div>
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link to="/organizations" className="cursor-pointer focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                      Organizations
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link to="/settings" className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground-secondary transition-colors">
-                      <Settings className="h-4 w-4" />
-                      Settings
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem 
-                    onClick={async () => {
-                      await signOut();
-                      navigate('/');
-                    }}
-                    className="cursor-pointer text-foreground-secondary hover:text-foreground focus:bg-transparent focus:text-foreground flex items-center gap-2 transition-colors"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Sign out
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                      className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
+                    >
+                      <LogOut className="h-5 w-5" />
+                      Sign out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             ) : (
               <Button asChild variant="green">
                 <Link to="/login">Try for free</Link>
               </Button>
             )}
+
+            {/* Burger — mobile only */}
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="md:hidden text-foreground-secondary hover:text-foreground inline-flex items-center justify-center rounded-md transition-colors"
+            >
+              <span className="sr-only">Open main menu</span>
+              <Menu className="size-8 p-1" aria-hidden="true" />
+            </button>
           </div>
         </nav>
       </div>
 
       {/* Mobile Menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 z-40 bg-background-card/95 backdrop-blur-lg">
-          <div className="flex flex-col h-full p-6">
+        <div className="md:hidden fixed inset-0 z-40 bg-background-card/95 backdrop-blur-lg">
+          <div className="flex flex-col h-full p-6 overflow-y-auto">
             <div className="flex items-center justify-between mb-8">
-              <Link to="/" className="flex items-center gap-2">
+              <Link to="/landing" className="flex items-center gap-2">
                 <img src="/images/logo.png" alt="Deptex" className="size-8" />
                 <span className="text-foreground font-semibold">Deptex</span>
               </Link>
@@ -403,6 +374,61 @@ export default function NavBar() {
                 </li>
               ))}
             </ul>
+
+            {/* Auth actions — mirror the desktop bar so they're reachable on mobile */}
+            <div className="mt-auto border-t border-border pt-6">
+              {user ? (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-3 px-3 py-2">
+                    <img
+                      src={avatarUrl}
+                      alt={user?.email || 'User'}
+                      className="h-9 w-9 rounded-full object-cover border border-border flex-shrink-0"
+                      onError={(e) => {
+                        e.currentTarget.src = '/images/blank_profile_image.png';
+                      }}
+                    />
+                    <div className="flex flex-col min-w-0">
+                      {fullName && (
+                        <span className="text-sm font-medium text-foreground truncate">{fullName}</span>
+                      )}
+                      <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
+                    </div>
+                  </div>
+                  <Link
+                    to="/organizations"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-base font-medium text-foreground hover:bg-background-subtle transition-colors"
+                  >
+                    Dashboard
+                  </Link>
+                  <Link
+                    to="/settings"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-base font-medium text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+                  >
+                    Settings
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMobileMenuOpen(false);
+                      await signOut();
+                      navigate('/');
+                    }}
+                    className="block w-full text-left rounded-lg px-3 py-2 text-base font-medium text-foreground-secondary hover:bg-background-subtle hover:text-foreground transition-colors"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <Button asChild variant="green" className="w-full">
+                  <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
+                    Try for free
+                  </Link>
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
