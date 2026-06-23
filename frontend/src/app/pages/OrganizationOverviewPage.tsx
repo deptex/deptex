@@ -2514,16 +2514,11 @@ export default function OrganizationOverviewPage() {
   // the collapsed rows ride together so the status cell has both in one pass.
   const loadTrackerLinks = useCallback(async () => {
     if (!orgId) return;
-    try {
-      const [{ links }, { suppressions }] = await Promise.all([
-        api.getOrgTrackerLinks(orgId),
-        api.getOrgGroupSuppressions(orgId),
-      ]);
-      setTrackerLinks(links);
-      setGroupSuppressions(suppressions);
-    } catch {
-      // Non-critical chrome — never blank the page on a tracker fetch failure.
-    }
+    // Two INDEPENDENT fetches — a failure in one (e.g. a route the running
+    // backend doesn't have yet) must not block the other, or the links (and the
+    // resolved-✓ external_state they carry) silently freeze at a stale snapshot.
+    api.getOrgTrackerLinks(orgId).then(({ links }) => setTrackerLinks(links)).catch(() => {});
+    api.getOrgGroupSuppressions(orgId).then(({ suppressions }) => setGroupSuppressions(suppressions)).catch(() => {});
   }, [orgId]);
 
   useEffect(() => {

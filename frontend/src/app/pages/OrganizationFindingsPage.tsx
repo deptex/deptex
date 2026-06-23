@@ -391,16 +391,11 @@ export default function OrganizationFindingsPage() {
 
   const loadTrackerLinks = useCallback(async () => {
     if (!organizationId) return;
-    try {
-      const [{ links }, { suppressions }] = await Promise.all([
-        api.getOrgTrackerLinks(organizationId),
-        api.getOrgGroupSuppressions(organizationId),
-      ]);
-      setTrackerLinks(links);
-      setGroupSuppressions(suppressions);
-    } catch {
-      // Tracker links are non-critical chrome — a failure shouldn't blank the page.
-    }
+    // Two INDEPENDENT fetches — a failure in one (e.g. a route the running
+    // backend doesn't have yet) must not block the other, or the links (and the
+    // resolved-✓ external_state they carry) silently freeze at a stale snapshot.
+    api.getOrgTrackerLinks(organizationId).then(({ links }) => setTrackerLinks(links)).catch(() => {});
+    api.getOrgGroupSuppressions(organizationId).then(({ suppressions }) => setGroupSuppressions(suppressions)).catch(() => {});
   }, [organizationId]);
 
   // Findings by Type donut — single piece of state. Hover commits the
