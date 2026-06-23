@@ -1,7 +1,7 @@
 /**
  * STEP: Semgrep static analysis (OPTIONAL).
  *
- * Runs Semgrep with the bundled `auto` config against the workspace,
+ * Runs Semgrep with a pinned `p/default` registry ruleset against the workspace,
  * upserts results into project_semgrep_findings (deduped by
  * project_id, rule_id, file_path, start_line, extraction_run_id), and
  * stashes the raw JSON in project-imports storage. Filters out
@@ -60,8 +60,8 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
       const msg = e?.status === 137
         ? 'Static analysis ran out of memory'
         : `Static analysis failed: ${e?.message ?? 'unknown error'}`;
-      // SAST is supplementary: a Semgrep crash (OOM, registry/`--config auto`
-      // fetch failure, a file it can't parse) must NOT discard a scan that
+      // SAST is supplementary: a Semgrep crash (OOM, registry fetch failure,
+      // a file it can't parse) must NOT discard a scan that
       // already resolved dependencies, dep-CVEs, secrets, IaC and container
       // findings. Degrade to "no SAST findings this run" and let the pipeline
       // continue instead of failing the whole extraction.
@@ -70,8 +70,21 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
     },
     fn: async () => {
       const semgrepPath = path.join(workspaceRoot, 'semgrep.json');
+      // Pinned registry pack instead of `--config auto`. `auto` performs an
+      // extra project-registration round-trip to semgrep.dev to tailor the
+      // ruleset, and that call is what flakes: when it fails Semgrep aborts
+      // before writing ANY output, silently disabling SAST for the run — which
+      // is why fastapi produced zero findings while same-language django/flask
+      // scanned fine. `p/default` is a plain, cacheable rule pack (pre-warmed
+      // into the worker image), and `--disable-version-check` + `--metrics off`
+      // drop the remaining phone-home calls so the step doesn't hang on a live
+      // network fetch. stderr is intentionally NOT redirected to /dev/null so a
+      // real failure surfaces its reason in the step log.
+      const semgrepCmd =
+        `semgrep scan --config p/default --disable-version-check --metrics off ` +
+        `--json --output "${semgrepPath}" "${workspaceRoot}"`;
       try {
-        execSync(`semgrep scan --config auto --json --output "${semgrepPath}" "${workspaceRoot}" 2>/dev/null`, {
+        execSync(semgrepCmd, {
           stdio: 'pipe',
           timeout: 19 * 60_000,
           maxBuffer: 64 * 1024 * 1024,
@@ -81,7 +94,23 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
         // target files failed to parse) while still writing a complete
         // results file. Only treat it as a real failure when no output
         // landed; otherwise proceed with the partial results it produced.
-        if (!fs.existsSync(semgrepPath)) throw e;
+        if (!fs.existsSync(semgrepPath)) {
+          // Surface the captured stderr (no longer redirected to /dev/null) so
+          // the log says *why* it died — registry fetch, parse crash, OOM —
+          // instead of a bare "Command failed". Preserve `status` so the
+          // onError OOM check (137) still fires.
+          const stderrTail = (e?.stderr ? String(e.stderr) : '')
+            .split('\n')
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+            .slice(-6)
+            .join(' | ');
+          const enriched: any = new Error(
+            stderrTail ? `${e?.message ?? 'semgrep failed'} — ${stderrTail}` : (e?.message ?? 'semgrep failed'),
+          );
+          enriched.status = e?.status;
+          throw enriched;
+        }
         await log.warn('semgrep', `Semgrep exited non-zero (status ${e?.status ?? '?'}); using the partial results it wrote`);
       }
       if (fs.existsSync(semgrepPath)) {
