@@ -75,18 +75,20 @@ export class ExtractionLogger {
   private runId: string;
   private cliMode: boolean;
   private sink: ConsoleSink | null;
+  private onProgress: (() => void) | null;
 
   constructor(
     supabase: Storage,
     projectId: string,
     runId: string,
-    options: { cliMode?: boolean; sink?: ConsoleSink | null } = {}
+    options: { cliMode?: boolean; sink?: ConsoleSink | null; onProgress?: () => void } = {}
   ) {
     this.supabase = supabase;
     this.projectId = projectId;
     this.runId = runId;
     this.cliMode = options.cliMode ?? false;
     this.sink = options.sink ?? null;
+    this.onProgress = options.onProgress ?? null;
   }
 
   async info(step: LogStep, message: string, metadata?: Record<string, unknown>): Promise<void> {
@@ -120,6 +122,15 @@ export class ExtractionLogger {
     metadata?: Record<string, unknown>
   ): Promise<void> {
     const sanitizedMessage = sanitize(message);
+
+    // A log line means the pipeline just moved — feed the stall watchdog's
+    // progress signal. Fires synchronously, before the (awaited) DB insert, so a
+    // wedged Supabase write doesn't starve the signal.
+    try {
+      this.onProgress?.();
+    } catch {
+      /* never let progress accounting break logging */
+    }
 
     if (this.cliMode) {
       if (this.sink) {

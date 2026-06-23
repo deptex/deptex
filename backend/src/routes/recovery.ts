@@ -77,14 +77,14 @@ router.post('/extraction-jobs', async (_req, res) => {
             run_id: job.run_id,
             step: 'complete',
             level: 'error',
-            message: `Extraction failed after ${job.attempts} attempts — machine crashed or timed out. Try re-syncing from project settings.`,
+            message: `Extraction failed — the worker crashed before finishing (it stopped responding). Re-sync from project settings to try again.`,
           }).then(() => {});
 
           await supabase
             .from('project_repositories')
             .update({
               status: 'error',
-              extraction_error: `Extraction failed after ${job.attempts} attempts`,
+              extraction_error: `Extraction failed — the worker crashed before finishing.`,
               extraction_step: null,
               updated_at: new Date().toISOString(),
             })

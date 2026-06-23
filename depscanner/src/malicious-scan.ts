@@ -151,10 +151,24 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   const lastHeartbeat = { at: Date.now() };
 
   const limit = pLimit(MALICIOUS_SCAN_CONCURRENCY);
+  const lastProgressLog = { at: Date.now() };
   let cancelled = false;
   try {
     await Promise.all(ctx.packages.map((pkg) => limit(async () => {
       if (cancelled) return;
+
+      // Visible progress signal. This runs once per package as a concurrency
+      // slot frees (i.e. only while the scan is genuinely advancing), so the
+      // throttled log both shows progress to the user AND feeds the worker
+      // watchdog's progress signal (via the log write). A scan that keeps
+      // emitting these is allowed to run as long as it needs — even an hour on
+      // a huge monorepo; only a scan that STOPS advancing (no completion for the
+      // watchdog window) is treated as stuck. No artificial time cap.
+      if (Date.now() - lastProgressLog.at > 60_000) {
+        lastProgressLog.at = Date.now();
+        await ctx.log.info(STEP, `Scanned ${scanned}/${ctx.packages.length} packages...`);
+      }
+
       if (ctx.checkCancelled && (await ctx.checkCancelled())) {
         if (!cancelled) {
           cancelled = true;
