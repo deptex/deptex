@@ -88,6 +88,14 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
           stdio: 'pipe',
           timeout: 19 * 60_000,
           maxBuffer: 64 * 1024 * 1024,
+          // PYTHONNOUSERSITE=1: dependency resolution for some projects pip-installs the
+          // repo's own deps into the worker user-site (~/.local). A fixture pinning an
+          // OLD pydantic (v1) then shadows the system pydantic v2 that Semgrep's CLI
+          // imports (`semgrep → mcp → pydantic.TypeAdapter`), crashing Semgrep with an
+          // ImportError before it writes anything (observed on dogfood-fastapi). Ignoring
+          // the user-site makes Semgrep use its own bundled pydantic, immune to whatever
+          // the scanned project dragged in.
+          env: { ...process.env, PYTHONNOUSERSITE: '1' },
         });
       } catch (e: any) {
         // Semgrep exits non-zero on a partial scan (e.g. status 1 — some
