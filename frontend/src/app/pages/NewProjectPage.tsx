@@ -282,54 +282,6 @@ export default function NewProjectPage() {
     });
   };
 
-  /** Fetch the full recursive-tree scan for a repo and cache it. Called lazily — only when
-   * the user opens the path picker or when the cheap peek says the root has no manifest. */
-  const ensureFullScan = async (repo: RepoWithProvider): Promise<ScanResult | null> => {
-    if (!organizationId) return null;
-    const cached = repoScanResultsByRepo[repo.full_name];
-    if (cached) return cached;
-    if (scanAbortRef.current) scanAbortRef.current.abort();
-    const controller = new AbortController();
-    scanAbortRef.current = controller;
-    const seq = ++scanSeqRef.current;
-    setRepoScanLoading(repo.full_name);
-    setRepoScanError(null);
-    try {
-      const scanData = await api.getOrganizationRepositoryScan(
-        organizationId,
-        repo.full_name,
-        repo.default_branch,
-        repo.integration_id ?? '',
-        { signal: controller.signal },
-      );
-      if (seq !== scanSeqRef.current || !isMountedRef.current) return null;
-      if (scanData.potentialProjects.length === 0) {
-        setRepoNoManifest(true);
-        return null;
-      }
-      const result: ScanResult = {
-        full_name: repo.full_name,
-        isMonorepo: scanData.isMonorepo,
-        potentialProjects: scanData.potentialProjects,
-        framework: scanData.framework,
-        ecosystem: scanData.ecosystem,
-        dockerizedPaths: scanData.dockerizedPaths,
-      };
-      setRepoScanResultsByRepo((prev) => seq === scanSeqRef.current ? { ...prev, [repo.full_name]: result } : prev);
-      return result;
-    } catch (err: any) {
-      if (controller.signal.aborted || err?.name === 'AbortError') return null;
-      if (seq !== scanSeqRef.current || !isMountedRef.current) return null;
-      console.error('Failed to scan repo:', err);
-      setRepoScanError('We couldn’t scan that repository. Try again, or pick a different one.');
-      return null;
-    } finally {
-      if (seq === scanSeqRef.current && isMountedRef.current) {
-        setRepoScanLoading(null);
-      }
-    }
-  };
-
   /** After an async hop returns, only commit state if the user hasn't navigated away from
    * this repo selection. We bump peekSeqRef on every repo click + integration switch, so a
    * mismatch means the result belongs to a previous selection. */
@@ -359,24 +311,8 @@ export default function NewProjectPage() {
     maybeAutoSetProjectName(repoNameOnly(repo.full_name));
     if (!organizationId) return;
 
-    // Use cached peek if we already fetched it for this repo (e.g., user clicked away and back).
-    if (repoPeekByRepo[repo.full_name]) {
-      const cached = repoPeekByRepo[repo.full_name];
-      if (!cached.hasRootManifest) {
-        // No root manifest — kick off the full scan to look for sub-projects.
-        const scanResult = await ensureFullScan(repo);
-        if (!isStillCurrentPeek(seq)) return;
-        if (scanResult) {
-          const firstUnlinked = scanResult.potentialProjects.find((p) => !p.isLinked);
-          if (firstUnlinked) {
-            setSelectedPath(firstUnlinked.path);
-            setSelectedPathEcosystem(firstUnlinked.ecosystem);
-            maybeAutoSetProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : toProjectName(firstUnlinked.name));
-          }
-        }
-      }
-      return;
-    }
+    // Already peeked this repo (clicked away and back) — nothing more to do.
+    if (repoPeekByRepo[repo.full_name]) return;
 
     setRepoPeekLoading(repo.full_name);
     try {
@@ -389,20 +325,6 @@ export default function NewProjectPage() {
       );
       if (!isStillCurrentPeek(seq)) return;
       setRepoPeekByRepo((prev) => seq === peekSeqRef.current ? { ...prev, [repo.full_name]: peek } : prev);
-      if (!peek.hasRootManifest) {
-        // No root manifest. Could be a true no-manifest repo OR a monorepo with sub-projects.
-        // Run the full scan to find out.
-        const scanResult = await ensureFullScan(repo);
-        if (!isStillCurrentPeek(seq)) return;
-        if (scanResult) {
-          const firstUnlinked = scanResult.potentialProjects.find((p) => !p.isLinked);
-          if (firstUnlinked) {
-            setSelectedPath(firstUnlinked.path);
-            setSelectedPathEcosystem(firstUnlinked.ecosystem);
-            maybeAutoSetProjectName(firstUnlinked.path === '' ? repoNameOnly(repo.full_name) : toProjectName(firstUnlinked.name));
-          }
-        }
-      }
     } catch (err: any) {
       if (controller.signal.aborted || err?.name === 'AbortError') return;
       if (!isStillCurrentPeek(seq)) return;
@@ -430,8 +352,8 @@ export default function NewProjectPage() {
       toast({
         title: inspecting ? 'Still inspecting' : 'Repository not ready',
         description: inspecting
-          ? 'Wait for the repository scan to finish before creating.'
-          : 'Pick a repository with a supported package manifest before creating.',
+          ? 'Wait for the repository check to finish before creating.'
+          : 'We couldn’t inspect that repository — try selecting it again.',
         variant: 'destructive',
       });
       return;
@@ -587,16 +509,17 @@ export default function NewProjectPage() {
   const selectedDisplayId = selectedPath === ''
     ? (rootFramework || rootEcosystem)
     : (selectedPathFramework || selectedPathEcosystem || rootFramework || rootEcosystem);
-  // Ready means: we have enough info to create. Either the cheap peek confirms a root
-  // manifest, OR the full scan found at least one usable sub-project.
-  const ready = !!repoToConnect
-    && !inspecting
-    && !repoNoManifest
-    && !repoScanError
-    && (
-      (!!peek && peek.hasRootManifest)
-      || (!!scan && scan.potentialProjects.length > 0)
-    );
+  // A real framework/ecosystem was detected. The peek emits the literal 'unknown'
+  // when the root has no manifest — treat that as "none".
+  const isKnownFramework = !!selectedDisplayId && selectedDisplayId !== 'unknown';
+  // Only the repo root carries a cheap container signal (from the peek); a picked
+  // sub-path doesn't, so the container icon only shows for the root.
+  const selectedDockerized = selectedPath === '' && !!peek?.rootDockerized;
+  // Ready once the cheap root peek has resolved without error. We intentionally
+  // do NOT require a root manifest — a repo with only a Dockerfile (or just
+  // code) is still a valid target: the worker runs container / SAST / secret
+  // scanning and simply skips dependency analysis when there's no manifest.
+  const ready = !!repoToConnect && !inspecting && !repoScanError && !!peek;
 
   return (
     <>
@@ -904,8 +827,10 @@ export default function NewProjectPage() {
                         <span className="h-5 w-5 flex-shrink-0 flex items-center justify-center">
                           {inspecting ? (
                             <Loader2 className="h-4 w-4 animate-spin text-foreground/70" />
-                          ) : ready && selectedDisplayId ? (
+                          ) : ready && isKnownFramework ? (
                             <FrameworkIcon frameworkId={selectedDisplayId} size={20} />
+                          ) : ready && selectedDockerized ? (
+                            <FrameworkIcon frameworkId="dockerfile" size={20} />
                           ) : (
                             <img src="/images/logo_white.png" alt="" className="h-5 w-5 object-contain block" />
                           )}

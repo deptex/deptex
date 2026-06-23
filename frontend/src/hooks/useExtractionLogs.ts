@@ -35,11 +35,27 @@ export function levelDotClass(level: string): string {
 }
 
 export function filterLog(log: ExtractionLog): boolean {
-  const msg = (log.message || '').toLowerCase();
-  if (/atom analysis in progress/i.test(msg)) return false;
-  if (/\d+\s*minute?\s*elapsed|elapsed\s*:\s*\d+/i.test(msg)) return false;
-  if (/scan still running.*dep-?scan is quiet/i.test(msg)) return false;
-  return true;
+  const msg = (log.message || '').trim();
+  const lower = msg.toLowerCase();
+  // Pre-existing noise filters.
+  if (/atom analysis in progress/.test(lower)) return false;
+  if (/\d+\s*minute?\s*elapsed|elapsed\s*:\s*\d+/.test(lower)) return false;
+  if (/scan still running.*dep-?scan is quiet/.test(lower)) return false;
+
+  // Same terminal look as before — we just drop the internal detail chatter and
+  // keep the high-level milestones. The full logs still live in extraction_logs.
+  // Always surface failures.
+  if (log.level === 'error') return true;
+  // Stage marker.
+  if (lower === 'extraction started') return true;
+  // "Doing X…" lines (announce a step — end with an ellipsis).
+  if (/(?:\.\.\.|…)$/.test(msg)) return true;
+  // Clean "X done" lines (drop the verbose stat-dump successes like
+  // "Emitted 15 flows…" / "71/71 scanned, 0 feed + 0 GuardDog hits…").
+  if (log.level === 'success' && /(?:successfully|complete|generated)$/i.test(msg)) return true;
+  // Everything else (framework-entry counts, OSV/PURL lines, EPD passes,
+  // container reachability, native bindings, composition summaries, …) is noise.
+  return false;
 }
 
 // ─── Hook ───

@@ -8,7 +8,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Minimize2, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
+import { Plus, Minus, Search, ShieldCheck, X, LayoutDashboard, FolderKanban, Shield, FileCode, Settings, Activity, UserPlus, Users, FolderPlus, Loader2, Package, HeartPulse, ChevronRight, Check, CircleCheck, MoreVertical, Trash2, Save, Mail, Webhook, BookOpen, PauseCircle, Tag, Palette, GripVertical, Edit2, FileCheck, CircleHelp, Maximize2, GitFork, MousePointer2, MousePointerClick, PanelRight, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import {
   DropdownMenu,
@@ -379,7 +379,6 @@ export default function OrganizationOverviewPage() {
   // Per-project depscore-band counts (phase48 security-summary RPC) — drives the mini
   // SeverityPills under each project tile. Keyed by project id.
   const [securitySummaryByProject, setSecuritySummaryByProject] = useState<Map<string, ProjectSecuritySummary>>(new Map());
-  const [compactTeams, setCompactTeams] = useState(false);
   const [graphRefreshTrigger, setGraphRefreshTrigger] = useState(0);
   const [silentRefreshTrigger, setSilentRefreshTrigger] = useState(0);
   const [expandingProjectId, setExpandingProjectId] = useState<string | null>(null);
@@ -1164,8 +1163,7 @@ export default function OrganizationOverviewPage() {
     organization?.id ?? null,
     organization?.role ?? null,
     orgStatusRollup,
-    teamStatusRollups,
-    compactTeams
+    teamStatusRollups
   );
 
   const [graphNodes, setGraphNodes, onNodesChange] = useNodesState<Node>([]);
@@ -1731,6 +1729,37 @@ export default function OrganizationOverviewPage() {
       openProject();
     }
   }, [closeOrgSidebarImmediate, closeTeamSidebarImmediate, orgSidebarVisible, teamSidebarVisible, setSidebarParams]);
+
+  // Open a team/project panel in response to the sidebar search palette. The
+  // palette also navigates with ?sidebar= params so a cross-page jump restores
+  // on mount; this handles the case where the overview is already mounted (the
+  // once-per-mount restore effect won't re-run on a same-page param change).
+  useEffect(() => {
+    const onOpenProject = (e: Event) => {
+      const project = (e as CustomEvent).detail?.project as Project | undefined;
+      if (project?.id) openProjectInSidebar(project);
+    };
+    const onOpenTeam = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { teamId?: string; teamName?: string } | undefined;
+      const teamId = detail?.teamId;
+      if (!teamId) return;
+      closeOrgSidebarImmediate();
+      closeProjectSidebarImmediate();
+      setSelectedTeamId(teamId);
+      setSelectedTeamName(detail?.teamName ?? teamsById[teamId]?.name ?? null);
+      setTeamSidebarTab('findings');
+      setTeamSettingsSubTab('general');
+      setSidebarParams({ sidebar: 'team', teamId, tab: 'findings', subtab: null, projectId: null });
+      setTeamSidebarOpen(true);
+      requestAnimationFrame(() => setTeamSidebarVisible(true));
+    };
+    window.addEventListener('organization:openProject', onOpenProject as EventListener);
+    window.addEventListener('organization:openTeam', onOpenTeam as EventListener);
+    return () => {
+      window.removeEventListener('organization:openProject', onOpenProject as EventListener);
+      window.removeEventListener('organization:openTeam', onOpenTeam as EventListener);
+    };
+  }, [openProjectInSidebar, closeOrgSidebarImmediate, closeProjectSidebarImmediate, setSidebarParams, teamsById]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -2972,26 +3001,6 @@ export default function OrganizationOverviewPage() {
 {!stillShowingSkeleton && (
 <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
           <div className="flex items-center gap-2 rounded-lg border border-border bg-background-card-header p-1 shadow-sm">
-          {/* Reduce clutter toggle — shown when total projects across all teams ≥ 6 */}
-          {teamsWithProjectsForGraph.reduce((sum, t) => sum + t.projects.length, 0) >= 6 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    'h-7 w-7 p-0 hover:bg-white/5',
-                    compactTeams ? 'text-primary' : 'text-foreground-secondary hover:text-foreground'
-                  )}
-                  onClick={() => setCompactTeams((v) => !v)}
-                  aria-label={compactTeams ? 'Expand projects' : 'Reduce clutter'}
-                >
-                  {compactTeams ? <Maximize2 className="h-3.5 w-3.5" /> : <Minimize2 className="h-3.5 w-3.5" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{compactTeams ? 'Show projects' : 'Reduce clutter'}</TooltipContent>
-            </Tooltip>
-          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -3878,19 +3887,10 @@ export default function OrganizationOverviewPage() {
                 <div className="flex items-center gap-3 min-w-0">
                   <FrameworkIcon frameworkId={selectedProjectFramework ?? undefined} size={20} className="flex-shrink-0 text-muted-foreground" />
                   <h2 className="text-lg font-semibold text-foreground truncate">{selectedProjectName ?? 'Project'}</h2>
-                  {selectedProjectEffectiveIsInitialExtracting ? (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Creating
-                    </span>
-                  ) : selectedProjectEffectiveIsExtracting ? (
+                  {selectedProjectEffectiveIsExtracting && !selectedProjectEffectiveIsInitialExtracting ? (
                     <span className="px-2 py-0.5 rounded text-xs font-medium border bg-foreground-secondary/20 text-foreground-secondary border-foreground-secondary/40 flex-shrink-0 flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
                       Syncing
-                    </span>
-                  ) : selectedProjectExtractionFailed ? (
-                    <span className="px-2 py-0.5 rounded text-xs font-medium border bg-destructive/20 text-destructive border-destructive/40 flex-shrink-0">
-                      Failed
                     </span>
                   ) : null}
                 </div>

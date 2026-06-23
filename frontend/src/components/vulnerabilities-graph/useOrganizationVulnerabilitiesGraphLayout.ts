@@ -422,9 +422,7 @@ export function useOrganizationOverviewGraphLayout(
   /** Raw role name (owner/admin/member) for RoleBadge color fallback — same as OrganizationSwitcher */
   orgRole?: string | null,
   orgStatusRollup?: OverviewStatusRollup | null,
-  teamStatusRollups?: Record<string, OverviewStatusRollup> | null,
-  /** When true, collapse project satellites back into compact team-only cards. */
-  compactTeams?: boolean
+  teamStatusRollups?: Record<string, OverviewStatusRollup> | null
 ): { nodes: Node[]; edges: Edge[] } {
   return useMemo(() => {
     const nodes: Node[] = [];
@@ -614,7 +612,7 @@ export function useOrganizationOverviewGraphLayout(
       }
 
       // ── Projects — saved position, or spawn offset from parent team ─────
-      if (!compactTeams && teamData.projects.length > 0) {
+      if (teamData.projects.length > 0) {
         teamData.projects.forEach((proj) => {
           const hasSaved =
             typeof proj.canvasPositionX === 'number' && typeof proj.canvasPositionY === 'number';
@@ -734,6 +732,5 @@ export function useOrganizationOverviewGraphLayout(
     orgRole,
     orgStatusRollup,
     teamStatusRollups,
-    compactTeams,
   ]);
 }

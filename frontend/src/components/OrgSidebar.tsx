@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -55,6 +55,7 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import OrganizationSwitcher from './OrganizationSwitcher';
+import SidebarSearch from './SidebarSearch';
 import FeedbackPopover from './FeedbackPopover';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
@@ -133,6 +134,8 @@ export default function OrgSidebar({
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchAnchorRef = useRef<HTMLDivElement>(null);
 
   const [showCreateTeamModal, setShowCreateTeamModal] = useState(false);
   const [createTeamName, setCreateTeamName] = useState('');
@@ -568,10 +571,14 @@ export default function OrgSidebar({
           )}
         </SidebarHeader>
 
-        <div className="px-2 pb-1">
+        <div className="px-2 pb-1" ref={searchAnchorRef}>
           <button
             type="button"
-            className="w-full flex items-center gap-2 px-3 h-8 rounded-md bg-background-subtle/50 border border-border/50 text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors text-left"
+            onClick={() => setSearchOpen(true)}
+            className={cn(
+              'w-full flex items-center gap-2 px-3 h-8 rounded-md bg-background-subtle/50 border border-border/50 text-foreground-secondary hover:text-foreground hover:bg-background-subtle transition-colors text-left',
+              searchOpen && 'opacity-0',
+            )}
           >
             <Search className="h-4 w-4 flex-shrink-0" />
             <span className="text-sm flex-1">Find...</span>
@@ -890,6 +897,14 @@ export default function OrgSidebar({
       </Sidebar>
 
       <FeedbackPopover open={feedbackOpen} onOpenChange={setFeedbackOpen} hideTrigger />
+
+      <SidebarSearch
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        anchorRef={searchAnchorRef}
+        organizationId={organizationId}
+        permissions={effectivePerms}
+      />
 
       <Dialog
         open={!!aegisConfirmDeleteId}

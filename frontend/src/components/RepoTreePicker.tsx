@@ -49,8 +49,10 @@ const FRAMEWORK_LABELS: Record<string, string> = {
   aspnet: 'ASP.NET',
 };
 
-function frameworkLabel(id?: string | null): string {
-  if (!id) return 'No framework detected';
+export function frameworkLabel(id?: string | null): string {
+  // The cheap root peek emits the literal 'unknown' (not null) when the root has
+  // no manifest — treat that the same as "nothing detected".
+  if (!id || id === 'unknown') return 'No framework detected';
   return FRAMEWORK_LABELS[id] ?? id;
 }
 

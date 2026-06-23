@@ -68,7 +68,6 @@ function Graph() {
       "owner",
       null,
       null,
-      false,
     );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(layoutNodes);
