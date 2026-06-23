@@ -18,6 +18,7 @@ import {
   type ExtractionJobRow,
 } from './job-db';
 import { postScanJobMeterEvent } from './lib/meter-event';
+import { startWorkerWatchdog, type WorkerWatchdog } from './worker-watchdog';
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -26,6 +27,12 @@ const POLL_INTERVAL_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
+
+// Stall watchdog (started in runWorker). Module-scoped so processJob /
+// processExtractionJob can mark progress on every successful heartbeat without
+// threading it through every call. Null in CLI / test paths that never run the
+// worker loop.
+let watchdog: WorkerWatchdog | null = null;
 
 function getSupabase(): Storage {
   const url = process.env.SUPABASE_URL;
@@ -45,7 +52,13 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
     integration_id?: string;
   };
 
-  const logger = new ExtractionLogger(supabase, job.project_id, job.run_id);
+  // onProgress feeds the watchdog's pipeline-progress signal: every log line
+  // means the extraction just moved a step, which a frozen-but-alive hang
+  // (event loop alive, pipeline stuck on a never-resolving await) would stop
+  // emitting — the bare liveness heartbeat can't catch that.
+  const logger = new ExtractionLogger(supabase, job.project_id, job.run_id, {
+    onProgress: () => watchdog?.markProgress(),
+  });
 
   await logger.info('cloning', 'Extraction started');
 
@@ -69,7 +82,7 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
       lastCancelledKnown = await isJobCancelled(supabase, job.id, lastCancelledKnown);
       return lastCancelledKnown;
     },
-    async () => { await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id); }
+    async () => { await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id); watchdog?.markProgress(); }
   );
 
   if (await isJobCancelled(supabase, job.id, lastCancelledKnown)) {
@@ -105,19 +118,61 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
   console.log(`${tag} Dispatching ${job.type} job for project ${job.project_id}`);
   const jobStartedAt = Date.now();
 
+  // Arm the stall watchdog so the worker self-terminates on a stall instead of
+  // idling until the backend's external 5-min detector SIGTERMs it. Extraction
+  // arms BOTH the liveness signal (event-loop-block / DB-wedge, fed by the
+  // heartbeats below) and the pipeline-progress signal (frozen-but-alive, fed by
+  // log writes + subprocess pulses). DAST arms liveness only — it doesn't feed
+  // the extraction-log progress stream, so the progress signal would false-fire
+  // on a legitimately long active scan.
+  watchdog?.arm(job.type === 'extraction');
+  watchdog?.onSoftStall(async () => {
+    // Best-effort: record a clean failure so the user sees "worker stalled"
+    // immediately rather than waiting for the external crash detector. Runs
+    // under the watchdog's own time cap.
+    if (job.type === 'extraction') {
+      try {
+        const stallLogger = new ExtractionLogger(supabase, job.project_id, job.run_id);
+        await stallLogger.error(
+          'complete',
+          'Extraction failed — the worker stalled and stopped responding. Re-sync from project settings to try again.',
+        );
+      } catch {
+        /* best-effort */
+      }
+    }
+    try {
+      await updateJobStatus(
+        supabase,
+        job.id,
+        MACHINE_ID,
+        job.run_id,
+        'failed',
+        'The worker stalled and self-terminated (a scan step stopped responding).',
+      );
+    } catch {
+      /* best-effort */
+    }
+  });
+
   // Send one explicit heartbeat right after the claim — the first interval
-  // pulse is otherwise HEARTBEAT_INTERVAL_MS away.
+  // pulse is otherwise HEARTBEAT_INTERVAL_MS away. This is a LIVENESS ping only
+  // (it fires on a timer regardless of pipeline movement), so it must NOT mark
+  // pipeline progress — otherwise a frozen-but-alive hang would look healthy.
   try {
     await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id);
+    watchdog?.markLiveness();
   } catch {
     // non-fatal
   }
 
-  // Single shared heartbeat regardless of type. The pipeline-specific code below
-  // also pulses heartbeat at step boundaries inside long-running subprocesses.
+  // Single shared heartbeat regardless of type. Liveness-only, for the same
+  // reason as above. The pipeline-specific code marks real PROGRESS separately
+  // (log writes + subprocess pulses at step boundaries).
   const heartbeatInterval = setInterval(async () => {
     try {
       await sendHeartbeat(supabase, job.id, MACHINE_ID, job.run_id);
+      watchdog?.markLiveness();
     } catch {
       // non-fatal
     }
@@ -163,6 +218,10 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
     }
   } finally {
     clearInterval(heartbeatInterval);
+    // Disarm the watchdog the moment the job settles, so the idle poll loop (up
+    // to IDLE_TIMEOUT_MS with no heartbeat by design) is never flagged as a stall.
+    watchdog?.disarm();
+    watchdog?.onSoftStall(null);
     // Emit worker_minutes meter event for billing. Best-effort: failures
     // are logged + retried inside postScanJobMeterEvent. We don't gate
     // worker completion on the meter event; the reconcile script catches
@@ -196,6 +255,11 @@ async function runWorker(): Promise<void> {
   // Clear any dast-nuclei-* credential dirs orphaned by a hard crash that
   // skipped runNuclei's finally cleanup. Best-effort, never throws.
   sweepStaleDastTmpDirs();
+
+  // Stall watchdog: armed per-job inside processJob. Self-terminates the worker
+  // (and so stops the machine) when a job wedges, instead of waiting on the
+  // backend's external 5-min stuck detector.
+  watchdog = startWorkerWatchdog();
 
   let lastJobTime = Date.now();
 
@@ -243,6 +307,11 @@ async function runWorker(): Promise<void> {
 // process.exit always runs even if close() rejects (Fly sends SIGINT on
 // scale-to-zero with a 5-min grace, so 2s is comfortably within budget).
 async function flushSentryAndExit(code: number): Promise<void> {
+  try {
+    watchdog?.stop();
+  } catch {
+    /* never block exit on watchdog teardown */
+  }
   try {
     await Sentry.close(2000);
   } catch {
