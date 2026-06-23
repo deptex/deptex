@@ -5,7 +5,6 @@ import { AuthProvider } from "../contexts/AuthContext";
 import App from "./App";
 import DocsApp from "./DocsApp";
 import DocsLayout from "./pages/DocsLayout";
-import HelpCenterPage from "./pages/docs/HelpCenterPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import SSOCallbackPage from "./pages/SSOCallbackPage";
@@ -394,10 +393,6 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: <Navigate to="/docs/introduction" replace />,
-      },
-      {
-        path: "help",
-        element: <HelpCenterPage />,
       },
       {
         path: ":section",
