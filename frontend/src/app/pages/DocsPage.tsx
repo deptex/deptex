@@ -101,16 +101,35 @@ interface DocsPageProps {
   section?: string;
 }
 
-const introductionOffers = [
-  "Custom organization-defined statuses for project compliance (not just pass/fail)",
-  "AI-powered vulnerability fixing with automated PR creation (Aider) and human review",
-  "Dependency Score (package reputation) and Depscore (context-aware vulnerability risk) for prioritization",
-  "Live extraction logs and real-time progress via Supabase Realtime",
-  "SLSA provenance verification and malicious package detection",
-  "SBOM generation and compliance tracking for frameworks and license policies",
-  "Autonomous Security Agent (Aegis) to chat, run tasks, automations, and Slack bot",
-  "Organizations and teams with roles, permissions, and scoped visibility",
-  "Policy-as-code (packagePolicy, projectStatus, pullRequestCheck) and integrations (GitHub, GitLab, Bitbucket, Slack, etc.)",
+const introductionOffers: { title: string; body: string }[] = [
+  {
+    title: "Reachability-scored CVE scanning",
+    body: "Every dependency vulnerability is scored by whether it's actually reachable in your code (Depscore), across 8 languages — so you fix what's exploitable, not just what's listed.",
+  },
+  {
+    title: "Supply-chain & malicious package detection",
+    body: "Malicious package detection, SLSA provenance verification, and OpenSSF signals on every dependency you pull in.",
+  },
+  {
+    title: "Code scanning",
+    body: "Static analysis (SAST) and live-verified secret detection across your whole codebase, deduped and scored.",
+  },
+  {
+    title: "Infrastructure & DAST",
+    body: "IaC misconfigurations, container image CVEs with base-image fixes, and active runtime testing of your live app.",
+  },
+  {
+    title: "Aegis — autonomous security agent",
+    body: "Chats about your posture, plans the fix, opens a draft pull request you review, runs scheduled automations, and remembers context between runs.",
+  },
+  {
+    title: "Policy-as-code",
+    body: "Per-dependency policies, project statuses, and PR checks, executed in a sandbox and versioned with full change history.",
+  },
+  {
+    title: "Organizations, teams & integrations",
+    body: "Role-based access with scoped project visibility, wired into GitHub, GitLab, Bitbucket, Slack, Jira, and Linear.",
+  },
 ];
 
 function IntroductionContent() {
@@ -119,10 +138,10 @@ function IntroductionContent() {
   return (
     <>
       <p className="text-foreground/90 leading-relaxed mb-8">
-        Deptex is a security and compliance platform for your dependency supply chain. It connects to
-        your repositories, tracks every dependency, and gives you a single place to see risks,
-        enforce policies with custom statuses, and use AI-powered fixing (automated PRs) and the
-        autonomous security agent (Aegis) to remediate and report on your behalf.
+        Deptex is an AI-powered dependency and code security platform. It connects to your
+        repositories, scans every dependency, line of code, and piece of infrastructure, and scores
+        each finding by what&apos;s actually reachable — then Aegis investigates and ships the fix as
+        a pull request you review.
       </p>
 
       <div className="mb-10">
@@ -142,20 +161,20 @@ function IntroductionContent() {
           )}
         </div>
         <p className="mt-2 text-sm text-foreground/70">
-          Organization dashboard: org graph with teams, projects, health scores (A+), and extraction status.
+          Organization dashboard: org graph with teams, projects, health scores, and extraction status.
         </p>
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold text-foreground mb-3">What we offer</h2>
-        <ul className="space-y-2 text-foreground/90">
-          {introductionOffers.map((item, i) => (
-            <li key={i} className="flex gap-2">
-              <span className="shrink-0 mt-1.5 size-1.5 rounded-full bg-foreground-muted" aria-hidden />
-              <span className="leading-relaxed">{item}</span>
-            </li>
+        <h2 className="text-lg font-semibold text-foreground mb-4">What you get</h2>
+        <div className="space-y-5">
+          {introductionOffers.map((item) => (
+            <div key={item.title} className="border-l-2 border-white/[0.08] pl-4">
+              <h3 className="font-medium text-foreground">{item.title}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-foreground/80">{item.body}</p>
+            </div>
           ))}
-        </ul>
+        </div>
       </div>
     </>
   );

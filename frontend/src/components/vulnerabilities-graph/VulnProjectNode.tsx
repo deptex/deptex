@@ -275,9 +275,7 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
           {/* Compact icon-only node. Project name (and status) render below the
               card, outside the clipping box, n8n / Tines style. */}
           <div className="relative h-full w-full rounded-xl border border-border bg-background-card-header cursor-pointer flex items-center justify-center hover:border-border/80 transition-colors">
-            {isInitialExtracting ? (
-              <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" aria-hidden />
-            ) : frameworkIdForIcon ? (
+            {frameworkIdForIcon ? (
               <FrameworkIcon frameworkId={frameworkIdForIcon} size={30} className="text-white" />
             ) : (
               <Folder className="h-7 w-7 text-white" strokeWidth={1.5} />
@@ -292,7 +290,10 @@ function VulnProjectNodeComponent({ data }: NodeProps) {
               {projectName}
             </p>
             {isInitialExtracting ? (
-              <span className="text-[10px] text-muted-foreground mt-0.5">Creating</span>
+              <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                <Loader2 className="h-2.5 w-2.5 animate-spin" aria-hidden />
+                Creating
+              </span>
             ) : isInitialExtractionFailed ? (
               <span className="text-[10px] text-destructive/80 mt-0.5">Failed</span>
             ) : bandCounts ? (

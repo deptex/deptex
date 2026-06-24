@@ -34,6 +34,7 @@ const CACHE_TTL = {
   POLICIES: 12 * 60 * 60,       // 12 hours - project effective policies
   IMPORT_STATUS: 12 * 60 * 60,  // 12 hours - import/AST completion status
   DEPENDENCY_NOTES: 7 * 24 * 60 * 60, // 1 week - invalidated on note/reaction mutations
+  ORG_REPOSITORIES: 2 * 60,     // 2 minutes - org-wide repo listing fetched live from the git provider; short so a newly-granted repo shows up quickly
 };
 
 /**
@@ -289,6 +290,49 @@ export async function invalidateCache(key: string): Promise<boolean> {
   } catch (error: any) {
     console.warn(`[Cache] Failed to invalidate cache for key ${key}:`, error.message);
     return false;
+  }
+}
+
+/**
+ * Org-wide repository listing cache — the "New Project" repo picker.
+ *
+ * Keyed per (org, integration scope) because the listing is fetched LIVE from
+ * the git provider (GitHub/GitLab/Bitbucket) and is the slowest part of opening
+ * the New Project screen. An index SET tracks every scope cached for an org so
+ * a single disconnect can wipe them all, no matter which scopes exist.
+ */
+export function getOrgRepositoriesCacheKey(organizationId: string, scope: string): string {
+  return `org-repos:v1:${organizationId}:${scope}`;
+}
+function getOrgRepositoriesIndexKey(organizationId: string): string {
+  return `org-repos:index:${organizationId}`;
+}
+export async function cacheOrgRepositories<T>(
+  organizationId: string,
+  scope: string,
+  value: T
+): Promise<void> {
+  const client = getRedisClient();
+  if (!client) return;
+  const cacheKey = getOrgRepositoriesCacheKey(organizationId, scope);
+  try {
+    await client.setex(cacheKey, CACHE_TTL.ORG_REPOSITORIES, JSON.stringify(value));
+    // Track the key so invalidateOrgRepositoriesCache can clear every scope.
+    await client.sadd(getOrgRepositoriesIndexKey(organizationId), cacheKey);
+  } catch (error: any) {
+    console.warn(`[Cache] Failed to cache org repositories:`, error.message);
+  }
+}
+export async function invalidateOrgRepositoriesCache(organizationId: string): Promise<void> {
+  const client = getRedisClient();
+  if (!client) return;
+  try {
+    const indexKey = getOrgRepositoriesIndexKey(organizationId);
+    const keys = await client.smembers(indexKey);
+    if (keys.length > 0) await Promise.all(keys.map((k) => client.del(k)));
+    await client.del(indexKey);
+  } catch (error: any) {
+    console.warn(`[Cache] Failed to invalidate org repositories cache:`, error.message);
   }
 }
 

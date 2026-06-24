@@ -1,20 +1,19 @@
 /**
  * §3.8 Breadth wall — breadth as fact, after depth.
  *
- * Reworked 2026-06-16 (founder, Aikido /code-tabs reference): the dry 3×3 text
- * grid became a tabbed feature display. We have ONE platform (not four products
- * like Aikido), so the tabs group the categories by where the vuln lives —
- * Code / Dependencies / Infrastructure.
+ * Reworked 2026-06-19 (founder): the tabbed grid hid half the categories behind
+ * a tab. Replaced with an editorial "label on the left, its scanners on the
+ * right" layout that shows EVERY category at once, grouped by where the risk
+ * lives — Dependencies / Code / Infrastructure (deps lead: the most
+ * differentiated layer, reachability-scored).
  *
- * Trimmed 2026-06-16 (founder): dropped Reachability (it owns the Verified
- * section above — featuring it once beats listing it twice) and SBOM & VEX (an
- * export, not a scanner). Engine vendor names removed everywhere — naming the
- * OSS we orchestrate (TruffleHog/Semgrep/…) reads as plumbing, not product.
+ * Trimmed earlier (founder): dropped Reachability (it owns the Verified section
+ * above — featuring it once beats listing it twice) and SBOM & VEX (an export,
+ * not a scanner). Engine vendor names removed everywhere — naming the OSS we
+ * orchestrate (TruffleHog/Semgrep/…) reads as plumbing, not product.
  */
-import { useState } from "react";
 import {
   Braces,
-  Container,
   KeyRound,
   Layers,
   Package,
@@ -30,67 +29,64 @@ interface Feature {
   sentence: string;
 }
 
-const TABS: { id: string; label: string; features: Feature[] }[] = [
+const GROUPS: { label: string; tagline: string; features: Feature[] }[] = [
   {
-    id: "app",
-    label: "Code & dependencies",
+    label: "Dependencies",
+    tagline: "What you import",
     features: [
       {
-        Icon: Braces,
-        name: "SAST",
-        sentence:
-          "Static analysis across your whole workspace, deduped and CWE-scored, so risks are caught before they merge.",
-      },
-      {
-        Icon: KeyRound,
-        name: "Secrets",
-        sentence:
-          "Leaked keys and tokens, caught and live-verified — a working credential outscores a dormant one.",
-      },
-      {
         Icon: Package,
-        name: "Dependency scanning",
+        name: "CVE scanning",
         sentence:
-          "A full SBOM every scan, matched against known vulnerabilities so no ecosystem goes blind.",
+          "Dependency CVEs scored by whether they're actually reachable in your codebase — not a generic CVSS rating.",
       },
       {
         Icon: ShieldAlert,
         name: "Malicious packages",
         sentence:
-          "Malicious-package feeds, behavioral heuristics, and a capability fingerprint for every package you pull in.",
+          "Known-malicious feeds plus behavioral and capability fingerprinting on everything you install.",
       },
     ],
   },
   {
-    id: "infrastructure",
+    label: "Code",
+    tagline: "What you write",
+    features: [
+      {
+        Icon: Braces,
+        name: "SAST",
+        sentence:
+          "Deduped, CWE-scored static analysis across your whole codebase — caught before it merges.",
+      },
+      {
+        Icon: KeyRound,
+        name: "Secrets",
+        sentence:
+          "Hardcoded keys and tokens, live-verified so a working credential outranks a dead one.",
+      },
+    ],
+  },
+  {
     label: "Infrastructure",
+    tagline: "What you deploy",
     features: [
       {
         Icon: Layers,
-        name: "Infrastructure as Code",
+        name: "IaC & containers",
         sentence:
-          "Misconfigurations across Terraform, Kubernetes, Helm, CloudFormation, Dockerfile and more.",
-      },
-      {
-        Icon: Container,
-        name: "Containers",
-        sentence:
-          "Image CVEs, base-image upgrade advice, and a bridge linking OS-package CVEs to the code that loads them.",
+          "Misconfigs across Terraform, Kubernetes and Dockerfiles, plus image CVEs and base-image fixes.",
       },
       {
         Icon: Radar,
         name: "DAST",
         sentence:
-          "Your running app gets actively attacked, guided by an OpenAPI spec synthesized from your detected routes.",
+          "Your running app, actively attacked along an OpenAPI spec synthesized from your routes.",
       },
     ],
   },
 ];
 
 export default function BreadthWall() {
-  const [active, setActive] = useState(TABS[0].id);
-  const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
-
   return (
     <section className="w-full border-t border-white/[0.08]">
       <div className="mx-auto max-w-[1200px] px-6 py-24">
@@ -100,48 +96,44 @@ export default function BreadthWall() {
           </h2>
         </Reveal>
 
-        {/* tabs */}
-        <Reveal delayMs={60}>
-          <div
-            role="tablist"
-            aria-label="Scanner categories"
-            className="mt-10 flex gap-8 border-b border-border"
-          >
-            {TABS.map((t) => {
-              const isActive = t.id === active;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => setActive(t.id)}
-                  className={`-mb-px border-b-2 pb-3 text-[15px] font-medium transition-colors ${
-                    isActive
-                      ? "border-accent-text text-foreground"
-                      : "border-transparent text-foreground-secondary hover:text-foreground"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-        </Reveal>
+        {/* category groups — label on the left, its scanners on the right */}
+        <div className="mt-14">
+          {GROUPS.map((group, gi) => (
+            <Reveal key={group.label} delayMs={gi * 70}>
+              <div
+                className={`grid grid-cols-1 gap-x-12 gap-y-8 py-12 lg:grid-cols-[200px_1fr] ${
+                  gi > 0 ? "border-t border-white/[0.06]" : ""
+                }`}
+              >
+                <div>
+                  <h3 className="text-lg font-semibold tracking-[-0.01em] text-foreground">
+                    {group.label}
+                  </h3>
+                  <p className="mt-1.5 text-sm text-foreground-secondary">
+                    {group.tagline}
+                  </p>
+                </div>
 
-        {/* active tab's features */}
-        <div
-          key={activeTab.id}
-          className="tab-fade mt-10 grid grid-cols-1 gap-x-10 gap-y-12 sm:grid-cols-2 lg:grid-cols-3"
-        >
-          {activeTab.features.map(({ Icon, name, sentence }) => (
-            <div key={name} className="flex flex-col">
-              <Icon className="h-5 w-5 text-foreground-secondary" aria-hidden />
-              <h3 className="mt-4 text-[15px] font-medium text-foreground">{name}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-foreground-secondary">
-                {sentence}
-              </p>
-            </div>
+                <div className="grid grid-cols-1 gap-x-10 gap-y-10 sm:grid-cols-2">
+                  {group.features.map(({ Icon, name, sentence }) => (
+                    <div key={name} className="group flex flex-col">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.03] transition-colors group-hover:border-white/[0.18]">
+                        <Icon
+                          className="h-[18px] w-[18px] text-foreground-secondary transition-colors group-hover:text-foreground"
+                          aria-hidden
+                        />
+                      </div>
+                      <h4 className="mt-4 text-[15px] font-medium text-foreground">
+                        {name}
+                      </h4>
+                      <p className="mt-2 text-sm leading-relaxed text-foreground-secondary">
+                        {sentence}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Reveal>
           ))}
         </div>
       </div>

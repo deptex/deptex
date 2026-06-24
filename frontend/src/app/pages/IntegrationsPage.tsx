@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Mail, Webhook } from "lucide-react";
+import { cn } from "../../lib/utils";
 
 const integrations = [
   {
@@ -51,12 +52,6 @@ const integrations = [
     category: "Project Management",
   },
   {
-    name: "Asana",
-    iconSrc: "/images/integrations/asana.png",
-    description: "Track security remediation and tasks in Asana.",
-    category: "Project Management",
-  },
-  {
     name: "Webhooks",
     iconSrc: null,
     description: "Build custom integrations with webhooks for any event in your security workflow.",
@@ -96,28 +91,33 @@ export default function IntegrationsPage() {
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-6 text-foreground">
             Integrations
           </h1>
-          <p className="text-xl text-foreground-secondary mb-8 max-w-3xl mx-auto leading-relaxed">
-            Connect Deptex with your favorite tools and workflows. Seamlessly integrate security monitoring into your existing development and operations stack.
+          <p className="text-xl text-foreground mb-8 max-w-2xl mx-auto leading-relaxed">
+            Connect Deptex to the tools you already use — source control, alerts, and ticketing, wired into your workflow.
           </p>
 
-          {/* Category filter – closer to subtitle */}
-          <div className="flex flex-wrap justify-center gap-2">
-            {categories.map((category) => {
-              const isSelected = selectedCategory === category;
-              return (
-                <button
-                  key={category}
-                  onClick={() => setSelectedCategory(category)}
-                  className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
-                    isSelected
-                      ? "bg-primary text-primary-foreground border-2 border-primary-foreground/30 hover:border-primary-foreground/50"
-                      : "bg-background-card/50 text-foreground-secondary border border-border/50 hover:bg-background-card hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  {category}
-                </button>
-              );
-            })}
+          {/* Category filter — the app's segmented-toggle pattern */}
+          <div className="flex justify-center">
+            <div className="inline-flex flex-wrap items-center justify-center gap-1 rounded-lg border border-border bg-background-card p-1">
+              {categories.map((category) => {
+                const isSelected = selectedCategory === category;
+                return (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setSelectedCategory(category)}
+                    aria-pressed={isSelected}
+                    className={cn(
+                      "inline-flex h-8 items-center rounded-md px-3.5 text-sm transition-all",
+                      isSelected
+                        ? "bg-background-subtle text-foreground font-medium shadow-sm ring-1 ring-white/[0.06]"
+                        : "text-foreground-secondary hover:text-foreground"
+                    )}
+                  >
+                    {category}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </section>

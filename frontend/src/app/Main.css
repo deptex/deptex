@@ -23,21 +23,6 @@
 }
 
 @layer utilities {
-  /* Get Demo page: inputs use Vercel palette */
-  .demo-page-input,
-  input.demo-page-input,
-  textarea.demo-page-input {
-    background-color: var(--vercel-card) !important;
-    border: 1px solid var(--vercel-border);
-  }
-  .demo-page-input::placeholder,
-  input.demo-page-input::placeholder,
-  textarea.demo-page-input::placeholder {
-    color: var(--vercel-text-muted);
-  }
-  .demo-page-label {
-    color: var(--vercel-text-secondary);
-  }
 
   /* Chrome, Safari and Opera */
   .no-scrollbar::-webkit-scrollbar {
@@ -118,6 +103,16 @@
     outline: none !important;
     box-shadow: none !important;
     border: none !important;
+  }
+
+  /* Founder preference: never paint the browser's default focus outline
+     anywhere in the app. It appears as a white ring when focus is restored to a
+     trigger (e.g. Radix returning focus after a dropdown/popover closes).
+     Intentional focus styling uses Tailwind `ring-*` (box-shadow), so those are
+     untouched — only the default `outline` is removed. */
+  *:focus,
+  *:focus-visible {
+    outline: none !important;
   }
 
   /* New Agent sidebar: horizontal scrolling suggestions, pause on hover */

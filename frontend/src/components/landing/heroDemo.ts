@@ -255,6 +255,25 @@ export const heroFindings: SecurityTableRow[] = [
   vuln({ id: "py-3177", osv: "CVE-2021-3177", cve: "CVE-2021-3177", severity: "high", summary: "ctypes PyCArg buffer overflow (python 3.5)", dep: "python", version: "3.5.0", depscore: 0, level: "unreachable", project: "payments-svc" }),
 ];
 
+/* --------------------------- per-feature-page findings (dedicated pages) */
+// Separate lists for the Code scanning + Infrastructure feature pages, kept OUT
+// of heroFindings so the homepage Overview counts + Verified table stay
+// unchanged. Built from the same row helpers, so they feed the real table.
+export const codeFindings: SecurityTableRow[] = [
+  semgrepRow({ id: "sast-sqli", rule: "python.django.security.audit.raw-query", file: "app/db/users.py", line: 88, severity: "ERROR", message: "SQL query built by string formatting on request data", category: "sql-injection", cwe: ["CWE-89"], snippet: "cursor.execute(f\"SELECT * FROM users WHERE email = '{email}'\")", depscore: 86, project: "storefront-api" }),
+  semgrepRow({ id: "sast-cmdi", rule: "python.lang.security.audit.subprocess-shell-true", file: "app/routes/export.py", line: 42, severity: "ERROR", message: "subprocess called with shell=True on user input — command injection", category: "command-injection", cwe: ["CWE-78"], snippet: 'subprocess.run(f"zip -r {user_path}", shell=True)', depscore: 81, project: "storefront-api" }),
+  secretRow({ id: "secret-stripe", detector: "Stripe", file: "src/config/credentials.py", line: 24, redacted: "sk_live_••••••3xQ2", snippet: 'STRIPE_KEY = "sk_live_51AbC...3xQ2"  # TODO: move to env', depscore: 78, project: "payments-svc" }),
+  secretRow({ id: "secret-aws", detector: "AWS", file: "deploy/terraform/main.tf", line: 7, redacted: "AKIA••••••7Q4P", snippet: 'access_key = "AKIAIOSFODNN7EXAMPLE"', depscore: 74, project: "api-gateway" }),
+  semgrepRow({ id: "sast-xss", rule: "javascript.react.security.audit.dangerouslysetinnerhtml", file: "src/views/Profile.jsx", line: 31, severity: "WARNING", message: "Unescaped user input passed to dangerouslySetInnerHTML", category: "xss", cwe: ["CWE-79"], snippet: "<div dangerouslySetInnerHTML={{ __html: bio }} />", depscore: 52, project: "web-dashboard" }),
+];
+
+export const infraFindings: SecurityTableRow[] = [
+  iacRow({ id: "iac-sg", rule: "CKV_AWS_24", framework: "terraform", file: "infra/aws/sg.tf", line: 12, severity: "CRITICAL", message: "Security group allows 0.0.0.0/0 on port 22 (SSH)", description: "Ingress is open to the entire internet on the SSH port.", snippet: 'ingress {\n  from_port   = 22\n  cidr_blocks = ["0.0.0.0/0"]\n}', depscore: 92, project: "api-gateway" }),
+  iacRow({ id: "iac-s3", rule: "CKV_AWS_20", framework: "terraform", file: "infra/aws/s3.tf", line: 8, severity: "HIGH", message: "S3 bucket allows public read access", description: "The bucket is created with acl = public-read, making its contents world-readable.", snippet: 'resource "aws_s3_bucket" "assets" {\n  acl = "public-read"\n}', depscore: 70, project: "api-gateway" }),
+  iacRow({ id: "iac-docker", rule: "CKV_DOCKER_3", framework: "dockerfile", file: "Dockerfile", line: 1, severity: "HIGH", message: "Image runs as root — no USER instruction", description: "Containers should drop to a non-root user.", snippet: "FROM node:18\n# no USER instruction — defaults to root", depscore: 66, project: "web-dashboard" }),
+  iacRow({ id: "iac-k8s", rule: "CKV_K8S_8", framework: "kubernetes", file: "k8s/api-deploy.yaml", line: 40, severity: "MEDIUM", message: "Container has no readiness probe", description: "Without a readiness probe, traffic can be routed to an unready pod.", snippet: "containers:\n  - name: api\n    # no readinessProbe defined", depscore: 41, project: "payments-svc" }),
+];
+
 /* ---------------------------------------------------------------------- teams */
 // Per-project Overview label = count of OPEN findings (autoTriageRow === null),
 // coloured by the project's worst open depscore using the same red/orange/blue/

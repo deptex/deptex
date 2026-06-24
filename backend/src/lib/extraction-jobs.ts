@@ -100,6 +100,12 @@ export async function queueExtractionJob(
       status: 'queued',
       run_id: runId,
       payload,
+      // No automatic retries. If the worker machine dies (OOM / disk / preemption),
+      // a blind requeue would usually crash the same way on the same machine — so we
+      // mark the scan failed instead. The user re-syncs manually to retry. With
+      // max_attempts = 1, recover_stuck never requeues (attempts < max is false) and
+      // fail_exhausted marks the stuck job failed on the first crash.
+      max_attempts: 1,
     };
     if (meta?.ai_cost_cap_usd != null && Number.isFinite(meta.ai_cost_cap_usd) && meta.ai_cost_cap_usd > 0) {
       // Cap to a sane ceiling so an operator typo (e.g. $10000) can't disable

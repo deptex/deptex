@@ -22,7 +22,7 @@ export default function TermsContent() {
         </div>
         <div className="p-6">
           <p className="text-foreground/90 leading-relaxed">
-            Deptex provides dependency tracking, vulnerability monitoring, and compliance tools for software development teams.
+            Deptex provides dependency, code, and infrastructure security scanning, plus AI-assisted fixes, for software development teams.
             You agree to use the service in compliance with applicable laws and not to misuse or abuse the platform.
           </p>
         </div>

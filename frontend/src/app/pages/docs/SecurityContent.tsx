@@ -23,7 +23,7 @@ export default function SecurityContent() {
         </div>
         <div className="p-6">
           <p className="text-foreground/90 leading-relaxed">
-            Organizations can define roles, permissions, and team-scoped access. SAML SSO and MFA enforcement add extra layers — included for every organization.
+            Organizations define their own roles and permissions with team-scoped access, so each member gets exactly the access they need — and nothing more.
           </p>
         </div>
       </div>

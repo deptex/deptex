@@ -18,7 +18,7 @@ import {
 import { queueExtractionJob } from '../lib/extraction-jobs';
 import { registerJiraWebhook, refreshAllJiraWebhooks } from '../lib/trackers';
 import { isValidInternalKey } from '../middleware/internal-key';
-import { invalidateProjectCaches } from '../lib/cache';
+import { invalidateProjectCaches, invalidateOrgRepositoriesCache } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
 import { detectAffectedWorkspaces, isFileInWorkspace, type EcosystemId } from '../lib/manifest-registry';
@@ -4072,6 +4072,12 @@ router.delete('/organizations/:orgId/connections/:connectionId', authenticateUse
 
     if (deleteError) {
       return res.status(500).json({ error: deleteError.message });
+    }
+
+    // Disconnecting a git provider must drop its repos from the New Project
+    // picker immediately rather than lingering for the cache TTL.
+    if (['github', 'gitlab', 'bitbucket'].includes(connection.provider)) {
+      await invalidateOrgRepositoriesCache(orgId);
     }
 
     try { await emitEvent({ type: 'integration_disconnected', organizationId: orgId, payload: { provider: connection.provider, displayName: connection.display_name }, source: 'system', priority: 'normal' }); } catch (e) {}

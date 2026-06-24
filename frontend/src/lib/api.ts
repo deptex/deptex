@@ -6349,6 +6349,35 @@ export async function apiAdminListExtractionFailures(params: {
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
 }
 
+export interface DemoRequestLead {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  company_name: string | null;
+  dev_count: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export interface AdminDemoRequestsResponse {
+  data: DemoRequestLead[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export async function apiAdminListDemoRequests(params: {
+  page?: number;
+  per_page?: number;
+}): Promise<AdminDemoRequestsResponse> {
+  const qs = new URLSearchParams();
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.per_page != null) qs.set('per_page', String(params.per_page));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return fetchWithAuth(`/api/admin/demo-requests${suffix}`);
+}
+
 export interface ExtractionTrendPoint {
   date: string;
   errors: number;
