@@ -30,7 +30,9 @@ export default function OrganizationVulnerabilitiesTableSkeleton({ showProjectCo
             {/* finding col has no explicit width so it absorbs leftover space */}
             <col />
             <col className="w-[8rem]" />
-            <col className="w-[18rem]" />
+            {/* Location only in single-project views — the Project column is the locator
+                everywhere else, matching the real table. */}
+            {!showProjectCol && <col className="w-[18rem]" />}
             {showProjectCol && <col className="w-[18rem]" />}
             <col className="w-[12rem]" />
           </colgroup>
@@ -39,7 +41,9 @@ export default function OrganizationVulnerabilitiesTableSkeleton({ showProjectCo
               <th className="text-center px-2 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Type</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Finding</th>
               <th className="text-center px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Depscore</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Location</th>
+              {!showProjectCol && (
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Location</th>
+              )}
               {showProjectCol && (
                 <th className="text-left px-4 py-3 text-xs font-semibold text-foreground-secondary uppercase tracking-wider">Project</th>
               )}
@@ -75,15 +79,17 @@ export default function OrganizationVulnerabilitiesTableSkeleton({ showProjectCo
                 <td className="px-4 py-3 align-top">
                   <div className="h-6 w-8 rounded-full bg-muted/50 animate-pulse mx-auto" />
                 </td>
-                {/* Location */}
-                <td className="px-4 py-3 align-top">
-                  <div className={cn(
-                    'h-4 rounded-md bg-muted/45 animate-pulse',
-                    i % 3 === 0 && 'w-[70%]',
-                    i % 3 === 1 && 'w-[52%]',
-                    i % 3 === 2 && 'w-[62%]',
-                  )} />
-                </td>
+                {/* Location — single-project views only (mirrors the real table) */}
+                {!showProjectCol && (
+                  <td className="px-4 py-3 align-top">
+                    <div className={cn(
+                      'h-4 rounded-md bg-muted/45 animate-pulse',
+                      i % 3 === 0 && 'w-[70%]',
+                      i % 3 === 1 && 'w-[52%]',
+                      i % 3 === 2 && 'w-[62%]',
+                    )} />
+                  </td>
+                )}
                 {/* Project */}
                 {showProjectCol && (
                   <td className="px-4 py-3 align-top">
