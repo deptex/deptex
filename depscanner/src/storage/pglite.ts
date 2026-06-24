@@ -152,7 +152,13 @@ export async function createPGLiteStorage(
       );
     }
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-    await db.exec(stripPgliteIncompatible(schemaSql));
+    // Disable eager function-body validation before loading the dump. The dump
+    // emits functions alphabetically, so a SQL function that calls another
+    // function defined later in the section (e.g. compute_auto_ignore_reason →
+    // compute_iac_is_critical) would otherwise fail at CREATE time. pg_dump sets
+    // the same flag for exactly this reason; both functions exist by the time the
+    // scan invokes them at runtime. Production never replays this dump.
+    await db.exec('SET check_function_bodies = off;\n' + stripPgliteIncompatible(schemaSql));
   }
 
   return new PGLiteStorage(db, outputDir);
