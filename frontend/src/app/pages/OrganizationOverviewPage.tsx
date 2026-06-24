@@ -275,6 +275,9 @@ export default function OrganizationOverviewPage() {
   const [orgSidebarVisible, setOrgSidebarVisible] = useState(false);
   const [orgSidebarSecuritySummary, setOrgSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
   const [orgSidebarProjects, setOrgSidebarProjects] = useState<Project[]>([]);
+  // Flat copy of the org's projects from the graph load — lets the org sidebar seed
+  // instantly from memory instead of waiting on a fresh getProjects round-trip.
+  const [allProjectsFlat, setAllProjectsFlat] = useState<Project[]>([]);
   const [orgSidebarLoading, setOrgSidebarLoading] = useState(false);
   const [orgSidebarError, setOrgSidebarError] = useState(false);
   const [orgSidebarRefetch, setOrgSidebarRefetch] = useState(0);
@@ -824,19 +827,19 @@ export default function OrganizationOverviewPage() {
     setTeamsById({});
     setSecuritySummaryByProject(new Map());
 
+    // Gate the graph on the STRUCTURAL data only — teams + projects are all the nodes
+    // need to draw. Org statuses (team status rollups) and the org security summary
+    // (tile band pills) are decoration, and the summary is the heaviest call on the
+    // page (an org-wide counts RPC over every project's findings). Loading them on
+    // their own tracks lets the graph paint the instant teams/projects land instead of
+    // waiting behind that aggregate; the rollups + pills pop in a beat later.
     Promise.all([
       api.getTeams(organization.id),
       api.getProjects(organization.id),
-      api.getOrganizationStatuses(organization.id).catch(() => []),
-      // Band counts are tile decoration — soft-fail to "no pills" rather than failing the graph.
-      api.getOrgSecuritySummary(organization.id).catch(() => null),
     ])
-      .then(([teams, allProjects, statusesData, securitySummary]) => {
+      .then(([teams, allProjects]) => {
         if (cancelled) return;
-        setStatuses((statusesData as OrganizationStatus[]) ?? []);
-        if (securitySummary?.projects) {
-          setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
-        }
+        setAllProjectsFlat(allProjects as Project[]);
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
         setTeamsById(byId);
@@ -931,6 +934,20 @@ export default function OrganizationOverviewPage() {
         if (!cancelled) setLoading(false);
       });
 
+    // Decoration — independent of the graph paint. The status rollups and tile band
+    // pills enhance the nodes once they arrive; a failure or slow response here never
+    // holds back (or blanks) the graph.
+    api.getOrganizationStatuses(organization.id)
+      .then((d) => { if (!cancelled) setStatuses((d as OrganizationStatus[]) ?? []); })
+      .catch(() => {});
+    api.getOrgSecuritySummary(organization.id)
+      .then((s) => {
+        if (!cancelled && s?.projects) {
+          setSecuritySummaryByProject(new Map(s.projects.map((x) => [x.project_id, x])));
+        }
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
@@ -950,6 +967,7 @@ export default function OrganizationOverviewPage() {
       .then(([teams, allProjects, statusesData, securitySummary]) => {
         if (cancelled) return;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
+        setAllProjectsFlat(allProjects as Project[]);
         if (securitySummary?.projects) {
           setSecuritySummaryByProject(new Map(securitySummary.projects.map((s) => [s.project_id, s])));
         }
@@ -2255,10 +2273,21 @@ export default function OrganizationOverviewPage() {
   }, [rawTeamsWithProjects]);
 
   // Fetch the org-wide projects + security summary when the org sidebar opens.
+  // The graph load already fetched both, so seed the table from that in-memory data
+  // for an instant open (no skeleton), then revalidate in the background. The sidebar
+  // is the same data the tiles already show, so a stale-while-revalidate render is safe.
   useEffect(() => {
     if (!orgId || !orgSidebarOpen) return;
     let cancelled = false;
-    setOrgSidebarLoading(true);
+    const seededSummaries = Array.from(securitySummaryByProject.values());
+    const haveSeed = seededSummaries.length > 0 && allProjectsFlat.length > 0;
+    if (haveSeed) {
+      setOrgSidebarSecuritySummary(seededSummaries);
+      setOrgSidebarProjects(allProjectsFlat);
+      setOrgSidebarLoading(false); // we have data — skip the skeleton
+    } else {
+      setOrgSidebarLoading(true);
+    }
     setOrgSidebarError(false);
     Promise.all([api.getOrgSecuritySummary(orgId), api.getProjects(orgId)])
       .then(([summary, projects]) => {
@@ -2271,8 +2300,9 @@ export default function OrganizationOverviewPage() {
         }
       })
       .catch(() => {
-        if (cancelled) return;
-        setOrgSidebarError(true);
+        // Only surface an error if we had nothing to show; a failed refresh over a
+        // good seed should leave the seeded rows in place, not blank them.
+        if (!cancelled && !haveSeed) setOrgSidebarError(true);
       })
       .finally(() => {
         if (!cancelled) setOrgSidebarLoading(false);
@@ -2280,6 +2310,10 @@ export default function OrganizationOverviewPage() {
     return () => {
       cancelled = true;
     };
+    // securitySummaryByProject / allProjectsFlat are read once for the seed; excluding
+    // them keeps the effect from re-firing (and re-fetching) on every background graph
+    // refresh while the sidebar is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, orgSidebarOpen, orgSidebarRefetch]);
 
   // Fetch team stats, members, projects, org members, roles, and team data when team sidebar opens
@@ -2483,15 +2517,18 @@ export default function OrganizationOverviewPage() {
         setTeamSidebarBaseImageRecs([]);
         return;
       }
-      const perProject = await Promise.all(teamProjects.map((p) => loadProjectFindingRows(orgId, p)));
-      const rows: SecurityTableRow[] = [];
-      const recs: BaseImageRecommendation[] = [];
-      for (const r of perProject) {
-        rows.push(...r.rows);
-        recs.push(...r.baseImageRecs);
-      }
-      setTeamSidebarFindingRows(rows);
-      setTeamSidebarBaseImageRecs(recs);
+      // Render each project's findings the moment they land rather than awaiting the
+      // whole fan-out. The table swaps in as soon as the FIRST project resolves (the
+      // render shows the skeleton only while loading AND no rows yet) and fills in the
+      // rest progressively — so "time to first findings" is the fastest project, not
+      // the slowest. A single project failing is swallowed so it can't blank the team.
+      await Promise.all(teamProjects.map(async (p) => {
+        try {
+          const { rows, baseImageRecs } = await loadProjectFindingRows(orgId, p);
+          if (rows.length) setTeamSidebarFindingRows((prev) => [...prev, ...rows]);
+          if (baseImageRecs.length) setTeamSidebarBaseImageRecs((prev) => [...prev, ...baseImageRecs]);
+        } catch { /* one project's findings failing shouldn't blank the rest of the team */ }
+      }));
     } catch {
       setTeamSidebarFindingsError(true);
       setTeamSidebarFindingRows([]);
@@ -2770,10 +2807,19 @@ export default function OrganizationOverviewPage() {
     }
   }, []);
 
-  // Fetch project stats, vulnerabilities, full project and org when project sidebar opens
+  // Fetch project findings, stats, full project and org when the project sidebar opens.
+  // The Findings tab is the default landing tab, so its time-to-render is what "opening
+  // the project" feels like. We gate the table on ONLY the finding data it draws
+  // (SCA vulns + secrets + semgrep) and load everything else — stats, the full project,
+  // the org — on independent tracks so they can't hold the table behind them. Previously
+  // all six were one Promise.all, so the table waited on the slowest call (often the
+  // 10-query stats aggregate) even though it renders none of that data.
   useEffect(() => {
     if (!orgId || !selectedProjectId || !projectSidebarOpen) return;
+    const pid = selectedProjectId;
     let cancelled = false;
+    // projectStatsLoading is (despite the name) the findings-table skeleton gate — it
+    // stays true until the finding data below settles.
     setProjectStatsLoading(true);
     setProjectStats(null);
     setProjectVulnerabilities(null);
@@ -2787,48 +2833,67 @@ export default function OrganizationOverviewPage() {
     setProjectCodeFlows([]);
     setExpandedProjectVulnRowId(null);
     setProjectVulnDetailByRowId({});
-    setProjectSidebarProjectLoading(true);
+    // Clear stale project/org; the full project + org are loaded lazily by the
+    // effect below, only when a tab that needs them (Dependencies / Settings) is
+    // opened. The default Findings tab never touches them, so keeping them off the
+    // open burst frees two of the browser's ~6 concurrent connections for the
+    // finding requests that actually gate the table.
+    setProjectSidebarProjectLoading(false);
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
-    // Non-SCA finding types load independently so they never block (or get
-    // blocked by) the core stats/vulns request.
-    void loadProjectExtraFindings(orgId, selectedProjectId, () => cancelled);
-    Promise.all([
-      api.getProjectStats(orgId, selectedProjectId),
-      api.getProjectVulnerabilities(orgId, selectedProjectId),
-      api.getProject(orgId, selectedProjectId),
-      api.getOrganization(orgId),
-      api.getProjectSecretFindings(orgId, selectedProjectId, 1, 50),
-      api.getProjectSemgrepFindings(orgId, selectedProjectId, 1, 50),
-    ])
-      .then(([stats, vulns, project, org, secrets, semgrep]) => {
-        if (!cancelled) {
-          setProjectStats(stats);
-          setProjectVulnerabilities(vulns ?? []);
-          setProjectSidebarProject(project);
-          setProjectSidebarOrganization(org);
-          setProjectSecrets(secrets?.data ?? []);
-          setProjectSemgrep(semgrep?.data ?? []);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setProjectStats(null);
-          setProjectVulnerabilities(null);
-          setProjectSecrets([]);
-          setProjectSemgrep([]);
-          setProjectSidebarProject(null);
-          setProjectSidebarOrganization(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setProjectStatsLoading(false);
-          setProjectSidebarProjectLoading(false);
-        }
-      });
+
+    // Non-SCA finding types (IaC / container / malicious / DAST / code-flow) load on
+    // their own track and pop into the table as they arrive.
+    void loadProjectExtraFindings(orgId, pid, () => cancelled);
+
+    // CRITICAL PATH — the findings table appears as soon as these three settle.
+    // allSettled so one failing scanner endpoint never blanks the others.
+    void (async () => {
+      const [vulnsR, secretsR, semgrepR] = await Promise.allSettled([
+        api.getProjectVulnerabilities(orgId, pid),
+        api.getProjectSecretFindings(orgId, pid, 1, 50),
+        api.getProjectSemgrepFindings(orgId, pid, 1, 50),
+      ]);
+      if (cancelled) return;
+      setProjectVulnerabilities(vulnsR.status === 'fulfilled' ? (vulnsR.value ?? []) : []);
+      setProjectSecrets(secretsR.status === 'fulfilled' ? (secretsR.value?.data ?? []) : []);
+      setProjectSemgrep(semgrepR.status === 'fulfilled' ? (semgrepR.value?.data ?? []) : []);
+      setProjectStatsLoading(false);
+    })();
+
+    // Stats feed only the partial-coverage banner + header chips — never the table rows.
+    api.getProjectStats(orgId, pid)
+      .then((stats) => { if (!cancelled) setProjectStats(stats); })
+      .catch(() => { if (!cancelled) setProjectStats(null); });
+
     return () => { cancelled = true; };
   }, [orgId, selectedProjectId, projectSidebarOpen]);
+
+  // Lazily load the full project + org — they back only the Dependencies / Settings
+  // tabs, so we fetch them the first time one of those tabs is opened rather than on
+  // every project open. The ref keys on project id so swapping tabs back and forth
+  // doesn't refetch, but switching to a different project does.
+  const projectMetaLoadedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!projectSidebarOpen) { projectMetaLoadedForRef.current = null; return; }
+    if (!orgId || !selectedProjectId || projectSidebarTab === 'findings') return;
+    if (projectMetaLoadedForRef.current === selectedProjectId) return;
+    projectMetaLoadedForRef.current = selectedProjectId;
+    const pid = selectedProjectId;
+    let cancelled = false;
+    setProjectSidebarProjectLoading(true);
+    void (async () => {
+      const [projectR, orgR] = await Promise.allSettled([
+        api.getProject(orgId, pid),
+        api.getOrganization(orgId),
+      ]);
+      if (cancelled) return;
+      setProjectSidebarProject(projectR.status === 'fulfilled' ? projectR.value : null);
+      setProjectSidebarOrganization(orgR.status === 'fulfilled' ? orgR.value : null);
+      setProjectSidebarProjectLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [projectSidebarOpen, orgId, selectedProjectId, projectSidebarTab]);
 
   /** One row per (dependency, CVE); keeps highest depscore. Fixes duplicate rows / shared osv_id expansion. */
   const dedupedProjectVulnerabilities = useMemo(() => {
