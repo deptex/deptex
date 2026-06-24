@@ -7523,12 +7523,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     const userId = req.user!.id;
     const { id, projectId } = req.params;
 
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    // Access check and the active-extraction lookup are independent — run them
+    // concurrently so the findings table (this is its sole gating request) waits
+    // on one round-trip instead of two stacked back-to-back.
+    const [accessCheck, activeExtractionId] = await Promise.all([
+      checkProjectAccess(userId, id, projectId),
+      getActiveExtractionId(supabase, projectId),
+    ]);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
     const { count: pdvCount } = await supabase
