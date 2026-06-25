@@ -2546,18 +2546,22 @@ export default function OrganizationOverviewPage() {
         setTeamSidebarBaseImageRecs([]);
         return;
       }
-      // Render each project's findings the moment they land rather than awaiting the
-      // whole fan-out. The table swaps in as soon as the FIRST project resolves (the
-      // render shows the skeleton only while loading AND no rows yet) and fills in the
-      // rest progressively — so "time to first findings" is the fastest project, not
-      // the slowest. A single project failing is swallowed so it can't blank the team.
+      // Fan out across the team's projects, then swap the whole set in once. Appending
+      // each project's rows as it landed made the list visibly grow and grow ("it keeps
+      // loading more and more"); with the table paginated, settling first and rendering a
+      // stable, complete list reads better — the animated skeleton covers the wait. A
+      // single project failing is swallowed so it can't blank the team.
+      const collectedRows: SecurityTableRow[] = [];
+      const collectedRecs: BaseImageRecommendation[] = [];
       await Promise.all(teamProjects.map(async (p) => {
         try {
           const { rows, baseImageRecs } = await loadProjectFindingRows(orgId, p);
-          if (rows.length) setTeamSidebarFindingRows((prev) => [...prev, ...rows]);
-          if (baseImageRecs.length) setTeamSidebarBaseImageRecs((prev) => [...prev, ...baseImageRecs]);
+          if (rows.length) collectedRows.push(...rows);
+          if (baseImageRecs.length) collectedRecs.push(...baseImageRecs);
         } catch { /* one project's findings failing shouldn't blank the rest of the team */ }
       }));
+      setTeamSidebarFindingRows(collectedRows);
+      setTeamSidebarBaseImageRecs(collectedRecs);
     } catch {
       setTeamSidebarFindingsError(true);
       setTeamSidebarFindingRows([]);
