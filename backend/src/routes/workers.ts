@@ -1,6 +1,7 @@
 import express from 'express';
 import semver from 'semver';
 import { supabase } from '../lib/supabase';
+import { fetchOsvVuln, osvVulnToAdvisoryRow } from '../lib/osv-advisory';
 import { createInstallationToken, getRepositoryFileContent } from '../lib/github';
 import {
   queuePopulateDependencyBatch,
@@ -1200,6 +1201,58 @@ async function populateSingleDependency(
       await supabase
         .from('dependency_vulnerabilities')
         .upsert(vulnInserts, { onConflict: 'dependency_id,osv_id' });
+    }
+
+    // 5a-osv. OSV advisory fallback. GHSA's per-package query doesn't return an
+    // advisory for every CVE that dep-scan / OSV surfaces — OSV aggregates PySec,
+    // the Go and Rust vuln DBs, and more, well beyond GHSA. Those findings render a
+    // blank description, since the vuln-detail card reads it only from this advisory
+    // cache. For any CVE a finding references on this package that still has no
+    // cached advisory (by osv_id OR alias), fetch the description from OSV and cache
+    // it. ignoreDuplicates so a richer GHSA row is never clobbered. Soft-fails: a
+    // hiccup here must never fail the populate.
+    try {
+      const { data: pdRows } = await supabase
+        .from('project_dependencies')
+        .select('id')
+        .eq('dependency_id', dependencyId)
+        .is('removed_at', null);
+      const pdIds = ((pdRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+      if (pdIds.length > 0) {
+        const { data: findingRows } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .select('osv_id')
+          .in('project_dependency_id', pdIds);
+        const findingOsvIds = [...new Set(
+          ((findingRows ?? []) as Array<{ osv_id: string | null }>)
+            .map((r) => r.osv_id)
+            .filter((id): id is string => !!id && /^(CVE|GHSA)-/i.test(id)),
+        )];
+        if (findingOsvIds.length > 0) {
+          const { data: advRows } = await supabase
+            .from('dependency_vulnerabilities')
+            .select('osv_id, aliases')
+            .eq('dependency_id', dependencyId);
+          const covered = new Set<string>();
+          for (const r of (advRows ?? []) as Array<{ osv_id: string | null; aliases: string[] | null }>) {
+            if (r.osv_id) covered.add(r.osv_id);
+            for (const a of r.aliases ?? []) covered.add(a);
+          }
+          const osvRows: Record<string, unknown>[] = [];
+          for (const id of findingOsvIds) {
+            if (covered.has(id)) continue;
+            const rec = await fetchOsvVuln(id);
+            if (rec?.details) osvRows.push(osvVulnToAdvisoryRow(dependencyId, rec, id));
+          }
+          if (osvRows.length > 0) {
+            await supabase
+              .from('dependency_vulnerabilities')
+              .upsert(osvRows, { onConflict: 'dependency_id,osv_id', ignoreDuplicates: true });
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[POPULATE] OSV advisory fallback failed for ${name}:`, e?.message);
     }
 
     // 5b. Check if any advisory has MALWARE classification -> flag dependency
