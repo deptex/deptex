@@ -48,11 +48,12 @@ export default function OrganizationFindingsPage() {
   // CVE request + a per-project fan-out for the other types (secrets, semgrep,
   // IaC, container, malicious, DAST, data-flow).
   //
-  // On first load each project's rows are appended the moment they land, so the
-  // table appears as soon as the first results arrive and fills in progressively
-  // rather than waiting for the slowest project. A status-change refresh keeps the
-  // current rows on screen and swaps the fresh set in one shot at the end (no blank
-  // flash). v2 backlog collapses the per-project fan-out into one bundle endpoint.
+  // The whole set is swapped in once, at the end. Appending per-project as each
+  // landed made the list visibly grow and grow ("it keeps loading more and more");
+  // with the table paginated, settling first and rendering a stable, complete list
+  // is the right call — the animated skeleton covers the wait. A status-change
+  // refresh keeps the current rows on screen until the swap (no blank flash). v2
+  // backlog collapses the per-project fan-out into one bundle endpoint.
   const load = useCallback(async (isRefresh = false) => {
     if (!organizationId) return;
     if (!isRefresh) {
@@ -69,7 +70,6 @@ export default function OrganizationFindingsPage() {
       const flush = (rows: SecurityTableRow[]) => {
         if (!rows.length) return;
         collected.push(...rows);
-        if (!isRefresh) setAllRows((prev) => [...prev, ...rows]);
       };
 
       const tasks: Promise<void>[] = [];
@@ -130,7 +130,8 @@ export default function OrganizationFindingsPage() {
       }
 
       await Promise.all(tasks);
-      if (isRefresh) setAllRows(collected);
+      // Swap the complete set in once — on first load and on refresh alike.
+      setAllRows(collected);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load security findings');
       if (!isRefresh) setAllRows([]);
