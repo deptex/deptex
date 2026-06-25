@@ -15,6 +15,7 @@ import {
   type SecurityTableRow,
 } from "../security/VulnerabilityExpandableTable";
 import type {
+  FindingTrackerLink,
   IaCFinding,
   IaCFramework,
   ProjectVulnerability,
@@ -87,6 +88,7 @@ function vuln(o: {
   cvss?: number;
   epss?: number;
   kev?: boolean;
+  status?: "open" | "ignored";
   project: string;
 }): SecurityTableRow {
   const p = proj(o.project);
@@ -94,6 +96,8 @@ function vuln(o: {
     type: "vulnerability",
     data: {
       id: o.id,
+      finding_key: o.id,
+      status: o.status ?? "open",
       osv_id: o.osv,
       severity: o.severity,
       summary: o.summary,
@@ -134,6 +138,7 @@ function secretRow(o: {
     type: "secret",
     data: {
       id: o.id,
+      finding_key: o.id,
       project_id: p.id,
       extraction_run_id: RUN,
       detector_type: o.detector,
@@ -164,6 +169,7 @@ function semgrepRow(o: {
   cwe: string[];
   snippet: string;
   depscore: number;
+  status?: "open" | "ignored";
   project: string;
 }): SecurityTableRow {
   const p = proj(o.project);
@@ -171,6 +177,7 @@ function semgrepRow(o: {
     type: "semgrep",
     data: {
       id: o.id,
+      finding_key: o.id,
       project_id: p.id,
       extraction_run_id: RUN,
       rule_id: o.rule,
@@ -185,7 +192,7 @@ function semgrepRow(o: {
       metadata: null,
       code_snippet: o.snippet,
       depscore: o.depscore,
-      status: "open",
+      status: o.status ?? "open",
       created_at: CREATED,
       project_name: p.name,
       project_framework: p.framework,
@@ -211,6 +218,7 @@ function iacRow(o: {
     type: "iac",
     data: {
       id: o.id,
+      finding_key: o.id,
       project_id: p.id,
       organization_id: HERO_ORG_ID,
       extraction_run_id: RUN,
@@ -247,12 +255,23 @@ function iacRow(o: {
 export const heroFindings: SecurityTableRow[] = [
   vuln({ id: "ejs", osv: "CVE-2022-29078", cve: "GHSA-phwq-j96m-2c2q", severity: "critical", summary: "Server-side template injection in ejs leads to remote code execution", dep: "ejs", version: "3.1.6", fixed: "3.1.7", depscore: 90, level: "confirmed", cvss: 9.8, epss: 0.91, kev: true, project: "storefront-api" }),
   secretRow({ id: "secret-stripe", detector: "Stripe", file: "src/config/credentials.py", line: 24, redacted: "sk_live_••••••3xQ2", snippet: 'STRIPE_KEY = "sk_live_51AbC...3xQ2"  # TODO: move to env', depscore: 88, project: "payments-svc" }),
-  semgrepRow({ id: "sast-cmdi", rule: "python.lang.security.audit.subprocess-shell-true", file: "app/routes/export.py", line: 42, severity: "ERROR", message: "subprocess called with shell=True on user input — command injection", category: "command-injection", cwe: ["CWE-78"], snippet: 'subprocess.run(f"zip -r {user_path}", shell=True)', depscore: 81, project: "storefront-api" }),
+  semgrepRow({ id: "sast-cmdi", rule: "python.lang.security.audit.subprocess-shell-true", file: "app/routes/export.py", line: 42, severity: "ERROR", message: "subprocess called with shell=True on user input — command injection", category: "command-injection", cwe: ["CWE-78"], snippet: 'subprocess.run(f"zip -r {user_path}", shell=True)', depscore: 81, status: "ignored", project: "storefront-api" }),
   vuln({ id: "lodash", osv: "CVE-2021-23337", cve: "GHSA-35jh-r3h4-6jhm", severity: "high", summary: "Command injection in lodash via _.template()", dep: "lodash", version: "4.17.20", fixed: "4.17.21", depscore: 72, level: "confirmed", cvss: 7.2, epss: 0.62, project: "storefront-api" }),
   iacRow({ id: "iac-s3", rule: "CKV_AWS_20", framework: "terraform", file: "infra/aws/s3.tf", line: 8, severity: "HIGH", message: "S3 bucket allows public read access", description: "The S3 bucket is created with acl = public-read, making its contents world-readable.", snippet: 'resource "aws_s3_bucket" "assets" {\n  acl = "public-read"\n}', depscore: 70, project: "api-gateway" }),
   vuln({ id: "braces", osv: "CVE-2024-4068", cve: "GHSA-grv7-fg5c-xmjg", severity: "medium", summary: "Uncontrolled resource consumption in braces", dep: "braces", version: "3.0.2", fixed: "3.0.3", depscore: 44, level: "data_flow", cvss: 5.3, epss: 0.21, project: "web-dashboard" }),
   vuln({ id: "minimist", osv: "CVE-2021-44906", cve: "GHSA-xvch-5gv4-984h", severity: "high", summary: "Prototype pollution in minimist", dep: "minimist", version: "1.2.5", fixed: "1.2.6", depscore: 0, level: "unreachable", cvss: 9.8, epss: 0.05, project: "storefront-api" }),
   vuln({ id: "py-3177", osv: "CVE-2021-3177", cve: "CVE-2021-3177", severity: "high", summary: "ctypes PyCArg buffer overflow (python 3.5)", dep: "python", version: "3.5.0", depscore: 0, level: "unreachable", project: "payments-svc" }),
+];
+
+// Demo tracker links — a few findings are linked to a Jira / Linear / GitHub issue,
+// keyed by (project_id, finding_type, finding_key) to match the rows above. The two
+// with external_state="done" render the resolved ✓ badge; all three drive the
+// provider icon + hover tooltip in the status column. A linked finding reads as
+// "Open" (a ticket has been filed), so these also vary the status spread.
+export const heroTrackerLinks: FindingTrackerLink[] = [
+  { id: "tl-ejs", project_id: "storefront-api", finding_type: "vulnerability", finding_key: "ejs", provider: "github", external_key: "#2451", external_url: null, title: "RCE in ejs — bump to 3.1.7", external_state: "done", created_at: CREATED },
+  { id: "tl-secret", project_id: "payments-svc", finding_type: "secret", finding_key: "secret-stripe", provider: "linear", external_key: "SEC-88", external_url: null, title: "Rotate the leaked Stripe live key", external_state: "open", created_at: CREATED },
+  { id: "tl-iac", project_id: "api-gateway", finding_type: "iac", finding_key: "iac-s3", provider: "jira", external_key: "OPS-310", external_url: null, title: "Lock down the public S3 bucket", external_state: "done", created_at: CREATED },
 ];
 
 /* --------------------------- per-feature-page findings (dedicated pages) */
