@@ -24,12 +24,12 @@ export interface SeverityPillsProps {
   size?: 'default' | 'xs';
 }
 
-// Aikido-style band ramp: red → orange → blue → green (critical → high → medium → low).
+// Depscore band ramp: red → orange → yellow → gray (critical → high → medium → low).
 const BANDS = [
   { key: 'critical', label: 'Critical', active: 'bg-red-500/10 text-red-400 border-red-500/20', title: 'Critical — depscore ≥ 90' },
   { key: 'high', label: 'High', active: 'bg-orange-500/10 text-orange-400 border-orange-500/20', title: 'High — depscore ≥ 70' },
-  { key: 'medium', label: 'Medium', active: 'bg-blue-500/10 text-blue-400 border-blue-500/20', title: 'Medium — depscore ≥ 40' },
-  { key: 'low', label: 'Low', active: 'bg-green-500/10 text-green-400 border-green-500/20', title: 'Low — depscore < 40' },
+  { key: 'medium', label: 'Medium', active: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', title: 'Medium — depscore ≥ 40' },
+  { key: 'low', label: 'Low', active: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20', title: 'Low — depscore < 40' },
 ] as const;
 
 export function SeverityPills({ critical = 0, high = 0, medium = 0, low = 0, className, hideZeros, size = 'default' }: SeverityPillsProps) {

@@ -6,6 +6,7 @@ import { supabase } from '../../../lib/supabase';
 import { sendEmail } from '../../email';
 import { createInstallationToken } from '../../github';
 import { createIssueComment } from '../../github';
+import { createJiraIssue, createLinearIssue, TrackerError } from '../../trackers';
 
 registerAegisTool(
   'sendSlackMessage',
@@ -78,51 +79,16 @@ registerAegisTool(
       summary: z.string(),
       description: z.string(),
       issueType: z.string().optional(),
+      projectKey: z.string().optional().describe('Jira project key (e.g. SEC). Falls back to the stored default.'),
     }),
-    execute: async ({ organizationId, summary, description, issueType }) => {
-      const { data: conn, error } = await supabase
-        .from('organization_integrations')
-        .select('access_token, metadata')
-        .eq('organization_id', organizationId)
-        .eq('provider', 'jira')
-        .single();
-      if (error || !conn?.access_token) {
-        return JSON.stringify({
-          error: 'Jira is not connected. Go to Organization Settings > Integrations to connect Jira.',
-          connected: false,
-        });
-      }
-      const meta = (conn.metadata ?? {}) as Record<string, any>;
-      const projectKey = meta.project_key;
-      const cloudId = meta.cloud_id;
-      const baseUrl = cloudId ? `https://api.atlassian.com/ex/jira/${cloudId}` : meta.base_url;
-      if (!baseUrl || !projectKey) {
-        return JSON.stringify({
-          error: 'Jira integration is missing project_key or cloud_id. Configure in Integration settings.',
-          connected: true,
-        });
-      }
+    execute: async ({ organizationId, summary, description, issueType, projectKey }) => {
       try {
-        const body = {
-          fields: {
-            project: { key: projectKey },
-            summary,
-            description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }] },
-            issuetype: { name: issueType ?? meta.issue_type ?? 'Task' },
-          },
-        };
-        const res = await fetch(`${baseUrl}/rest/api/3/issue`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${conn.access_token}` },
-          body: JSON.stringify(body),
-        });
-        const data = (await res.json()) as { key?: string; errors?: Record<string, string> };
-        if (!res.ok) {
-          const errMsg = data.errors ? JSON.stringify(data.errors) : (data as any).errorMessages?.join(', ') ?? 'Jira API error';
-          return JSON.stringify({ error: errMsg, success: false });
-        }
-        return JSON.stringify({ success: true, issueKey: data.key });
+        const result = await createJiraIssue(organizationId, { projectKey, summary, description, issueType });
+        return JSON.stringify({ success: true, issueKey: result.externalKey, url: result.externalUrl });
       } catch (err: any) {
+        if (err instanceof TrackerError) {
+          return JSON.stringify({ error: err.message, connected: err.connected, success: false });
+        }
         return JSON.stringify({ error: err.message, success: false });
       }
     },
@@ -138,56 +104,16 @@ registerAegisTool(
       organizationId: z.string().uuid(),
       title: z.string(),
       description: z.string(),
+      teamId: z.string().optional().describe('Linear team id. Falls back to the stored default.'),
     }),
-    execute: async ({ organizationId, title, description }) => {
-      const { data: conn, error } = await supabase
-        .from('organization_integrations')
-        .select('access_token, metadata')
-        .eq('organization_id', organizationId)
-        .eq('provider', 'linear')
-        .single();
-      if (error || !conn?.access_token) {
-        return JSON.stringify({
-          error: 'Linear is not connected. Go to Organization Settings > Integrations to connect Linear (API key).',
-          connected: false,
-        });
-      }
-      const meta = (conn.metadata ?? {}) as Record<string, any>;
-      const teamId = meta.team_id;
-      if (!teamId) {
-        return JSON.stringify({
-          error: 'Linear integration is missing team_id. Configure in Integration settings.',
-          connected: true,
-        });
-      }
+    execute: async ({ organizationId, title, description, teamId }) => {
       try {
-        const mutation = `
-          mutation CreateIssue($input: IssueCreateInput!) {
-            issueCreate(input: $input) {
-              success
-              issue { id identifier url }
-            }
-          }
-        `;
-        const res = await fetch('https://api.linear.app/graphql', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: conn.access_token },
-          body: JSON.stringify({
-            query: mutation,
-            variables: { input: { teamId, title, description } },
-          }),
-        });
-        const data = (await res.json()) as { data?: { issueCreate?: { success?: boolean; issue?: { identifier: string } }; errors?: Array<{ message: string }> }; errors?: Array<{ message: string }> };
-        const errs = data.errors ?? data.data?.issueCreate === undefined ? [] : [];
-        if (errs.length) {
-          return JSON.stringify({ error: errs[0].message ?? 'Linear API error', success: false });
-        }
-        const created = data.data?.issueCreate;
-        if (!created?.success) {
-          return JSON.stringify({ error: 'Linear issueCreate returned success=false', success: false });
-        }
-        return JSON.stringify({ success: true, identifier: created.issue?.identifier });
+        const result = await createLinearIssue(organizationId, { teamId, title, description });
+        return JSON.stringify({ success: true, identifier: result.externalKey, url: result.externalUrl });
       } catch (err: any) {
+        if (err instanceof TrackerError) {
+          return JSON.stringify({ error: err.message, connected: err.connected, success: false });
+        }
         return JSON.stringify({ error: err.message, success: false });
       }
     },

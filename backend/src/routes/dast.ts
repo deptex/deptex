@@ -1758,7 +1758,7 @@ router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
     const query = supabase
       .from('project_dast_findings')
       .select(
-        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, handler_code_snippet, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at',
+        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, handler_code_snippet, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at, finding_key, auto_ignored, auto_ignore_reason',
       )
       .eq('project_id', projectId)
       .eq('target_id', filterTargetId)

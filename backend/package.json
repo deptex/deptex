@@ -16,6 +16,7 @@
     "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts",
     "e2e:fleet:drain": "tsx scripts/e2e-fleet-drain.ts",
     "fleet:probe": "tsx scripts/fleet-probe.ts",
+    "tracker:probe": "tsx scripts/tracker-probe.ts",
     "reconcile:billing": "tsx scripts/reconcile-billing.ts",
     "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts",
     "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts",

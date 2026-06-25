@@ -320,6 +320,22 @@ CREATE TABLE IF NOT EXISTS public.feedback (
   body text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.finding_tracker_links (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  finding_type text NOT NULL,
+  finding_key text NOT NULL,
+  provider text NOT NULL,
+  external_id text NOT NULL,
+  external_key text,
+  external_url text,
+  title text,
+  created_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  external_state text,
+  external_state_synced_at timestamp with time zone
+);
 CREATE TABLE IF NOT EXISTS public.flow_node_executions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   flow_run_id uuid NOT NULL,
@@ -1056,7 +1072,15 @@ CREATE TABLE IF NOT EXISTS public.project_container_findings (
   risk_accepted_reason text,
   created_at timestamp with time zone DEFAULT now(),
   reachability_level text,
-  reachability_details jsonb
+  reachability_details jsonb,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_config (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1115,7 +1139,15 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   linked_sast_finding_id uuid,
   cross_link_methods text[] DEFAULT ARRAY[]::text[],
   kev boolean NOT NULL DEFAULT false,
-  handler_code_snippet text
+  handler_code_snippet text,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_targets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1230,7 +1262,15 @@ CREATE TABLE IF NOT EXISTS public.project_dependency_vulnerabilities (
   runtime_confirmed_at timestamp with time zone,
   runtime_confirmed_dast_finding_id uuid,
   runtime_confirmed_prior_level text,
-  composition_factor numeric(4,3)
+  composition_factor numeric(4,3),
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_entry_points (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1251,6 +1291,41 @@ CREATE TABLE IF NOT EXISTS public.project_entry_points (
   created_at timestamp with time zone DEFAULT now(),
   request_params jsonb,
   code_snippet text
+);
+CREATE TABLE IF NOT EXISTS public.project_finding_acknowledgements (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  finding_type text NOT NULL,
+  finding_key text NOT NULL,
+  acknowledged_by uuid,
+  acknowledged_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.project_finding_group_suppressions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  group_type text NOT NULL,
+  group_key text NOT NULL,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.project_finding_status_events (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  finding_type text NOT NULL,
+  finding_key text NOT NULL,
+  finding_id uuid,
+  from_status text,
+  to_status text NOT NULL,
+  reason text,
+  note text,
+  actor_user_id uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -1283,7 +1358,15 @@ CREATE TABLE IF NOT EXISTS public.project_iac_findings (
   risk_accepted_at timestamp with time zone,
   risk_accepted_reason text,
   created_at timestamp with time zone DEFAULT now(),
-  compliance_refs jsonb
+  compliance_refs jsonb,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_integrations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1325,7 +1408,16 @@ CREATE TABLE IF NOT EXISTS public.project_malicious_findings (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   reachability_level text,
   reachability_details jsonb,
-  reachability_computed_at timestamp with time zone
+  reachability_computed_at timestamp with time zone,
+  status text NOT NULL DEFAULT 'open'::text,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_members (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1498,7 +1590,6 @@ CREATE TABLE IF NOT EXISTS public.project_repositories (
   integration_id uuid,
   pull_request_comments_enabled boolean DEFAULT true,
   auto_fix_vulnerabilities_enabled boolean DEFAULT false,
-  scan_on_commit boolean NOT NULL DEFAULT false,
   sync_frequency text NOT NULL DEFAULT 'daily'::text,
   webhook_id text,
   webhook_secret text,
@@ -1506,7 +1597,8 @@ CREATE TABLE IF NOT EXISTS public.project_repositories (
   last_webhook_event text,
   webhook_status text DEFAULT 'unknown'::text,
   last_extracted_at timestamp with time zone,
-  organization_id uuid
+  organization_id uuid,
+  scan_on_commit boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS public.project_roles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1533,7 +1625,15 @@ CREATE TABLE IF NOT EXISTS public.project_secret_findings (
   created_at timestamp with time zone DEFAULT now(),
   depscore integer,
   status text NOT NULL DEFAULT 'open'::text,
-  code_snippet text
+  code_snippet text,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1601,7 +1701,15 @@ CREATE TABLE IF NOT EXISTS public.project_semgrep_findings (
   depscore integer,
   status text NOT NULL DEFAULT 'open'::text,
   code_snippet text,
-  semgrep_fingerprint text
+  semgrep_fingerprint text,
+  finding_key text,
+  ignore_reason text,
+  ignore_note text,
+  ignored_by uuid,
+  ignored_at timestamp with time zone,
+  auto_ignored boolean NOT NULL DEFAULT false,
+  auto_ignore_reason text,
+  resolved_at timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public.project_teams (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -3267,6 +3375,70 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.compute_auto_ignore_reason(p_type text, p_reachability_level text, p_is_reachable boolean, p_is_kev boolean, p_rule_id text, p_severity text, p_payload_redacted text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  SELECT CASE p_type
+    WHEN 'container' THEN
+      CASE WHEN p_is_kev IS TRUE THEN NULL ELSE 'base_image' END
+    WHEN 'iac' THEN
+      CASE WHEN compute_iac_is_critical(p_rule_id, p_severity) THEN NULL ELSE 'iac_hardening' END
+    WHEN 'dast' THEN
+      CASE
+        WHEN (p_payload_redacted IS NOT NULL AND btrim(p_payload_redacted) <> '')
+          OR lower(coalesce(p_severity, '')) IN ('high', 'critical') THEN NULL
+        ELSE 'passive_hygiene'
+      END
+    WHEN 'vulnerability' THEN
+      CASE
+        WHEN lower(coalesce(p_reachability_level, '')) IN ('confirmed', 'data_flow') THEN NULL
+        WHEN lower(coalesce(p_reachability_level, '')) = 'unreachable' OR p_is_reachable IS FALSE THEN 'not_reachable'
+        WHEN lower(coalesce(p_reachability_level, '')) = 'module' THEN 'unconfirmed_reachable'
+        ELSE NULL
+      END
+    ELSE NULL
+  END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.compute_finding_key(p_parts text[])
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  SELECT encode(
+    sha256(convert_to(
+      (SELECT string_agg(lower(coalesce(x.val, '')), E'\x1F' ORDER BY x.ord)
+       FROM unnest(p_parts) WITH ORDINALITY AS x(val, ord)),
+      'UTF8'
+    )),
+    'hex'
+  );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.compute_iac_is_critical(p_rule_id text, p_severity text)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  SELECT CASE
+    WHEN p_rule_id IN (
+      'CKV_K8S_16','CKV_K8S_20','CKV_K8S_23','CKV_K8S_19','CKV_K8S_17','CKV_K8S_18',
+      'KSV-0023','KSV023','AVD-KSV-0023','KSV-0121'
+    ) THEN true
+    WHEN p_rule_id IN (
+      'CKV_K8S_38','CKV_K8S_28','CKV_K8S_37','CKV2_K8S_6','CKV_K8S_31','CKV_K8S_22',
+      'CKV_K8S_29','CKV_K8S_14','CKV_K8S_43','CKV_K8S_40','CKV_K8S_13','CKV_K8S_11',
+      'CKV_K8S_10','CKV_K8S_12','CKV_K8S_8','CKV_K8S_9','CKV_K8S_21'
+    ) THEN false
+    ELSE upper(coalesce(p_severity, '')) IN ('HIGH', 'CRITICAL')
+  END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.compute_strategy_patterns(p_org_id uuid)
  RETURNS void
  LANGUAGE plpgsql
@@ -3840,7 +4012,7 @@ CREATE OR REPLACE FUNCTION public.fail_exhausted_scan_jobs()
 AS $function$
   UPDATE scan_jobs
   SET status        = 'failed',
-      error         = type || ' job failed after ' || attempts || ' attempts (machine crash or timeout)',
+      error         = 'The ' || type || ' worker crashed before finishing (it stopped responding).',
       completed_at  = NOW()
   WHERE status = 'processing'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
@@ -3866,6 +4038,7 @@ $function$
 CREATE OR REPLACE FUNCTION public.finalize_extraction(p_job_id uuid, p_project_id uuid, p_extraction_run_id text)
  RETURNS jsonb
  LANGUAGE plpgsql
+ SET statement_timeout TO '300s'
 AS $function$
 DECLARE
   v_prev_active TEXT;
@@ -4259,7 +4432,7 @@ $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.get_project_vulnerabilities_from_pdv(p_project_id uuid)
- RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, entry_point_classification text, epd_status text, sla_status text, sla_deadline_at timestamp with time zone, runtime_confirmed_at timestamp with time zone)
+ RETURNS TABLE(id uuid, dependency_id uuid, osv_id text, severity text, summary text, details text, aliases text[], fixed_versions text[], published_at timestamp with time zone, modified_at timestamp with time zone, created_at timestamp with time zone, dependency_name text, dependency_version text, is_reachable boolean, reachability_level text, reachability_details jsonb, epss_score numeric, cvss_score numeric, cisa_kev boolean, depscore integer, contextual_depscore numeric, entry_point_classification text, epd_status text, sla_status text, sla_deadline_at timestamp with time zone, runtime_confirmed_at timestamp with time zone, finding_key text, status text, auto_ignored boolean, auto_ignore_reason text, ignore_reason text, ignore_note text, suppressed boolean, risk_accepted boolean)
  LANGUAGE sql
  STABLE
 AS $function$
@@ -4289,7 +4462,15 @@ AS $function$
     pdv.epd_status,
     pdv.sla_status,
     pdv.sla_deadline_at,
-    pdv.runtime_confirmed_at
+    pdv.runtime_confirmed_at,
+    pdv.finding_key,
+    pdv.status,
+    pdv.auto_ignored,
+    pdv.auto_ignore_reason,
+    pdv.ignore_reason,
+    pdv.ignore_note,
+    pdv.suppressed,
+    pdv.risk_accepted
   FROM project_dependency_vulnerabilities pdv
   INNER JOIN project_dependencies pd
     ON pd.id = pdv.project_dependency_id
@@ -4297,8 +4478,7 @@ AS $function$
   INNER JOIN projects p
     ON p.id = pdv.project_id
   WHERE pdv.project_id = p_project_id
-    AND pdv.extraction_run_id = p.active_extraction_run_id
-    AND pdv.suppressed = false;
+    AND pdv.extraction_run_id = p.active_extraction_run_id;
 $function$
 ;
 
@@ -4833,6 +5013,8 @@ AS $function$
 DECLARE
   v_inserted integer := 0;
   v_dep_ids uuid[];
+  v_new_ids uuid[];
+  v_project_ids uuid[];
 BEGIN
   WITH inserted AS (
     INSERT INTO public.project_malicious_findings (
@@ -4860,10 +5042,36 @@ BEGIN
     FROM jsonb_array_elements(p_findings) AS f
     ON CONFLICT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id)
       DO NOTHING
-    RETURNING dependency_id
+    RETURNING id, dependency_id, project_id
   )
-  SELECT array_agg(DISTINCT dependency_id), count(*)::integer
-    INTO v_dep_ids, v_inserted FROM inserted;
+  SELECT array_agg(DISTINCT dependency_id),
+         array_agg(id),
+         array_agg(DISTINCT project_id),
+         count(*)::integer
+    INTO v_dep_ids, v_new_ids, v_project_ids, v_inserted
+  FROM inserted;
+
+  IF v_new_ids IS NOT NULL AND array_length(v_new_ids, 1) > 0 THEN
+    UPDATE public.project_malicious_findings cur
+    SET status        = prev.status,
+        ignore_reason = prev.ignore_reason,
+        ignore_note   = prev.ignore_note,
+        ignored_by    = prev.ignored_by,
+        ignored_at    = prev.ignored_at
+    FROM (
+      SELECT DISTINCT ON (p.project_id, p.finding_key)
+             p.project_id, p.finding_key, p.status,
+             p.ignore_reason, p.ignore_note, p.ignored_by, p.ignored_at
+      FROM public.project_malicious_findings p
+      WHERE p.project_id = ANY(v_project_ids)
+        AND p.status = 'ignored'
+        AND NOT (p.id = ANY(v_new_ids))
+      ORDER BY p.project_id, p.finding_key, p.created_at DESC
+    ) prev
+    WHERE cur.id = ANY(v_new_ids)
+      AND cur.project_id = prev.project_id
+      AND cur.finding_key = prev.finding_key;
+  END IF;
 
   IF v_dep_ids IS NOT NULL AND array_length(v_dep_ids, 1) > 0 THEN
     PERFORM public.recompute_dependency_is_malicious(v_dep_ids);
@@ -5263,11 +5471,13 @@ DECLARE
   v_secret_deleted INTEGER := 0;
   v_iac_deleted INTEGER := 0;
   v_container_deleted INTEGER := 0;
+  v_malicious_deleted INTEGER := 0;
   v_flows_deleted INTEGER := 0;
   v_slices_deleted INTEGER := 0;
   v_files_deleted INTEGER := 0;
   v_fns_deleted INTEGER := 0;
   v_entry_points_deleted INTEGER := 0;
+  v_mal_dep_ids uuid[];
 BEGIN
   SELECT active_extraction_run_id, previous_extraction_run_id
     INTO v_active, v_previous
@@ -5311,6 +5521,22 @@ BEGIN
     AND extraction_run_id <> v_active
     AND (v_previous IS NULL OR extraction_run_id <> v_previous);
   GET DIAGNOSTICS v_container_deleted = ROW_COUNT;
+
+  WITH del AS (
+    DELETE FROM project_malicious_findings
+    WHERE project_id = p_project_id
+      AND extraction_run_id IS NOT NULL
+      AND extraction_run_id <> v_active
+      AND (v_previous IS NULL OR extraction_run_id <> v_previous)
+    RETURNING dependency_id
+  )
+  SELECT array_agg(DISTINCT dependency_id), count(*)::integer
+    INTO v_mal_dep_ids, v_malicious_deleted
+  FROM del;
+
+  IF v_mal_dep_ids IS NOT NULL AND array_length(v_mal_dep_ids, 1) > 0 THEN
+    PERFORM public.recompute_dependency_is_malicious(v_mal_dep_ids);
+  END IF;
 
   DELETE FROM project_reachable_flows
   WHERE project_id = p_project_id
@@ -5360,6 +5586,7 @@ BEGIN
     'secret_deleted', v_secret_deleted,
     'iac_deleted', v_iac_deleted,
     'container_deleted', v_container_deleted,
+    'malicious_deleted', v_malicious_deleted,
     'flows_deleted', v_flows_deleted,
     'slices_deleted', v_slices_deleted,
     'dep_files_deleted', v_files_deleted,
@@ -5512,6 +5739,7 @@ BEGIN
       WHERE f.dependency_id = d.id
         AND f.suppressed = false
         AND f.risk_accepted = false
+        AND f.status NOT IN ('ignored', 'resolved')
     )
     OR EXISTS (
       SELECT 1 FROM public.known_malicious_packages k
@@ -5707,15 +5935,15 @@ AS $function$
         pdv.is_reachable,
         pdv.depscore,
         COALESCE(pdv.contextual_depscore, pdv.depscore, 0) AS eff_score,
-        NOT (
-          pdv.runtime_confirmed_at IS NULL
-          AND lower(COALESCE(pdv.reachability_level, '')) NOT IN ('confirmed', 'data_flow')
-          AND (lower(COALESCE(pdv.reachability_level, '')) IN ('unreachable', 'module') OR pdv.is_reachable = false)
+        (
+          COALESCE(pdv.suppressed, false) = false
+          AND COALESCE(pdv.risk_accepted, false) = false
+          AND NOT (pdv.auto_ignored AND pdv.runtime_confirmed_at IS NULL)
         ) AS is_open
       FROM project_dependency_vulnerabilities pdv
       WHERE pdv.project_id = p.id
         AND pdv.extraction_run_id = ANY(p_active_run_ids)
-        AND pdv.suppressed = false
+        AND pdv.status NOT IN ('ignored', 'resolved')
     ) r
   ) v ON true
   LEFT JOIN LATERAL (
@@ -5724,12 +5952,10 @@ AS $function$
     WHERE pdv.project_id = p.id
       AND pdv.extraction_run_id = ANY(p_active_run_ids)
       AND (
-        pdv.suppressed = true
-        OR (
-          pdv.runtime_confirmed_at IS NULL
-          AND lower(COALESCE(pdv.reachability_level, '')) NOT IN ('confirmed', 'data_flow')
-          AND (lower(COALESCE(pdv.reachability_level, '')) IN ('unreachable', 'module') OR pdv.is_reachable = false)
-        )
+        pdv.status = 'ignored'
+        OR COALESCE(pdv.suppressed, false) = true
+        OR COALESCE(pdv.risk_accepted, false) = true
+        OR (pdv.auto_ignored AND pdv.runtime_confirmed_at IS NULL)
       )
   ) ig ON true
   LEFT JOIN LATERAL (
@@ -5746,15 +5972,10 @@ AS $function$
       FROM project_iac_findings f
       WHERE f.project_id = p.id
         AND f.extraction_run_id = ANY(p_active_run_ids)
+        AND f.status NOT IN ('ignored', 'resolved')
         AND COALESCE(f.suppressed, false) = false
         AND COALESCE(f.risk_accepted, false) = false
-        AND (
-          upper(f.rule_id) IN (
-            'CKV_K8S_16','CKV_K8S_17','CKV_K8S_18','CKV_K8S_19','CKV_K8S_20','CKV_K8S_23',
-            'KSV-0023','KSV023','AVD-KSV-0023','KSV-0121'
-          )
-          OR (f.framework = 'dockerfile' AND lower(COALESCE(f.severity, '')) IN ('high', 'critical'))
-        )
+        AND f.auto_ignored = false
     ) q
   ) iac ON true
   LEFT JOIN LATERAL (
@@ -5772,7 +5993,9 @@ AS $function$
       WHERE pcf.project_id = p.id
         AND pcf.extraction_run_id = ANY(p_active_run_ids)
         AND pcf.is_kev = true
+        AND pcf.status NOT IN ('ignored', 'resolved')
         AND COALESCE(pcf.suppressed, false) = false
+        AND COALESCE(pcf.risk_accepted, false) = false
       UNION ALL
       SELECT CASE
                WHEN m >= 90 THEN 'critical' WHEN m >= 70 THEN 'high'
@@ -5783,7 +6006,9 @@ AS $function$
         WHERE pcf.project_id = p.id
           AND pcf.extraction_run_id = ANY(p_active_run_ids)
           AND pcf.is_kev = false
+          AND pcf.status NOT IN ('ignored', 'resolved')
           AND COALESCE(pcf.suppressed, false) = false
+          AND COALESCE(pcf.risk_accepted, false) = false
         GROUP BY pcf.image_reference
       ) g
     ) q
@@ -5832,14 +6057,11 @@ AS $function$
                   ELSE 0 END)) AS canon
           FROM project_dast_findings df
           WHERE df.project_id = p.id
-            AND COALESCE(df.status, 'open') = 'open'
+            AND df.status = 'open'
+            AND df.auto_ignored = false
             AND df.dast_run_id = (
               SELECT df2.dast_run_id FROM project_dast_findings df2
               WHERE df2.project_id = p.id ORDER BY df2.created_at DESC LIMIT 1
-            )
-            AND (
-              (df.payload_redacted IS NOT NULL AND btrim(df.payload_redacted) <> '')
-              OR lower(COALESCE(df.severity, '')) IN ('high', 'critical')
             )
         ) s
         ORDER BY s.handler_file_path, s.fam, s.canon DESC
@@ -5854,6 +6076,7 @@ AS $function$
       count(*) FILTER (WHERE COALESCE(psf.depscore, 0) < 40) AS low
     FROM project_secret_findings psf
     WHERE psf.project_id = p.id AND psf.extraction_run_id = ANY(p_active_run_ids)
+      AND psf.status NOT IN ('ignored', 'resolved')
   ) sec ON true
   LEFT JOIN LATERAL (
     SELECT
@@ -5863,6 +6086,7 @@ AS $function$
       count(*) FILTER (WHERE COALESCE(sf.depscore, 0) < 40) AS low
     FROM project_semgrep_findings sf
     WHERE sf.project_id = p.id AND sf.extraction_run_id = ANY(p_active_run_ids)
+      AND sf.status NOT IN ('ignored', 'resolved')
   ) sg ON true
   LEFT JOIN LATERAL (
     SELECT
@@ -5875,6 +6099,7 @@ AS $function$
       FROM project_malicious_findings pmf
       WHERE pmf.project_id = p.id
         AND pmf.extraction_run_id = ANY(p_active_run_ids)
+        AND pmf.status NOT IN ('ignored', 'resolved')
         AND COALESCE(pmf.suppressed, false) = false
         AND COALESCE(pmf.risk_accepted, false) = false
     ) q
@@ -6073,6 +6298,110 @@ CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$subvector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_container_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.container_fingerprint, concat_ws('|', NEW.image_reference, coalesce(NEW.osv_id, NEW.cve_id, NEW.os_package_name)))]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('container', NULL, NULL, NEW.is_kev, NULL, NULL, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_dast_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      NEW.rule_id,
+      NEW.vulnerability_type,
+      CASE WHEN NEW.handler_file_path IS NOT NULL
+           THEN concat_ws('|', NEW.handler_file_path, NEW.handler_function_name)
+           ELSE concat_ws('|', NEW.endpoint_url, NEW.http_method) END]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('dast', NULL, NULL, NULL, NULL, NEW.severity, NEW.payload_redacted);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_iac_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.iac_fingerprint, concat_ws('|', NEW.scanner, NEW.rule_id, NEW.file_path, NEW.start_line_key::text))]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('iac', NULL, NULL, NULL, NEW.rule_id, NEW.severity, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_malicious_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      (SELECT pd.name FROM project_dependencies pd WHERE pd.id = NEW.project_dependency_id),
+      NEW.rule_id, NEW.scanner]);
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_pdv_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      (SELECT pd.name FROM project_dependencies pd WHERE pd.id = NEW.project_dependency_id),
+      NEW.osv_id]);
+  END IF;
+  NEW.auto_ignore_reason := compute_auto_ignore_reason('vulnerability', NEW.reachability_level, NEW.is_reachable, NULL, NULL, NULL, NULL);
+  NEW.auto_ignored := NEW.auto_ignore_reason IS NOT NULL;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_secret_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[NEW.detector_type, NEW.file_path, NEW.redacted_value]);
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_semgrep_finding_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.finding_key := compute_finding_key(ARRAY[
+      coalesce(NEW.semgrep_fingerprint, concat_ws('|', NEW.rule_id, NEW.file_path, NEW.start_line::text))]);
+  END IF;
+  RETURN NEW;
+END $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.update_aegis_chat_threads_updated_at()
@@ -6557,6 +6886,7 @@ ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerab
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_pkey PRIMARY KEY (id);
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_pkey PRIMARY KEY (id);
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_pkey PRIMARY KEY (id);
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_pkey PRIMARY KEY (id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_pkey PRIMARY KEY (id);
@@ -6618,6 +6948,9 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT project_dependency_fi
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT project_dependency_functions_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_integrations ADD CONSTRAINT project_integrations_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT project_malicious_findings_pkey PRIMARY KEY (id);
@@ -6672,6 +7005,7 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_project_id_depen
 ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_edges_parent_version_id_child_version_id_key UNIQUE (parent_version_id, child_version_id);
 ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_unique UNIQUE (project_id, finding_type, finding_key, provider, external_id);
 ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
@@ -6712,6 +7046,8 @@ ALTER TABLE public.project_dependency_files ADD CONSTRAINT pdf_extraction_run_un
 ALTER TABLE public.project_dependency_functions ADD CONSTRAINT pdfn_extraction_run_unique UNIQUE (project_dependency_id, function_name, extraction_run_id);
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT pdv_extraction_run_unique UNIQUE (project_id, project_dependency_id, osv_id, extraction_run_id);
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_extraction_run_id_file_path_key UNIQUE (project_id, extraction_run_id, file_path, line_number, framework, handler_name);
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgeme_project_id_finding_type_findi_key UNIQUE (project_id, finding_type, finding_key);
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppres_project_id_group_type_group_k_key UNIQUE (project_id, group_type, group_key);
 ALTER TABLE public.project_malicious_findings ADD CONSTRAINT pmf_dedup UNIQUE NULLS NOT DISTINCT (project_id, project_dependency_id, rule_id, scanner, extraction_run_id);
 ALTER TABLE public.project_members ADD CONSTRAINT project_members_project_id_user_id_key UNIQUE (project_id, user_id);
 ALTER TABLE public.project_native_bindings ADD CONSTRAINT project_native_bindings_extraction_run_id_scope_package_ide_key UNIQUE (extraction_run_id, scope, package_identifier, soname, install_path);
@@ -6758,6 +7094,8 @@ ALTER TABLE public.dependency_prs ADD CONSTRAINT dependency_prs_type_check CHECK
 ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_level_check CHECK ((level = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'error'::text])));
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_errors_severity CHECK ((severity = ANY (ARRAY['warn'::text, 'error'::text])));
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_provider_chk CHECK ((provider = ANY (ARRAY['jira'::text, 'linear'::text, 'github'::text])));
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_type_chk CHECK ((finding_type = ANY (ARRAY['vulnerability'::text, 'secret'::text, 'semgrep'::text, 'iac'::text, 'container'::text, 'dast'::text, 'malicious'::text, 'taint_flow'::text])));
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_status_check CHECK ((status = ANY (ARRAY['success'::text, 'failed'::text, 'skipped'::text])));
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'dry_run'::text])));
 ALTER TABLE public.flows ADD CONSTRAINT flows_flow_type_check CHECK ((flow_type = ANY (ARRAY['notification'::text, 'pr_check'::text, 'policy'::text, 'status'::text])));
@@ -6816,13 +7154,15 @@ ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_au
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_confidence_check CHECK ((confidence = ANY (ARRAY['confirmed'::text, 'high'::text, 'medium'::text, 'low'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_engine_check CHECK ((engine = ANY (ARRAY['zap'::text, 'nuclei'::text, 'merged'::text])));
 ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_severity_check CHECK ((severity = ANY (ARRAY['critical'::text, 'high'::text, 'medium'::text, 'low'::text, 'info'::text])));
-ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_status_check CHECK ((status = ANY (ARRAY['open'::text, 'suppressed'::text, 'risk_accepted'::text, 'fixed'::text])));
+ALTER TABLE public.project_dast_findings ADD CONSTRAINT project_dast_findings_status_check CHECK ((status = ANY (ARRAY['open'::text, 'suppressed'::text, 'risk_accepted'::text, 'fixed'::text, 'ignored'::text, 'resolved'::text])));
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_api_spec_source_check CHECK ((api_spec_source = ANY (ARRAY['synthesized'::text, 'url'::text, 'none'::text])));
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_api_spec_url_required CHECK (((api_spec_source <> 'url'::text) OR ((api_spec_url IS NOT NULL) AND (length(api_spec_url) > 0))));
 ALTER TABLE public.project_dast_targets ADD CONSTRAINT project_dast_targets_detected_runtime_check CHECK ((detected_runtime = ANY (ARRAY['unknown'::text, 'classic'::text, 'spa'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_epd_confidence_tier CHECK (((epd_confidence_tier IS NULL) OR (epd_confidence_tier = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text]))));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_reachability_status CHECK ((reachability_status = ANY (ARRAY['reachable'::text, 'unreachable'::text, 'unknown'::text])));
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT chk_pdv_sla_status CHECK (((sla_status IS NULL) OR (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text, 'breached'::text, 'met'::text, 'resolved_late'::text, 'exempt'::text]))));
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_group_type_check CHECK ((group_type = ANY (ARRAY['container_group'::text, 'iac_group'::text])));
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_ignore_reason_check CHECK ((ignore_reason = ANY (ARRAY['false_positive'::text, 'wont_fix'::text, 'accepted_risk'::text])));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT piaf_risk_accepted_reason_length_check CHECK (((risk_accepted_reason IS NULL) OR (length(risk_accepted_reason) <= 4096)));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_framework_check CHECK ((framework = ANY (ARRAY['terraform'::text, 'kubernetes'::text, 'dockerfile'::text, 'helm'::text, 'cloudformation'::text, 'arm'::text, 'bicep'::text, 'serverless'::text, 'github_actions'::text])));
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_scanner_check CHECK ((scanner = ANY (ARRAY['trivy'::text, 'checkov'::text])));
@@ -6903,6 +7243,9 @@ ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_project_id_fke
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_extraction_job_id_fkey FOREIGN KEY (extraction_job_id) REFERENCES scan_jobs(id) ON DELETE CASCADE;
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
 ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
@@ -7018,6 +7361,12 @@ ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dep
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_dependency_vulnerabilities ADD CONSTRAINT project_dependency_vulnerabilities_runtime_confirmed_dast_findi FOREIGN KEY (runtime_confirmed_dast_finding_id) REFERENCES project_dast_findings(id) ON DELETE SET NULL;
 ALTER TABLE public.project_entry_points ADD CONSTRAINT project_entry_points_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_acknowledgements ADD CONSTRAINT project_finding_acknowledgements_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_group_suppressions ADD CONSTRAINT project_finding_group_suppressions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_finding_status_events ADD CONSTRAINT project_finding_status_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_iac_findings ADD CONSTRAINT project_iac_findings_risk_accepted_by_fkey FOREIGN KEY (risk_accepted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
@@ -7159,6 +7508,10 @@ CREATE INDEX idx_billing_transactions_org_created ON public.billing_transactions
 CREATE INDEX idx_billing_transactions_org_project_created ON public.billing_transactions USING btree (organization_id, project_id, created_at DESC) WHERE (project_id IS NOT NULL);
 CREATE INDEX idx_cisc_scanned_at ON public.container_image_scan_cache USING btree (scanned_at);
 CREATE INDEX idx_compliance_violations_project ON public.project_compliance_violations USING btree (project_id);
+CREATE INDEX idx_container_project_finding_key ON public.project_container_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_container_project_status ON public.project_container_findings USING btree (project_id, status);
+CREATE INDEX idx_dast_project_finding_key ON public.project_dast_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_dast_project_status ON public.project_dast_findings USING btree (project_id, status);
 CREATE INDEX idx_debt_snapshots_org_date ON public.security_debt_snapshots USING btree (organization_id, snapshot_date DESC);
 CREATE INDEX idx_debt_snapshots_project ON public.security_debt_snapshots USING btree (project_id, snapshot_date DESC);
 CREATE INDEX idx_demo_requests_created_at ON public.demo_requests USING btree (created_at DESC);
@@ -7185,6 +7538,13 @@ CREATE INDEX idx_extraction_step_errors_step_code ON public.extraction_step_erro
 CREATE INDEX idx_feedback_created_at ON public.feedback USING btree (created_at DESC);
 CREATE INDEX idx_feedback_type ON public.feedback USING btree (type);
 CREATE INDEX idx_feedback_user_id ON public.feedback USING btree (user_id) WHERE (user_id IS NOT NULL);
+CREATE INDEX idx_finding_acks_org ON public.project_finding_acknowledgements USING btree (organization_id);
+CREATE INDEX idx_finding_acks_project ON public.project_finding_acknowledgements USING btree (project_id, finding_type, finding_key);
+CREATE INDEX idx_finding_group_suppressions_org ON public.project_finding_group_suppressions USING btree (organization_id);
+CREATE INDEX idx_finding_group_suppressions_project ON public.project_finding_group_suppressions USING btree (project_id);
+CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);
+CREATE INDEX idx_finding_tracker_links_finding ON public.finding_tracker_links USING btree (project_id, finding_type, finding_key);
+CREATE INDEX idx_finding_tracker_links_org ON public.finding_tracker_links USING btree (organization_id);
 CREATE INDEX idx_flow_node_executions_run ON public.flow_node_executions USING btree (flow_run_id, executed_at);
 CREATE INDEX idx_flow_runs_flow_started ON public.flow_runs USING btree (flow_id, started_at DESC);
 CREATE INDEX idx_flow_runs_org_started ON public.flow_runs USING btree (organization_id, started_at DESC);
@@ -7192,11 +7552,15 @@ CREATE INDEX idx_flow_runs_trigger_event ON public.flow_runs USING btree (trigge
 CREATE INDEX idx_flow_versions_flow ON public.flow_versions USING btree (flow_id, version DESC);
 CREATE INDEX idx_flows_org_type_active ON public.flows USING btree (organization_id, flow_type, active) WHERE (active = true);
 CREATE INDEX idx_flows_scope ON public.flows USING btree (scope, scope_id);
+CREATE INDEX idx_iac_project_finding_key ON public.project_iac_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_iac_project_status ON public.project_iac_findings USING btree (project_id, status);
 CREATE INDEX idx_invitation_teams_invitation_id ON public.invitation_teams USING btree (invitation_id);
 CREATE INDEX idx_invitation_teams_team_id ON public.invitation_teams USING btree (team_id);
 CREATE INDEX idx_ip_allowlist_org ON public.organization_ip_allowlist USING btree (organization_id);
 CREATE INDEX idx_known_malicious_packages_lookup ON public.known_malicious_packages USING btree (package_name, ecosystem) WHERE (withdrawn_at IS NULL);
 CREATE INDEX idx_license_obligations_spdx ON public.license_obligations USING btree (license_spdx_id);
+CREATE INDEX idx_malicious_project_finding_key ON public.project_malicious_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_malicious_project_status ON public.project_malicious_findings USING btree (project_id, status);
 CREATE INDEX idx_mfsr_source_state ON public.malicious_feed_sync_runs USING btree (source, state, completed_at DESC);
 CREATE INDEX idx_notif_deliveries_event ON public.notification_deliveries USING btree (event_id);
 CREATE INDEX idx_notif_deliveries_flow_run ON public.notification_deliveries USING btree (flow_run_id) WHERE (flow_run_id IS NOT NULL);
@@ -7266,6 +7630,7 @@ CREATE INDEX idx_pbir_current_digest ON public.project_base_image_recommendation
 CREATE INDEX idx_pbir_project_active ON public.project_base_image_recommendations USING btree (project_id) WHERE (is_dismissed = false);
 CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
 CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
+CREATE INDEX idx_pcf_carryforward ON public.project_container_findings USING btree (project_id, extraction_run_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
@@ -7282,7 +7647,9 @@ CREATE INDEX idx_pdf_dep_extraction_run ON public.project_dependency_files USING
 CREATE INDEX idx_pdfn_dep_extraction_run ON public.project_dependency_functions USING btree (project_dependency_id, extraction_run_id);
 CREATE INDEX idx_pdv_project_epd_confidence ON public.project_dependency_vulnerabilities USING btree (project_id, epd_confidence_tier);
 CREATE INDEX idx_pdv_project_extraction_run ON public.project_dependency_vulnerabilities USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pdv_project_finding_key ON public.project_dependency_vulnerabilities USING btree (project_id, finding_key);
 CREATE INDEX idx_pdv_project_reachability_contextual ON public.project_dependency_vulnerabilities USING btree (project_id, reachability_status, contextual_depscore DESC);
+CREATE INDEX idx_pdv_project_status ON public.project_dependency_vulnerabilities USING btree (project_id, status);
 CREATE INDEX idx_pdv_sla_deadline ON public.project_dependency_vulnerabilities USING btree (sla_deadline_at) WHERE (sla_status = ANY (ARRAY['on_track'::text, 'warning'::text]));
 CREATE INDEX idx_pdv_sla_status ON public.project_dependency_vulnerabilities USING btree (sla_status) WHERE (sla_status IS NOT NULL);
 CREATE INDEX idx_pdv_sla_warning_at ON public.project_dependency_vulnerabilities USING btree (sla_warning_at) WHERE ((sla_status = 'on_track'::text) AND (sla_warning_at IS NOT NULL));
@@ -7422,6 +7789,10 @@ CREATE INDEX idx_scan_jobs_queued ON public.scan_jobs USING btree (type, created
 CREATE INDEX idx_scan_jobs_status_created ON public.scan_jobs USING btree (status, created_at);
 CREATE INDEX idx_scan_jobs_type_status_created ON public.scan_jobs USING btree (type, status, created_at);
 CREATE INDEX idx_scim_mappings_org ON public.scim_user_mappings USING btree (organization_id);
+CREATE INDEX idx_secret_project_finding_key ON public.project_secret_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_secret_project_status ON public.project_secret_findings USING btree (project_id, status);
+CREATE INDEX idx_semgrep_project_finding_key ON public.project_semgrep_findings USING btree (project_id, finding_key);
+CREATE INDEX idx_semgrep_project_status ON public.project_semgrep_findings USING btree (project_id, status);
 CREATE INDEX idx_sla_policies_org ON public.organization_sla_policies USING btree (organization_id);
 CREATE INDEX idx_sla_policy_changes_created ON public.sla_policy_changes USING btree (created_at DESC);
 CREATE INDEX idx_sla_policy_changes_org ON public.sla_policy_changes USING btree (organization_id);
@@ -7506,9 +7877,16 @@ CREATE TRIGGER project_native_bindings_enforce_org_id BEFORE INSERT OR UPDATE OF
 CREATE TRIGGER project_reachable_flow_suppressions_tenant_check BEFORE INSERT OR UPDATE ON public.project_reachable_flow_suppressions FOR EACH ROW EXECUTE FUNCTION assert_flow_suppression_tenant();
 CREATE TRIGGER team_integrations_updated_at BEFORE UPDATE ON public.team_integrations FOR EACH ROW EXECUTE FUNCTION update_team_integrations_updated_at();
 CREATE TRIGGER trg_cleanup_orphaned_watchlist AFTER DELETE ON public.project_watchlist FOR EACH ROW EXECUTE FUNCTION cleanup_orphaned_watchlist();
+CREATE TRIGGER trg_container_finding_status BEFORE INSERT OR UPDATE ON public.project_container_findings FOR EACH ROW EXECUTE FUNCTION trg_container_finding_status();
+CREATE TRIGGER trg_dast_finding_status BEFORE INSERT OR UPDATE ON public.project_dast_findings FOR EACH ROW EXECUTE FUNCTION trg_dast_finding_status();
+CREATE TRIGGER trg_iac_finding_status BEFORE INSERT OR UPDATE ON public.project_iac_findings FOR EACH ROW EXECUTE FUNCTION trg_iac_finding_status();
+CREATE TRIGGER trg_malicious_finding_status BEFORE INSERT OR UPDATE ON public.project_malicious_findings FOR EACH ROW EXECUTE FUNCTION trg_malicious_finding_status();
 CREATE TRIGGER trg_org_policy_rules_updated_at BEFORE UPDATE ON public.organization_policy_rules FOR EACH ROW EXECUTE FUNCTION update_org_policy_rules_updated_at();
 CREATE TRIGGER trg_organizations_after_insert_billing AFTER INSERT ON public.organizations FOR EACH ROW EXECUTE FUNCTION create_organization_billing_row();
+CREATE TRIGGER trg_pdv_finding_status BEFORE INSERT OR UPDATE ON public.project_dependency_vulnerabilities FOR EACH ROW EXECUTE FUNCTION trg_pdv_finding_status();
 CREATE TRIGGER trg_project_repositories_fill_organization_id BEFORE INSERT OR UPDATE ON public.project_repositories FOR EACH ROW EXECUTE FUNCTION fill_project_repositories_organization_id();
+CREATE TRIGGER trg_secret_finding_status BEFORE INSERT OR UPDATE ON public.project_secret_findings FOR EACH ROW EXECUTE FUNCTION trg_secret_finding_status();
+CREATE TRIGGER trg_semgrep_finding_status BEFORE INSERT OR UPDATE ON public.project_semgrep_findings FOR EACH ROW EXECUTE FUNCTION trg_semgrep_finding_status();
 CREATE TRIGGER trigger_update_pr_guardrails_updated_at BEFORE UPDATE ON public.project_pr_guardrails FOR EACH ROW EXECUTE FUNCTION update_pr_guardrails_updated_at();
 CREATE TRIGGER update_aegis_chat_threads_updated_at BEFORE UPDATE ON public.aegis_chat_threads FOR EACH ROW EXECUTE FUNCTION update_aegis_chat_threads_updated_at();
 CREATE TRIGGER update_organization_notification_rules_updated_at BEFORE UPDATE ON public.organization_notification_rules FOR EACH ROW EXECUTE FUNCTION update_organization_notification_rules_updated_at();

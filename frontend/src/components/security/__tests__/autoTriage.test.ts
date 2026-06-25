@@ -50,4 +50,61 @@ describe('autoTriageRow — Refined/All reachability rules', () => {
     expect(autoTriageRow(secret)).toBeNull();
     expect(autoTriageRow(semgrep)).toBeNull();
   });
+
+  it('keeps KEV base-image findings (never set aside)', () => {
+    const kev = { type: 'container', data: { id: 'c2', is_kev: true, severity: 'MEDIUM' } } as unknown as SecurityTableRow;
+    expect(autoTriageRow(kev)).toBeNull();
+  });
+});
+
+// Golden-master freeze for the findings-status foundation: these cases pin the
+// REAL autoTriageRow's IaC/DAST per-row verdicts — including the cases where the
+// phase54 count SQL DISAGREES with the table — before autoTriageRow is replaced
+// by the stored `auto_ignored` column. The byte-identical backend contract lives
+// in backend/src/lib/findings/triage-golden-master.ts; keep the two in sync.
+function iac(data: Record<string, unknown>): SecurityTableRow {
+  return { type: 'iac', data: { id: 'i1', ...data } } as unknown as SecurityTableRow;
+}
+function dast(data: Record<string, unknown>): SecurityTableRow {
+  return { type: 'dast', data: { id: 'd1', ...data } } as unknown as SecurityTableRow;
+}
+
+describe('autoTriageRow — IaC critical vs hardening (frozen)', () => {
+  it('keeps per-rule critical misconfigs open even at LOW severity', () => {
+    expect(autoTriageRow(iac({ rule_id: 'CKV_K8S_16', severity: 'LOW' }))).toBeNull();
+    expect(autoTriageRow(iac({ rule_id: 'KSV-0023', severity: 'MEDIUM' }))).toBeNull();
+  });
+
+  it('sets aside per-rule hardening checks as iac_hardening', () => {
+    expect(autoTriageRow(iac({ rule_id: 'CKV_K8S_13', severity: 'MEDIUM' }))?.reason).toBe('iac_hardening');
+  });
+
+  it('keeps known hardening rules set aside even at HIGH severity (per-rule wins over severity)', () => {
+    expect(autoTriageRow(iac({ rule_id: 'CKV_K8S_22', severity: 'HIGH' }))?.reason).toBe('iac_hardening');
+  });
+
+  it('DIVERGENCE: unmapped HIGH/CRITICAL rules stay open via the severity fallback (phase54 hides them)', () => {
+    expect(autoTriageRow(iac({ rule_id: 'CKV_AWS_23', severity: 'HIGH' }))).toBeNull();
+    expect(autoTriageRow(iac({ rule_id: 'CKV_AWS_999', severity: 'CRITICAL' }))).toBeNull();
+  });
+
+  it('sets aside unmapped MEDIUM rules as iac_hardening', () => {
+    expect(autoTriageRow(iac({ rule_id: 'CKV_AWS_50', severity: 'MEDIUM' }))?.reason).toBe('iac_hardening');
+  });
+});
+
+describe('autoTriageRow — DAST passive vs active (frozen)', () => {
+  it('sets aside passive checks (no payload, low/info severity) as passive_hygiene', () => {
+    expect(autoTriageRow(dast({ severity: 'low', payload_redacted: null }))?.reason).toBe('passive_hygiene');
+    expect(autoTriageRow(dast({ severity: 'info', payload_redacted: '' }))?.reason).toBe('passive_hygiene');
+  });
+
+  it('keeps exploited findings (a payload was injected) open even at low severity', () => {
+    expect(autoTriageRow(dast({ severity: 'low', payload_redacted: "' OR 1=1--" }))).toBeNull();
+  });
+
+  it('keeps high/critical-severity findings open', () => {
+    expect(autoTriageRow(dast({ severity: 'high', payload_redacted: null }))).toBeNull();
+    expect(autoTriageRow(dast({ severity: 'critical', payload_redacted: '   ' }))).toBeNull();
+  });
 });

@@ -7566,12 +7566,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     const userId = req.user!.id;
     const { id, projectId } = req.params;
 
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    // Access check and the active-extraction lookup are independent — run them
+    // concurrently so the findings table (this is its sole gating request) waits
+    // on one round-trip instead of two stacked back-to-back.
+    const [accessCheck, activeExtractionId] = await Promise.all([
+      checkProjectAccess(userId, id, projectId),
+      getActiveExtractionId(supabase, projectId),
+    ]);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
     const { count: pdvCount } = await supabase
@@ -7674,6 +7678,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         contextual_depscore: vuln.contextual_depscore ?? null,
         entry_point_classification: vuln.entry_point_classification ?? null,
         epd_status: vuln.epd_status ?? null,
+        // Unified-status fields — without finding_key the status cell has no
+        // handle, so the ⋯ actions menu can't render on a dependency CVE row.
+        finding_key: vuln.finding_key ?? null,
+        status: vuln.status ?? null,
+        auto_ignored: vuln.auto_ignored ?? false,
+        auto_ignore_reason: vuln.auto_ignore_reason ?? null,
+        ignore_reason: vuln.ignore_reason ?? null,
+        ignore_note: vuln.ignore_note ?? null,
+        suppressed: vuln.suppressed ?? false,
+        risk_accepted: vuln.risk_accepted ?? false,
       }),
     }));
 
@@ -10311,9 +10325,13 @@ router.get('/:id/projects/:projectId/code-flow-findings', async (req: AuthReques
       (supRes.data ?? []).map((r: any) => r.flow_signature_hash).filter(Boolean),
     );
 
-    const data = (flowsRes.data ?? [])
-      .filter((row: any) => !row.flow_signature_hash || !suppressed.has(row.flow_signature_hash))
-      .map((row: any) => toDataFlowFinding(row));
+    // Return suppressed flows too, flagged — the findings table filters Open vs
+    // Ignored client-side and lets the user restore them. (The count RPC still
+    // excludes suppressed flows, so the pills stay correct.)
+    const data = (flowsRes.data ?? []).map((row: any) => ({
+      ...toDataFlowFinding(row),
+      flow_suppressed: Boolean(row.flow_signature_hash && suppressed.has(row.flow_signature_hash)),
+    }));
 
     res.json({ data, total: data.length });
   } catch (error: any) {
@@ -10946,12 +10964,14 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     const severityFilter = (req.query.severity as string) || '';
     const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
 
+    // Return open + ignored rows (the table filters Open/Ignored/All client-side
+    // via the stored status); resolved rows stay hidden.
     let countQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
 
     const { count: totalCount, error: countError } = await countQuery;
@@ -10963,11 +10983,11 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
       )
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
 
     const { data: rows, error: dataError } = await dataQuery

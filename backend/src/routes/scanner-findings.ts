@@ -21,8 +21,19 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
-import { checkProjectAccess, checkProjectManagePermission } from '../lib/project-access';
+import { checkProjectAccess, checkProjectManagePermission, checkOrgManageFindingsPermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import {
+  getConnectedProviders,
+  listJiraProjects,
+  listLinearTeams,
+  createJiraIssue,
+  createLinearIssue,
+  createGithubIssue,
+  TrackerError,
+  type TrackerProvider,
+  type TrackerResult,
+} from '../lib/trackers';
 
 // Mirror of `IAC_FRAMEWORKS` in `depscanner/src/scanners/types.ts`.
 // Backend's tsconfig rootDir is ./src so cross-package import isn't possible;
@@ -466,6 +477,597 @@ router.get('/:id/projects/:projectId/scanner-summary', async (req: AuthRequest, 
   } catch (error: any) {
     console.error('[scanner-findings] summary error:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch scanner summary' });
+  }
+});
+
+// ============================================================
+// Unified finding status (ignore / un-ignore across finding types)
+// ============================================================
+
+/** Finding types whose status the unified endpoint can set, with how to resolve
+ *  their active-run rows and whether they carry the legacy suppressed/risk_accepted
+ *  columns. `malicious` lacks carry-forward (PR-B) and `taint_flow` uses its own
+ *  flow-suppression model, so both are intentionally excluded. */
+const STATUS_FINDING_TYPES = {
+  vulnerability: { table: 'project_dependency_vulnerabilities', run: 'extraction', legacy: true },
+  secret: { table: 'project_secret_findings', run: 'extraction', legacy: false },
+  semgrep: { table: 'project_semgrep_findings', run: 'extraction', legacy: false },
+  iac: { table: 'project_iac_findings', run: 'extraction', legacy: true },
+  container: { table: 'project_container_findings', run: 'extraction', legacy: true },
+  dast: { table: 'project_dast_findings', run: 'dast', legacy: false },
+  // Malicious is status-only (NOT the legacy suppressed path) to keep the manual
+  // ignore layer orthogonal to the allowlist auto-suppression. A status change
+  // triggers a recompute of dependencies.is_malicious below (phase56), and the
+  // ignore now carries across scans via insert_malicious_findings_with_recompute.
+  malicious: { table: 'project_malicious_findings', run: 'extraction', legacy: false },
+} as const;
+type StatusFindingType = keyof typeof STATUS_FINDING_TYPES;
+const IGNORE_REASONS = ['false_positive', 'wont_fix', 'accepted_risk'] as const;
+
+/** Synthetic "collapsed" rows with no backing finding store of their own — the
+ *  out-of-date base-image group and the container/k8s hardening group. Their
+ *  Ignore lives in project_finding_group_suppressions, keyed by the stable
+ *  synthetic group key (`cig:…` / `iacg:…`) the UI already uses. */
+const GROUP_FINDING_TYPES = new Set<string>(['container_group', 'iac_group']);
+
+router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    const isGroup = GROUP_FINDING_TYPES.has(type);
+    const cfg = STATUS_FINDING_TYPES[type as StatusFindingType];
+    if (!isGroup && !cfg) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+
+    const { status, reason, note } = req.body ?? {};
+    if (status !== 'open' && status !== 'ignored') {
+      return res.status(400).json({ error: 'status must be "open" or "ignored"' });
+    }
+    if (status === 'ignored' && reason !== undefined && reason !== null && !IGNORE_REASONS.includes(reason)) {
+      return res.status(400).json({ error: `reason must be one of: ${IGNORE_REASONS.join(', ')}` });
+    }
+    const trimmedNote = typeof note === 'string' ? note.trim().slice(0, RISK_ACCEPTED_REASON_MAX_LEN) || null : null;
+
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) {
+      return res.status(access.error!.status).json({ error: access.error!.message });
+    }
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+
+    // Group rows (container_group / iac_group) have no backing finding store, so
+    // their Ignore disposition is a row in project_finding_group_suppressions
+    // keyed by the synthetic group key. Ignoring sets it aside; opening removes it.
+    if (isGroup) {
+      if (status === 'ignored') {
+        const { error } = await supabase
+          .from('project_finding_group_suppressions')
+          .upsert(
+            {
+              organization_id: id,
+              project_id: projectId,
+              group_type: type,
+              group_key: findingKey,
+              ignore_reason: reason ?? null,
+              ignore_note: trimmedNote,
+              ignored_by: userId,
+              ignored_at: new Date().toISOString(),
+            },
+            { onConflict: 'project_id,group_type,group_key' },
+          );
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('project_finding_group_suppressions')
+          .delete()
+          .eq('project_id', projectId)
+          .eq('group_type', type)
+          .eq('group_key', findingKey);
+        if (error) throw error;
+      }
+      return res.json({ success: true, status, updated: 1 });
+    }
+    if (!cfg) return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+
+    const now = new Date().toISOString();
+    const ignoring = status === 'ignored';
+    const acceptedRisk = ignoring && reason === 'accepted_risk';
+
+    // Unified status + ignore_* columns, mirrored onto the legacy
+    // suppressed/risk_accepted columns so every reader (the count RPC, the legacy
+    // detail panels) stays consistent until the legacy columns are retired.
+    const update: Record<string, unknown> = {
+      status,
+      ignore_reason: ignoring ? reason ?? null : null,
+      ignore_note: ignoring ? trimmedNote : null,
+      ignored_by: ignoring ? userId : null,
+      ignored_at: ignoring ? now : null,
+    };
+    if (cfg.legacy) {
+      update.suppressed = ignoring && !acceptedRisk;
+      update.suppressed_by = ignoring && !acceptedRisk ? userId : null;
+      update.suppressed_at = ignoring && !acceptedRisk ? now : null;
+      update.risk_accepted = acceptedRisk;
+      update.risk_accepted_by = acceptedRisk ? userId : null;
+      update.risk_accepted_at = acceptedRisk ? now : null;
+      update.risk_accepted_reason = acceptedRisk ? trimmedNote : null;
+    } else if (type === 'dast') {
+      update.risk_accepted_by = acceptedRisk ? userId : null;
+      update.risk_accepted_at = acceptedRisk ? now : null;
+      update.risk_accepted_reason = acceptedRisk ? trimmedNote : null;
+    }
+
+    let query = supabase
+      .from(cfg.table)
+      .update(update, { count: 'exact' })
+      .eq('project_id', projectId)
+      .eq('finding_key', findingKey);
+    if (cfg.run === 'extraction') {
+      const activeRun = await getActiveExtractionId(supabase, projectId);
+      if (!activeRun) return res.status(404).json({ error: 'No active scan for this project' });
+      query = query.eq('extraction_run_id', activeRun);
+    } else {
+      const { data: targets } = await supabase
+        .from('project_dast_targets')
+        .select('active_dast_run_id')
+        .eq('project_id', projectId);
+      const runs = (targets ?? []).map((t: any) => t.active_dast_run_id).filter(Boolean);
+      if (runs.length === 0) return res.status(404).json({ error: 'No active DAST run for this project' });
+      query = query.in('dast_run_id', runs);
+    }
+
+    const { data: updated, error, count } = await query.select(
+      type === 'malicious' ? 'id, dependency_id' : 'id',
+    );
+    if (error) throw error;
+    if ((count ?? 0) === 0) {
+      return res.status(404).json({ error: 'Finding not found in the active scan' });
+    }
+
+    // A malicious status change flips dependencies.is_malicious (phase56): an
+    // ignored/resolved finding no longer counts as active malicious.
+    if (type === 'malicious') {
+      const depIds = Array.from(
+        new Set((updated ?? []).map((row: any) => row.dependency_id).filter(Boolean)),
+      );
+      if (depIds.length > 0) {
+        await supabase
+          .rpc('recompute_dependency_is_malicious', { p_dependency_ids: depIds })
+          .then(undefined, (e: any) =>
+            console.error('[finding-status] is_malicious recompute failed:', e?.message),
+          );
+      }
+    }
+
+    // Best-effort audit log (write-only in PR-A; postgrest builders have no
+    // .catch, so use .then(ok, err) for fire-and-forget — see memory).
+    await supabase
+      .from('project_finding_status_events')
+      .insert(
+        (updated ?? []).map((row: any) => ({
+          organization_id: id,
+          project_id: projectId,
+          finding_type: type,
+          finding_key: findingKey,
+          finding_id: row.id,
+          to_status: status,
+          reason: ignoring ? reason ?? null : null,
+          note: ignoring ? trimmedNote : null,
+          actor_user_id: userId,
+        })),
+      )
+      .then(undefined, (e: any) => console.error('[finding-status] event log failed:', e?.message));
+
+    res.json({ success: true, status, updated: count });
+  } catch (error: any) {
+    console.error('[scanner-findings] finding status error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update finding status' });
+  }
+});
+
+// ============================================================
+// Finding -> external tracker links (Jira / Linear / GitHub)
+// ============================================================
+
+/** Finding types that can be filed to a tracker: the unified status types, plus
+ *  data-flow (taint_flow, resolves by flow_signature_hash) and the two collapsed
+ *  group rows (one ticket upgrades the whole base image / hardens the manifest). */
+const TRACKER_FINDING_TYPES = new Set<string>([
+  ...Object.keys(STATUS_FINDING_TYPES),
+  'taint_flow',
+  ...GROUP_FINDING_TYPES,
+]);
+
+/** Does the (finding_key) resolve to a row in the active run for its type?
+ *  taint_flow resolves by flow_signature_hash against project_reachable_flows. */
+async function findingExistsInActiveRun(
+  projectId: string,
+  type: string,
+  findingKey: string,
+): Promise<boolean> {
+  if (type === 'taint_flow') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    const { count } = await supabase
+      .from('project_reachable_flows')
+      .select('project_id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('flow_signature_hash', findingKey)
+      .eq('extraction_run_id', activeRun);
+    return (count ?? 0) > 0;
+  }
+  // Collapsed group rows have no per-row store — validate the project actually
+  // has findings of that family in the active run (enough to block phantom keys).
+  if (type === 'container_group' || type === 'iac_group') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    const table = type === 'container_group' ? 'project_container_findings' : 'project_iac_findings';
+    const { count } = await supabase
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', activeRun);
+    return (count ?? 0) > 0;
+  }
+  const cfg = STATUS_FINDING_TYPES[type as StatusFindingType];
+  if (!cfg) return false;
+  let q = supabase
+    .from(cfg.table)
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId)
+    .eq('finding_key', findingKey);
+  if (cfg.run === 'extraction') {
+    const activeRun = await getActiveExtractionId(supabase, projectId);
+    if (!activeRun) return false;
+    q = q.eq('extraction_run_id', activeRun);
+  } else {
+    const { data: targets } = await supabase
+      .from('project_dast_targets')
+      .select('active_dast_run_id')
+      .eq('project_id', projectId);
+    const runs = (targets ?? []).map((t: any) => t.active_dast_run_id).filter(Boolean);
+    if (runs.length === 0) return false;
+    q = q.in('dast_run_id', runs);
+  }
+  const { count } = await q;
+  return (count ?? 0) > 0;
+}
+
+const TITLE_MAX = 255;
+const DESC_MAX = 16384;
+
+// Which providers are connected for this project (drives the picker).
+router.get('/:id/projects/:projectId/tracker-providers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const providers = await getConnectedProviders(id, projectId);
+    res.json({ providers });
+  } catch (error: any) {
+    console.error('[scanner-findings] tracker-providers error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker providers' });
+  }
+});
+
+// Destinations within a provider (Jira projects / Linear teams). GitHub files to
+// the project's connected repo, so it has a single implicit destination.
+router.get('/:id/projects/:projectId/tracker-destinations/:provider', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, provider } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    let destinations: Array<{ id: string; name: string }> = [];
+    if (provider === 'jira') {
+      destinations = (await listJiraProjects(id)).map((p) => ({ id: p.key, name: `${p.key} — ${p.name}` }));
+    } else if (provider === 'linear') {
+      destinations = await listLinearTeams(id);
+    } else if (provider === 'github') {
+      destinations = []; // implicit: the project's repo
+    } else {
+      return res.status(400).json({ error: `Unsupported provider: ${provider}` });
+    }
+    res.json({ destinations });
+  } catch (error: any) {
+    if (error instanceof TrackerError) return res.status(error.connected ? 502 : 409).json({ error: error.message });
+    console.error('[scanner-findings] tracker-destinations error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list destinations' });
+  }
+});
+
+// All tracker links for the project's findings (the row chips read this once).
+router.get('/:id/projects/:projectId/tracker-links', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('finding_tracker_links')
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ links: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] tracker-links error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker links' });
+  }
+});
+
+// All tracker links across the org's projects (the org-wide findings table maps
+// chips by project_id + finding_type + finding_key in a single call).
+router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('finding_tracker_links')
+      .select('id, project_id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
+      .eq('organization_id', id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ links: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org tracker-links error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list tracker links' });
+  }
+});
+
+// Group-level Ignore for the collapsed rows (container_group / iac_group). The
+// findings table reads these once and stamps the matching group row as ignored.
+router.get('/:id/projects/:projectId/group-suppressions', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('project_finding_group_suppressions')
+      .select('project_id, group_type, group_key, ignore_reason, ignore_note')
+      .eq('project_id', projectId);
+    if (error) throw error;
+    res.json({ suppressions: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] group-suppressions error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list group suppressions' });
+  }
+});
+
+// All group suppressions across the org's projects (org-wide findings table).
+router.get('/:id/group-suppressions', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('project_finding_group_suppressions')
+      .select('project_id, group_type, group_key, ignore_reason, ignore_note')
+      .eq('organization_id', id);
+    if (error) throw error;
+    res.json({ suppressions: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org group-suppressions error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list group suppressions' });
+  }
+});
+
+// Every type that can carry a manual New/Open/Ignored status — the status-store
+// types plus taint_flow and the synthetic group rows.
+const ACK_FINDING_TYPES = new Set<string>([
+  ...Object.keys(STATUS_FINDING_TYPES),
+  'taint_flow',
+  ...GROUP_FINDING_TYPES,
+]);
+
+// Acknowledge a finding (the "Open" disposition) or clear it (back to New).
+// A row present = Open; absent = New. Keyed by the stable finding_key / flow
+// hash / synthetic group key, so the disposition survives rescans.
+router.put('/:id/projects/:projectId/findings/:type/:findingKey/acknowledge', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    if (!ACK_FINDING_TYPES.has(type)) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+    const acknowledged = req.body?.acknowledged === true;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    if (acknowledged) {
+      const { error } = await supabase
+        .from('project_finding_acknowledgements')
+        .upsert({
+          organization_id: id,
+          project_id: projectId,
+          finding_type: type,
+          finding_key: findingKey,
+          acknowledged_by: userId,
+          acknowledged_at: new Date().toISOString(),
+        }, { onConflict: 'project_id,finding_type,finding_key' });
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('project_finding_acknowledgements')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('finding_type', type)
+        .eq('finding_key', findingKey);
+      if (error) throw error;
+    }
+    res.json({ success: true, acknowledged });
+  } catch (error: any) {
+    console.error('[scanner-findings] acknowledge error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update acknowledgement' });
+  }
+});
+
+// Acknowledgements for one project's findings.
+router.get('/:id/projects/:projectId/acknowledgements', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    const { data, error } = await supabase
+      .from('project_finding_acknowledgements')
+      .select('project_id, finding_type, finding_key')
+      .eq('project_id', projectId);
+    if (error) throw error;
+    res.json({ acknowledgements: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] acknowledgements error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list acknowledgements' });
+  }
+});
+
+// All acknowledgements across the org's projects (org-wide findings table).
+router.get('/:id/acknowledgements', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const { data: membership } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
+    const { data, error } = await supabase
+      .from('project_finding_acknowledgements')
+      .select('project_id, finding_type, finding_key')
+      .eq('organization_id', id);
+    if (error) throw error;
+    res.json({ acknowledgements: data ?? [] });
+  } catch (error: any) {
+    console.error('[scanner-findings] org acknowledgements error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list acknowledgements' });
+  }
+});
+
+// Create a ticket for a finding and store the link.
+router.post('/:id/projects/:projectId/findings/:type/:findingKey/tracker', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, type, findingKey } = req.params;
+    if (!TRACKER_FINDING_TYPES.has(type)) {
+      return res.status(400).json({ error: `Unsupported finding type: ${type}` });
+    }
+    const provider = String(req.body?.provider ?? '') as TrackerProvider;
+    if (!['jira', 'linear', 'github'].includes(provider)) {
+      return res.status(400).json({ error: 'provider must be jira, linear, or github' });
+    }
+    const title = String(req.body?.title ?? '').trim().slice(0, TITLE_MAX);
+    const description = String(req.body?.description ?? '').trim().slice(0, DESC_MAX);
+    if (!title) return res.status(400).json({ error: 'title is required' });
+
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+
+    if (!(await findingExistsInActiveRun(projectId, type, findingKey))) {
+      return res.status(404).json({ error: 'Finding not found in the active scan' });
+    }
+
+    // Multiple issues per (finding, provider) are allowed — a finding can be
+    // tracked by several tickets in the same tool. The DB unique now keys on
+    // external_id, so only the exact same ticket can't be linked twice.
+
+    let result: TrackerResult;
+    if (provider === 'jira') {
+      const projectKey = String(req.body?.projectKey ?? '').trim();
+      if (!projectKey) return res.status(400).json({ error: 'projectKey is required for Jira' });
+      result = await createJiraIssue(id, {
+        projectKey,
+        summary: title,
+        description,
+        issueType: req.body?.issueType ? String(req.body.issueType) : undefined,
+      });
+    } else if (provider === 'linear') {
+      const teamId = String(req.body?.teamId ?? '').trim();
+      if (!teamId) return res.status(400).json({ error: 'teamId is required for Linear' });
+      result = await createLinearIssue(id, { teamId, title, description });
+    } else {
+      result = await createGithubIssue(projectId, { title, body: description });
+    }
+
+    const { data: link, error: insErr } = await supabase
+      .from('finding_tracker_links')
+      .insert({
+        organization_id: id,
+        project_id: projectId,
+        finding_type: type,
+        finding_key: findingKey,
+        provider,
+        external_id: result.externalId,
+        external_key: result.externalKey,
+        external_url: result.externalUrl,
+        title,
+        created_by: userId,
+        external_state: 'open', // a freshly-filed ticket is open; GitHub keeps it fresh via webhook
+        external_state_synced_at: new Date().toISOString(),
+      })
+      .select('id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
+      .single();
+    if (insErr) {
+      // The ticket exists even if we couldn't store the link (e.g. a race on the
+      // unique index). Surface the created ticket so the user isn't left guessing.
+      console.error('[scanner-findings] tracker link insert failed:', insErr.message);
+      return res.status(201).json({ success: true, link: { provider, external_key: result.externalKey, external_url: result.externalUrl, title }, persisted: false });
+    }
+    res.status(201).json({ success: true, link, persisted: true });
+  } catch (error: any) {
+    if (error instanceof TrackerError) return res.status(error.connected ? 502 : 409).json({ error: error.message });
+    console.error('[scanner-findings] create tracker error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create ticket' });
+  }
+});
+
+// Remove a tracker link (does NOT close the external ticket).
+router.delete('/:id/projects/:projectId/findings/:type/:findingKey/tracker/:linkId', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId, linkId } = req.params;
+    const access = await checkProjectAccess(userId, id, projectId);
+    if (!access.hasAccess) return res.status(access.error!.status).json({ error: access.error!.message });
+    if (!(await checkOrgManageFindingsPermission(userId, id))) {
+      return res.status(403).json({ error: 'Requires manage_findings permission' });
+    }
+    const { error, count } = await supabase
+      .from('finding_tracker_links')
+      .delete({ count: 'exact' })
+      .eq('id', linkId)
+      .eq('project_id', projectId);
+    if (error) throw error;
+    if ((count ?? 0) === 0) return res.status(404).json({ error: 'Link not found' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[scanner-findings] delete tracker error:', error);
+    res.status(500).json({ error: error.message || 'Failed to remove link' });
   }
 });
 

@@ -2582,52 +2582,10 @@ router.get('/:id/teams/:teamId/license-violations', async (req: AuthRequest, res
   }
 });
 
-// PATCH /api/organizations/:id/findings/:findingType/:findingId/status — toggle finding status
-const FINDING_TABLES: Record<string, string> = {
-  vulnerability: 'project_dependency_vulnerabilities',
-  secret: 'project_secret_findings',
-  semgrep: 'project_semgrep_findings',
-};
-
-router.patch('/:id/findings/:findingType/:findingId/status', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.id;
-    const { id, findingType, findingId } = req.params;
-    const { status } = req.body;
-
-    if (!['open', 'ignored'].includes(status)) {
-      return res.status(400).json({ error: 'Status must be "open" or "ignored"' });
-    }
-
-    const table = FINDING_TABLES[findingType];
-    if (!table) {
-      return res.status(400).json({ error: 'Finding type must be "vulnerability", "secret", or "semgrep"' });
-    }
-
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (!membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
-    }
-
-    const { error } = await supabase
-      .from(table)
-      .update({ status })
-      .eq('id', findingId);
-
-    if (error) throw error;
-
-    res.json({ success: true, status });
-  } catch (error: any) {
-    console.error('Error updating finding status:', error);
-    res.status(500).json({ error: error.message || 'Failed to update finding status' });
-  }
-});
+// (Removed: the legacy PATCH /:id/findings/:findingType/:findingId/status toggle.
+// It was membership-only and updated by bare finding id with no project/org
+// scoping — a cross-org IDOR. Superseded by the project-scoped, finding_key-keyed
+// unified status endpoint in scanner-findings.ts, gated on manage_findings.)
 
 export default router;
 
