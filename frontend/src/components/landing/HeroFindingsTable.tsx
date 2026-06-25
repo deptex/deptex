@@ -11,7 +11,7 @@
  * (dimmed) without the Open/All toggle. See [[feedback_landing_use_real_components]].
  */
 import VulnerabilityExpandableTable from "../security/VulnerabilityExpandableTable";
-import { HERO_ORG_ID, heroFindings, heroFindingDetail } from "./heroDemo";
+import { HERO_ORG_ID, heroFindings, heroFindingDetail, heroTrackerLinks } from "./heroDemo";
 
 export default function HeroFindingsTable() {
   return (
@@ -20,6 +20,8 @@ export default function HeroFindingsTable() {
         organizationId={HERO_ORG_ID}
         rows={heroFindings}
         canManageFindings={false}
+        demo
+        trackerLinks={heroTrackerLinks}
         fetchDetail={heroFindingDetail}
         hideRefineToggle
         hideTypeFilter
