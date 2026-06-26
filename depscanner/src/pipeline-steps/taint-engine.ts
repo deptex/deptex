@@ -85,11 +85,15 @@ export interface TaintEngineOutput {
  * intentionally omitted until the matcher does word-boundary matching.
  */
 const CONFIRM_OR_DENY_CVE_ALIASES: Record<string, string[]> = {
-  // Express open redirect (CVE-2024-29041) — same res.redirect sink as the
-  // already-tagged CVE-2024-43796 (XSS via response.redirect), which the live
-  // classifier already demotes to `unreachable`. Keyed on the identical
-  // `res.redirect` token so the two get the same verdict instead of 29041
-  // sitting at the weaker `module` fallback.
+  // Express response.redirect CVEs — CVE-2024-43796 (XSS via response.redirect)
+  // and CVE-2024-29041 (open redirect) share the identical `res.redirect` sink.
+  // These live HERE (the PDV-side symbol check) rather than as an `osv_id` on
+  // the bundled express.yaml sink: a bundled framework-model loads for EVERY JS
+  // project, so stamping its sink with these Express CVEs false-attributed them
+  // onto non-Express apps (e.g. Next.js). Keyed here, the confirm-or-deny symbol
+  // check only fires for a PDV that actually carries the CVE (i.e. express IS a
+  // vulnerable dependency) and never stamps an arbitrary res.redirect flow.
+  'CVE-2024-43796': ['res.redirect(*)'],
   'CVE-2024-29041': ['res.redirect(*)'],
   // lodash prototype pollution via `_.unset` (CVE-2025-13465). `unset` is a
   // distinctive token; an app that only calls `_.template` never trips it.
@@ -316,6 +320,24 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       cveSinkPatterns.set(sink.osv_id, patterns);
     }
   }
+  // Detected framework(s) for client-SPA scoping. A pure browser SPA
+  // (framework=react/vue/…) has no server request boundary, so the engine
+  // drops server application-framework specs + server-only vuln classes to
+  // avoid the false-positive storm those produce on client code. Best-effort:
+  // a missing/unknown framework leaves scoping off (full load-all behavior).
+  let projectFrameworks: string[] | undefined;
+  try {
+    const { data: projRow } = await supabase
+      .from('projects')
+      .select('framework')
+      .eq('id', projectId)
+      .maybeSingle();
+    const fw = (projRow as { framework?: string | null } | null)?.framework;
+    if (fw && fw.trim()) projectFrameworks = [fw.trim()];
+  } catch {
+    // non-fatal — scoping just stays off
+  }
+
   try {
     const engineResult = await withTimeout(
       async (signal) => runTaintEngine({
@@ -324,6 +346,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         signal,
         onWarn: (m) => { void log.warn('taint_engine', m); },
         cveSpecs: cveSpecResult.specs,
+        projectFrameworks,
         fpFilter: {
           storage: supabase,
           organizationId,

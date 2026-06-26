@@ -18,6 +18,38 @@ import { calculateSecretDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
+/**
+ * Structural false-positive filter for TruffleHog's GitLab detector.
+ *
+ * TruffleHog's `Gitlab` detector pattern-matches on identifier/JWT-shaped
+ * substrings (e.g. a TS interface field like `role_display_name?: string`, or
+ * a generic `fetchWithAuth(...)` wrapper) and, when it can't reach GitLab to
+ * confirm them, emits them UNVERIFIED. A genuine GitLab personal-access token
+ * always carries the canonical `glpat-` prefix followed by ~20 base64url chars.
+ *
+ * So: for the GitLab detector ONLY, drop a detection when it is unverified AND
+ * its raw secret doesn't match the `glpat-` shape. We keep:
+ *   - every VERIFIED detection (TruffleHog confirmed it live), and
+ *   - unverified detections that DO look like a real `glpat-` token (could be a
+ *     revoked-but-real token worth surfacing).
+ * Every other detector is left completely untouched.
+ *
+ * `raw` is the unredacted matched string (TruffleHog's `Raw` field), captured
+ * before we strip it for storage.
+ */
+const GITLAB_PAT_RE = /glpat-[0-9A-Za-z_-]{20,}/;
+function isLowConfidenceGitlabFinding(args: {
+  detectorType: string;
+  isVerified: boolean;
+  raw: string;
+}): boolean {
+  const isGitlab = args.detectorType.toLowerCase() === 'gitlab';
+  if (!isGitlab) return false;
+  if (args.isVerified) return false; // verified = confirmed live, always keep
+  // Unverified GitLab match: keep only if it's actually `glpat-`-shaped.
+  return !GITLAB_PAT_RE.test(args.raw);
+}
+
 export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
@@ -146,6 +178,16 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
               }
               const detectorType = f.DetectorName ?? 'Unknown';
               const isVerified = f.Verified ?? false;
+
+              // Drop GitLab false positives: unverified, non-`glpat-`-shaped
+              // matches (TS interface fields, generic auth wrappers, etc.) that
+              // TruffleHog's GitLab detector pattern-matched but couldn't verify.
+              // Only this detector's low-confidence matches are dropped; `raw`
+              // (TruffleHog's unredacted `Raw`) is checked before it's stripped.
+              if (isLowConfidenceGitlabFinding({ detectorType, isVerified, raw })) {
+                return null;
+              }
+
               const isCurrent = !!(f.SourceMetadata?.Data?.Filesystem);
               const startLine = f.SourceMetadata?.Data?.Filesystem?.line ?? f.SourceMetadata?.Data?.Git?.line ?? null;
 
@@ -178,6 +220,8 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
                 depscore: calculateSecretDepscore({ detectorType, isVerified, isCurrent, importance }),
               };
             })
+              // Drop the GitLab false positives nulled out above.
+              .filter((f: any): f is NonNullable<typeof f> => f != null)
               .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')
               // Filter out .git/ internals — these are clone credentials, not user code secrets
               .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'));

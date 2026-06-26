@@ -154,12 +154,21 @@ export async function doDepsSync(ctx: PipelineContext, sbom: SbomOutput): Promis
           // resolved scope. A transitively-dev-only dep keeps source 'transitive'
           // but `devScoped` flips environment to 'dev'. `environment` is not in
           // the upsert conflict key, so this never destabilises row identity.
+          //
+          // `d.lockfileDev` (npm only) is the final fallback for the NULL
+          // branch: cdxgen's transitive dev propagation frequently leaves a
+          // build/test-only transitive un-`devScoped`, but npm's lockfile marks
+          // it `"dev": true` directly. It's consulted ONLY when the scope would
+          // otherwise be null, so it never downgrades a 'prod' or already-'dev'
+          // dep — it can only lift a stray null to 'dev'.
           environment:
             d.source === 'dependencies'
               ? 'prod'
               : d.source === 'devDependencies' || d.devScoped
                 ? 'dev'
-                : null,
+                : d.lockfileDev
+                  ? 'dev'
+                  : null,
           last_seen_extraction_run_id: runId,
           removed_at: null,
         };

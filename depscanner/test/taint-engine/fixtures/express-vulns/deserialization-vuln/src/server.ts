@@ -1,8 +1,11 @@
-declare const child_process: any;
+declare function unserialize(s: string): any;
 
 function handler(req: any) {
   const payload = req.body.payload;
-  const obj = JSON.parse(payload);
+  // node-serialize `unserialize` — a real deserialization-RCE sink (it will run
+  // an IIFE embedded in the payload). JSON.parse is intentionally NOT a sink:
+  // it cannot execute code, so it was dropped from the deserialization class.
+  const obj = unserialize(payload);
   void obj;
 }
 

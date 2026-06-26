@@ -30,7 +30,7 @@ export interface BaseDepscoreContext {
   packageScore?: number | null;
 }
 
-const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
+export const REACHABILITY_LEVEL_WEIGHTS: Record<string, number> = {
   confirmed: 1.0,
   data_flow: 0.9,
   function: 0.7,

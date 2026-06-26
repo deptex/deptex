@@ -112,6 +112,21 @@ export interface RunEngineOptions {
    * unchanged (no CVE-targeted rows for this org/extraction).
    */
   cveSpecs?: FrameworkSpec[];
+  /**
+   * Detected framework name(s) for the project (lowercased), e.g. ['react'].
+   * Used to scope the engine for pure client-side SPAs: a React/Vue/etc.
+   * browser bundle has no server request boundary, so loading server
+   * application-framework specs (express/nestjs/nextjs/…) makes their bare
+   * `params`/`body`/`query` request sources match ordinary local variables and
+   * server-only sink classes (ssrf, deserialization, …) fire on browser code —
+   * a large false-positive surface (observed: 56 phantom flows on a real SPA).
+   *
+   * When this names a pure client framework (and NO server/SSR framework),
+   * server application-framework specs are dropped and only client-exploitable
+   * vuln classes are emitted. Undefined / unrecognized → unchanged load-all
+   * behavior (so the validation harness + CLI are unaffected).
+   */
+  projectFrameworks?: string[];
 }
 
 /** Map an SBOM-style ecosystem identifier to the framework spec language. */
@@ -135,6 +150,64 @@ function ecosystemToLanguage(ecosystem: string | undefined): FrameworkLanguage {
     default:
       return 'js';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Client-SPA scoping
+//
+// Server web-application frameworks model the HTTP request as the trust
+// boundary; their specs declare request-object sources (`req.body.*`,
+// `request.query.*`) and — for NestJS-style decorator binding — bare
+// `params.*`/`body.*`/`query.*`. The engine loads EVERY same-language spec, so
+// on a pure client-side SPA (React/Vue/Svelte/… with no server) these bare
+// request sources match ordinary local variables and server-only sink classes
+// (ssrf/deserialization/path_traversal/…) fire on browser code that can't
+// reach them. We scope those out when the project is unambiguously a client
+// SPA. This is opt-in (driven by detected frameworks) so server apps and the
+// validation harness keep the full load-all behavior.
+// ---------------------------------------------------------------------------
+
+/** Spec `framework` names whose sources model a server HTTP request boundary. */
+const SERVER_APP_FRAMEWORK_SPECS: ReadonlySet<string> = new Set([
+  'express', 'fastify', 'nestjs', 'nextjs', 'hono',
+  'django', 'flask', 'fastapi',
+  'rails', 'sinatra', 'laravel', 'symfony',
+  'spring-boot', 'micronaut', 'quarkus',
+  'aspnet-core', 'gin', 'echo', 'axum', 'actix-web',
+]);
+
+/** Detected framework names that indicate a pure client-side SPA. */
+const CLIENT_SPA_FRAMEWORKS: ReadonlySet<string> = new Set([
+  'react', 'vue', 'vuejs', 'svelte', 'angular', 'angularjs',
+  'preact', 'solid', 'solidjs', 'ember', 'emberjs', 'lit', 'alpine',
+]);
+
+/**
+ * Frameworks that DISQUALIFY the pure-client verdict: a server framework, or a
+ * meta-framework with a server/SSR runtime where the request sources DO apply.
+ */
+const SERVER_OR_SSR_FRAMEWORKS: ReadonlySet<string> = new Set([
+  'nextjs', 'next', 'nuxt', 'nuxtjs', 'remix', 'gatsby', 'sveltekit', 'astro',
+  'express', 'fastify', 'nestjs', 'koa', 'hapi', 'hono',
+  'django', 'flask', 'fastapi', 'rails', 'sinatra', 'laravel', 'symfony',
+  'spring-boot', 'spring', 'micronaut', 'quarkus', 'aspnet-core', 'aspnet',
+  'gin', 'gin-gonic', 'echo', 'axum', 'actix-web',
+]);
+
+/** Vuln classes that are genuinely exploitable inside a browser bundle. */
+const CLIENT_EXPLOITABLE_CLASSES: ReadonlySet<string> = new Set([
+  'xss', 'open_redirect', 'prototype_pollution', 'code_injection', 'redos',
+]);
+
+/**
+ * True when the detected frameworks name a client UI framework and NO server /
+ * SSR framework. Empty / undefined / unrecognized → false (keep load-all).
+ */
+export function isPureClientSpa(frameworks: string[] | undefined): boolean {
+  if (!frameworks || frameworks.length === 0) return false;
+  const norm = frameworks.map((f) => f.toLowerCase().trim()).filter(Boolean);
+  if (norm.some((f) => SERVER_OR_SSR_FRAMEWORKS.has(f))) return false;
+  return norm.some((f) => CLIENT_SPA_FRAMEWORKS.has(f));
 }
 
 export interface FpFilterContext {
@@ -269,7 +342,30 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
 
   // Filter by language: a spec without an explicit language tag defaults to
   // 'js' (the original Phase 6 specs predate the field).
-  const specs = allSpecs.filter((s) => (s.language ?? 'js') === language);
+  let specs = allSpecs.filter((s) => (s.language ?? 'js') === language);
+
+  // Client-SPA scoping: on a pure browser SPA, drop server application-framework
+  // specs so their request-object sources (incl. NestJS-style bare
+  // `params`/`body`/`query`) don't match ordinary local variables. CVE-targeted
+  // specs (options.cveSpecs, which carry osv_id) are never dropped — they model
+  // specific vulnerable library calls, not a server request boundary.
+  const clientSpa = isPureClientSpa(options.projectFrameworks);
+  if (clientSpa) {
+    const before = specs.length;
+    // Drop a spec only if it's a bundled server application-framework spec.
+    // A CVE-targeted spec (any sink carries an osv_id) models a specific
+    // vulnerable library call, never a server request boundary — keep it.
+    specs = specs.filter((s) => {
+      const isCveSpec = s.sinks.some((sink) => !!sink.osv_id);
+      return isCveSpec || !SERVER_APP_FRAMEWORK_SPECS.has(s.framework);
+    });
+    if (specs.length !== before) {
+      onWarn?.(
+        `client-SPA scope: dropped ${before - specs.length} server-framework spec(s) ` +
+        `for a pure-client project (frameworks: ${(options.projectFrameworks ?? []).join(', ')})`,
+      );
+    }
+  }
   const frameworksLoaded = specs.map((s) => s.framework);
 
   // Union of osv_ids across every loaded sink (framework-model + CVE-targeted).
@@ -386,7 +482,25 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
   // a single-hop Flow whose engine_confidence sits just below the FP-filter
   // threshold so it is LLM-checked alongside taint flows (an over-broad
   // detector sink can still false-positive).
-  const detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, onWarn);
+  let detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, onWarn);
+
+  // Client-SPA scoping (class filter): a browser bundle can only be exploited
+  // through client-reachable classes (DOM XSS, open redirect, prototype
+  // pollution, eval-injection, ReDoS). Server-only classes (ssrf, sql/command
+  // injection, path traversal, deserialization, file upload, log injection,
+  // auth bypass) can't fire client-side — drop them so a tainted DOM/storage
+  // read flowing to e.g. a same-origin `fetch` isn't reported as SSRF.
+  if (clientSpa) {
+    const keepClass = (f: Flow): boolean => CLIENT_EXPLOITABLE_CLASSES.has(f.vuln_class);
+    const taintBefore = propagation.flows.length;
+    const detBefore = detectorFlowsRaw.length;
+    propagation.flows = propagation.flows.filter(keepClass);
+    detectorFlowsRaw = detectorFlowsRaw.filter(keepClass);
+    const dropped = (taintBefore - propagation.flows.length) + (detBefore - detectorFlowsRaw.length);
+    if (dropped > 0) {
+      onWarn?.(`client-SPA scope: dropped ${dropped} server-only-class flow(s) (ssrf/deserialization/…) on a pure-client project`);
+    }
+  }
 
   // Default: filter inactive, all flows pass through.
   let flowsAfterFilter: Flow[] = propagation.flows;

@@ -222,33 +222,37 @@ sinks:
     description: Object.assign with untrusted source
 
   # ---------- Deserialization ----------
-  - pattern: JSON.parse(*)
-    vuln_class: deserialization
-    argument_indices: [0]
-    description: JSON.parse — RCE only via prototype-pollution-then-eval, but
-      noisy enough to trace
+  # NOTE: `JSON.parse(*)` was removed as a deserialization sink. JSON.parse is a
+  # pure data parser — it cannot instantiate gadget classes or execute code
+  # (unlike node-serialize `unserialize` or js-yaml `yaml.load`); the worst a
+  # malicious payload does is throw. Keeping it produced a flood of false
+  # positives (e.g. every `JSON.parse(localStorage.getItem(...))` in a frontend),
+  # with no real RCE surface. Real deserialization-RCE sinks (unserialize,
+  # yaml.load) remain below; prototype-pollution has its own class above.
+  # Code injection (eval-family): the runtime interprets tainted input AS
+  # source code. Distinct from data deserialization (below).
   - pattern: eval(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: eval — direct RCE
   - pattern: Function(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: Function constructor — eval-equivalent
   - pattern: vm.runInNewContext(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: vm.runInNewContext
   - pattern: vm.runInThisContext(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: vm.runInThisContext
   - pattern: vm.runInContext(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: vm.runInContext
   - pattern: vm.compileFunction(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: vm.compileFunction
   - pattern: serialize.unserialize(*)

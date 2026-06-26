@@ -31,17 +31,30 @@ export interface GuardDogRule {
 
 /**
  * GuardDog source heuristics that are too low-precision to stand alone as a
- * "this package is malicious" finding. `api-obfuscation` fires on any dynamic
- * / minified API access (dynamic `require`, bracket access on `process`,
- * etc.), which the vast majority of legitimate packages contain — it flagged
- * `express@4.18.2` and `on-finished@2.4.1`, two of the most-vetted packages on
- * npm. Real malware that obfuscates also trips higher-signal rules
- * (exfiltration, install hooks, outbound network) which we keep, so dropping
- * these standalone heuristic flags loses no real detection while killing a
- * large source of false positives. Matched by rule-id suffix so it covers
- * every ecosystem prefix (npm-/pypi-/go-/…).
+ * "this package is malicious" finding. Each fires on a structural pattern that
+ * the vast majority of legitimate packages contain, with no judgement of
+ * intent:
+ *   - `api-obfuscation`   — any dynamic / minified API access (dynamic
+ *     `require`, bracket access on `process`). Flagged `express@4.18.2` and
+ *     `on-finished@2.4.1`.
+ *   - `npm-install-script` — merely "package.json declares a pre/post-install
+ *     hook." Flagged `esbuild` and `@types/node`. It detects the *presence* of
+ *     a hook, not a malicious one — a genuinely malicious install hook also
+ *     trips the behavioral rules below.
+ *   - `shady-links`       — a URL whose domain "looks" suspicious by shape.
+ *     Flagged `is-number`, `micromatch`, `proxy-from-env` — three of the most-
+ *     downloaded packages on npm.
+ * Real malware that does any of these ALSO trips higher-signal behavioral rules
+ * (exfiltration, silent process execution, outbound network) which we keep, so
+ * dropping these standalone structural flags loses no real detection while
+ * killing a large source of false positives. Matched by rule-id suffix so it
+ * covers every ecosystem prefix (npm-/pypi-/go-/…).
  */
-export const GUARDDOG_LOW_PRECISION_RULE_SUFFIXES = ['api-obfuscation'] as const;
+export const GUARDDOG_LOW_PRECISION_RULE_SUFFIXES = [
+  'api-obfuscation',
+  'npm-install-script',
+  'shady-links',
+] as const;
 
 export function isLowPrecisionGuardDogRule(ruleId: string): boolean {
   const id = (ruleId ?? '').toLowerCase();

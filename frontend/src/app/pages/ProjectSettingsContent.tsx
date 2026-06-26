@@ -543,6 +543,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [syncFrequencySaving, setSyncFrequencySaving] = useState(false);
   const [extractionRuns, setExtractionRuns] = useState<ExtractionRun[]>([]);
   const [extractionRunsLoading, setExtractionRunsLoading] = useState(true);
+  const [rescanning, setRescanning] = useState(false);
   // Which project's runs we've already loaded — gates the skeleton to the first load only.
   const loadedRunsForProjectRef = useRef<string | null>(null);
   // Transfer project state
@@ -1355,6 +1356,29 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
     }
   };
 
+  // Manual "Rescan now" — re-queues an extraction for the connected repo on
+  // demand (same path as the periodic sync). The backend rejects a concurrent
+  // run (409) and enforces a short cooldown (429); we surface either as a toast.
+  const handleTriggerRescan = async () => {
+    if (!organizationId || !projectId || rescanning) return;
+    setRescanning(true);
+    try {
+      await api.triggerProjectSync(organizationId, projectId);
+      toast({ title: 'Rescan queued', description: 'A fresh scan is starting — new results will appear shortly.' });
+      // Reflect the just-queued run in the activity table + project state.
+      await reloadProject?.();
+      api.getExtractionRuns(organizationId, projectId).then(setExtractionRuns).catch(() => {});
+    } catch (err: any) {
+      toast({
+        title: 'Could not start rescan',
+        description: (err as Error).message,
+        variant: 'destructive',
+      });
+    } finally {
+      setRescanning(false);
+    }
+  };
+
   const isRepoDisconnected = connectedRepository?.status === 'repo_deleted'
     || connectedRepository?.status === 'access_revoked'
     || connectedRepository?.status === 'installation_removed';
@@ -1652,6 +1676,19 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                               : 'Repository root'}
                           </div>
                         </div>
+                        <Button
+                          variant="outline"
+                          onClick={handleTriggerRescan}
+                          disabled={rescanning || !canEditSettings || isRepoDisconnected || isExtractionOngoing(connectedRepository?.status ?? '')}
+                          className="relative shrink-0 !h-8 !px-3 !rounded-lg"
+                        >
+                          <span className={rescanning ? 'invisible' : undefined}>Rescan</span>
+                          {rescanning && (
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            </span>
+                          )}
+                        </Button>
                       </div>
                     </div>
                   ) : (

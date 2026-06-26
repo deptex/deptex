@@ -64,27 +64,28 @@ sinks:
     argument_indices: [1, 2]
     description: axios.setProxy (qualified) — same SSRF surface
 
-  # ---------- axios.create config + AxiosHeaders.set (CVE-2026-25639 family) ----------
+  # ---------- axios.create config (CVE-2026-25639 family) ----------
   # axios.create(config) — first-arg keys flow into the global defaults
   # chain, which `proxy`, `headers`, `transformRequest`, and friends
   # propagate from. Attacker-controlled config keys (especially
   # `__proto__` / `constructor.prototype`) poison the per-instance
   # defaults and downstream cross-instance state. Qwen fixtures
   # consistently emit this shape.
+  #
+  # NOTE: a bare wildcard-receiver `*.create(*)` and `*.set(*)` used to live
+  # here (for destructured `create()` / `AxiosHeaders.set()` shapes). They
+  # were removed: `*.set(*)` matched EVERY `.set()` call in a codebase —
+  # `Map.prototype.set`, `URLSearchParams.set`, every in-memory cache write —
+  # and produced ~39 SSRF false positives on a single real frontend scan, and
+  # `*.create(*)` matches `Object.create`/any `.create()`. AxiosHeaders.set as
+  # an SSRF surface is speculative and almost never appears as a literal
+  # `AxiosHeaders.set(...)` call; the real axios SSRF (axios.get/post/request,
+  # fetch, setProxy) is already covered above and in node-stdlib.yaml. A
+  # wildcard receiver on a generic method name (`set`/`create`/`get`) is the
+  # exact "broad sink" anti-pattern the broadness guard exists to reject.
   - pattern: axios.create(*)
     vuln_class: prototype_pollution
     argument_indices: [0]
     description: axios.create(config) — first-arg keys flow into the per-instance defaults chain (CVE-2026-25639 family)
-  - pattern: "*.create(*)"
-    vuln_class: prototype_pollution
-    argument_indices: [0]
-    description: axios.create (wildcard receiver — destructured import)
-
-  # AxiosHeaders.set(name, value) routes both name + value into outbound
-  # headers; attacker-controlled name = header smuggling / proxy bypass.
-  - pattern: "*.set(*)"
-    vuln_class: ssrf
-    argument_indices: [0, 1]
-    description: AxiosHeaders.set — tainted header name/value routes outbound traffic
 
 sanitizers: []

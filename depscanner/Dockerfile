@@ -280,6 +280,17 @@ RUN chown -R worker:worker /app /tmp /data /backend/database /zap
 
 USER worker
 
+# Pre-warm Semgrep's registry cache for the pinned `p/default` ruleset as the
+# runtime `worker` user (HOME=/home/worker, created with `useradd -m` above), so
+# a cold scan never blocks on a live fetch to semgrep.dev — the network call that
+# intermittently aborts the SAST step and silently drops every finding for a run.
+# Scans an empty dir purely to trigger + cache the rule download; `|| true` keeps
+# a transient build-time registry hiccup from failing the image build (runtime
+# would just re-fetch on first use).
+RUN mkdir -p /tmp/semgrep-warm \
+  && semgrep scan --config p/default --disable-version-check --metrics off \
+       /tmp/semgrep-warm >/dev/null 2>&1 || true
+
 # Bump the V8 old-space cap to 8 GB. Default ~4 GB OOMs the worker on
 # moderate-sized JS monorepos (express, react, etc.) while tree-sitter +
 # downstream pipeline steps hold per-file extraction state. Fly machines and

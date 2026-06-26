@@ -20,9 +20,10 @@ import {
  * (`+build`), PEP 440 `1.0` vs `1.0.0`, Maven `.RELEASE` casing. A raw
  * string `!==` therefore silently fails to flag a known-malicious package.
  *
- * Returns `null` when the input can't be coerced to a comparable form —
- * the caller treats `null` on either side as "can't decide, flag anyway"
- * so a parse failure never causes a false negative.
+ * Returns `null` when the input can't be coerced to a comparable form. The
+ * caller then falls back to a raw-string comparison and still requires
+ * equality — under the precision-first policy we only flag on a positive
+ * version match, never on "can't decide".
  */
 export function normalizeVersionForCompare(
   raw: string,
@@ -129,19 +130,22 @@ export async function lookupFeed(
     withdrawn_at: string | null;
   }>) {
     if (row.withdrawn_at) continue;
-    // version=null in feed → covers all versions of this package.
-    // Feed-side and scan-side versions are normalized per-ecosystem before
-    // comparison (leading `v`, build metadata, PEP 440 padding, Maven
-    // qualifier casing all differ across sources). If either side fails to
-    // normalize we FLAG rather than skip — a parse failure must never cause
-    // a silent false negative for a known-malicious package.
-    if (row.version && version) {
-      const feedNorm = normalizeVersionForCompare(row.version, canonical);
-      const scanNorm = normalizeVersionForCompare(version, canonical);
-      if (feedNorm !== null && scanNorm !== null && feedNorm !== scanNorm) {
-        continue;
-      }
-    }
+    // Precision-first matching: only flag when we can positively confirm the
+    // INSTALLED version equals a known-malicious version. A feed row with no
+    // concrete version ("flag every version of this name") cannot confirm
+    // that, so we DROP it — otherwise a clean install of a package whose one
+    // bad version was briefly compromised (e.g. the Sept-2025 npm worm:
+    // chalk@5.6.1) gets a name-only CRITICAL on chalk@5.6.2. Genuine
+    // version-specific malware still matches via the concrete-version rows
+    // the GHSA range resolver writes at sync time; guarddog's tarball scan is
+    // the backstop for all-versions typosquats.
+    if (!row.version || !version) continue;
+    // Normalize per-ecosystem (leading `v`, build metadata, PEP 440 padding,
+    // Maven qualifier casing all differ across sources); fall back to the raw
+    // trimmed string when a side won't normalize. Flag only on equality.
+    const feedNorm = normalizeVersionForCompare(row.version, canonical) ?? row.version.trim();
+    const scanNorm = normalizeVersionForCompare(version, canonical) ?? version.trim();
+    if (feedNorm !== scanNorm) continue;
     hits.push({
       source: row.source,
       source_id: row.source_id,

@@ -80,7 +80,8 @@ export default function DataFlowFindingCard({ finding }: { finding: DataFlowFind
 
   return (
     <div className="space-y-4">
-      {/* Badges: vuln class + severity, the reachable-path proof, entry class. */}
+      {/* Badges: vuln class + severity, entry class. The reachable-path proof
+          is the traced Source → Sink stepper below, so no redundant badge. */}
       <div className="flex flex-wrap items-center gap-1.5">
         <span
           className={cn(
@@ -89,12 +90,6 @@ export default function DataFlowFindingCard({ finding }: { finding: DataFlowFind
           )}
         >
           {finding.title}
-        </span>
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M20 6L9 17l-5-5" />
-          </svg>
-          Reachable path
         </span>
         {epClass && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">

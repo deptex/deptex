@@ -406,10 +406,11 @@ sinks:
     vuln_class: xss
     argument_indices: []
     description: Rails String#html_safe (receiver form)
-  - pattern: render(*)
-    vuln_class: xss
-    argument_indices: [0]
-    description: "Rails render with html: option"
+  # NOTE: `render(*)` is intentionally NOT a blanket XSS sink. Rails `render`
+  # auto-escapes its template output by default, so the common forms
+  # (`render :show`, `render json:`, `render plain:`) are safe — a blanket
+  # sink false-flagged them. The genuinely-unsafe inline/`html:` forms flow
+  # through `raw` / `html_safe` / `ERB.new` (modeled above) and are caught there.
   - pattern: render_to_string(*)
     vuln_class: xss
     argument_indices: [0]
@@ -466,20 +467,21 @@ sinks:
     vuln_class: deserialization
     argument_indices: [0]
     description: Psych.unsafe_load
+  # ---------- Code injection (eval-family: tainted input is interpreted AS code) ----------
   - pattern: eval(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: Kernel#eval
   - pattern: instance_eval(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: instance_eval
   - pattern: class_eval(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: class_eval
   - pattern: module_eval(*)
-    vuln_class: deserialization
+    vuln_class: code_injection
     argument_indices: [0]
     description: module_eval
 

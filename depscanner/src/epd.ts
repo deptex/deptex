@@ -4,6 +4,7 @@ import * as path from 'path';
 import type { Storage } from './storage';
 import { MAX_VOTE_THRESHOLD, UNCERTAIN_UPPER } from './taint-engine/confidence-thresholds';
 import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from './ai-telemetry';
+import { REACHABILITY_LEVEL_WEIGHTS } from './depscore';
 
 export type ReachabilityStatus = 'reachable' | 'unreachable' | 'unknown';
 export type EntryPointClassification = 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
@@ -1079,7 +1080,21 @@ export async function applyEpdScoringFallback(
     const reachabilityLevel = (row.reachability_level as string | null) ?? null;
     const projectDependencyId = row.project_dependency_id as string;
     const dependencyId = depIdByProjectDependencyId.get(projectDependencyId);
-    const baseScore = Number(row.base_depscore_no_reachability ?? row.depscore ?? 0);
+    // Contextual depscore must be a *dampening* of the reachability-weighted
+    // score — never exceeding it — and must preserve tier ordering (a `module`
+    // CVE must not out-rank a `confirmed` CVE on the same package). The EPD
+    // factor (entry-point exposure × depth decay) is derived per-package from
+    // the flow set, so feeding the raw base_depscore_no_reachability let a
+    // high-CVSS module CVE inherit a sibling flow's factor and inflate above
+    // the confirmed one. Fold the reachability-tier weight in here so
+    // contextual = base_no_reach × tierWeight × epd_factor.
+    const baseNoReach = Number(row.base_depscore_no_reachability ?? row.depscore ?? 0);
+    const tierWeight = reachabilityLevel === 'unreachable'
+      ? 0
+      : reachabilityLevel
+        ? (REACHABILITY_LEVEL_WEIGHTS[reachabilityLevel] ?? 0.5)
+        : 1.0;
+    const baseScore = baseNoReach * tierWeight;
 
     // Phase 6.5 / M5 — primary path: aggregate per-flow AI verdicts.
     const perFlowList = dependencyId ? (perFlowByDependencyId.get(dependencyId) ?? []) : [];
@@ -1382,23 +1397,37 @@ ${sourceContext || 'none'}`;
     // BYOK is gone, so the heuristic path is now uniform.)
     let finalEpdStatus: EpdStatus = aggregated.epd_status;
     if (aggregated.epd_status === 'no_flows_evaluated') {
-      const heuristicTag = dependencyId ? flowByDependencyId.get(dependencyId)?.tag ?? null : null;
-      const heuristic = classifyFallbackEntryPoint(heuristicTag);
-      const factor = reachabilityStatus === 'reachable'
-        ? calculateEpdFactor(heuristic.weight, aggregated.epd_depth ?? 0, false, DEFAULT_ALPHA)
-        : 0;
-      const contextual = reachabilityStatus === 'reachable'
-        ? Number((baseScore * factor).toFixed(4))
-        : 0;
-      aggregated = {
-        ...aggregated,
-        entry_point_classification: heuristic.classification,
-        entry_point_weight: heuristic.weight,
-        is_sanitized: false,
-        epd_factor: Number(factor.toFixed(6)),
-        contextual_depscore: contextual,
-      };
-      finalEpdStatus = 'fallback_no_ai';
+      if (reachabilityStatus === 'reachable') {
+        const heuristicTag = dependencyId ? flowByDependencyId.get(dependencyId)?.tag ?? null : null;
+        const heuristic = classifyFallbackEntryPoint(heuristicTag);
+        const factor = calculateEpdFactor(heuristic.weight, aggregated.epd_depth ?? 0, false, DEFAULT_ALPHA);
+        const contextual = Number((baseScore * factor).toFixed(4));
+        aggregated = {
+          ...aggregated,
+          entry_point_classification: heuristic.classification,
+          entry_point_weight: heuristic.weight,
+          is_sanitized: false,
+          epd_factor: Number(factor.toFixed(6)),
+          contextual_depscore: contextual,
+        };
+        finalEpdStatus = 'fallback_no_ai';
+      } else {
+        // Unreachable dep with no flows: no entry-point analysis actually ran,
+        // so a heuristic classification (AUTH_INTERNAL) would be misleading.
+        // Drop to the neutral UNKNOWN class with zero weight and leave the
+        // impact at 0. Keep the honest `no_flows_evaluated` status rather than
+        // tagging fallback_no_ai — the heuristic fallback was never applied
+        // here. (`AggregatedEpd.entry_point_classification` is non-nullable;
+        // UNKNOWN is its purpose-built "not classified" member.)
+        aggregated = {
+          ...aggregated,
+          entry_point_classification: 'UNKNOWN',
+          entry_point_weight: 0,
+          is_sanitized: false,
+          epd_factor: 0,
+          contextual_depscore: 0,
+        };
+      }
     }
 
     updates.push({

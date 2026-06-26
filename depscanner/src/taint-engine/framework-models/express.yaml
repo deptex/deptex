@@ -73,14 +73,16 @@ sinks:
 
   # Open redirect / XSS — res.redirect with attacker-controlled URL.
   # osv-tagged so the reachability classifier's vulnerable-symbol check can
-  # confirm-or-deny CVE-2024-43796 (XSS via response.redirect): if the app
-  # never calls res.redirect, the finding is downgraded to `unreachable`
-  # rather than the weaker `module` fallback. If it IS called with tainted
-  # input, the engine traces a real source→redirect flow and promotes it.
+  # Generic open-redirect sink — deliberately NOT CVE-attributed. Per the
+  # framework-model convention (spec.ts FrameworkSink.osv_id), bundled models
+  # stay CVE-agnostic: express.yaml loads for every JS project, so stamping
+  # this sink with the Express-specific CVE-2024-43796 false-attributed that
+  # CVE onto non-Express apps (e.g. Next.js). Confirming CVE-2024-43796 for a
+  # real Express dependency is the job of a CVE-targeted spec that loads only
+  # when express is present in the tree.
   - pattern: res.redirect(*)
     vuln_class: open_redirect
     argument_indices: [0]
-    osv_id: CVE-2024-43796
     description: Express res.redirect
 
 sanitizers: []
