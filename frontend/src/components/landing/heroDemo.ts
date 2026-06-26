@@ -422,14 +422,11 @@ const FLOWS: Record<string, ReachableFlow[]> = {
       epCode:
         "import { handleRender } from '../controllers/render';\n" +
         "\n" +
-        "// POST /render — public preview route, no auth\n" +
+        "// POST /render — public preview route (no auth)\n" +
         "router.post('/render', (req, res) => {\n" +
-        "  // template + data come straight from the client body\n" +
+        "  // tpl + data come straight from the client body\n" +
         "  const { tpl, data } = req.body;\n" +
-        "\n" +
-        "  // no validation — handed straight to the controller\n" +
         "  const html = handleRender({ tpl, data });\n" +
-        "\n" +
         "  res.set('content-type', 'text/html');\n" +
         "  res.send(html);\n" +
         "});",
@@ -441,12 +438,11 @@ const FLOWS: Record<string, ReachableFlow[]> = {
         "\n" +
         "// Compiles and runs a user-supplied template string.\n" +
         "export function renderTemplate(opts) {\n" +
-        "  // opts.tpl reaches lodash _.template as a string\n" +
-        "  //  → prototype pollution → command injection\n" +
+        "  // opts.tpl flows in untouched from the request body\n" +
         "  const compiled = _.template(opts.tpl);\n" +
-        "\n" +
-        "  // executing the compiled template runs attacker input\n" +
-        "  return compiled(opts.data);\n" +
+        "  //  → prototype pollution → command injection\n" +
+        "  const out = compiled(opts.data);\n" +
+        "  return out;\n" +
         "}",
       level: "confirmed",
       nodes: [
@@ -491,9 +487,26 @@ const FLOWS: Record<string, ReachableFlow[]> = {
   ],
 };
 
+// Fuller advisory text per CVE — what the expanded card renders under
+// "Description" (via AdvisoryMarkdown). The row `summary` stays the short title;
+// these are the real-shaped, longer write-ups so the focal "we trace the path"
+// card (and any expanded finding in the demo table) reads like the live product.
+const DESCRIPTIONS: Record<string, string> = {
+  "CVE-2021-23337":
+    "Crafted template strings reach lodash's `template` function, get compiled, and execute as code at render time. Fixed in **4.17.21**.",
+  "CVE-2022-29078":
+    "The `ejs` template engine before **3.1.7** allows server-side template injection that escalates to remote code execution. When request data reaches the render `options` (notably `settings['view options']` / `outputFunctionName`), an attacker can break out of the template and run code on the server. Fixed in 3.1.7.",
+  "CVE-2024-4068":
+    "`braces` before **3.0.3** does not bound the number of characters it expands, so a crafted brace pattern can exhaust CPU and memory — uncontrolled resource consumption leading to denial of service. Upgrade to 3.0.3.",
+  "CVE-2021-44906":
+    "`minimist` before **1.2.6** is vulnerable to prototype pollution: a crafted argument vector can assign properties on `Object.prototype`, corrupting state for every object in the process. Fixed in 1.2.6.",
+  "CVE-2021-3177":
+    "CPython through 3.9.1 has a buffer overflow in `PyCArg_repr` in `_ctypes/callproc.c` (CWE-787) which may allow remote code execution when attacker-controlled floating-point values are passed into `ctypes`. Resolved in Python 3.9.2 / 3.8.8.",
+};
+
 function vulnDetail(v: ProjectVulnerability): VulnerabilityDetail {
   return {
-    vulnerability: { ...v },
+    vulnerability: { ...v, details: v.details ?? DESCRIPTIONS[v.osv_id] ?? null },
     affected_dependencies: [
       {
         id: v.dependency_id,
@@ -539,7 +552,18 @@ export const heroTraceVuln: ProjectVulnerability = heroFindings.find(
   (r): r is Extract<SecurityTableRow, { type: "vulnerability" }> =>
     r.type === "vulnerability" && r.data.osv_id === TRACE_OSV,
 )!.data;
-export const heroTraceDetail: VulnerabilityDetail = DETAIL_BY_OSV[TRACE_OSV]!;
+// The focal landing card shows Source → Sink only (no intermediate Step hops):
+// dropping flow_nodes makes buildHops synthesize exactly the entry-point Source
+// and the Sink from the flow's authoritative fields. The Findings-tab demo keeps
+// the full multi-hop trace (it reads DETAIL_BY_OSV directly), so this is scoped
+// to the "we trace the path" card.
+export const heroTraceDetail: VulnerabilityDetail = {
+  ...DETAIL_BY_OSV[TRACE_OSV]!,
+  reachable_flows: (DETAIL_BY_OSV[TRACE_OSV]!.reachable_flows ?? []).map((f) => ({
+    ...f,
+    flow_nodes: [],
+  })),
+};
 
 /* A varied findings list for the "wall of findings" BACKGROUND in the Verified
    section — a diverse spread of real-looking vulns (distinct packages / CVEs /
@@ -585,3 +609,13 @@ export const heroBackgroundFindings: SecurityTableRow[] = BG_VULNS.map((b, i) =>
     project: b.project,
   }),
 );
+
+// A few background rows carry a GitHub / Linear ticket — a linked finding reads
+// as "Open" with the provider icon, so the backdrop wall shows a real status
+// spread (Open-with-ticket vs New) rather than a column of identical "New" pills.
+// Keyed by (project_id, finding_type, finding_key=`bg-N`) to match the rows above.
+export const heroBackgroundTrackerLinks: FindingTrackerLink[] = [
+  { id: "btl-0", project_id: "storefront-api", finding_type: "vulnerability", finding_key: "bg-0", provider: "github", external_key: "#1842", external_url: null, title: "RCE in ejs — bump to 3.1.7", external_state: "open", created_at: CREATED },
+  { id: "btl-2", project_id: "auth-service", finding_type: "vulnerability", finding_key: "bg-2", provider: "linear", external_key: "SEC-42", external_url: null, title: "JWT forgery in jsonwebtoken", external_state: "open", created_at: CREATED },
+  { id: "btl-4", project_id: "payments-svc", finding_type: "vulnerability", finding_key: "bg-4", provider: "github", external_key: "#1791", external_url: null, title: "Header leak in follow-redirects", external_state: "open", created_at: CREATED },
+];

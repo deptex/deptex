@@ -19,15 +19,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, CheckCircle2, FileCode2, GitPullRequest } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Reveal } from "./primitives";
+import { Reveal, FocalArtifact } from "./primitives";
 import { Button } from "../ui/button";
 import { ChatInput } from "../aegis/ChatInput";
 import { ToolCallGroup, type ToolCallEntry } from "../aegis/ToolCallCard";
 import type { AIModelMetadata } from "../../lib/api";
-
-// Same top-left-anchored radial fade as the Verified findings backdrop.
-const FADE =
-  "radial-gradient(135% 135% at 0% 0%, #000 26%, transparent 100%)";
 
 // Mock model catalog (real AIModelMetadata shape) — feeds the real ModelPicker
 // inside ChatInput (Claude Opus 4.8 + the real Anthropic logo).
@@ -121,7 +117,7 @@ function AegisChatCard() {
   };
 
   return (
-    <div className="flex h-[560px] flex-col overflow-hidden rounded-xl border border-border bg-background">
+    <div className="flex h-[420px] flex-col overflow-hidden rounded-xl border border-border bg-background-card">
       <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar py-4">
         <UserBubble>lodash is flagged critical — is it actually exploitable here?</UserBubble>
 
@@ -267,20 +263,20 @@ export default function AegisSection() {
         {/* Layered: the real Aegis chat in front, the draft PR faded behind. */}
         <Reveal className="mt-14 lg:mt-16">
           <div className="relative">
-            {/* BACK — draft PR, full width, app palette, dimmed + faded,
-                vertically centered against the chat (desktop) */}
+            {/* BACK — the draft PR it opens, peeking out from behind the chat on
+                the right, vertically centered, partially faded (desktop). Its left
+                edge tucks behind the chat card, so no gradient mask is needed. */}
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-0 z-0 hidden items-center opacity-[0.8] lg:flex"
-              style={{ maskImage: FADE, WebkitMaskImage: FADE }}
+              className="pointer-events-none absolute inset-y-0 right-0 z-0 hidden w-[760px] items-center opacity-50 lg:flex"
             >
               <DraftPrCard />
             </div>
 
             {/* FRONT — the chat card (defines height) */}
-            <div className="relative z-10 w-full max-w-[520px]">
+            <FocalArtifact className="z-10 w-full max-w-[500px]">
               <AegisChatCard />
-            </div>
+            </FocalArtifact>
           </div>
         </Reveal>
       </div>
