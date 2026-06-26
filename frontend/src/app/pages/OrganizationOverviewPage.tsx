@@ -4002,9 +4002,32 @@ export default function OrganizationOverviewPage() {
                     ) : (projectStatsLoading && !projectVulnerabilities) || selectedProjectRealtime.isLoading ? (
                       <OrgProjectVulnerabilitiesTableSkeleton />
                     ) : !projectSecurityRows.length ? (
-                      <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">
-                        No findings
-                      </div>
+                      // No findings for the active run. Distinguish a genuinely
+                      // clean finalized scan from one that never finished: a
+                      // crashed/incomplete run has status 'error' and no active
+                      // run, so showing "No findings" would be misleading.
+                      selectedProjectRealtime.status === 'error' ? (
+                        <ExtractionProgressCard
+                          isError
+                          title="Scan didn't finish"
+                          description="The last scan stopped before it completed, so there are no results to show yet. Re-run the scan to try again."
+                          showLogsToggle
+                          organizationId={orgId}
+                          projectId={selectedProjectId ?? ''}
+                          onRetry={async () => {
+                            if (!orgId || !selectedProjectId) return;
+                            try {
+                              await api.triggerProjectSync(orgId, selectedProjectId);
+                            } catch (err: any) {
+                              toast({ title: 'Retry failed', description: err?.message || 'Could not retry the scan', variant: 'destructive' });
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="py-8 text-center text-sm text-muted-foreground border border-border rounded-lg bg-background-subtle/50">
+                          No findings
+                        </div>
+                      )
                     ) : (
                       <VulnerabilityExpandableTable
                         organizationId={orgId!}
