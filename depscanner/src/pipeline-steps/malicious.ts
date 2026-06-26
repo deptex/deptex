@@ -47,7 +47,7 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
     fn: async () => {
       const { data: pdRows, error: pdErr } = await supabase
         .from('project_dependencies')
-        .select('id, name, version, dependency_id')
+        .select('id, name, namespace, version, dependency_id')
         .eq('project_id', projectId)
         .eq('last_seen_extraction_run_id', runId);
       if (pdErr) throw new Error(`malicious-scan failed to load dependencies: ${pdErr.message}`);
@@ -55,6 +55,7 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
       const pdRowList = (pdRows ?? []) as Array<{
         id: string;
         name: string;
+        namespace: string | null;
         version: string | null;
         dependency_id: string | null;
       }>;
@@ -74,13 +75,27 @@ export async function doMaliciousScan(ctx: PipelineContext): Promise<void> {
 
       const packages = pdRowList
         .filter((r) => !!r.dependency_id && !!r.version)
-        .map((r) => ({
-          project_dependency_id: r.id,
-          dependency_id: r.dependency_id as string,
-          name: r.name,
-          ecosystem: ecoById.get(r.dependency_id as string) ?? jobEcosystem,
-          version: r.version,
-        }));
+        .map((r) => {
+          // cdxgen splits a scoped npm package into name='supabase-js' +
+          // namespace='@supabase'. Rejoin to the canonical
+          // '@supabase/supabase-js' so the feed lookup + guarddog tarball
+          // fetch key on the real registry name — otherwise a legit scoped
+          // package collides with an unscoped typosquat malware advisory of
+          // the same bare name (the @supabase/supabase-js ⟷ "supabase-js"
+          // false positive). Mirrors the phase63 PDV scope-rejoin; the `@`
+          // guard is npm-only (Maven's group:name namespace has no `@`).
+          const name =
+            r.namespace && r.namespace.startsWith('@')
+              ? `${r.namespace}/${r.name}`
+              : r.name;
+          return {
+            project_dependency_id: r.id,
+            dependency_id: r.dependency_id as string,
+            name,
+            ecosystem: ecoById.get(r.dependency_id as string) ?? jobEcosystem,
+            version: r.version,
+          };
+        });
 
       const { runMaliciousScan, eventDeduplicationKey } = await import('../malicious-scan');
       // Pass workspace info so the scan can build its own per-project
