@@ -657,7 +657,15 @@ export async function extractDependencies(
       .from('project_repositories')
       .update({
         status,
-        ...(status === 'ready' ? { extraction_step: 'completed', last_extracted_at: new Date().toISOString() } : {}),
+        // last_extracted_at drives the daily/weekly scheduler's eligibility
+        // guard, so it must record when the extraction RAN — independent of
+        // whether async dependency-population has finished. Gating it on
+        // status==='ready' meant any project still 'analyzing' (a large repo
+        // whose populate-dependencies is slow or partial) never got stamped, so
+        // the scheduler saw last_extracted_at=NULL forever and re-queued it on
+        // every 6-hourly cron tick regardless of the weekly/daily setting.
+        last_extracted_at: new Date().toISOString(),
+        ...(status === 'ready' ? { extraction_step: 'completed' } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('project_id', projectId);
