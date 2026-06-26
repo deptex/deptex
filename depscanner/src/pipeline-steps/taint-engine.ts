@@ -29,7 +29,7 @@
  * monthly-cap per-extraction ceiling).
  */
 
-import { withTimeout, logStepError, classifyError } from '../with-timeout';
+import { logStepError, classifyError } from '../with-timeout';
 import {
   runEngine as runTaintEngine,
   shouldRunForOrg as shouldRunTaintEngineForOrg,
@@ -37,12 +37,13 @@ import {
   writeRun as writeTaintEngineRun,
   checkCircuitBreaker as checkTaintEngineCircuitBreaker,
   maybeEngageKillswitch as maybeEngageTaintEngineKillswitch,
+  EngineCoreTimeoutError,
   loadCveSpecsForExtraction,
   createOsvIdResolver,
   type ResolvedDep,
 } from '../taint-engine';
 import { buildPurl } from '../purl';
-import { updateStep, setError } from '../pipeline-helpers';
+import { updateStep } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
 
 export interface TaintEngineOutput {
@@ -338,32 +339,41 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
     // non-fatal — scoping just stays off
   }
 
+  // Pulse the heartbeat + a progress log while the engine core runs off-thread,
+  // so a legitimately long callgraph build on a big repo isn't mistaken for a
+  // stall and reaped. The core runs in a worker_thread in the Fly worker (the
+  // main event loop stays free, so this interval actually fires); the inline
+  // dev/CLI path never calls it. ctx.heartbeat writes scan_jobs.heartbeat_at
+  // (clears the backend's 5-min stuck detector) AND marks the in-worker stall
+  // watchdog's liveness + progress signals.
+  const onKeepAlive = async (elapsedMs: number) => {
+    const secs = Math.round(elapsedMs / 1000);
+    await log.info('taint_engine', `Reachability analysis in progress… (${secs}s elapsed)`);
+    if (ctx.heartbeat) await ctx.heartbeat();
+  };
+
   try {
-    const engineResult = await withTimeout(
-      async (signal) => runTaintEngine({
-        workspaceRoot,
-        ecosystem: job.ecosystem,
-        signal,
-        onWarn: (m) => { void log.warn('taint_engine', m); },
-        cveSpecs: cveSpecResult.specs,
-        projectFrameworks,
-        fpFilter: {
-          storage: supabase,
-          organizationId,
-          // No human triggered this extraction; we attribute the
-          // platform AI spend to the org owner (the cost-cap
-          // aggregator filters by organization_id, not user_id).
-          userId: organizationId,
-          projectId,
-          extractionRunId: runId,
-          // Phase 33: thread scan_jobs id so per-call cost rolls up
-          // into the scan row + the per-scan cap is honoured.
-          jobId: job.jobId,
-        },
-      }),
-      30 * 60_000,
-      'taint_engine',
-    );
+    const engineResult = await runTaintEngine({
+      workspaceRoot,
+      ecosystem: job.ecosystem,
+      onWarn: (m) => { void log.warn('taint_engine', m); },
+      cveSpecs: cveSpecResult.specs,
+      projectFrameworks,
+      onKeepAlive,
+      fpFilter: {
+        storage: supabase,
+        organizationId,
+        // No human triggered this extraction; we attribute the
+        // platform AI spend to the org owner (the cost-cap
+        // aggregator filters by organization_id, not user_id).
+        userId: organizationId,
+        projectId,
+        extractionRunId: runId,
+        // Phase 33: thread scan_jobs id so per-call cost rolls up
+        // into the scan row + the per-scan cap is honoured.
+        jobId: job.jobId,
+      },
+    });
 
     if (!engineResult.ran || !engineResult.propagation) {
       await log.warn('taint_engine', `No-op: ${engineResult.skippedReason ?? 'unknown'}`);
@@ -482,24 +492,38 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       }
     }
   } catch (err: unknown) {
-    // HARD-FAIL: log telemetry, maybe engage killswitch, then rethrow.
+    // SOFT-FAIL. The taint engine is reachability ENRICHMENT, not a gate: a
+    // timeout (huge repo whose callgraph build genuinely runs too long) or a
+    // crash must never fail the whole extraction. We record telemetry, maybe
+    // trip the circuit breaker, then RETURN — the pipeline continues, the scan
+    // finalizes with deps/CVEs/SAST/secrets intact, and reachability falls back
+    // to the heuristic classifier (module/unreachable). This is what stops a
+    // single wedged step from bricking the entire scan (the Deptex-backend bug).
+    const timedOut = err instanceof EngineCoreTimeoutError;
     const { code, message, stack } = classifyError(err);
     await writeTaintEngineRun(supabase, {
       projectId,
       organizationId,
       extractionRunId: runId,
-      status: 'failed',
+      status: timedOut ? 'aborted' : 'failed',
       totalMs: Date.now() - stepStart,
-      errorCode: code,
+      errorCode: timedOut ? 'timeout' : code,
       errorMessage: message,
     });
-    // Killswitch is best-effort — never let an RPC error here
-    // shadow the original engine failure being reported below.
+    await log.warn(
+      'taint_engine',
+      timedOut
+        ? `Reachability analysis exceeded its time budget on this repository — skipping taint reachability and continuing with heuristic classification (${message})`
+        : `Reachability analysis failed — continuing with heuristic classification (${message})`,
+    );
+    // Killswitch is best-effort — a systematically-failing/timing-out engine
+    // still trips so the org's later scans skip it fast. Never let an RPC error
+    // here shadow the soft-fail path.
     try {
       const engaged = await maybeEngageTaintEngineKillswitch(
         supabase,
         organizationId,
-        `taint_engine ${code}: ${message.slice(0, 200)}`,
+        `taint_engine ${timedOut ? 'timeout' : code}: ${message.slice(0, 200)}`,
       );
       if (engaged) {
         await log.warn('taint_engine', 'Killswitch engaged: failure rate exceeded threshold');
@@ -508,7 +532,9 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       const ksMsg = killswitchErr instanceof Error ? killswitchErr.message : String(killswitchErr);
       await log.warn('taint_engine', `Killswitch RPC failed: ${ksMsg}`);
     }
-    if (job.jobId) {
+    // A genuine engine CRASH is still worth a step-error row (operator signal);
+    // a timeout is an expected degradation on a large repo, not an error.
+    if (!timedOut && job.jobId) {
       await logStepError(supabase, {
         jobId: job.jobId,
         projectId,
@@ -520,8 +546,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         severity: 'error',
       });
     }
-    await setError(supabase, projectId, `Taint engine failed: ${message}`);
-    throw err;
+    // Deliberately NOT calling setError() and NOT rethrowing — soft-fail.
   }
 
   return { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies };

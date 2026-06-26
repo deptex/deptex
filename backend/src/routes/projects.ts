@@ -7577,6 +7577,15 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
+    // No finalized extraction run (scan never completed, or crashed mid-run).
+    // Returning the legacy run-unscoped `get_project_vulnerabilities` RPC below
+    // would surface ORPHANED vulns from a partial run — rows with no depscore /
+    // reachability that 404 on expand ("not in project"). There is nothing valid
+    // to show until a run finalizes; the UI renders an "incomplete scan" state.
+    if (!activeExtractionId) {
+      return res.json([]);
+    }
+
     // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
     const { count: pdvCount } = await supabase
       .from('project_dependency_vulnerabilities')

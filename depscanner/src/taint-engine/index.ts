@@ -98,8 +98,10 @@ export {
 export type { IrFunction, Step, LocalVar, SourceLocation, CalleeRef } from './ir';
 export { lowerFunction } from './ir';
 
-export { runEngine, shouldRunForRollout, shouldRunForOrg } from './runner';
-export type { RunEngineOptions, RunEngineResult } from './runner';
+export { runEngine, runEngineCore, shouldRunForRollout, shouldRunForOrg } from './runner';
+export type { RunEngineOptions, RunEngineResult, RunEngineCoreOptions, EngineCoreResult } from './runner';
+export { runEngineCoreInWorker, EngineCoreTimeoutError } from './engine-worker-host';
+export type { RunInWorkerOptions } from './engine-worker-host';
 
 export {
   writeFlows,
