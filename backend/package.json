@@ -16,10 +16,12 @@
     "e2e:fleet:live": "tsx scripts/e2e-fleet-live.ts",
     "e2e:fleet:drain": "tsx scripts/e2e-fleet-drain.ts",
     "fleet:probe": "tsx scripts/fleet-probe.ts",
+    "tracker:probe": "tsx scripts/tracker-probe.ts",
     "reconcile:billing": "tsx scripts/reconcile-billing.ts",
     "loadtest:deduct": "tsx scripts/loadtest-deduct-balance.ts",
     "e2e:billing-prepaid": "tsx scripts/e2e-billing-prepaid.ts",
     "e2e:sentry": "tsx scripts/e2e-sentry.ts",
+    "backfill:advisory-details": "tsx scripts/backfill-advisory-details.ts",
     "aegis:iterate": "cross-env NODE_PATH=node_modules tsx scripts/aegis-iterate/cli.ts",
     "aegis:gate-test": "cross-env NODE_PATH=node_modules tsx scripts/aegis-iterate/language-gate-test.ts"
   },

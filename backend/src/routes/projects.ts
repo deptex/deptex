@@ -53,6 +53,9 @@ import {
   invalidateLatestSafeVersionCacheByDependencyId,
   invalidateAllProjectCachesInOrg,
   invalidateProjectCachesForTeam,
+  getCached,
+  getOrgRepositoriesCacheKey,
+  cacheOrgRepositories,
   CACHE_TTL_SECONDS,
 } from '../lib/cache';
 import { recordMeterEvent } from '../lib/billing/ledger';
@@ -1328,6 +1331,17 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
     const allRepos: RepoListEntry[] = [];
     const failedProviders: FailedProvider[] = [];
 
+    // Serve a recently-cached listing if we have one. The live provider call
+    // below is the slowest part of opening the New Project screen; membership
+    // is already verified above and the key is org-scoped, so this is safe.
+    const cacheScope = integration_id || 'all';
+    const cachedListing = await getCached<{ repositories: RepoListEntry[]; failedProviders: FailedProvider[] }>(
+      getOrgRepositoriesCacheKey(id, cacheScope),
+    );
+    if (cachedListing) {
+      return res.json(cachedListing);
+    }
+
     const results = await Promise.allSettled(
       integrations.map(async (integ) => ({
         integ,
@@ -1367,6 +1381,12 @@ router.get('/:id/repositories', async (req: AuthRequest, res) => {
           reason,
         });
       }
+    }
+
+    // Only cache a clean, fully-successful listing — never pin a transient
+    // provider rate-limit / outage for the TTL window.
+    if (failedProviders.length === 0) {
+      await cacheOrgRepositories(id, cacheScope, { repositories: allRepos, failedProviders });
     }
 
     res.json({ repositories: allRepos, failedProviders });
@@ -4941,6 +4961,24 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
       if (j.run_id && !jobByRunId.has(j.run_id)) jobByRunId.set(j.run_id, j);
     }
 
+    // Orphaned runs (superseded crashed attempts) have no scan_job, hence no
+    // completed_at — without an end time their duration renders as "now − start"
+    // and balloons to hours. Use each orphan's last log time as its real end.
+    // Only the orphaned runs are queried, so healthy projects pay nothing.
+    const orphanRunIds = runIds.filter((rid) => !jobByRunId.has(rid));
+    const lastLogByRun = new Map<string, string>();
+    if (orphanRunIds.length > 0) {
+      const { data: lastLogRows } = await supabase
+        .from('extraction_logs')
+        .select('run_id, created_at')
+        .eq('project_id', projectId)
+        .in('run_id', orphanRunIds)
+        .order('created_at', { ascending: false });
+      for (const row of lastLogRows ?? []) {
+        if (row.run_id && !lastLogByRun.has(row.run_id)) lastLogByRun.set(row.run_id, row.created_at);
+      }
+    }
+
     const startedByUserIds = new Set<string>();
     for (const j of allJobRows ?? []) {
       const uid = (j.payload as any)?.started_by_user_id;
@@ -4983,13 +5021,18 @@ router.get('/:id/projects/:projectId/extraction/runs', async (req: AuthRequest, 
     const out = runs.map((r) => {
       const job = jobByRunId.get(r.run_id) ?? null;
       const payload = job?.payload;
+      // A run with no matching scan_job is a SUPERSEDED attempt: recovery requeues
+      // a stuck job by overwriting its run_id with a fresh one, so every earlier
+      // run_id loses its job link. The only path to a requeue is a crash / timeout,
+      // so those attempts failed — they are NOT completed. Defaulting them to
+      // 'failed' stops the runs list from showing crashed attempts as "ready".
       return {
         run_id: r.run_id,
-        status: job ? job.status : 'completed',
+        status: job ? job.status : 'failed',
         attempts: job ? job.attempts : 1,
         created_at: r.started_at,
-        completed_at: job?.completed_at ?? null,
-        error: job?.error ?? null,
+        completed_at: job?.completed_at ?? lastLogByRun.get(r.run_id) ?? null,
+        error: job?.error ?? (job ? null : 'Extraction attempt was superseded after a crash or timeout.'),
         ...payloadToMeta(payload),
       };
     });
@@ -7523,12 +7566,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     const userId = req.user!.id;
     const { id, projectId } = req.params;
 
-    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    // Access check and the active-extraction lookup are independent — run them
+    // concurrently so the findings table (this is its sole gating request) waits
+    // on one round-trip instead of two stacked back-to-back.
+    const [accessCheck, activeExtractionId] = await Promise.all([
+      checkProjectAccess(userId, id, projectId),
+      getActiveExtractionId(supabase, projectId),
+    ]);
     if (!accessCheck.hasAccess) {
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
-
-    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
     // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
     const { count: pdvCount } = await supabase
@@ -7631,6 +7678,16 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
         contextual_depscore: vuln.contextual_depscore ?? null,
         entry_point_classification: vuln.entry_point_classification ?? null,
         epd_status: vuln.epd_status ?? null,
+        // Unified-status fields — without finding_key the status cell has no
+        // handle, so the ⋯ actions menu can't render on a dependency CVE row.
+        finding_key: vuln.finding_key ?? null,
+        status: vuln.status ?? null,
+        auto_ignored: vuln.auto_ignored ?? false,
+        auto_ignore_reason: vuln.auto_ignore_reason ?? null,
+        ignore_reason: vuln.ignore_reason ?? null,
+        ignore_note: vuln.ignore_note ?? null,
+        suppressed: vuln.suppressed ?? false,
+        risk_accepted: vuln.risk_accepted ?? false,
       }),
     }));
 
@@ -10268,9 +10325,13 @@ router.get('/:id/projects/:projectId/code-flow-findings', async (req: AuthReques
       (supRes.data ?? []).map((r: any) => r.flow_signature_hash).filter(Boolean),
     );
 
-    const data = (flowsRes.data ?? [])
-      .filter((row: any) => !row.flow_signature_hash || !suppressed.has(row.flow_signature_hash))
-      .map((row: any) => toDataFlowFinding(row));
+    // Return suppressed flows too, flagged — the findings table filters Open vs
+    // Ignored client-side and lets the user restore them. (The count RPC still
+    // excludes suppressed flows, so the pills stay correct.)
+    const data = (flowsRes.data ?? []).map((row: any) => ({
+      ...toDataFlowFinding(row),
+      flow_suppressed: Boolean(row.flow_signature_hash && suppressed.has(row.flow_signature_hash)),
+    }));
 
     res.json({ data, total: data.length });
   } catch (error: any) {
@@ -10903,12 +10964,14 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     const severityFilter = (req.query.severity as string) || '';
     const allowedSeverity = ['critical', 'high', 'medium', 'low'].includes(severityFilter) ? severityFilter : '';
 
+    // Return open + ignored rows (the table filters Open/Ignored/All client-side
+    // via the stored status); resolved rows stay hidden.
     let countQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select('*', { count: 'exact', head: true })
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) countQuery = countQuery.eq('severity', allowedSeverity);
 
     const { count: totalCount, error: countError } = await countQuery;
@@ -10920,11 +10983,11 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
     let dataQuery = supabase
       .from('project_dependency_vulnerabilities')
       .select(
-        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level'
+        'id, project_id, project_dependency_id, osv_id, severity, summary, aliases, fixed_versions, published_at, is_reachable, epss_score, cvss_score, cisa_kev, depscore, contextual_depscore, entry_point_classification, epd_status, sla_status, sla_deadline_at, reachability_level, runtime_confirmed_at, runtime_confirmed_dast_finding_id, runtime_confirmed_prior_level, status, finding_key, auto_ignored, auto_ignore_reason, suppressed, risk_accepted'
       )
       .in('project_id', accessibleProjectIds)
       .in('extraction_run_id', activeRunIds)
-      .eq('suppressed', false);
+      .neq('status', 'resolved');
     if (allowedSeverity) dataQuery = dataQuery.eq('severity', allowedSeverity);
 
     const { data: rows, error: dataError } = await dataQuery

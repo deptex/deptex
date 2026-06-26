@@ -68,6 +68,7 @@ export interface RolePermissions {
   view_activity: boolean;
   manage_compliance: boolean;
   manage_statuses?: boolean;
+  manage_findings?: boolean;
   interact_with_security_agent?: boolean;
   interact_with_aegis: boolean;
   manage_aegis: boolean;
@@ -223,6 +224,41 @@ export interface OrganizationMember {
 
 // Aegis Fix Agent types — mirror the backend's plan-types.ts.
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+
+export type TrackerProvider = 'jira' | 'linear' | 'github';
+export type TrackerFindingType =
+  | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow'
+  | 'container_group' | 'iac_group';
+export interface TrackerDestination { id: string; name: string }
+
+/** Ignore disposition for a collapsed group row (container_group / iac_group),
+ *  which has no backing finding store of its own. */
+export interface FindingGroupSuppression {
+  project_id: string;
+  group_type: 'container_group' | 'iac_group';
+  group_key: string;
+  ignore_reason: 'false_positive' | 'wont_fix' | 'accepted_risk' | null;
+  ignore_note: string | null;
+}
+/** A finding marked Open (acknowledged). Present = Open, absent = New. */
+export interface FindingAcknowledgement {
+  project_id: string;
+  finding_type: string;
+  finding_key: string;
+}
+export interface FindingTrackerLink {
+  id: string;
+  project_id?: string;
+  finding_type: string;
+  finding_key: string;
+  provider: TrackerProvider;
+  external_key: string | null;
+  external_url: string | null;
+  title: string | null;
+  /** Normalized linked-ticket state: 'open' | 'done' (null = not yet synced). */
+  external_state?: 'open' | 'done' | null;
+  created_at: string;
+}
 export type FixStatus =
   | 'planning'
   | 'awaiting_approval'
@@ -2423,15 +2459,94 @@ export const api = {
     );
   },
 
-  async updateFindingStatus(
+  /**
+   * Unified finding-status endpoint (findings-status foundation). Resolves
+   * (project_id, finding_key) to the active-run row(s) and sets the stored
+   * status + ignore reason/note. Supersedes the per-type ignore endpoints.
+   */
+  async setFindingStatus(
     organizationId: string,
-    findingType: 'vulnerability' | 'secret' | 'semgrep',
-    findingId: string,
-    status: 'open' | 'ignored'
-  ): Promise<{ success: boolean; status: string }> {
+    projectId: string,
+    type: 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'container_group' | 'iac_group',
+    findingKey: string,
+    status: 'open' | 'ignored',
+    reason?: 'false_positive' | 'wont_fix' | 'accepted_risk',
+    note?: string,
+  ): Promise<{ success: boolean; status: string; updated: number }> {
     return fetchWithAuth(
-      `/api/organizations/${organizationId}/findings/${findingType}/${findingId}/status`,
-      { method: 'PATCH', body: JSON.stringify({ status }) }
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status, reason, note }) },
+    );
+  },
+
+  // --- Finding -> external tracker links (Jira / Linear / GitHub) ---
+
+  /** All tracker links across the org's projects (org-wide findings table). */
+  async getOrgTrackerLinks(organizationId: string): Promise<{ links: FindingTrackerLink[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/tracker-links`);
+  },
+
+  /** Group-level Ignore for the collapsed rows, across the org's projects. */
+  async getOrgGroupSuppressions(organizationId: string): Promise<{ suppressions: FindingGroupSuppression[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/group-suppressions`);
+  },
+
+  /** All "Open" acknowledgements across the org's projects (org-wide findings table). */
+  async getOrgAcknowledgements(organizationId: string): Promise<{ acknowledgements: FindingAcknowledgement[] }> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/acknowledgements`);
+  },
+
+  /** Mark a finding Open (acknowledged=true) or back to New (false). Generic over
+   *  every finding type, including taint_flow and the collapsed group rows. */
+  async setFindingAcknowledged(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType | 'taint_flow',
+    findingKey: string,
+    acknowledged: boolean,
+  ): Promise<{ success: boolean; acknowledged: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/acknowledge`,
+      { method: 'PUT', body: JSON.stringify({ acknowledged }) },
+    );
+  },
+
+  /** Destinations within a provider — Jira projects / Linear teams. */
+  async getTrackerDestinations(
+    organizationId: string,
+    projectId: string,
+    provider: TrackerProvider,
+  ): Promise<{ destinations: TrackerDestination[] }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/tracker-destinations/${provider}`,
+    );
+  },
+
+  /** File a ticket for a finding and persist the link. */
+  async createFindingTicket(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType,
+    findingKey: string,
+    body: { provider: TrackerProvider; title: string; description?: string; projectKey?: string; issueType?: string; teamId?: string },
+  ): Promise<{ success: boolean; link: FindingTrackerLink; persisted?: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/tracker`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  },
+
+  /** Remove a tracker link (does not close the external ticket). */
+  async deleteTrackerLink(
+    organizationId: string,
+    projectId: string,
+    type: TrackerFindingType,
+    findingKey: string,
+    linkId: string,
+  ): Promise<{ success: boolean }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/findings/${type}/${encodeURIComponent(findingKey)}/tracker/${linkId}`,
+      { method: 'DELETE' },
     );
   },
 
@@ -4644,6 +4759,13 @@ export interface ProjectVulnerability {
   /** Set on organization-wide vulnerability list rows */
   project_id?: string;
   project_name?: string;
+  /** Findings-status foundation (phase55): stable handle + unified disposition. */
+  finding_key?: string | null;
+  status?: 'open' | 'ignored' | 'resolved';
+  auto_ignored?: boolean;
+  auto_ignore_reason?: string | null;
+  suppressed?: boolean;
+  risk_accepted?: boolean;
 }
 
 export interface ProjectPermissions {
@@ -5211,6 +5333,9 @@ export interface DataFlowFinding {
   flow_signature_hash: string | null;
   created_at: string | null;
   project_name?: string;
+  /** True when the user has suppressed this flow (by signature) — drives the
+   *  Ignored state + Restore in the findings table. */
+  flow_suppressed?: boolean;
 }
 
 export interface SecretFinding {
@@ -5531,6 +5656,12 @@ export interface MaliciousFinding {
   risk_accepted_at: string | null;
   risk_accepted_reason: string | null;
   created_at: string;
+  /** Findings-status foundation (phase55). Manual ignore resets on rescan until
+   *  malicious carry-forward lands (PR-B). */
+  status?: 'open' | 'ignored' | 'resolved';
+  finding_key?: string | null;
+  ignore_reason?: string | null;
+  ignore_note?: string | null;
   package_name?: string | null;
   ecosystem?: string | null;
   package_version?: string | null;
@@ -6216,6 +6347,35 @@ export async function apiAdminListExtractionFailures(params: {
   if (params.since) qs.set('since', params.since);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return fetchWithAuth(`/api/admin/extraction-failures${suffix}`);
+}
+
+export interface DemoRequestLead {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  company_name: string | null;
+  dev_count: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export interface AdminDemoRequestsResponse {
+  data: DemoRequestLead[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export async function apiAdminListDemoRequests(params: {
+  page?: number;
+  per_page?: number;
+}): Promise<AdminDemoRequestsResponse> {
+  const qs = new URLSearchParams();
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.per_page != null) qs.set('per_page', String(params.per_page));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return fetchWithAuth(`/api/admin/demo-requests${suffix}`);
 }
 
 export interface ExtractionTrendPoint {

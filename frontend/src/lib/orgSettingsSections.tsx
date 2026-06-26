@@ -42,6 +42,7 @@ const ALL_SETTINGS_SECTIONS = [
 // excluded from VALID_SETTINGS_SECTIONS so deep-links fall back to General. The components
 // and routes are left intact; remove an id from this set to bring a section back.
 export const MVP_PARKED_SECTIONS = new Set<string>([
+  'reachability',
   'policies',
   'statuses',
   'security_slas',

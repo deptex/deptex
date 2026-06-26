@@ -774,6 +774,61 @@ export async function createIssueComment(
   return data;
 }
 
+/**
+ * Create a new GitHub issue on a repo (used by the finding -> tracker flow).
+ */
+export async function createIssue(
+  installationToken: string,
+  repoFullName: string,
+  params: { title: string; body: string; labels?: string[] }
+): Promise<{ number: number; html_url: string; id: number }> {
+  const response = await fetch(
+    `${GITHUB_API_BASE}/repos/${repoFullName}/issues`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-App',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: params.title, body: params.body, labels: params.labels }),
+    }
+  );
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create issue: ${response.status} ${errorText}`);
+  }
+  const data = (await response.json()) as { number: number; html_url: string; id: number };
+  return data;
+}
+
+/**
+ * Fetch a single GitHub issue (used to poll its open/closed state for the
+ * finding -> tracker chip when webhooks aren't available, e.g. local dev).
+ */
+export async function getIssue(
+  installationToken: string,
+  repoFullName: string,
+  issueNumber: number
+): Promise<{ number: number; state: 'open' | 'closed' }> {
+  const response = await fetch(
+    `${GITHUB_API_BASE}/repos/${repoFullName}/issues/${issueNumber}`,
+    {
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-App',
+      },
+    }
+  );
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch issue: ${response.status} ${errorText}`);
+  }
+  return (await response.json()) as { number: number; state: 'open' | 'closed' };
+}
+
 export async function listIssueComments(
   installationToken: string,
   repoFullName: string,

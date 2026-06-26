@@ -3,7 +3,7 @@ import ReCAPTCHA from 'react-google-recaptcha';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { ScanSearch, Scale, Bell } from 'lucide-react';
+import { ScanSearch, KeyRound, ShieldAlert, Loader2 } from 'lucide-react';
 
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
 
@@ -21,11 +21,10 @@ const AegisIcon = () => (
 );
 
 const CYCLING_ITEMS: { phrase: string; icon: React.ReactNode }[] = [
-  { phrase: 'Try our custom policy as code', icon: <Scale className="h-5 w-5 shrink-0" /> },
-  { phrase: 'Check out our integrations — connect anything you want', icon: <Bell className="h-5 w-5 shrink-0" /> },
-  { phrase: 'Aegis AI that investigates, fixes, and reports', icon: <AegisIcon /> },
-  { phrase: 'Dependency intelligence with reachability', icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
-  { phrase: 'SBOM and compliance made simple', icon: <Scale className="h-5 w-5 shrink-0" /> },
+  { phrase: "Every finding scored by what's actually reachable", icon: <ScanSearch className="h-5 w-5 shrink-0" /> },
+  { phrase: 'Aegis investigates, writes the fix, and opens a PR', icon: <AegisIcon /> },
+  { phrase: 'Leaked secrets, caught and live-verified', icon: <KeyRound className="h-5 w-5 shrink-0" /> },
+  { phrase: 'Malicious packages flagged before they reach you', icon: <ShieldAlert className="h-5 w-5 shrink-0" /> },
 ];
 
 function EnterpriseTypewriterBlock() {
@@ -138,7 +137,7 @@ export default function ContactEnterprisePage() {
             <h1 className="text-4xl md:text-5xl font-bold text-foreground leading-tight mb-4">
               Talk to the founders
             </h1>
-            <p className="text-base text-foreground-secondary max-w-md">
+            <p className="text-base text-foreground max-w-md">
               Enterprise inquiries go straight to the founders. Tell us about your organization and we&apos;ll get back to you.
             </p>
           </div>
@@ -149,90 +148,49 @@ export default function ContactEnterprisePage() {
 
         {/* Right: Form card */}
         <div className="flex flex-col px-6 pt-24 lg:pt-28 pb-8 lg:pr-16 lg:pl-12">
-          <div className="rounded-xl border border-border bg-background-card/80 backdrop-blur-sm p-6 max-w-lg w-full mx-auto lg:mx-0 lg:self-start">
-            <h2 className="text-xl font-semibold text-foreground mb-5">
-              Get in touch
-            </h2>
+          <div className="w-full max-w-lg mx-auto lg:mx-0 lg:self-start rounded-xl border border-border bg-background-card p-6">
+            <h2 className="text-base font-semibold text-foreground">Get in touch</h2>
+            <p className="mt-1 text-xs text-foreground-secondary">
+              Tell us about your organization and we&apos;ll get back to you.
+            </p>
 
             {submitted ? (
-              <div className="py-6 text-center">
-                <p className="text-foreground font-medium mb-2">Request received</p>
-                <p className="text-sm text-foreground-secondary">
-                  We&apos;ll be in touch soon.
-                </p>
+              <div className="py-10 text-center">
+                <p className="text-foreground font-medium mb-1">Request received</p>
+                <p className="text-sm text-foreground-secondary">We&apos;ll be in touch soon.</p>
               </div>
             ) : (
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="mt-5 space-y-4">
                 <div className="space-y-1.5">
-                  <Label htmlFor="companyName" className="demo-page-label text-sm">Company name</Label>
-                  <Input
-                    id="companyName"
-                    name="companyName"
-                    placeholder="Acme Inc."
-                    className="demo-page-input h-9"
-                    disabled={loading}
-                  />
+                  <Label htmlFor="companyName" className="text-sm">Company name</Label>
+                  <Input id="companyName" name="companyName" placeholder="Acme Inc." disabled={loading} />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="firstName" className="demo-page-label text-sm">Your first name</Label>
-                    <Input
-                      id="firstName"
-                      name="firstName"
-                      required
-                      placeholder="First name"
-                      className="demo-page-input h-9"
-                      disabled={loading}
-                    />
+                    <Label htmlFor="firstName" className="text-sm">First name</Label>
+                    <Input id="firstName" name="firstName" required placeholder="Ada" disabled={loading} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="lastName" className="demo-page-label text-sm">Your last name</Label>
-                    <Input
-                      id="lastName"
-                      name="lastName"
-                      required
-                      placeholder="Last name"
-                      className="demo-page-input h-9"
-                      disabled={loading}
-                    />
+                    <Label htmlFor="lastName" className="text-sm">Last name</Label>
+                    <Input id="lastName" name="lastName" required placeholder="Lovelace" disabled={loading} />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="email" className="demo-page-label text-sm">Business email</Label>
-                  <Input
-                    id="email"
-                    name="email"
-                    type="email"
-                    required
-                    placeholder="you@company.com"
-                    className="demo-page-input h-9"
-                    disabled={loading}
-                  />
+                  <Label htmlFor="email" className="text-sm">Business email</Label>
+                  <Input id="email" name="email" type="email" required placeholder="you@company.com" disabled={loading} />
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="companySize" className="demo-page-label text-sm">Company size</Label>
-                  <Input
-                    id="companySize"
-                    name="companySize"
-                    placeholder="e.g. 50–200"
-                    className="demo-page-input h-9"
-                    disabled={loading}
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="phone" className="demo-page-label text-sm">Your phone number</Label>
-                  <Input
-                    id="phone"
-                    name="phone"
-                    type="tel"
-                    placeholder="+1 234 567 8900"
-                    className="demo-page-input h-9"
-                    disabled={loading}
-                  />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="companySize" className="text-sm">Company size</Label>
+                    <Input id="companySize" name="companySize" placeholder="e.g. 50–200" disabled={loading} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="phone" className="text-sm">Phone</Label>
+                    <Input id="phone" name="phone" type="tel" placeholder="+1 234 567 8900" disabled={loading} />
+                  </div>
                 </div>
 
                 {/* Honeypot: hidden from users; bots that fill it get rejected */}
@@ -242,13 +200,13 @@ export default function ContactEnterprisePage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="additionalDetails" className="demo-page-label text-sm">Additional details</Label>
+                  <Label htmlFor="additionalDetails" className="text-sm">Additional details</Label>
                   <textarea
                     id="additionalDetails"
                     name="additionalDetails"
                     placeholder="Tell us about your needs or questions."
                     rows={4}
-                    className="demo-page-input w-full resize-y rounded-md px-3 py-2.5 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50 min-h-[100px]"
+                    className="flex w-full resize-y rounded-md border border-border bg-background-card px-3 py-2.5 text-sm text-foreground shadow-sm transition-colors placeholder:text-foreground-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-input disabled:cursor-not-allowed disabled:opacity-50 min-h-[110px]"
                     disabled={loading}
                   />
                 </div>
@@ -268,21 +226,21 @@ export default function ContactEnterprisePage() {
                   <p className="text-sm text-destructive">{error}</p>
                 )}
 
-                <Button
-                  type="submit"
-                  size="lg"
-                  disabled={loading}
-                  className="w-full bg-primary text-primary-foreground hover:bg-primary/90 border border-primary-foreground/20 hover:border-primary-foreground/40 h-10 text-base font-medium"
-                >
-                  {loading ? 'Submitting…' : 'Submit'}
+                <Button type="submit" variant="green" disabled={loading} className="relative w-full">
+                  <span className={loading ? 'invisible' : undefined}>Submit</span>
+                  {loading && (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    </span>
+                  )}
                 </Button>
 
                 {RECAPTCHA_SITE_KEY && (
-                  <p className="text-xs text-foreground-secondary text-center pt-2">
-                    This site is protected by reCAPTCHA and the Google{' '}
-                    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer" className="underline">Privacy Policy</a>
-                    {' '}and{' '}
-                    <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer" className="underline">Terms of Service</a> apply.
+                  <p className="text-xs text-foreground-secondary text-center pt-1">
+                    Protected by reCAPTCHA (Google{' '}
+                    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer" className="text-foreground hover:underline">Privacy</a>
+                    {' '}&amp;{' '}
+                    <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer" className="text-foreground hover:underline">Terms</a>).
                   </p>
                 )}
               </form>

@@ -1,4 +1,4 @@
-import { Link, useNavigate, useLocation } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { LogOut, Settings } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { getAvatarUrl, getDisplayNameOrNull } from "../lib/userIdentity";
@@ -14,14 +14,8 @@ import {
 
 const HEADER_HEIGHT = "h-14";
 
-const docTabs = [
-  { label: "Docs", path: "/docs", slug: null },
-  { label: "Help", path: "/docs/help", slug: "help" },
-];
-
 export default function DocsHeader() {
   const { user, signOut } = useAuth();
-  const location = useLocation();
   const avatarUrl = getAvatarUrl(user);
   const fullName = getDisplayNameOrNull(user);
   const navigate = useNavigate();
@@ -29,12 +23,12 @@ export default function DocsHeader() {
   return (
     <>
       <header
-        className={`${HEADER_HEIGHT} fixed left-0 right-0 top-0 z-50 flex items-center border-b border-border bg-background px-6`}
+        className={`${HEADER_HEIGHT} fixed left-0 right-0 top-0 z-50 flex items-center justify-between border-b border-border bg-background px-6`}
       >
-        {/* Left: logo + nav */}
-        <div className="flex items-center gap-6 flex-1 min-w-0">
+        {/* Left: logo + Docs wordmark */}
+        <div className="flex items-center gap-3 min-w-0">
           <Link
-            to="/"
+            to="/landing"
             className="flex items-center hover:opacity-80 transition-opacity shrink-0"
           >
             <img
@@ -43,44 +37,15 @@ export default function DocsHeader() {
               className="h-7 object-contain"
             />
           </Link>
-
-          <nav className="flex items-center gap-1">
-            {docTabs.map((tab) => {
-              const path = location.pathname;
-              const isDocsTab = tab.path === "/docs";
-              const isTopLevelSection = ["help"].includes(path.split("/")[2] || "");
-              const isActive = isDocsTab
-                ? path === "/docs" || (path.startsWith("/docs/") && !isTopLevelSection)
-                : path.startsWith(tab.path);
-              return (
-                <Link
-                  key={tab.label}
-                  to={tab.path}
-                  className={`relative flex items-center px-3 py-2 text-sm font-medium transition-colors rounded-md ${
-                    isActive
-                      ? "text-foreground"
-                      : "text-foreground/80 hover:text-foreground"
-                  }`}
-                >
-                  {tab.label}
-                  {isActive && (
-                    <span className="absolute left-2 right-2 h-[2px] bg-foreground rounded-full -bottom-[10px]" aria-hidden />
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
+          <span className="text-sm font-medium text-foreground border-l border-border pl-3">
+            Docs
+          </span>
         </div>
 
-        {/* Right: sign in / user */}
-        <div className="flex items-center gap-3 flex-1 justify-end min-w-0">
+        {/* Right: sign in / user — matches the landing NavBar */}
+        <div className="flex items-center gap-3 min-w-0">
           {user && (
-            <Button
-              asChild
-              size="default"
-              variant="outline"
-              className="font-semibold text-sm px-5 py-2.5 rounded-lg h-9"
-            >
+            <Button asChild variant="outline" className="!h-8 !rounded-lg !px-3 text-foreground">
               <Link to="/organizations">Dashboard</Link>
             </Button>
           )}
@@ -98,9 +63,9 @@ export default function DocsHeader() {
                   />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuContent align="end" sideOffset={8} className="w-72 p-1.5 rounded-xl">
                 <DropdownMenuLabel className="p-0">
-                  <div className="flex items-center gap-3 px-2 py-3">
+                  <div className="flex items-center gap-3 px-3 py-2">
                     <div className="flex-shrink-0">
                       <img
                         src={avatarUrl}
@@ -117,7 +82,7 @@ export default function DocsHeader() {
                           {fullName}
                         </span>
                       )}
-                      <span className="text-xs text-foreground/80 truncate">{user.email}</span>
+                      <span className="text-xs text-foreground-secondary truncate">{user.email}</span>
                     </div>
                   </div>
                 </DropdownMenuLabel>
@@ -125,21 +90,20 @@ export default function DocsHeader() {
                 <DropdownMenuItem asChild>
                   <Link
                     to="/settings"
-                    className="cursor-pointer flex items-center gap-2 focus:bg-transparent hover:text-foreground text-foreground/80 transition-colors"
+                    className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                   >
-                    <Settings className="h-4 w-4" />
+                    <Settings className="h-5 w-5" />
                     Settings
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={async () => {
                     await signOut();
                     navigate("/");
                   }}
-                  className="cursor-pointer text-foreground/80 hover:text-foreground focus:bg-transparent focus:text-foreground flex items-center gap-2 transition-colors"
+                  className="cursor-pointer h-9 px-3 gap-3 rounded-md font-medium text-foreground-secondary hover:bg-background-subtle/85 focus:bg-background-subtle/85 hover:text-foreground"
                 >
-                  <LogOut className="h-4 w-4" />
+                  <LogOut className="h-5 w-5" />
                   Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>

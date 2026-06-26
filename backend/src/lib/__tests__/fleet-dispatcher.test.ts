@@ -199,9 +199,35 @@ describe('claimable-aware desired (per-org cap)', () => {
 
     const r = await dispatchFleet('extraction');
 
-    expect(r.desired).toBe(0);
+    // The 20 queued jobs are all blocked by the per-org cap (5 inflight = cap),
+    // so claimable = 0. desired = busyMachines(5) + claimable(0) = 5, which the
+    // 5 already-running machines fully cover → start nothing. The guarantee is
+    // that nothing is provisioned for cap-blocked jobs.
+    expect(r.desired).toBe(5);
     expect(r.started).toBe(0);
     expect(mockBurstCount).toBe(0);
+  });
+
+  it('boots a fresh machine for a queued job when the only machine is busy', async () => {
+    process.env.FLY_MAX_FLEET = '25';
+    process.env.FLY_MAX_PER_ORG = '5';
+    // One machine busy on a (possibly slow/hung) job for o1; one more job queued
+    // for the same org. A busy machine can't claim the queued job until it
+    // finishes, so the dispatcher must boot a second machine rather than let the
+    // queue wait behind it (the ~9-min stall observed when the only machine was
+    // stuck on a hanging extraction).
+    mockListMachinesReturn = [{ id: 'm1', state: 'started' }];
+    setRpcResponse('fleet_scan_snapshot',
+      snapshot([{ organization_id: 'o1', queued: 1, inflight: 1 }], ['m1']),
+    );
+
+    const r = await dispatchFleet('extraction');
+
+    expect(r.running).toBe(1);
+    expect(r.inflight).toBe(1); // m1 only (running ∪ flyActive dedup)
+    expect(r.desired).toBe(2); // keep m1 on its job + 1 for the queued job
+    expect(r.started).toBe(1);
+    expect(mockBurstCount).toBe(1);
   });
 
   it('caps new machines to remaining per-org headroom across orgs', async () => {
@@ -220,9 +246,12 @@ describe('claimable-aware desired (per-org cap)', () => {
 
     const r = await dispatchFleet('extraction');
 
-    // claimable = 2 + 5 = 7; inflight (running) = 3 → startN = 7 - 3 = 4.
-    expect(r.desired).toBe(7);
-    expect(r.started).toBe(4);
+    // claimable = 2 + 5 = 7; the 3 running machines are busy, so desired =
+    // busy(3) + claimable(7) = 10; inflight = 3 → startN = 10 - 3 = 7. Each
+    // claimable queued job gets its own machine instead of serializing behind a
+    // busy one (still bounded by FLY_MAX_FLEET and the per-org cap).
+    expect(r.desired).toBe(10);
+    expect(r.started).toBe(7);
   });
 });
 

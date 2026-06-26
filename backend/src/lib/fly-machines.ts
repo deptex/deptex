@@ -196,7 +196,11 @@ async function createBurstMachine(config: FlyMachineConfig, imageOverride?: stri
         guest: config.guest,
         // Stamp the machine kind so the worker only claims matching job types
         // and the dispatcher / legacy burst-count only count their own kind.
-        env: { SCAN_TYPE: config.scanType },
+        // Burst machines have no depscan VDB volume (only the persistent machine
+        // does), so force OSV-only vulnerability scanning here — dep-scan would
+        // otherwise wedge rebuilding its ~30GB VDB on ephemeral disk. Belt-and-
+        // braces with the app-level DEPTEX_OSV_FALLBACK secret.
+        env: { SCAN_TYPE: config.scanType, DEPTEX_OSV_FALLBACK: 'force' },
       },
     }),
   });

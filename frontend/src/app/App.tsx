@@ -9,17 +9,21 @@ import "./Main.css";
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const isIndexRoute = location.pathname === "/";
+  // "/" is pure routing (no page of its own); the landing homepage lives at
+  // "/landing" and is the only full-bleed marketing route.
+  const isLandingLayout = location.pathname === "/landing";
 
-  // Redirect authenticated users away from marketing pages without a visible flash.
-  // <Navigate> fires one render too late (its navigate() runs in useEffect); doing it
-  // here keeps the spinner on screen until the router transition completes.
+  // "/" just decides where to send you: your dashboard if signed in, otherwise
+  // the landing page. Wait for auth to resolve (loading) so a returning user
+  // isn't bounced to /landing before their cached session loads. Doing this here
+  // (not via <Navigate>) keeps the spinner on screen until the transition lands.
   useEffect(() => {
-    if (isIndexRoute && user) {
-      navigate("/organizations", { replace: true });
+    if (isIndexRoute && !loading) {
+      navigate(user ? "/organizations" : "/landing", { replace: true });
     }
-  }, [isIndexRoute, user, navigate]);
+  }, [isIndexRoute, loading, user, navigate]);
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -35,9 +39,9 @@ export default function App() {
     }
   }, [location]);
 
-  // Hold the spinner on "/" only while we're about to redirect an authenticated
-  // user. Prevents the NavBar from painting for one frame before the navigate fires.
-  if (isIndexRoute && user) {
+  // "/" never renders a page — hold a spinner while the effect above redirects.
+  // Prevents the NavBar from painting for one frame before the navigate fires.
+  if (isIndexRoute) {
     return (
       <>
         <div className="bg-background text-foreground min-h-screen flex items-center justify-center">
@@ -54,7 +58,7 @@ export default function App() {
         <NavBar />
         {/* Landing page is full-bleed (sections own their max-w containers);
             other marketing routes keep the centered shell. */}
-        {isIndexRoute ? (
+        {isLandingLayout ? (
           <div className="flex-1 pt-14">
             <Outlet />
           </div>

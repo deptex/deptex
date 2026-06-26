@@ -16,7 +16,9 @@ import {
   type CheckRunOutput,
 } from '../lib/github';
 import { queueExtractionJob } from '../lib/extraction-jobs';
-import { invalidateProjectCaches } from '../lib/cache';
+import { registerJiraWebhook, refreshAllJiraWebhooks } from '../lib/trackers';
+import { isValidInternalKey } from '../middleware/internal-key';
+import { invalidateProjectCaches, invalidateOrgRepositoriesCache } from '../lib/cache';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getVulnCountsForPackageVersion, exceedsThreshold, type VulnCounts } from '../lib/vuln-counts';
 import { detectAffectedWorkspaces, isFileInWorkspace, type EcosystemId } from '../lib/manifest-registry';
@@ -1648,6 +1650,110 @@ function verifyGitHubWebhookSignature(req: express.Request): boolean {
   }
 }
 
+/**
+ * Verify a Linear webhook via the Linear-Signature header (HMAC-SHA256 of the
+ * raw body with the OAuth app's webhook signing secret).
+ */
+function verifyLinearWebhookSignature(req: express.Request): boolean {
+  const secret = process.env.LINEAR_WEBHOOK_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('CRITICAL: LINEAR_WEBHOOK_SECRET not set in production. Rejecting webhook.');
+      return false;
+    }
+    console.warn('LINEAR_WEBHOOK_SECRET not set; skipping verification (dev mode only).');
+    return true;
+  }
+  const signature = req.headers['linear-signature'] as string | undefined;
+  const rawBody = (req as any).rawBody;
+  if (!signature || typeof rawBody !== 'string') return false;
+  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const sigBuf = Buffer.from(signature, 'utf8');
+  const expBuf = Buffer.from(expected, 'utf8');
+  if (sigBuf.length !== expBuf.length) return false;
+  try {
+    return crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A Linear issue changed — refresh the resolved state of any finding_tracker_links
+ * pointing at it. Linear issue ids are globally unique, so no project scoping is
+ * needed. state.type completed/canceled = done; everything else = open.
+ */
+export async function handleLinearIssueEvent(payload: any): Promise<void> {
+  if (payload?.type !== 'Issue') return;
+  const issueId = payload?.data?.id;
+  const stateType = payload?.data?.state?.type as string | undefined;
+  if (!issueId || !stateType) return;
+  const newState = stateType === 'completed' || stateType === 'canceled' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('provider', 'linear')
+    .eq('external_id', String(issueId));
+}
+
+export async function linearWebhookHandler(req: express.Request, res: express.Response) {
+  try {
+    if (!verifyLinearWebhookSignature(req)) {
+      return res.status(401).json({ error: 'Invalid webhook signature' });
+    }
+    // Ack fast so Linear doesn't retry; process after.
+    res.json({ received: true });
+    try {
+      await handleLinearIssueEvent(req.body);
+    } catch (err: any) {
+      console.error('Linear webhook processing error:', err?.message);
+    }
+  } catch (error: any) {
+    console.error('Linear webhook error:', error);
+    if (!res.headersSent) res.status(200).json({ received: true, error: error.message });
+  }
+}
+
+/**
+ * A Jira issue changed — refresh the resolved state of this org's jira links.
+ * Jira issue ids are unique per site, so we scope by the org from the URL.
+ * status.statusCategory.key === 'done' = done; everything else = open.
+ */
+export async function handleJiraIssueEvent(organizationId: string, payload: any): Promise<void> {
+  const issueId = payload?.issue?.id;
+  const category = payload?.issue?.fields?.status?.statusCategory?.key;
+  if (!issueId || !category) return;
+  const newState = category === 'done' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('organization_id', organizationId)
+    .eq('provider', 'jira')
+    .eq('external_id', String(issueId));
+}
+
+export async function jiraWebhookHandler(req: express.Request, res: express.Response) {
+  try {
+    // Jira dynamic webhooks aren't HMAC-signed — verify the shared secret carried
+    // in the callback URL, and scope the update by the org id from the path.
+    const secret = process.env.JIRA_WEBHOOK_SECRET;
+    const token = req.query.token as string | undefined;
+    if (!secret || token !== secret) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const { orgId } = req.params;
+    res.json({ received: true });
+    try {
+      await handleJiraIssueEvent(orgId, req.body);
+    } catch (err: any) {
+      console.error('Jira webhook processing error:', err?.message);
+    }
+  } catch (error: any) {
+    console.error('Jira webhook error:', error);
+    if (!res.headersSent) res.status(200).json({ received: true, error: error.message });
+  }
+}
+
 async function deduplicateWebhookDelivery(deliveryId: string | undefined): Promise<boolean> {
   if (!deliveryId) return false;
   try {
@@ -1721,6 +1827,34 @@ async function updateWebhookDeliveryStatus(
   } catch {}
 }
 
+/**
+ * A GitHub issue was closed or reopened — refresh the resolved state of any
+ * finding_tracker_links pointing at it. Scoped to links whose project is
+ * connected to the event's repo so issue numbers don't collide across repos.
+ */
+export async function handleIssueStateEvent(payload: any): Promise<void> {
+  const repoFullName: string | undefined = payload?.repository?.full_name;
+  const issueNumber = payload?.issue?.number;
+  const state: string | undefined = payload?.issue?.state; // 'open' | 'closed'
+  if (!repoFullName || issueNumber == null) return;
+
+  const { data: repos } = await supabase
+    .from('project_repositories')
+    .select('project_id')
+    .eq('provider', 'github')
+    .eq('repo_full_name', repoFullName);
+  const projectIds = (repos ?? []).map((r: any) => r.project_id);
+  if (projectIds.length === 0) return;
+
+  const newState = state === 'closed' ? 'done' : 'open';
+  await supabase
+    .from('finding_tracker_links')
+    .update({ external_state: newState, external_state_synced_at: new Date().toISOString() })
+    .eq('provider', 'github')
+    .eq('external_id', String(issueNumber))
+    .in('project_id', projectIds);
+}
+
 export async function githubWebhookHandler(req: express.Request, res: express.Response) {
   try {
     // 8Q.2: Rate limiting
@@ -1780,6 +1914,12 @@ export async function githubWebhookHandler(req: express.Request, res: express.Re
           }
           if (payload?.action === 'closed') {
             await handlePullRequestClosedEvent(payload);
+          }
+          break;
+
+        case 'issues':
+          if (['closed', 'reopened'].includes(payload?.action)) {
+            await handleIssueStateEvent(payload);
           }
           break;
 
@@ -1958,6 +2098,23 @@ async function handlePullRequestClosedEvent(payload: any) {
 
 // Also mount on router for backwards compatibility
 router.post('/webhooks/github', githubWebhookHandler);
+router.post('/webhooks/linear', linearWebhookHandler);
+router.post('/webhooks/jira/:orgId', jiraWebhookHandler);
+
+// Internal: daily cron refreshes Jira dynamic webhooks before their 30-day expiry.
+router.post('/internal/refresh-jira-webhooks', async (req, res) => {
+  const headerKey = req.headers['x-internal-api-key'] as string | undefined;
+  if (!isValidInternalKey(headerKey)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await refreshAllJiraWebhooks();
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('[jira-webhook-refresh]', error?.message);
+    res.status(500).json({ error: error?.message || 'refresh failed' });
+  }
+});
 
 // ============================================================
 // PR Guardrails: helpers and handlePullRequestEvent
@@ -3237,7 +3394,9 @@ router.get('/jira/install', authenticateUser, async (req: AuthRequest, res) => {
     const backendUrl = getBackendUrl();
     const frontendUrl = getFrontendUrl();
     const redirectUri = `${backendUrl}/api/integrations/jira/org-callback`;
-    const scopes = 'read:jira-work write:jira-work read:jira-user';
+    // offline_access → a refresh token (3LO access tokens expire ~1h);
+    // manage:jira-webhook → register the issue-update webhook.
+    const scopes = 'read:jira-work write:jira-work read:jira-user manage:jira-webhook offline_access';
     const statePayload: { userId: string; orgId: string; projectId?: string; teamId?: string; successRedirect?: string } = { userId: req.user!.id, orgId: org_id };
     if (project_id && typeof project_id === 'string') {
       statePayload.projectId = project_id;
@@ -3391,6 +3550,8 @@ router.get('/jira/org-callback', async (req, res) => {
         return res.redirect(`${frontendUrl}/organizations/${orgId}/settings/integrations?error=jira&message=Failed to save integration`);
       }
       try { await emitEvent({ type: 'integration_connected', organizationId: orgId, payload: { provider: 'jira', displayName }, source: 'system', priority: 'normal' }); } catch (e) {}
+      // Register the issue-update webhook (best-effort; never blocks the connect).
+      try { await registerJiraWebhook(orgId); } catch (e: any) { console.error('Jira webhook registration failed:', e?.message); }
       res.redirect(redirectOnSuccess);
     }
   } catch (err: any) {
@@ -3622,8 +3783,18 @@ router.get('/linear/org-callback', async (req, res) => {
       installation_id: orgKey,
       display_name: displayName,
       access_token: tokenData.access_token,
+      // Linear OAuth access tokens expire; persist the refresh token + expiry so
+      // getValidLinearToken can mint a fresh one instead of locking us out a day
+      // later. (Personal API keys / long-lived tokens simply have no refresh.)
+      refresh_token: tokenData.refresh_token ?? null,
       status: 'connected',
-      metadata: { linear_org_id: orgKey, scope: tokenData.scope },
+      metadata: {
+        linear_org_id: orgKey,
+        scope: tokenData.scope,
+        expires_at: tokenData.expires_in
+          ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
+          : null,
+      },
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     } as any;
@@ -3653,6 +3824,10 @@ router.get('/linear/org-callback', async (req, res) => {
       }
       res.redirect(redirectOnSuccess);
     } else {
+      // The unique (org, provider) constraint was dropped for multi-provider, so a
+      // reconnect must REPLACE the prior Linear row, not add a duplicate (two rows
+      // would break the single-row .maybeSingle() reads in trackers.ts).
+      await supabase.from('organization_integrations').delete().eq('organization_id', orgId).eq('provider', 'linear');
       const { error: dbError } = await supabase.from('organization_integrations').insert({ organization_id: orgId, ...linearInsert });
       if (dbError) {
         console.error('Linear org integration DB error:', dbError);
@@ -3897,6 +4072,12 @@ router.delete('/organizations/:orgId/connections/:connectionId', authenticateUse
 
     if (deleteError) {
       return res.status(500).json({ error: deleteError.message });
+    }
+
+    // Disconnecting a git provider must drop its repos from the New Project
+    // picker immediately rather than lingering for the cache TTL.
+    if (['github', 'gitlab', 'bitbucket'].includes(connection.provider)) {
+      await invalidateOrgRepositoriesCache(orgId);
     }
 
     try { await emitEvent({ type: 'integration_disconnected', organizationId: orgId, payload: { provider: connection.provider, displayName: connection.display_name }, source: 'system', priority: 'normal' }); } catch (e) {}

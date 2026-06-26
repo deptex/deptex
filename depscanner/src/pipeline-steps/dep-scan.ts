@@ -259,6 +259,27 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
     },
     fn: async (signal) => {
       fs.mkdirSync(reportsDir, { recursive: true });
+
+      // OSV-only mode (DEPTEX_OSV_FALLBACK=force — set globally and forced on
+      // burst machines): skip the dep-scan subprocess entirely. dep-scan needs
+      // its ~30GB local VDB, which burst machines have no volume for; without it
+      // dep-scan grinds rebuilding the VDB on ephemeral disk and wedges the scan
+      // at this step (the burst hang). The OSV API scan below replaces it — same
+      // CVE coverage, no local DB. Seed reportsDir with the pipeline's SBOM so
+      // the OSV fallback (which reads reportsDir/*.cdx.json) has components to
+      // query; nothing else writes an SBOM there when dep-scan doesn't run.
+      if (osvFallbackMode() === 'force') {
+        const pipelineSbom = path.join(workspaceRoot, 'sbom.json');
+        if (fs.existsSync(pipelineSbom)) {
+          try {
+            fs.copyFileSync(pipelineSbom, path.join(reportsDir, 'pipeline-sbom.cdx.json'));
+          } catch (e) {
+            await log.warn('vuln_scan', `Could not stage SBOM for OSV scan: ${(e as Error).message}`);
+          }
+        }
+        return;
+      }
+
       const outArg = reportsDir;
 
       let depScanExe = 'depscan';
@@ -386,7 +407,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         // reportsDir or the workspace.
         callerPurls: pipelinePurls,
       });
-      if (result.wrote && result.vulnCount > 0) {
+      if (result.wrote && (result.vulnCount > 0 || fallbackMode === 'force')) {
+        // In force mode OSV is the SOLE vulnerability source (dep-scan skipped),
+        // so a successful run — even with zero matches — means the scan ran, and
+        // a genuinely vuln-free project should pass rather than trip the
+        // loud-fail check below.
         depScanSucceeded = true;
       } else if (skipDepScan && result.wrote) {
         // dep-scan was deliberately skipped, so a clean OSV query (even one that
@@ -403,7 +428,9 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       }
     } catch (e) {
       // Network errors here must NOT fail the whole scan — dep-scan's own
-      // findings (if any) still get processed below.
+      // findings (if any) still get processed below. In force mode there are no
+      // dep-scan findings, so capture the cause for the loud-fail check.
+      if (fallbackMode === 'force') depScanFailureDetail = `OSV scan failed: ${(e as Error).message}`;
       await log.warn('vuln_scan_osv', `OSV fallback errored (continuing): ${(e as Error).message}`);
     }
   }

@@ -12,7 +12,7 @@ import { cn } from '../../lib/utils';
  */
 
 // Same band thresholds + ramp as the Findings table's DepscoreValue /
-// SeverityPills: >=90 C / >=70 H / >=40 M / <40 L, red→yellow→blue→green.
+// SeverityPills: >=90 C / >=70 H / >=40 M / <40 L, red→orange→yellow→gray.
 function bandClasses(detail: FixFindingDetail): string {
   const sev =
     detail.depscore != null
@@ -28,11 +28,11 @@ function bandClasses(detail: FixFindingDetail): string {
     case 'critical':
       return 'bg-red-500/10 text-red-400 border-red-500/20';
     case 'high':
-      return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+      return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
     case 'medium':
-      return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+      return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
     default:
-      return 'bg-green-500/10 text-green-400 border-green-500/20';
+      return 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20';
   }
 }
 

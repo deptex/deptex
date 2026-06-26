@@ -40,6 +40,8 @@ function RunRow({
   const [expanded, setExpanded] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [animateOpen, setAnimateOpen] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = useState(0);
 
   useEffect(() => {
     if (expanded) {
@@ -51,6 +53,20 @@ function RunRow({
       setAnimateOpen(false);
     }
   }, [expanded]);
+
+  // Track the content's natural height so the expansion animates not just on
+  // open but also when the logs load in (and stream) — otherwise the panel
+  // snaps from the loading skeleton to the loaded height with no transition.
+  useEffect(() => {
+    if (!mounted) return;
+    const el = contentRef.current;
+    if (!el) return;
+    const measure = () => setContentHeight(el.scrollHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mounted]);
 
   return (
     <tr
@@ -178,12 +194,12 @@ function RunRow({
         {/* Animated in-place expansion */}
         {mounted && (
           <div
-            className="grid transition-[grid-template-rows] duration-300 ease-out"
-            style={{ gridTemplateRows: animateOpen ? '1fr' : '0fr' }}
+            className="overflow-hidden transition-[height] duration-300 ease-out"
+            style={{ height: animateOpen ? contentHeight : 0 }}
             onTransitionEnd={() => { if (!expanded) setMounted(false); }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="overflow-hidden">
+            <div ref={contentRef}>
               <div className="px-4 pb-4">
                 <InlineExtractionLogs
                   organizationId={organizationId}
@@ -273,7 +289,11 @@ function formatWebhookTimeAgo(dateStr: string | null | undefined): string {
 
 function formatRunDuration(createdAt: string, completedAt: string | null, status: string): string {
   const start = new Date(createdAt).getTime();
-  const end = (completedAt ? new Date(completedAt).getTime() : Date.now());
+  const isTerminal = status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'error';
+  // Only an in-progress run should grow toward "now". A terminal run with no
+  // recorded end time would otherwise balloon to "1h" — show a dash instead.
+  if (!completedAt && isTerminal) return '—';
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
   const sec = Math.max(0, Math.floor((end - start) / 1000));
   if (sec < 60) return `${sec}s`;
   const m = Math.floor(sec / 60);

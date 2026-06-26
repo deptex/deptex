@@ -258,6 +258,7 @@ router.post('/', async (req: AuthRequest, res) => {
       view_activity: true,
       manage_compliance: true,
       manage_statuses: true,
+      manage_findings: true,
       interact_with_aegis: true,
       trigger_fix: true,
       manage_aegis: true,

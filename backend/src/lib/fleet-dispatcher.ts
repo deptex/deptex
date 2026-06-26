@@ -241,7 +241,19 @@ export async function dispatchFleet(type: string = 'extraction'): Promise<FleetT
       (s, o) => s + Math.min(o.queued, Math.max(0, c.maxPerOrg - o.inflight)),
       0,
     );
-    const desired = Math.min(c.maxFleet, claimable);
+    // Busy machines (a job in `processing`) are consumed by their current scan
+    // and can't claim a queued one until they finish — and a slow or wedged job
+    // can hold a machine for many minutes. So size the fleet as "keep every busy
+    // machine running PLUS one machine per claimable queued job" instead of
+    // letting busy machines absorb the queued-job budget. Without the
+    // busyMachines term, a single occupied machine made desired == inflight and
+    // startN == 0, so a freshly-queued scan sat behind it (the ~9-min wait seen
+    // when the only machine was stuck on a hanging extraction). startN below
+    // still subtracts every starting/active machine, so machines already booting
+    // to drain the queue are never double-counted; and `claimable` already honors
+    // the per-org cap so this can't over-provision for jobs no machine may claim.
+    const busyMachines = runningIds.length;
+    const desired = Math.min(c.maxFleet, busyMachines + claimable);
 
     result.queued = queuedTotal;
     result.running = runningIds.length;
@@ -249,7 +261,7 @@ export async function dispatchFleet(type: string = 'extraction'): Promise<FleetT
     result.flyActive = flyActiveIds.length;
     result.inflight = inflight;
     result.desired = desired;
-    result.capped = desired >= c.maxFleet && claimable > c.maxFleet;
+    result.capped = busyMachines + claimable > c.maxFleet;
 
     // 7. Spend guard (read).
     let remainingByBudget = Number.POSITIVE_INFINITY;
