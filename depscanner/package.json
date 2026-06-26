@@ -44,6 +44,7 @@
     "test:finalize": "tsx test/finalize-extraction.test.ts",
     "test:findings-status": "tsx test/findings-status-migration-pglite.ts",
     "test:stats-counts": "tsx test/stats-counts-pglite.ts",
+    "test:security-summary-recompute": "tsx test/security-summary-recompute-pglite.ts",
     "test:rule-generation-step-pglite": "tsx test/rule-generation-step-pglite.test.ts",
     "test:dual-scope-pglite": "tsx test/dual-scope-attachment-pglite.test.ts",
     "test:few-shot-gate2": "tsx test/few-shot-roundtrip-gate2.ts",

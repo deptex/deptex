@@ -2127,6 +2127,19 @@ export async function runDastPipeline(
   // Step 6: atomic-commit via the target-scoped RPC.
   await commitDastTargetRun(supabase, target.id, dastRunId);
 
+  // Refresh the denormalized per-project overview summary. DAST runs as its own
+  // scan type (not through finalize), yet it folds into the band counts and flips
+  // cross-linked PDVs to reachability='confirmed', so the stored row would go stale
+  // after every DAST scan without this. Non-fatal: the scan already committed.
+  {
+    const { error: recomputeErr } = await supabase.rpc('recompute_project_summary', {
+      p_project_id: job.project_id,
+    });
+    if (recomputeErr) {
+      console.error(`${tag} recompute_project_summary failed: ${recomputeErr.message}`);
+    }
+  }
+
   // Step 6.1 (Phase 35 v1.1) — spec persistence + row update.
   //
   // Storage-first ordering: write the synthesized YAML to the bucket BEFORE

@@ -23,6 +23,7 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { checkProjectAccess, checkProjectManagePermission, checkOrgManageFindingsPermission } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { recomputeProjectSummary } from '../lib/security-summary';
 import {
   getConnectedProviders,
   listJiraProjects,
@@ -156,6 +157,7 @@ router.patch('/:id/projects/:projectId/iac-findings/:findingId/ignore', async (r
     if ((count ?? 0) === 0) {
       return res.status(404).json({ error: 'Finding not found' });
     }
+    await recomputeProjectSummary(projectId);
     res.json({ success: true, status: newStatus });
   } catch (error: any) {
     console.error('[scanner-findings] iac ignore error:', error);
@@ -205,6 +207,7 @@ router.patch('/:id/projects/:projectId/iac-findings/:findingId/risk-accept', asy
     if ((count ?? 0) === 0) {
       return res.status(404).json({ error: 'Finding not found' });
     }
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('[scanner-findings] iac risk-accept error:', error);
@@ -292,6 +295,7 @@ router.patch('/:id/projects/:projectId/container-findings/:findingId/ignore', as
     if ((count ?? 0) === 0) {
       return res.status(404).json({ error: 'Finding not found' });
     }
+    await recomputeProjectSummary(projectId);
     res.json({ success: true, status: newStatus });
   } catch (error: any) {
     console.error('[scanner-findings] container ignore error:', error);
@@ -341,6 +345,7 @@ router.patch('/:id/projects/:projectId/container-findings/:findingId/risk-accept
     if ((count ?? 0) === 0) {
       return res.status(404).json({ error: 'Finding not found' });
     }
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('[scanner-findings] container risk-accept error:', error);
@@ -567,6 +572,7 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
           .eq('group_key', findingKey);
         if (error) throw error;
       }
+      await recomputeProjectSummary(projectId);
       return res.json({ success: true, status, updated: 1 });
     }
     if (!cfg) return res.status(400).json({ error: `Unsupported finding type: ${type}` });
@@ -660,6 +666,7 @@ router.patch('/:id/projects/:projectId/findings/:type/:findingKey/status', async
       )
       .then(undefined, (e: any) => console.error('[finding-status] event log failed:', e?.message));
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true, status, updated: count });
   } catch (error: any) {
     console.error('[scanner-findings] finding status error:', error);

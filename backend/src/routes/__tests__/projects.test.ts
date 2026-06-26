@@ -902,4 +902,65 @@ describe('Project Routes', () => {
       expect(selectArgs.some((s: string) => s.includes('policy_result'))).toBe(false);
     });
   });
+
+  describe('PDV mutations recompute the denormalized summary', () => {
+    it('suppressing a vulnerability fires recompute_project_summary', async () => {
+      const projectId = 'proj-recompute-1';
+      // getActiveExtractionId reads projects.single.
+      pushTableResponse('projects', { data: { active_extraction_run_id: 'run-1' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/vulnerabilities/CVE-2024-1/suppress`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      // This is the #1 drift guard: the mutation MUST refresh the stored summary so the overview
+      // reflects the change on the next load.
+      expect(supabase.rpc).toHaveBeenCalledWith('recompute_project_summary', { p_project_id: projectId });
+    });
+  });
+
+  describe('GET /api/organizations/:id/security-summary reads the denormalized table', () => {
+    it('serves counts from project_security_summaries, not the live aggregation RPC', async () => {
+      const summaryRow = {
+        project_id: 'proj-a', organization_id: orgId, vuln_count: 10, critical_count: 2, reachable_count: 5,
+        worst_depscore: 88, band_critical: 2, band_high: 3, band_medium: 1, band_low: 0, ignored_count: 4,
+        semgrep_count: 1, secret_count: 0, verified_secret_count: 0, has_container: true, has_dast: false,
+        last_scan_at: '2026-06-01T00:00:00.000Z',
+      };
+      setTableResponse('projects', 'then', { data: [{ id: 'proj-a', name: 'Proj A', active_extraction_run_id: 'r1', infra_types: [] }], error: null });
+      setTableResponse('project_teams', 'then', { data: [{ project_id: 'proj-a', team_id: 'team-1', is_owner: true }], error: null });
+      setTableResponse('project_security_summaries', 'then', { data: [summaryRow], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/security-summary`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      const proj = res.body.projects.find((p: any) => p.project_id === 'proj-a');
+      expect(proj).toBeDefined();
+      expect(proj.vuln_count).toBe(10);
+      expect(proj.band_critical).toBe(2);
+      expect(proj.has_container).toBe(true);
+      expect(proj.last_scan_at).toBe('2026-06-01T00:00:00.000Z');
+      // The whole point of PR-B: the live 10-LATERAL aggregation RPC is no longer on the read path.
+      expect(supabase.rpc).not.toHaveBeenCalledWith('security_summary_counts', expect.anything());
+    });
+
+    it('lazily recomputes a project that has no stored summary row yet', async () => {
+      setTableResponse('projects', 'then', { data: [{ id: 'proj-new', name: 'New', active_extraction_run_id: 'r1', infra_types: [] }], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+      // No stored row → the lazy fallback must compute it on the spot.
+      setTableResponse('project_security_summaries', 'then', { data: [], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/security-summary`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(supabase.rpc).toHaveBeenCalledWith('recompute_project_summary', { p_project_id: 'proj-new' });
+    });
+  });
 });

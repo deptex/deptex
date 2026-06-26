@@ -1683,6 +1683,27 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   malicious_finding_id uuid,
   thread_id uuid
 );
+CREATE TABLE IF NOT EXISTS public.project_security_summaries (
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  active_extraction_run_id text,
+  vuln_count bigint NOT NULL DEFAULT 0,
+  critical_count bigint NOT NULL DEFAULT 0,
+  reachable_count bigint NOT NULL DEFAULT 0,
+  worst_depscore numeric NOT NULL DEFAULT 0,
+  band_critical bigint NOT NULL DEFAULT 0,
+  band_high bigint NOT NULL DEFAULT 0,
+  band_medium bigint NOT NULL DEFAULT 0,
+  band_low bigint NOT NULL DEFAULT 0,
+  ignored_count bigint NOT NULL DEFAULT 0,
+  semgrep_count bigint NOT NULL DEFAULT 0,
+  secret_count bigint NOT NULL DEFAULT 0,
+  verified_secret_count bigint NOT NULL DEFAULT 0,
+  has_container boolean NOT NULL DEFAULT false,
+  has_dast boolean NOT NULL DEFAULT false,
+  last_scan_at timestamp with time zone,
+  summary_updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_semgrep_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -5767,6 +5788,28 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.recompute_all_project_summaries(p_stale_before timestamp with time zone DEFAULT NULL::timestamp with time zone)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE r record; n integer := 0;
+BEGIN
+  FOR r IN
+    SELECT p.id
+    FROM projects p
+    LEFT JOIN project_security_summaries pss ON pss.project_id = p.id
+    WHERE p_stale_before IS NULL
+       OR pss.project_id IS NULL
+       OR pss.summary_updated_at < p_stale_before
+  LOOP
+    PERFORM recompute_project_summary(r.id);
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.recompute_dependency_is_malicious(p_dependency_ids uuid[])
  RETURNS void
  LANGUAGE plpgsql
@@ -5791,6 +5834,63 @@ BEGIN
     )
   )
   WHERE d.id = ANY(p_dependency_ids);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recompute_project_summary(p_project_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_org_id uuid;
+  v_run_id text;
+BEGIN
+  SELECT organization_id, active_extraction_run_id
+    INTO v_org_id, v_run_id
+    FROM projects WHERE id = p_project_id;
+  IF v_org_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO project_security_summaries AS pss (
+    project_id, organization_id, active_extraction_run_id,
+    vuln_count, critical_count, reachable_count, worst_depscore,
+    band_critical, band_high, band_medium, band_low, ignored_count,
+    semgrep_count, secret_count, verified_secret_count,
+    has_container, has_dast, last_scan_at, summary_updated_at
+  )
+  SELECT
+    p_project_id, v_org_id, v_run_id,
+    COALESCE(s.vuln_count, 0), COALESCE(s.critical_count, 0), COALESCE(s.reachable_count, 0),
+    COALESCE(s.worst_depscore, 0),
+    COALESCE(s.band_critical, 0), COALESCE(s.band_high, 0), COALESCE(s.band_medium, 0),
+    COALESCE(s.band_low, 0), COALESCE(s.ignored_count, 0),
+    COALESCE(s.semgrep_count, 0), COALESCE(s.secret_count, 0), COALESCE(s.verified_secret_count, 0),
+    COALESCE(s.has_container, false), COALESCE(s.has_dast, false), s.last_scan_at, now()
+  FROM security_summary_counts(
+         ARRAY[p_project_id]::uuid[],
+         CASE WHEN v_run_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[v_run_id] END
+       ) s
+  ON CONFLICT (project_id) DO UPDATE SET
+    organization_id          = EXCLUDED.organization_id,
+    active_extraction_run_id = EXCLUDED.active_extraction_run_id,
+    vuln_count               = EXCLUDED.vuln_count,
+    critical_count           = EXCLUDED.critical_count,
+    reachable_count          = EXCLUDED.reachable_count,
+    worst_depscore           = EXCLUDED.worst_depscore,
+    band_critical            = EXCLUDED.band_critical,
+    band_high                = EXCLUDED.band_high,
+    band_medium              = EXCLUDED.band_medium,
+    band_low                 = EXCLUDED.band_low,
+    ignored_count            = EXCLUDED.ignored_count,
+    semgrep_count            = EXCLUDED.semgrep_count,
+    secret_count             = EXCLUDED.secret_count,
+    verified_secret_count    = EXCLUDED.verified_secret_count,
+    has_container            = EXCLUDED.has_container,
+    has_dast                 = EXCLUDED.has_dast,
+    last_scan_at             = EXCLUDED.last_scan_at,
+    summary_updated_at       = now();
 END;
 $function$
 ;
@@ -7065,6 +7165,7 @@ ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_pkey
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_pkey PRIMARY KEY (project_id);
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
@@ -7510,6 +7611,8 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;

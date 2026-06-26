@@ -29,6 +29,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { recomputeProjectSummary } from '../lib/security-summary';
 import { toDataFlowFinding } from '../lib/code-flow-findings';
 import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
@@ -10445,6 +10446,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
       metadata: { suppressed_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error suppressing vulnerability:', error);
@@ -10485,6 +10487,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
       metadata: { unsuppressed_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error unsuppressing vulnerability:', error);
@@ -10561,6 +10564,7 @@ router.post('/:id/projects/:projectId/flow-suppressions', async (req: AuthReques
       .single();
     if (insertError) throw insertError;
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true, suppression: inserted });
   } catch (error: any) {
     console.error('Error creating flow suppression:', error);
@@ -10600,6 +10604,7 @@ router.delete('/:id/projects/:projectId/flow-suppressions/:hash', async (req: Au
       .eq('flow_signature_hash', flowSignatureHash);
     if (error) throw error;
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error deleting flow suppression:', error);
@@ -10649,6 +10654,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
       metadata: { accepted_by: userId, reason: reason ?? null },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error accepting risk:', error);
@@ -10694,6 +10700,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
       metadata: { unaccepted_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error revoking risk acceptance:', error);
@@ -10857,10 +10864,6 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
     }
 
     const projectIds = projects.map((p: any) => p.id);
-    // Phase 19: only include findings tagged with the project's currently active run
-    const activeRunIds = (projects as any[])
-      .map((p) => p.active_extraction_run_id)
-      .filter(Boolean) as string[];
 
     const { data: projectTeams } = await supabase
       .from('project_teams')
@@ -10872,15 +10875,33 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
     }
 
-    // All per-project finding counts + coverage flags are computed in SQL (no row transfer, no
-    // PostgREST 1000-row truncation). See backend/database/phase47_security_summary_counts_rpc.sql.
-    const { data: countRows, error: countsError } = await supabase.rpc('security_summary_counts', {
-      p_project_ids: projectIds,
-      p_active_run_ids: activeRunIds,
-    });
+    // Read the denormalized per-project summaries (phase64) — a single indexed PK SELECT instead
+    // of re-running the 10-LATERAL security_summary_counts aggregation live on every overview load.
+    // The rows are kept fresh by recompute hooks at finalize + every finding mutation, backed by a
+    // daily self-heal cron. Columns mirror the RPC output, so the result.map below is unchanged.
+    const { data: summaryRows, error: countsError } = await supabase
+      .from('project_security_summaries')
+      .select('*')
+      .in('project_id', projectIds);
     if (countsError) throw countsError;
     const countsByProject = new Map<string, any>();
-    for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
+    for (const c of summaryRows ?? []) countsByProject.set(c.project_id, c);
+
+    // Lazy fallback: a project with no stored row yet (brand-new, or before the one-time post-deploy
+    // backfill runs) is computed on the spot so the overview is never wrong. Stale rows are handled
+    // by the recompute hooks + the daily cron, so this path stays rare (and a zero-finding project
+    // stores a zero row, self-healing after one load).
+    const missing = projectIds.filter((pid: string) => !countsByProject.has(pid));
+    if (missing.length) {
+      await Promise.allSettled(
+        missing.map((pid: string) => supabase.rpc('recompute_project_summary', { p_project_id: pid })),
+      );
+      const { data: filled } = await supabase
+        .from('project_security_summaries')
+        .select('*')
+        .in('project_id', missing);
+      for (const c of filled ?? []) countsByProject.set(c.project_id, c);
+    }
 
     // Primary linked repository per project (provider logo + repo name) — one row per project,
     // bounded by project count, so a plain select is fine here.
@@ -11469,7 +11490,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       supabase.rpc('project_stats_counts', { p_project_id: projectId, p_active_run_id: activeRunId }).then(r => r.data?.[0] ?? null),
       supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
       supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('verified', true),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('is_verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('scan_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
       supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),

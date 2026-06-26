@@ -1888,20 +1888,30 @@ router.get('/:id/teams/:teamId/security-summary', async (req: AuthRequest, res) 
       .eq('organization_id', id)  // defense-in-depth: the team's linked projects must belong to this org (service-role bypasses RLS)
       .in('id', projectIds);
 
-    // Phase 19: only include findings tagged with each project's currently active run
-    const activeRunIds = (projects ?? [])
-      .map((p: any) => p.active_extraction_run_id)
-      .filter(Boolean) as string[];
-
-    // Per-project counts computed in SQL (no PostgREST 1000-row truncation).
-    // See backend/database/phase47_security_summary_counts_rpc.sql.
-    const { data: countRows, error: countsError } = await supabase.rpc('security_summary_counts', {
-      p_project_ids: projectIds,
-      p_active_run_ids: activeRunIds,
-    });
+    // Read the denormalized per-project summaries (phase64) — one indexed PK SELECT instead of
+    // re-running the 10-LATERAL security_summary_counts aggregation live. Kept fresh by recompute
+    // hooks + the daily self-heal cron; columns mirror the RPC output, so result.map is unchanged.
+    const { data: summaryRows, error: countsError } = await supabase
+      .from('project_security_summaries')
+      .select('*')
+      .in('project_id', projectIds);
     if (countsError) throw countsError;
     const countsByProject = new Map<string, any>();
-    for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
+    for (const c of summaryRows ?? []) countsByProject.set(c.project_id, c);
+
+    // Lazy fallback: compute any not-yet-populated project's row on the spot (brand-new project, or
+    // before the post-deploy backfill). Stale rows are handled by the hooks + cron, so this is rare.
+    const missing = projectIds.filter((pid: string) => !countsByProject.has(pid));
+    if (missing.length) {
+      await Promise.allSettled(
+        missing.map((pid: string) => supabase.rpc('recompute_project_summary', { p_project_id: pid })),
+      );
+      const { data: filled } = await supabase
+        .from('project_security_summaries')
+        .select('*')
+        .in('project_id', missing);
+      for (const c of filled ?? []) countsByProject.set(c.project_id, c);
+    }
 
     // Primary linked repository per project (provider logo + repo name) — one row per project.
     const { data: repoRows } = await supabase

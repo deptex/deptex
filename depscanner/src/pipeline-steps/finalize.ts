@@ -155,5 +155,19 @@ export async function doFinalize(
     }
   }
 
+  // Refresh the denormalized per-project overview summary now that finalize has
+  // committed this scan's findings and flipped the active-run pointer (and, when
+  // status is 'ready', marked the job 'completed' so last_scan_at is current).
+  // Reuses the same security_summary_counts the overview reads. Single call —
+  // malicious_scan runs before finalize under this run, so its counts are
+  // already included. Non-fatal: the scan succeeded; the daily self-heal cron
+  // backstops any failure.
+  const { error: recomputeErr } = await supabase.rpc('recompute_project_summary', {
+    p_project_id: projectId,
+  });
+  if (recomputeErr) {
+    await log.error('finalize', `recompute_project_summary failed: ${recomputeErr.message}`);
+  }
+
   return finalizeSummary;
 }
