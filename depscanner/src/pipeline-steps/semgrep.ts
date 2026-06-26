@@ -17,7 +17,64 @@ import { logStepError, classifyError } from '../with-timeout';
 import { ScanFailedError } from '../scan-errors';
 import { calculateSemgrepDepscore } from '../depscore';
 import { binaryAvailable, INSTALL_HINTS } from '../pipeline-helpers';
+import { isPureClientSpa } from '../taint-engine/runner';
 import type { PipelineContext } from '../pipeline-types';
+
+/**
+ * Noise filter for known low-signal `p/default` audit rules. Matched by
+ * substring against the Semgrep `check_id` (rule_id) so a rule's full
+ * namespace prefix doesn't have to be spelled out.
+ *
+ * - `drop`: the finding is discarded entirely (never persisted). Reserved for
+ *   audit rules that carry no real signal on JS/TS, e.g. the printf
+ *   format-string check — JavaScript has no printf format-string semantics, so
+ *   it only ever fires on plain template literals (`console.error(`…${x}`, e)`).
+ * - `downrank`: the finding is kept but forced to the lowest severity tier so
+ *   it drops out of the default WARNING view. Reserved for notoriously noisy
+ *   audit rules that occasionally matter, e.g. non-literal-RegExp (ReDoS),
+ *   which fires on ANY `new RegExp(variable)` even when the value is a fixed
+ *   literal/enum.
+ */
+const SEMGREP_NOISE_RULES: { drop: string[]; downrank: string[] } = {
+  drop: ['unsafe-formatstring'],
+  downrank: ['detect-non-literal-regexp'],
+};
+
+/**
+ * Semgrep rules that are pure noise on a CLIENT-SIDE SPA (react / vue / svelte /
+ * angular / …). Each targets a server-runtime construct or a self-DoS-only issue
+ * that cannot be a real exploit once the code ships to a browser:
+ *   - detect-non-literal-regexp        — ReDoS only hangs the user's OWN tab
+ *     (self-DoS), never a shared server thread; CWE-1333 is a server concern.
+ *   - detect-non-literal-fs-filename   — Node `fs`; no filesystem in a browser.
+ *   - detect-child-process             — Node `child_process`; N/A in a browser.
+ *   - detect-non-literal-require       — Node dynamic `require`; bundled SPAs
+ *     resolve imports statically at build time.
+ *   - detect-no-csrf-before-method-override — Express CSRF middleware; server-only.
+ * Applied ONLY when the project's framework is a pure client SPA (isPureClientSpa);
+ * server / SSR projects keep every rule. Matched by substring against the rule_id,
+ * same as SEMGREP_NOISE_RULES.
+ *
+ * ▶ This is the place to silence future frontend-irrelevant Semgrep rules: add
+ *   the rule-id substring here and a client SPA stops showing it. (For rules that
+ *   are noise on EVERY project regardless of framework, use SEMGREP_NOISE_RULES
+ *   above instead.)
+ */
+const SEMGREP_CLIENT_SPA_DROP_RULES: string[] = [
+  'detect-non-literal-regexp',
+  'detect-non-literal-fs-filename',
+  'detect-child-process',
+  'detect-non-literal-require',
+  'detect-no-csrf-before-method-override',
+];
+
+// Lowest/least-severe tier the rest of this step uses (the same value the
+// mapping falls back to when a finding carries no severity). Downranked
+// findings are pinned here so they leave the default WARNING view.
+const SEMGREP_INFO_SEVERITY = 'INFO';
+
+const matchesNoiseRule = (checkId: string, patterns: string[]): boolean =>
+  patterns.some((p) => checkId.includes(p));
 
 export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
@@ -43,6 +100,23 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
       });
     }
     throw new ScanFailedError(msg);
+  }
+
+  // Client-SPA noise scoping: on a pure browser SPA, the server-runtime /
+  // self-DoS rules in SEMGREP_CLIENT_SPA_DROP_RULES carry no real signal. Read
+  // the project framework once up front. Best-effort — on any read failure the
+  // scoping stays off and every rule applies (server-safe default).
+  let isClientSpaProject = false;
+  try {
+    const { data: projFw } = await supabase
+      .from('projects')
+      .select('framework')
+      .eq('id', projectId)
+      .maybeSingle();
+    const fw = (projFw as { framework?: string | null } | null)?.framework;
+    isClientSpaProject = fw ? isPureClientSpa([fw]) : false;
+  } catch {
+    // non-fatal — scoping just stays off
   }
 
   await log.info('semgrep', 'Running static code analysis...');
@@ -178,13 +252,28 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
               // `const app = express()` line (the absence has no real line to flag).
               // INFO severity, high false-positive rate, zero reachability signal.
               .filter((r: any) => !(r.check_id ?? '').includes('express-check-'))
+              // Drop tier of the noise filter (SEMGREP_NOISE_RULES.drop): audit
+              // rules with no real signal on JS/TS. unsafe-formatstring (CWE-134)
+              // fires on plain template literals — JS has no printf semantics.
+              .filter((r: any) => !matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.drop))
+              // Client-SPA scope: drop server-runtime / self-DoS rules that
+              // cannot be a real exploit in a browser bundle (ReDoS self-DoS,
+              // Node fs/child_process/require, Express CSRF). Server/SSR
+              // projects keep them all.
+              .filter((r: any) => !(isClientSpaProject && matchesNoiseRule(r.check_id ?? '', SEMGREP_CLIENT_SPA_DROP_RULES)))
               // Filter out generated/report files
               .filter((r: any) => {
                 const p = r.path ?? '';
                 return !p.includes('depscan-reports/') && !p.includes('node_modules/');
               })
               .map((r: any) => {
-                const severity = r.extra?.severity ?? 'INFO';
+                // Downrank tier of the noise filter (SEMGREP_NOISE_RULES.downrank):
+                // keep the finding but pin it to the lowest severity so it drops out
+                // of the default WARNING view. detect-non-literal-regexp (ReDoS) fires
+                // on any new RegExp(variable), including fixed literals/enums.
+                const severity = matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.downrank)
+                  ? SEMGREP_INFO_SEVERITY
+                  : r.extra?.severity ?? 'INFO';
                 // Semgrep rule authors emit metadata.cwe / metadata.owasp as
                 // either a string (e.g. "CWE-79") or an array depending on the
                 // rule. The DB column is text[] and depscore calls .some() on
@@ -248,6 +337,25 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
                   depscore: calculateSemgrepDepscore({ severity, cweIds, category, importance }),
                 };
               });
+            // Surface how much the noise filter trimmed/demoted from the raw
+            // results so the choice is auditable in the step log.
+            const rawResults: any[] = semgrepParsed.results;
+            const droppedNoise = rawResults.filter((r) =>
+              matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.drop)).length;
+            const downrankedNoise = rawResults.filter((r) =>
+              matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.downrank)).length;
+            const droppedClientSpa = isClientSpaProject
+              ? rawResults.filter((r) =>
+                  matchesNoiseRule(r.check_id ?? '', SEMGREP_CLIENT_SPA_DROP_RULES)).length
+              : 0;
+            if (droppedNoise > 0 || downrankedNoise > 0 || droppedClientSpa > 0) {
+              await log.info(
+                'semgrep',
+                `Noise filter: dropped ${droppedNoise}, downranked ${downrankedNoise}` +
+                  (droppedClientSpa > 0 ? `, dropped ${droppedClientSpa} client-SPA-irrelevant` : '') +
+                  ` low-signal finding(s)`,
+              );
+            }
             for (let i = 0; i < findings.length; i += 100) {
               await supabase.from('project_semgrep_findings').upsert(findings.slice(i, i + 100), {
                 onConflict: 'project_id,rule_id,file_path,start_line,extraction_run_id',

@@ -320,6 +320,24 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
       cveSinkPatterns.set(sink.osv_id, patterns);
     }
   }
+  // Detected framework(s) for client-SPA scoping. A pure browser SPA
+  // (framework=react/vue/…) has no server request boundary, so the engine
+  // drops server application-framework specs + server-only vuln classes to
+  // avoid the false-positive storm those produce on client code. Best-effort:
+  // a missing/unknown framework leaves scoping off (full load-all behavior).
+  let projectFrameworks: string[] | undefined;
+  try {
+    const { data: projRow } = await supabase
+      .from('projects')
+      .select('framework')
+      .eq('id', projectId)
+      .maybeSingle();
+    const fw = (projRow as { framework?: string | null } | null)?.framework;
+    if (fw && fw.trim()) projectFrameworks = [fw.trim()];
+  } catch {
+    // non-fatal — scoping just stays off
+  }
+
   try {
     const engineResult = await withTimeout(
       async (signal) => runTaintEngine({
@@ -328,6 +346,7 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         signal,
         onWarn: (m) => { void log.warn('taint_engine', m); },
         cveSpecs: cveSpecResult.specs,
+        projectFrameworks,
         fpFilter: {
           storage: supabase,
           organizationId,

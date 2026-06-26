@@ -7266,6 +7266,7 @@ CREATE INDEX idx_pbir_current_digest ON public.project_base_image_recommendation
 CREATE INDEX idx_pbir_project_active ON public.project_base_image_recommendations USING btree (project_id) WHERE (is_dismissed = false);
 CREATE INDEX idx_pc_high_signal ON public.package_capabilities USING btree (package_name, ecosystem) WHERE ((eval_dynamic = true) OR (network_io = true) OR (spawns_processes = true));
 CREATE INDEX idx_pc_lookup ON public.package_capabilities USING btree (package_name, version, ecosystem);
+CREATE INDEX idx_pcf_carryforward ON public.project_container_findings USING btree (project_id, extraction_run_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);

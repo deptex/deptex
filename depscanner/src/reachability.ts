@@ -466,6 +466,17 @@ export interface UpdateReachabilityOptions {
    * Undefined defaults to the legacy `!isDirect`-only gate.
    */
   ecosystem?: string;
+  /**
+   * True when the project is a pure client-side SPA (React/Vue/… bundled to a
+   * browser artifact). A bundler ships the project's ENTIRE production
+   * dependency graph, so a prod/unknown-scope dep's vulnerable module is loaded
+   * even when no first-party file imports it directly (e.g. dompurify pulled in
+   * by monaco-editor, react-router under react-router-dom). For such projects we
+   * reserve `unreachable` for dev/build-only deps (not bundled) and floor every
+   * prod/unknown dep at `module`. Undefined / false → unchanged server-project
+   * behavior.
+   */
+  isClientSpaProject?: boolean;
 }
 
 /**
@@ -1142,6 +1153,13 @@ export async function updateReachabilityLevels(
         const EXPLICIT_IMPORT_ECOSYSTEMS = new Set(['composer', 'pypi', 'npm']);
         const allowDirectDemotion =
           !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
+        // Client-SPA bundling floor: a browser bundle ships the whole prod
+        // dependency graph, so `files_importing_count === 0` is NOT evidence
+        // of unreachability for a prod/unknown-scope dep — its vulnerable
+        // module is bundled and loaded (dompurify-via-monaco, react-router).
+        // Only dev/build-only deps (not bundled) may stay `unreachable` here.
+        const clientSpaBundledProdDep =
+          !!options.isClientSpaProject && !!meta && (meta.scope ?? null) !== 'dev';
         const heuristicUnreachable =
           graphTrusted &&
           importAnalysisRan &&
@@ -1150,7 +1168,8 @@ export async function updateReachabilityLevels(
           meta.filesImporting === 0 &&
           !isFrameworkEmbeddedRuntime(depName) &&
           !isFrameworkRuntimePackage(depName) &&
-          !callgraphReachedThisDep;
+          !callgraphReachedThisDep &&
+          !clientSpaBundledProdDep;
         if (heuristicUnreachable) {
           level = 'unreachable';
           // A directly-declared dep with zero importers reads differently from a

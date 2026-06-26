@@ -22,6 +22,7 @@
 
 import { logStepError, classifyError } from '../with-timeout';
 import { updateReachabilityLevels, computeImportCountsFromUsageSlices } from '../reachability';
+import { isPureClientSpa } from '../taint-engine/runner';
 import {
   calculateBaseDepscoreNoReachability,
   calculateDepscore,
@@ -106,12 +107,30 @@ export async function doReachabilityAndEpd(
   // tree-sitter's usage_slices (non-Java) or atom's slices + usages
   // (Java). files_importing_count is authoritative from the tree-sitter
   // storage write for non-Java; for Java we recompute from atom output.
+  // Client-SPA bundling floor: on a pure browser SPA the bundler ships the
+  // entire prod dependency graph, so a prod/unknown-scope dep is loaded even
+  // with zero first-party imports. Lets the classifier keep `unreachable` for
+  // dev/build-only deps while flooring prod deps at `module`. Best-effort.
+  let isClientSpaProject = false;
+  try {
+    const { data: projFw } = await supabase
+      .from('projects')
+      .select('framework')
+      .eq('id', projectId)
+      .maybeSingle();
+    const fw = (projFw as { framework?: string | null } | null)?.framework;
+    isClientSpaProject = fw ? isPureClientSpa([fw]) : false;
+  } catch {
+    // non-fatal — floor just stays off
+  }
+
   await updateReachabilityLevels(projectId, runId, supabase, log, workspaceRoot, {
     validOsvIds,
     organizationId,
     astParsedSuccessfully,
     graphTrusted,
     cveSinkPatterns,
+    isClientSpaProject,
     // v3 precision: dep names the callgraph confirmed are reached. The
     // classifier's heuristicUnreachable branch AND-clauses with
     // `!usedTransitives.has(depName)` to demote called-but-not-imported

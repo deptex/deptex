@@ -770,6 +770,19 @@ function aggregateFlows(stateById: Map<FunctionId, FunctionState>, maxPathLength
     for (const hit of state.sinkHits) {
       const flow = sinkHitToFlow(hit, state.funcNode, maxPathLength);
       if (seen.has(flow.id)) continue;
+      // Drop degenerate self-referential "flows": a single node that is both
+      // entry and sink at the same coordinates (flow_length ≤ 1 with the entry
+      // and sink on the same file:line). There is no propagation here — it's a
+      // method-name match firing on its own call site (e.g. a local `verify()`
+      // matched as an auth-bypass sink). A real flow has ≥2 hops or a distinct
+      // source location.
+      if (
+        flow.flow_length <= 1 &&
+        flow.entry_point_file === flow.sink_file &&
+        flow.entry_point_line === flow.sink_line
+      ) {
+        continue;
+      }
       seen.add(flow.id);
       out.push(flow);
     }

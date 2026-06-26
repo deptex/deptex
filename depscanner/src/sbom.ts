@@ -44,6 +44,18 @@ export interface ParsedSbomDep {
    * `environment` column, never written back into `source`.
    */
   devScoped: boolean;
+  /**
+   * npm-only fallback signal: true when the npm lockfile (`package-lock.json`)
+   * marks this package `"dev": true`. cdxgen's edge-graph dev propagation
+   * (`devScoped` pass 2) is fragile and frequently leaves a transitive-of-dev
+   * package un-scoped — but npm's lockfile records the resolved dev flag on
+   * every package directly. `deps-sync` consults this only when `environment`
+   * would otherwise resolve to `null`, so it never downgrades an already-'dev'
+   * dep. Set by `patchDevDependencies` for the npm ecosystem; left undefined
+   * for every other ecosystem (their lockfiles are read by their own
+   * resolvers, not here).
+   */
+  lockfileDev?: boolean;
   bomRef: string;
 }
 
@@ -322,6 +334,29 @@ export function patchDevDependencies(
     }
   }
 
+  // npm lockfile-dev fallback capture (npm only). cdxgen's edge-graph dev
+  // propagation below (pass 2) is fragile — on real frontends it routinely
+  // leaves build/test-only transitives (rollup, esbuild, @babel/core, ajv,
+  // js-yaml, brace-expansion, …) un-scoped. npm's own lockfile records the
+  // resolved `"dev": true` flag on every package, so stamp `lockfileDev` from
+  // it and let `deps-sync` use it as the `environment === null` fallback.
+  // Only marks dev-only packages true; never clears a flag, so it can't
+  // un-scope anything pass 1/2 already caught.
+  if (ecosystem === 'npm') {
+    const lockfileDevKeys = collectNpmLockfileDevSet(repoRoot);
+    if (lockfileDevKeys.size > 0) {
+      for (const dep of deps) {
+        // Key on both `name@version` (exact resolved package) and bare `name`
+        // (npm v3 nests by path, so a transitive may not match the version we
+        // see — bare-name still pins dev-only packages correctly because npm
+        // only records `dev: true` when the package is dev-only everywhere).
+        if (lockfileDevKeys.has(`${dep.name}@${dep.version}`) || lockfileDevKeys.has(dep.name)) {
+          dep.lockfileDev = true;
+        }
+      }
+    }
+  }
+
   // Pass 2 — transitive dev-only propagation. A transitive dependency that is
   // reachable in the cdxgen dependency graph only via devDependency roots —
   // never via a production root — is itself dev-only. Skipped when the graph
@@ -421,6 +456,78 @@ function collectNpmDevDeps(repoRoot: string, devNames: Set<string>): void {
       for (const name of Object.keys(pkg.devDependencies)) devNames.add(name);
     }
   } catch { /* no package.json or parse error */ }
+}
+
+/**
+ * Build the set of npm packages the lockfile marks dev-only, for the
+ * `lockfileDev` fallback. cdxgen's transitive dev propagation is fragile; the
+ * lockfile is authoritative. Returns keys in both `name@version` and bare
+ * `name` form so callers can match either.
+ *
+ * Handles both lockfile shapes:
+ *   - npm v2/v3 (`lockfileVersion` 2/3): `packages` keyed by install path
+ *     (`""` is the root, `"node_modules/<name>"` / nested), each carrying a
+ *     resolved `dev: true` flag. We derive the package name from the last
+ *     `node_modules/` path segment and read `version` off the entry.
+ *   - npm v1 (`lockfileVersion` 1): `dependencies` keyed by bare name, each
+ *     with `dev: true` + `version` (recurse into nested `dependencies`).
+ *
+ * npm sets `dev: true` only when a package is reachable *exclusively* through
+ * devDependencies — exactly the scope we want — so a bare-name match is safe.
+ */
+function collectNpmLockfileDevSet(repoRoot: string): Set<string> {
+  const devKeys = new Set<string>();
+  const lockPath = path.join(repoRoot, 'package-lock.json');
+  let lock: {
+    packages?: Record<string, { dev?: boolean; version?: string }>;
+    dependencies?: Record<string, NpmV1LockEntry>;
+  };
+  try {
+    lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  } catch {
+    // No lockfile (or unparseable) — nothing to fall back on. The transitive
+    // dev propagation in patchDevDependencies still runs.
+    return devKeys;
+  }
+
+  // npm v2/v3: `packages` map keyed by install path.
+  if (lock.packages && typeof lock.packages === 'object') {
+    for (const [pkgPath, entry] of Object.entries(lock.packages)) {
+      if (!entry || entry.dev !== true) continue;
+      // Path is `node_modules/<name>` (possibly nested,
+      // `node_modules/a/node_modules/b`); the package name is everything after
+      // the last `node_modules/` segment. The root entry (`""`) has no name.
+      const idx = pkgPath.lastIndexOf('node_modules/');
+      if (idx === -1) continue;
+      const name = pkgPath.slice(idx + 'node_modules/'.length);
+      if (!name) continue;
+      devKeys.add(name);
+      if (entry.version) devKeys.add(`${name}@${entry.version}`);
+    }
+  }
+
+  // npm v1: nested `dependencies` map keyed by bare name.
+  if (lock.dependencies && typeof lock.dependencies === 'object') {
+    const walk = (deps: Record<string, NpmV1LockEntry>) => {
+      for (const [name, entry] of Object.entries(deps)) {
+        if (!entry) continue;
+        if (entry.dev === true) {
+          devKeys.add(name);
+          if (entry.version) devKeys.add(`${name}@${entry.version}`);
+        }
+        if (entry.dependencies) walk(entry.dependencies);
+      }
+    };
+    walk(lock.dependencies);
+  }
+
+  return devKeys;
+}
+
+interface NpmV1LockEntry {
+  dev?: boolean;
+  version?: string;
+  dependencies?: Record<string, NpmV1LockEntry>;
 }
 
 function collectPypiDevDeps(repoRoot: string, devNames: Set<string>): void {

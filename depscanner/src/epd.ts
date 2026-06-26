@@ -1397,23 +1397,37 @@ ${sourceContext || 'none'}`;
     // BYOK is gone, so the heuristic path is now uniform.)
     let finalEpdStatus: EpdStatus = aggregated.epd_status;
     if (aggregated.epd_status === 'no_flows_evaluated') {
-      const heuristicTag = dependencyId ? flowByDependencyId.get(dependencyId)?.tag ?? null : null;
-      const heuristic = classifyFallbackEntryPoint(heuristicTag);
-      const factor = reachabilityStatus === 'reachable'
-        ? calculateEpdFactor(heuristic.weight, aggregated.epd_depth ?? 0, false, DEFAULT_ALPHA)
-        : 0;
-      const contextual = reachabilityStatus === 'reachable'
-        ? Number((baseScore * factor).toFixed(4))
-        : 0;
-      aggregated = {
-        ...aggregated,
-        entry_point_classification: heuristic.classification,
-        entry_point_weight: heuristic.weight,
-        is_sanitized: false,
-        epd_factor: Number(factor.toFixed(6)),
-        contextual_depscore: contextual,
-      };
-      finalEpdStatus = 'fallback_no_ai';
+      if (reachabilityStatus === 'reachable') {
+        const heuristicTag = dependencyId ? flowByDependencyId.get(dependencyId)?.tag ?? null : null;
+        const heuristic = classifyFallbackEntryPoint(heuristicTag);
+        const factor = calculateEpdFactor(heuristic.weight, aggregated.epd_depth ?? 0, false, DEFAULT_ALPHA);
+        const contextual = Number((baseScore * factor).toFixed(4));
+        aggregated = {
+          ...aggregated,
+          entry_point_classification: heuristic.classification,
+          entry_point_weight: heuristic.weight,
+          is_sanitized: false,
+          epd_factor: Number(factor.toFixed(6)),
+          contextual_depscore: contextual,
+        };
+        finalEpdStatus = 'fallback_no_ai';
+      } else {
+        // Unreachable dep with no flows: no entry-point analysis actually ran,
+        // so a heuristic classification (AUTH_INTERNAL) would be misleading.
+        // Drop to the neutral UNKNOWN class with zero weight and leave the
+        // impact at 0. Keep the honest `no_flows_evaluated` status rather than
+        // tagging fallback_no_ai — the heuristic fallback was never applied
+        // here. (`AggregatedEpd.entry_point_classification` is non-nullable;
+        // UNKNOWN is its purpose-built "not classified" member.)
+        aggregated = {
+          ...aggregated,
+          entry_point_classification: 'UNKNOWN',
+          entry_point_weight: 0,
+          is_sanitized: false,
+          epd_factor: 0,
+          contextual_depscore: 0,
+        };
+      }
     }
 
     updates.push({
