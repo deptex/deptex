@@ -116,6 +116,36 @@ export function SpecimenFrame({
 }
 
 /* ------------------------------------------------------------------ */
+/* FocalArtifact — lifts a real-component card off a faded backdrop.    */
+/* The sanctioned green glow behind it (ties to the hero's emerald      */
+/* stage light) + an elevation shadow + a hairline top highlight, so    */
+/* the focal card reads as clearly in front of the texture. Shared by   */
+/* Verified (flow card) and Aegis (chat card) so the two sibling        */
+/* sections rhyme. The child keeps its own border + raised surface.     */
+/* ------------------------------------------------------------------ */
+export function FocalArtifact({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      {/* sanctioned green halo, behind the card — only bleeds past the edges */}
+      <div
+        className="glow-green left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-70"
+        aria-hidden
+      />
+      {/* elevation + hairline top-light, drawn at the card's own radius */}
+      <div className="relative rounded-xl shadow-[0_28px_80px_-24px_rgba(0,0,0,0.95)] ring-1 ring-white/[0.07]">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* RepoLink — GitHub deep link that degrades to a plain mono path      */
 /* when the repo is private (pre-flight blocker #1 fallback).          */
 /* ------------------------------------------------------------------ */
