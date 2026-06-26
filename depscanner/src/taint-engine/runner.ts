@@ -54,6 +54,7 @@ import {
 } from './cost-cap';
 import type { Storage } from '../storage';
 import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from '../ai-telemetry';
+import { runEngineCoreInWorker } from './engine-worker-host';
 
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
@@ -127,6 +128,19 @@ export interface RunEngineOptions {
    * behavior (so the validation harness + CLI are unaffected).
    */
   projectFrameworks?: string[];
+  /**
+   * Called on a fixed interval while the engine core runs off-thread, with
+   * elapsed ms. The pipeline wires this to pulse the worker heartbeat + emit a
+   * progress log so a legitimately long callgraph build is never mistaken for a
+   * stall and reaped. No-op in the inline (dev/CLI) path.
+   */
+  onKeepAlive?: (elapsedMs: number) => Promise<void> | void;
+  /**
+   * Hard wall-clock budget for the engine core (ms). Overrides the
+   * DEPTEX_TAINT_ENGINE_TIMEOUT_MS env / default. Generous by design — a big
+   * repo's build runs this long before it's treated as wedged.
+   */
+  timeoutMs?: number;
 }
 
 /** Map an SBOM-style ecosystem identifier to the framework spec language. */
@@ -314,7 +328,61 @@ export interface RunEngineResult {
 
 const FRAMEWORK_MODELS_DIR = path.resolve(__dirname, 'framework-models');
 
-export async function runEngine(options: RunEngineOptions): Promise<RunEngineResult> {
+// ---------------------------------------------------------------------------
+// Engine core (IO-free) vs. full engine (core + AI fp-filter)
+//
+// runEngineCore does the pure CPU + filesystem work: load specs, build the
+// callgraph, run forward-propagation, run the non-taint detectors, and apply
+// client-SPA scoping. It touches NO database / network / Redis and every value
+// it returns is structured-cloneable — so it is the unit we run inside a
+// worker_thread (see engine-worker-host.ts) to keep the heavy, SYNCHRONOUS
+// TS-compiler callgraph build off the main event loop. A blocked loop freezes
+// the worker heartbeat → the backend reaps a still-working scan; that was the
+// production bug bricking every large TS/Node scan (e.g. the Deptex backend).
+//
+// runEngine() runs the core (off-thread in the Fly worker, inline in dev/CLI/
+// tests) and then the AI fp-filter — the one IO stage — on the main thread,
+// where it has the Storage handle + cost-cap Redis.
+// ---------------------------------------------------------------------------
+
+/** Default engine wall-clock budget. Generous: a big repo's callgraph build is
+ *  allowed to run this long before it's treated as wedged. Env-tunable via
+ *  DEPTEX_TAINT_ENGINE_TIMEOUT_MS; sits under the worker's 2h absolute job cap. */
+const DEFAULT_ENGINE_TIMEOUT_MS = 30 * 60_000;
+
+function engineTimeoutMs(override?: number): number {
+  if (override && override > 0) return override;
+  const raw = process.env.DEPTEX_TAINT_ENGINE_TIMEOUT_MS;
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_ENGINE_TIMEOUT_MS;
+}
+
+export interface RunEngineCoreOptions {
+  workspaceRoot: string;
+  ecosystem?: RunEngineOptions['ecosystem'];
+  maxIterations?: number;
+  signal?: AbortSignal;
+  onWarn?: (msg: string) => void;
+  cveSpecs?: FrameworkSpec[];
+  projectFrameworks?: string[];
+}
+
+export interface EngineCoreResult {
+  ran: boolean;
+  skippedReason: string | null;
+  frameworksLoaded: string[];
+  /** Engine output; null when ran=false. Structured-cloneable across threads. */
+  propagation: PropagateResult | null;
+  /** Non-taint detector findings (post client-SPA class filter), pre fp-filter. */
+  detectorFlows: Flow[];
+  /** Language-filtered + client-SPA-scoped specs that produced the flows —
+   *  returned so the main-thread fp-filter sees the exact spec set. */
+  specs: FrameworkSpec[];
+  loadedOsvIds: Set<string>;
+  loadedCveSinkPatterns: Map<string, string[]>;
+}
+
+export async function runEngineCore(options: RunEngineCoreOptions): Promise<EngineCoreResult> {
   const { workspaceRoot, onWarn } = options;
   const language = ecosystemToLanguage(options.ecosystem);
 
@@ -391,9 +459,8 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
       skippedReason: `no framework specs for language=${language}`,
       frameworksLoaded: [],
       propagation: null,
-      flowsAfterFilter: null,
-      aiFilter: null,
       detectorFlows: [],
+      specs: [],
       loadedOsvIds,
       loadedCveSinkPatterns,
     };
@@ -502,6 +569,61 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     }
   }
 
+  return {
+    ran: true,
+    skippedReason: null,
+    frameworksLoaded,
+    propagation,
+    detectorFlows: detectorFlowsRaw,
+    specs,
+    loadedOsvIds,
+    loadedCveSinkPatterns,
+  };
+}
+
+export async function runEngine(options: RunEngineOptions): Promise<RunEngineResult> {
+  const { workspaceRoot, onWarn } = options;
+
+  const coreOptions: RunEngineCoreOptions = {
+    workspaceRoot: options.workspaceRoot,
+    ecosystem: options.ecosystem,
+    maxIterations: options.maxIterations,
+    signal: options.signal,
+    onWarn,
+    cveSpecs: options.cveSpecs,
+    projectFrameworks: options.projectFrameworks,
+  };
+
+  // Run the CPU-bound core OFF the main event loop in the Fly worker, so a
+  // multi-minute callgraph build on a large repo can't freeze the heartbeat and
+  // get the scan reaped (see engine-worker-host.ts). Inline fallback in
+  // dev/CLI/tests. onKeepAlive pulses the heartbeat + a progress log while the
+  // build runs so a legitimately slow build is allowed to finish.
+  const core = await runEngineCoreInWorker(coreOptions, {
+    timeoutMs: engineTimeoutMs(options.timeoutMs),
+    onKeepAlive: options.onKeepAlive,
+    onWarn,
+    inlineFallback: () => runEngineCore(coreOptions),
+  });
+
+  if (!core.ran || !core.propagation) {
+    return {
+      ran: false,
+      skippedReason: core.skippedReason,
+      frameworksLoaded: core.frameworksLoaded,
+      propagation: null,
+      flowsAfterFilter: null,
+      aiFilter: null,
+      detectorFlows: [],
+      loadedOsvIds: core.loadedOsvIds,
+      loadedCveSinkPatterns: core.loadedCveSinkPatterns,
+    };
+  }
+
+  const propagation = core.propagation;
+  const specs = core.specs;
+  const detectorFlowsRaw = core.detectorFlows;
+
   // Default: filter inactive, all flows pass through.
   let flowsAfterFilter: Flow[] = propagation.flows;
   let detectorFlows: Flow[] = detectorFlowsRaw;
@@ -528,7 +650,7 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
   return {
     ran: true,
     skippedReason: null,
-    frameworksLoaded,
+    frameworksLoaded: core.frameworksLoaded,
     propagation,
     flowsAfterFilter,
     aiFilter,
@@ -537,8 +659,8 @@ export async function runEngine(options: RunEngineOptions): Promise<RunEngineRes
     // For other languages this is undefined until their per-language
     // extractor lands (T3.2-Python / -Go / -Rust / -Java follow-ups).
     usedDependencies: lowercaseSet(propagation.callgraph.usedDependencies),
-    loadedOsvIds,
-    loadedCveSinkPatterns,
+    loadedOsvIds: core.loadedOsvIds,
+    loadedCveSinkPatterns: core.loadedCveSinkPatterns,
   };
 }
 
