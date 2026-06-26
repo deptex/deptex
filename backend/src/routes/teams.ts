@@ -2008,16 +2008,23 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
     let vulnTotals = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
     let topVulns: any[] = [];
     let syncingCount = 0;
+    // SLA aggregates over the team's PDV rows (computed alongside the vuln counts below).
+    let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
 
     if (projectIds.length > 0) {
-      const [vulnsResult, syncResult] = await Promise.all([
+      const n = (x: any) => Number(x ?? 0);
+      // SQL-aggregate counts (phase64b) replace the old full-table fetch + JS counting, which
+      // silently truncated at PostgREST's 1000-row cap once a team had >1000 vulns. team_stats_counts
+      // returns the vuln bands (over suppressed=false) AND the SLA bands (over ALL rows, matching the
+      // old pdvSla fetch which did not filter suppressed). team_top_vulns returns the top-5 osv with
+      // SQL-side dedup + affected-project counts (also previously derived from the truncated array).
+      const [statsRow, topRowsResult, syncResult] = await Promise.all([
         activeRunIds.length > 0
-          ? supabase.from('project_dependency_vulnerabilities')
-              .select('severity, depscore, project_id, osv_id')
-              .in('project_id', projectIds)
-              .in('extraction_run_id', activeRunIds)
-              .eq('suppressed', false)
-          : Promise.resolve({ data: [] as any[] }),
+          ? supabase.rpc('team_stats_counts', { p_project_ids: projectIds, p_active_run_ids: activeRunIds }).then((r: any) => r.data?.[0] ?? null)
+          : Promise.resolve(null),
+        activeRunIds.length > 0
+          ? supabase.rpc('team_top_vulns', { p_project_ids: projectIds, p_active_run_ids: activeRunIds }).then((r: any) => r.data ?? [])
+          : Promise.resolve([] as any[]),
         supabase.from('scan_jobs')
           .select('id', { count: 'exact', head: true })
           .in('project_id', projectIds)
@@ -2026,52 +2033,46 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
       ]);
 
       syncingCount = (syncResult as any).count ?? 0;
-      const vulns = vulnsResult.data ?? [];
 
-      for (const v of vulns) {
-        vulnTotals.total++;
-        if (v.severity === 'critical') vulnTotals.critical++;
-        else if (v.severity === 'high') vulnTotals.high++;
-        else if (v.severity === 'medium') vulnTotals.medium++;
-        else if (v.severity === 'low') vulnTotals.low++;
-      }
+      vulnTotals = {
+        total: n(statsRow?.vuln_total),
+        critical: n(statsRow?.vuln_critical),
+        high: n(statsRow?.vuln_high),
+        medium: n(statsRow?.vuln_medium),
+        low: n(statsRow?.vuln_low),
+      };
 
-      // Top 5 vulns
-      const byDepscore = [...vulns].filter((v: any) => v.severity === 'critical' || v.severity === 'high');
-      byDepscore.sort((a: any, b: any) => (b.depscore ?? 0) - (a.depscore ?? 0));
-      const seen = new Set<string>();
-      const topRaw: any[] = [];
-      for (const r of byDepscore) {
-        if (!r.osv_id || seen.has(r.osv_id)) continue;
-        seen.add(r.osv_id);
-        topRaw.push(r);
-        if (topRaw.length >= 5) break;
-      }
+      const slaMet = n(statsRow?.sla_met);
+      const slaResolvedLate = n(statsRow?.sla_resolved_late);
+      const slaTotalResolved = slaMet + slaResolvedLate;
+      slaAgg = {
+        compliance_percent: slaTotalResolved > 0 ? Math.round((slaMet / slaTotalResolved) * 100) : 100,
+        on_track: n(statsRow?.sla_on_track),
+        warning: n(statsRow?.sla_warning),
+        breached: n(statsRow?.sla_breached),
+        exempt: n(statsRow?.sla_exempt),
+        met: slaMet,
+        resolved_late: slaResolvedLate,
+      };
 
-      if (topRaw.length > 0) {
+      const topRows = (topRowsResult ?? []) as any[];
+      if (topRows.length > 0) {
         const { data: vulnDetails } = await supabase
           .from('dependency_vulnerabilities')
           .select('osv_id, summary, severity')
-          .in('osv_id', topRaw.map((r: any) => r.osv_id));
+          .in('osv_id', topRows.map((r: any) => r.osv_id));
         const detailMap = new Map((vulnDetails ?? []).map((d: any) => [d.osv_id, d]));
         const projectNameMap = new Map(projects.map((p: any) => [p.id, p.name]));
 
-        const affectedCounts = new Map<string, Set<string>>();
-        for (const v of vulns) {
-          if (!v.osv_id) continue;
-          if (!affectedCounts.has(v.osv_id)) affectedCounts.set(v.osv_id, new Set());
-          affectedCounts.get(v.osv_id)!.add(v.project_id);
-        }
-
-        topVulns = topRaw.map((r: any) => {
+        topVulns = topRows.map((r: any) => {
           const detail = detailMap.get(r.osv_id);
           return {
             osv_id: r.osv_id,
             summary: detail?.summary ?? '',
             severity: detail?.severity ?? r.severity,
-            depscore: r.depscore ?? 0,
-            affected_project_count: affectedCounts.get(r.osv_id)?.size ?? 1,
-            worst_project: { id: r.project_id, name: projectNameMap.get(r.project_id) ?? 'Unknown' },
+            depscore: Number(r.depscore ?? 0),
+            affected_project_count: n(r.affected_project_count) || 1,
+            worst_project: { id: r.worst_project_id, name: projectNameMap.get(r.worst_project_id) ?? 'Unknown' },
           };
         });
       }
@@ -2108,28 +2109,7 @@ router.get('/:id/teams/:teamId/stats', async (req: AuthRequest, res) => {
       depsTotalCount = count ?? 0;
     }
 
-    // SLA aggregates (team's projects)
-    let slaAgg = { compliance_percent: 100, on_track: 0, warning: 0, breached: 0, exempt: 0, met: 0, resolved_late: 0 };
-    if (projectIds.length > 0 && activeRunIds.length > 0) {
-      const { data: pdvSla } = await supabase
-        .from('project_dependency_vulnerabilities')
-        .select('sla_status')
-        .in('project_id', projectIds)
-        .in('extraction_run_id', activeRunIds);
-      const list = pdvSla ?? [];
-      const met = list.filter((p: any) => p.sla_status === 'met').length;
-      const resolvedLate = list.filter((p: any) => p.sla_status === 'resolved_late').length;
-      const totalResolved = met + resolvedLate;
-      slaAgg = {
-        compliance_percent: totalResolved > 0 ? Math.round((met / totalResolved) * 100) : 100,
-        on_track: list.filter((p: any) => p.sla_status === 'on_track').length,
-        warning: list.filter((p: any) => p.sla_status === 'warning').length,
-        breached: list.filter((p: any) => p.sla_status === 'breached').length,
-        exempt: list.filter((p: any) => p.sla_status === 'exempt').length,
-        met,
-        resolved_late: resolvedLate,
-      };
-    }
+    // (SLA aggregates are computed above via team_stats_counts — see slaAgg.)
 
     const result = {
       projects: { total: projects.length, healthy, at_risk: atRisk, critical, syncing_count: syncingCount },

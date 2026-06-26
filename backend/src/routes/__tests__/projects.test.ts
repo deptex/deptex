@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../../index';
-import { supabase, queryBuilder, setTableResponse, pushTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
+import { supabase, queryBuilder, setTableResponse, pushTableResponse, setRpcResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 jest.mock('../../lib/activities', () => ({
@@ -865,6 +865,41 @@ describe('Project Routes', () => {
         .set('Authorization', `Bearer ${mockToken}`);
 
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('GET /api/organizations/:id/projects/:projectId/stats (truncation guard)', () => {
+    it('drives counts from the project_stats_counts RPC, never an unbounded row fetch', async () => {
+      const projectId = 'proj-stats-1';
+      setTableResponse('projects', 'maybeSingle', { data: { organization_id: orgId }, error: null });
+      // projects.single is consumed twice in order: getActiveExtractionId, then the projectRow lookup.
+      pushTableResponse('projects', { data: { active_extraction_run_id: 'run-1' }, error: null });
+      pushTableResponse('projects', { data: { health_score: 90, status_id: null, importance: 1.0 }, error: null });
+      // No direct deps → the bounded graph-severity fetch is skipped.
+      setTableResponse('project_dependencies', 'then', { data: [], error: null });
+      // bigint columns arrive as strings over JSON — assert the handler coerces them.
+      setRpcResponse('project_stats_counts', { data: [{
+        vuln_total: '1500', vuln_critical: '40', vuln_high: '60', vuln_medium: '900', vuln_low: '500', reachable_count: '120',
+        sla_on_track: '0', sla_warning: '0', sla_breached: '0', sla_exempt: '0', sla_met: '0', sla_resolved_late: '0',
+        deps_total: '1200', deps_direct: '10', deps_transitive: '1190', deps_outdated: '4',
+        deps_compliant: '8', deps_failing: '2', deps_vulnerable: '37',
+      }], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/projects/${projectId}/stats`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(supabase.rpc).toHaveBeenCalledWith('project_stats_counts', { p_project_id: projectId, p_active_run_id: 'run-1' });
+      expect(res.body.vulnerabilities.total).toBe(1500);
+      expect(res.body.vulnerabilities.critical).toBe(40);
+      expect(res.body.dependencies.total).toBe(1200);
+      expect(res.body.dependencies.transitive).toBe(1190);
+      // Regression guard: the old code fetched every pdv/dep row and counted in JS, truncating at
+      // PostgREST's 1000-row cap. Neither old unbounded-select signature may reappear.
+      const selectArgs = queryBuilder.select.mock.calls.map((c: any[]) => String(c[0] ?? ''));
+      expect(selectArgs.some((s: string) => s.includes('sla_status'))).toBe(false);
+      expect(selectArgs.some((s: string) => s.includes('policy_result'))).toBe(false);
     });
   });
 });

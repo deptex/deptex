@@ -11448,11 +11448,11 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     if (cached) return res.json(cached);
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+    const activeRunId = activeExtractionId ?? '__no_active_run__';
 
     const [
       projectRow,
-      depsRows,
-      vulnRows,
+      statsResult,
       semgrepResult,
       secretResult,
       verifiedSecretResult,
@@ -11460,17 +11460,23 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       lastFailedJob,
       maliciousResult,
       latestJobMaliciousStatus,
+      depNames,
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
-      supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
-      supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).then(r => r.data ?? []),
-      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
+      // SQL-aggregate vuln + dep counts (phase64b). Replaces the old client-side counting of the
+      // full project_dependency_vulnerabilities + project_dependencies row sets, which silently
+      // truncated at PostgREST's 1000-row cap for any project with >1000 vulns or deps.
+      supabase.rpc('project_stats_counts', { p_project_id: projectId, p_active_run_id: activeRunId }).then(r => r.data?.[0] ?? null),
+      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('scan_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
-      supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
+      supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
       supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
+      // The 30 direct deps shown in the graph (names). Worst-severity per dep is fetched below,
+      // scoped to just these deps, so the graph never re-introduces an unbounded fetch.
+      supabase.from('project_dependencies').select('id, dependency_id, dependencies!inner(name)').eq('project_id', projectId).eq('is_direct', true).is('removed_at', null).limit(30).then(r => r.data ?? []),
     ]);
 
     // Status lookup
@@ -11481,26 +11487,31 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     }
     const importance: number = typeof (projectRow as any)?.importance === 'number' ? (projectRow as any).importance : 1.0;
 
+    // All vuln + dep counts come from the SQL aggregate (phase64b). bigint columns arrive as
+    // strings over JSON → coerce with Number(). Defensive ?? 0 covers an RPC error (null row).
+    const n = (x: any) => Number(x ?? 0);
+
     // Compliance
-    const compliant = depsRows.filter((d: any) => d.policy_result?.allowed === true).length;
-    const failing = depsRows.filter((d: any) => d.policy_result?.allowed === false).length;
-    const notEvaluated = depsRows.length - compliant - failing;
-    const compliancePercent = depsRows.length > 0 ? Math.round((compliant / depsRows.length) * 100) : 100;
+    const depsTotal = n(statsResult?.deps_total);
+    const compliant = n(statsResult?.deps_compliant);
+    const failing = n(statsResult?.deps_failing);
+    const notEvaluated = depsTotal - compliant - failing;
+    const compliancePercent = depsTotal > 0 ? Math.round((compliant / depsTotal) * 100) : 100;
 
     // Vulnerabilities
-    const vulnCritical = vulnRows.filter((v: any) => v.severity === 'critical').length;
-    const vulnHigh = vulnRows.filter((v: any) => v.severity === 'high').length;
-    const vulnMedium = vulnRows.filter((v: any) => v.severity === 'medium').length;
-    const vulnLow = vulnRows.filter((v: any) => v.severity === 'low').length;
-    const reachableCount = vulnRows.filter((v: any) => v.is_reachable).length;
+    const vulnTotal = n(statsResult?.vuln_total);
+    const vulnCritical = n(statsResult?.vuln_critical);
+    const vulnHigh = n(statsResult?.vuln_high);
+    const vulnMedium = n(statsResult?.vuln_medium);
+    const vulnLow = n(statsResult?.vuln_low);
+    const reachableCount = n(statsResult?.reachable_count);
 
     // Dependencies
-    const directDeps = depsRows.filter((d: any) => d.is_direct === true);
-    const transitiveDeps = depsRows.filter((d: any) => d.is_direct === false);
-    const outdated = depsRows.filter((d: any) => d.is_outdated === true).length;
-    const vulnerableDepIds = new Set(vulnRows.map((v: any) => v.project_dependency_id));
-    const vulnerable = vulnerableDepIds.size;
-    const healthy = depsRows.length - vulnerable;
+    const directCount = n(statsResult?.deps_direct);
+    const transitiveCount = n(statsResult?.deps_transitive);
+    const outdated = n(statsResult?.deps_outdated);
+    const vulnerable = n(statsResult?.deps_vulnerable);
+    const healthy = depsTotal - vulnerable;
 
     // Action items
     const actionItems: any[] = [];
@@ -11537,25 +11548,25 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       });
     }
 
-    // Graph deps — direct deps with worst severity
-    const directDepIds = directDeps.map((d: any) => d.id);
-    const depIdToDepRow = new Map(depsRows.map((d: any) => [d.id, d]));
-
-    const { data: depNames } = await supabase
-      .from('project_dependencies')
-      .select('id, dependency_id, dependencies!inner(name)')
-      .eq('project_id', projectId)
-      .eq('is_direct', true)
-      .is('removed_at', null)
-      .limit(30);
-
+    // Graph deps — the 30 direct deps (fetched above) with their worst severity. Worst severity is
+    // derived from a fetch SCOPED to just those 30 deps, so it's bounded and never truncates.
     const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    const directDepRowIds = (depNames ?? []).map((d: any) => d.id);
     const vulnByPd = new Map<string, string>();
-    for (const v of vulnRows) {
-      const curr = vulnByPd.get(v.project_dependency_id) ?? 'none';
-      const newSev = v.severity ?? 'none';
-      if ((severityRank[newSev] ?? 0) > (severityRank[curr] ?? 0)) {
-        vulnByPd.set(v.project_dependency_id, newSev);
+    if (directDepRowIds.length > 0) {
+      const { data: directVulns } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('project_dependency_id, severity')
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId)
+        .eq('suppressed', false)
+        .in('project_dependency_id', directDepRowIds);
+      for (const v of directVulns ?? []) {
+        const curr = vulnByPd.get(v.project_dependency_id) ?? 'none';
+        const newSev = v.severity ?? 'none';
+        if ((severityRank[newSev] ?? 0) > (severityRank[curr] ?? 0)) {
+          vulnByPd.set(v.project_dependency_id, newSev);
+        }
       }
     }
 
@@ -11565,13 +11576,13 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       worst_severity: vulnByPd.get(d.id) ?? 'none',
     }));
 
-    // SLA aggregates
-    const slaOnTrack = vulnRows.filter((v: any) => v.sla_status === 'on_track').length;
-    const slaWarning = vulnRows.filter((v: any) => v.sla_status === 'warning').length;
-    const slaBreached = vulnRows.filter((v: any) => v.sla_status === 'breached').length;
-    const slaExempt = vulnRows.filter((v: any) => v.sla_status === 'exempt').length;
-    const slaMet = vulnRows.filter((v: any) => v.sla_status === 'met').length;
-    const slaResolvedLate = vulnRows.filter((v: any) => v.sla_status === 'resolved_late').length;
+    // SLA aggregates (from the SQL aggregate)
+    const slaOnTrack = n(statsResult?.sla_on_track);
+    const slaWarning = n(statsResult?.sla_warning);
+    const slaBreached = n(statsResult?.sla_breached);
+    const slaExempt = n(statsResult?.sla_exempt);
+    const slaMet = n(statsResult?.sla_met);
+    const slaResolvedLate = n(statsResult?.sla_resolved_late);
     const slaTotalResolved = slaMet + slaResolvedLate;
     const slaCompliancePercent = slaTotalResolved > 0 ? Math.round((slaMet / slaTotalResolved) * 100) : 100;
 
@@ -11596,8 +11607,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       health_score: projectRow?.health_score ?? 0,
       status,
       importance,
-      compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
-      vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
+      compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsTotal },
+      vulnerabilities: { total: vulnTotal, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
       malicious_packages: {
         total: maliciousTotal,
@@ -11606,7 +11617,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
         medium: maliciousMedium,
         scan_status: maliciousScanStatus,
       },
-      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated, healthy, vulnerable },
+      dependencies: { total: depsTotal, direct: directCount, transitive: transitiveCount, outdated, healthy, vulnerable },
       sync: {
         status: repoRow?.status ?? 'not_connected',
         extraction_step: repoRow?.extraction_step ?? null,

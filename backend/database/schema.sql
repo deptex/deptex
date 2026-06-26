@@ -5309,6 +5309,48 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.project_stats_counts(p_project_id uuid, p_active_run_id text)
+ RETURNS TABLE(vuln_total bigint, vuln_critical bigint, vuln_high bigint, vuln_medium bigint, vuln_low bigint, reachable_count bigint, sla_on_track bigint, sla_warning bigint, sla_breached bigint, sla_exempt bigint, sla_met bigint, sla_resolved_late bigint, deps_total bigint, deps_direct bigint, deps_transitive bigint, deps_outdated bigint, deps_compliant bigint, deps_failing bigint, deps_vulnerable bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    v.vuln_total, v.vuln_critical, v.vuln_high, v.vuln_medium, v.vuln_low, v.reachable_count,
+    v.sla_on_track, v.sla_warning, v.sla_breached, v.sla_exempt, v.sla_met, v.sla_resolved_late,
+    d.deps_total, d.deps_direct, d.deps_transitive, d.deps_outdated,
+    d.deps_compliant, d.deps_failing, v.deps_vulnerable
+  FROM (
+    SELECT
+      count(*) FILTER (WHERE NOT suppressed) AS vuln_total,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'critical') AS vuln_critical,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'high') AS vuln_high,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'medium') AS vuln_medium,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'low') AS vuln_low,
+      count(*) FILTER (WHERE NOT suppressed AND is_reachable) AS reachable_count,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'on_track') AS sla_on_track,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'warning') AS sla_warning,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'breached') AS sla_breached,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'exempt') AS sla_exempt,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'met') AS sla_met,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'resolved_late') AS sla_resolved_late,
+      count(DISTINCT project_dependency_id) FILTER (WHERE NOT suppressed) AS deps_vulnerable
+    FROM project_dependency_vulnerabilities
+    WHERE project_id = p_project_id AND extraction_run_id = p_active_run_id
+  ) v
+  CROSS JOIN (
+    SELECT
+      count(*) AS deps_total,
+      count(*) FILTER (WHERE is_direct) AS deps_direct,
+      count(*) FILTER (WHERE NOT is_direct) AS deps_transitive,
+      count(*) FILTER (WHERE is_outdated) AS deps_outdated,
+      count(*) FILTER (WHERE policy_result->'allowed' = 'true'::jsonb) AS deps_compliant,
+      count(*) FILTER (WHERE policy_result->'allowed' = 'false'::jsonb) AS deps_failing
+    FROM project_dependencies
+    WHERE project_id = p_project_id AND removed_at IS NULL
+  ) d;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.queue_fix_job(p_project_id uuid, p_organization_id uuid, p_fix_type text, p_strategy text, p_triggered_by uuid, p_osv_id text DEFAULT NULL::text, p_dependency_id uuid DEFAULT NULL::uuid, p_project_dependency_id uuid DEFAULT NULL::uuid, p_semgrep_finding_id uuid DEFAULT NULL::uuid, p_secret_finding_id uuid DEFAULT NULL::uuid, p_target_version text DEFAULT NULL::text, p_payload jsonb DEFAULT '{}'::jsonb)
  RETURNS uuid
  LANGUAGE plpgsql
@@ -6298,6 +6340,62 @@ CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$subvector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.team_stats_counts(p_project_ids uuid[], p_active_run_ids text[])
+ RETURNS TABLE(vuln_total bigint, vuln_critical bigint, vuln_high bigint, vuln_medium bigint, vuln_low bigint, sla_on_track bigint, sla_warning bigint, sla_breached bigint, sla_exempt bigint, sla_met bigint, sla_resolved_late bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    count(*) FILTER (WHERE NOT suppressed) AS vuln_total,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'critical') AS vuln_critical,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'high') AS vuln_high,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'medium') AS vuln_medium,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'low') AS vuln_low,
+    count(*) FILTER (WHERE sla_status = 'on_track') AS sla_on_track,
+    count(*) FILTER (WHERE sla_status = 'warning') AS sla_warning,
+    count(*) FILTER (WHERE sla_status = 'breached') AS sla_breached,
+    count(*) FILTER (WHERE sla_status = 'exempt') AS sla_exempt,
+    count(*) FILTER (WHERE sla_status = 'met') AS sla_met,
+    count(*) FILTER (WHERE sla_status = 'resolved_late') AS sla_resolved_late
+  FROM project_dependency_vulnerabilities
+  WHERE project_id = ANY(p_project_ids)
+    AND extraction_run_id = ANY(p_active_run_ids);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.team_top_vulns(p_project_ids uuid[], p_active_run_ids text[])
+ RETURNS TABLE(osv_id text, depscore numeric, severity text, worst_project_id uuid, affected_project_count bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  WITH team_vulns AS (
+    SELECT project_id, osv_id, severity, depscore
+    FROM project_dependency_vulnerabilities
+    WHERE project_id = ANY(p_project_ids)
+      AND extraction_run_id = ANY(p_active_run_ids)
+      AND suppressed = false
+      AND osv_id IS NOT NULL
+  ),
+  affected AS (
+    SELECT osv_id AS oid, count(DISTINCT project_id) AS affected_project_count
+    FROM team_vulns
+    GROUP BY osv_id
+  ),
+  ranked AS (
+    SELECT tv.osv_id, tv.severity, tv.depscore, tv.project_id,
+           row_number() OVER (PARTITION BY tv.osv_id ORDER BY tv.depscore DESC NULLS LAST) AS rn
+    FROM team_vulns tv
+    WHERE tv.severity IN ('critical', 'high')
+  )
+  SELECT r.osv_id, r.depscore, r.severity, r.project_id AS worst_project_id, a.affected_project_count
+  FROM ranked r
+  JOIN affected a ON a.oid = r.osv_id
+  WHERE r.rn = 1
+  ORDER BY r.depscore DESC NULLS LAST
+  LIMIT 5;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.trg_container_finding_status()
