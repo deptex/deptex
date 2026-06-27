@@ -119,25 +119,17 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check if user is a member
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Membership + the caller's org-role permissions in ONE parallel hop (fetch the org's roles
+    // alongside the membership and pick the caller's in JS, instead of a second sequential round-trip).
+    const [membershipRes, orgRolesRes] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_roles').select('name, permissions').eq('organization_id', id),
+    ]);
+    const membership = membershipRes.data;
+    if (membershipRes.error || !membership) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    // Get user's organization role permissions
-    const { data: orgRole } = await supabase
-      .from('organization_roles')
-      .select('permissions')
-      .eq('organization_id', id)
-      .eq('name', membership.role)
-      .single();
+    const orgRole = (orgRolesRes.data ?? []).find((r: any) => r.name === membership.role) ?? null;
 
     const canViewAllTeams = membership.role === 'owner' || orgRole?.permissions?.manage_teams_and_projects === true;
 
@@ -177,118 +169,112 @@ router.get('/:id/teams', async (req: AuthRequest, res) => {
       teams = data;
     }
 
-    // Get member counts, project counts, and user roles for each team
-    const teamsWithCounts = await Promise.all(
-      (teams || []).map(async (team) => {
-        const { count: memberCount } = await supabase
-          .from('team_members')
-          .select('*', { count: 'exact', head: true })
-          .eq('team_id', team.id);
+    // Member counts, project counts, and the caller's team roles — previously an N+1 (3-4 queries
+    // PER team). Bulk-load all of it in ONE parallel batch scoped to the org's team set, then resolve
+    // every per-team row in JS. (Each saved round-trip is ~100ms against the prod DB from local dev.)
+    const teamIds = (teams || []).map((t: any) => t.id);
+    const [teamMembersRes, teamProjectLinksRes, teamRolesRes] = await Promise.all([
+      teamIds.length > 0
+        ? supabase.from('team_members').select('team_id, user_id, role_id').in('team_id', teamIds)
+        : Promise.resolve({ data: [] as any[] }),
+      teamIds.length > 0
+        ? supabase.from('project_teams').select('team_id').in('team_id', teamIds)
+        : Promise.resolve({ data: [] as any[] }),
+      teamIds.length > 0
+        ? supabase.from('team_roles').select('id, team_id, name, display_name, color, permissions, display_order').in('team_id', teamIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
 
-        const { count: projectCount } = await supabase
-          .from('project_teams')
-          .select('*', { count: 'exact', head: true })
-          .eq('team_id', team.id);
+    const allTeamMembers = (teamMembersRes as any).data ?? [];
+    const allProjectLinks = (teamProjectLinksRes as any).data ?? [];
+    const allTeamRoles = (teamRolesRes as any).data ?? [];
 
-        // Get user's team membership with role
-        const { data: teamMembership } = await supabase
-          .from('team_members')
-          .select('role_id')
-          .eq('team_id', team.id)
-          .eq('user_id', userId)
-          .single();
+    const memberCountByTeam = new Map<string, number>();
+    const myMembershipByTeam = new Map<string, { role_id: string | null }>();
+    for (const tm of allTeamMembers) {
+      memberCountByTeam.set(tm.team_id, (memberCountByTeam.get(tm.team_id) ?? 0) + 1);
+      if (tm.user_id === userId) myMembershipByTeam.set(tm.team_id, { role_id: tm.role_id ?? null });
+    }
+    const projectCountByTeam = new Map<string, number>();
+    for (const pl of allProjectLinks) projectCountByTeam.set(pl.team_id, (projectCountByTeam.get(pl.team_id) ?? 0) + 1);
+    const roleById = new Map<string, any>();
+    const memberRoleByTeam = new Map<string, any>();
+    for (const r of allTeamRoles) {
+      roleById.set(r.id, r);
+      if (r.name === 'member') memberRoleByTeam.set(r.team_id, r);
+    }
 
-        let userRole = 'member';
-        let userRoleDisplayName = 'Member';
-        let userRoleColor = null;
-        let userRank: number | null = null;
-        let userPermissions = {
+    const teamsWithCounts = (teams || []).map((team: any) => {
+      const memberCount = memberCountByTeam.get(team.id) ?? 0;
+      const projectCount = projectCountByTeam.get(team.id) ?? 0;
+      const teamMembership = myMembershipByTeam.get(team.id) ?? null;
+
+      let userRole: string | null = 'member';
+      let userRoleDisplayName: string | null = 'Member';
+      let userRoleColor: string | null = null;
+      let userRank: number | null = null;
+      let userPermissions: Record<string, boolean> = {
+        view_overview: true,
+        manage_projects: false,
+        manage_members: false,
+        view_settings: false,
+        view_roles: false,
+        edit_roles: false,
+        manage_notification_settings: false,
+      };
+
+      if (teamMembership?.role_id) {
+        const role = roleById.get(teamMembership.role_id);
+        if (role) {
+          userRole = role.name;
+          userRoleDisplayName = role.display_name || role.name.charAt(0).toUpperCase() + role.name.slice(1);
+          userRoleColor = role.color;
+          userRank = role.display_order;
+          userPermissions = { ...userPermissions, ...(role.permissions || {}), view_overview: true };
+        }
+      } else if (teamMembership) {
+        // Team member with no role_id → fall back to the team's 'member' role.
+        const memberRole = memberRoleByTeam.get(team.id);
+        if (memberRole) {
+          userRole = memberRole.name;
+          userRoleDisplayName = memberRole.display_name || 'Member';
+          userRoleColor = memberRole.color;
+          userRank = memberRole.display_order;
+          userPermissions = { ...userPermissions, ...(memberRole.permissions || {}), view_overview: true };
+        }
+      }
+
+      // Org owners / users with manage_teams_and_projects get all team permissions and rank 0.
+      if (membership.role === 'owner' || canViewAllTeams) {
+        userPermissions = {
           view_overview: true,
-          manage_projects: false,
-          manage_members: false,
-          view_settings: false,
-          view_roles: false,
-          edit_roles: false,
-          manage_notification_settings: false,
+          manage_projects: true,
+          manage_members: true,
+          view_settings: true,
+          view_roles: true,
+          edit_roles: true,
+          manage_notification_settings: true,
         };
-
-        // If user has a team membership with a role, get role details
-        if (teamMembership?.role_id) {
-          const { data: role } = await supabase
-            .from('team_roles')
-            .select('name, display_name, color, permissions, display_order')
-            .eq('id', teamMembership.role_id)
-            .single();
-
-          if (role) {
-            userRole = role.name;
-            userRoleDisplayName = role.display_name || role.name.charAt(0).toUpperCase() + role.name.slice(1);
-            userRoleColor = role.color;
-            userRank = role.display_order;
-            // Merge permissions but always ensure view_overview is true (everyone can view overview)
-            userPermissions = {
-              ...userPermissions,
-              ...(role.permissions || {}),
-              view_overview: true, // Always allow viewing overview
-            };
-          }
-        } else if (teamMembership) {
-          // User is a team member but without role_id, look up the member role for this team
-          const { data: memberRole } = await supabase
-            .from('team_roles')
-            .select('name, display_name, color, permissions, display_order')
-            .eq('team_id', team.id)
-            .eq('name', 'member')
-            .single();
-
-          if (memberRole) {
-            userRole = memberRole.name;
-            userRoleDisplayName = memberRole.display_name || 'Member';
-            userRoleColor = memberRole.color;
-            userRank = memberRole.display_order;
-            // Merge permissions but always ensure view_overview is true
-            userPermissions = {
-              ...userPermissions,
-              ...(memberRole.permissions || {}),
-              view_overview: true,
-            };
-          }
+        userRank = 0;
+        // Not a team member but has org-level access → no role badge; team members keep theirs.
+        if (!teamMembership?.role_id) {
+          userRole = null;
+          userRoleDisplayName = null;
+          userRoleColor = null;
         }
+      }
 
-        // Org owners OR users with manage_teams_and_projects permission get all permissions on teams
-        if (membership.role === 'owner' || canViewAllTeams) {
-          userPermissions = {
-            view_overview: true,
-            manage_projects: true,
-            manage_members: true,
-            view_settings: true,
-            view_roles: true,
-            edit_roles: true,
-            manage_notification_settings: true,
-          };
-          // Org admins/owners have effective rank of 0 (highest) for team role management
-          userRank = 0;
-          // If user is NOT a team member but has org-level access, don't show a role badge
-          // But if they ARE a team member, preserve their team role badge
-          if (!teamMembership?.role_id) {
-            userRole = null as any;
-            userRoleDisplayName = null as any;
-            userRoleColor = null;
-          }
-        }
-
-        return {
-          ...team,
-          member_count: memberCount || 0,
-          project_count: projectCount || 0,
-          role: userRole,
-          role_display_name: userRoleDisplayName,
-          role_color: userRoleColor,
-          user_rank: userRank,
-          permissions: userPermissions,
-        };
-      })
-    );
+      return {
+        ...team,
+        member_count: memberCount,
+        project_count: projectCount,
+        role: userRole,
+        role_display_name: userRoleDisplayName,
+        role_color: userRoleColor,
+        user_rank: userRank,
+        permissions: userPermissions,
+      };
+    });
 
     res.json(teamsWithCounts);
   } catch (error: any) {

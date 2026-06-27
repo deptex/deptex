@@ -391,72 +391,44 @@ router.get('/:id/members', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check if user is a member
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
+    // Members + teams (with their memberships embedded) + org roles in ONE parallel batch. The
+    // all-members fetch doubles as the access check (the caller must appear in it), so there's no
+    // separate membership round-trip; team memberships are embedded under teams, so there's no
+    // separate team_members hop. Collapses five sequential round-trips to one.
+    const [membersRes, orgTeamsRes, orgRolesRes] = await Promise.all([
+      supabase.from('organization_members').select('user_id, role, created_at').eq('organization_id', id).order('created_at', { ascending: false }),
+      supabase.from('teams').select('id, name, team_members(user_id)').eq('organization_id', id),
+      supabase.from('organization_roles').select('name, display_order, display_name, color').eq('organization_id', id),
+    ]);
 
-    if (membershipError || !membership) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
-    }
-
-    // Get all members
-    const { data: members, error: membersError } = await supabase
-      .from('organization_members')
-      .select('user_id, role, created_at')
-      .eq('organization_id', id)
-      .order('created_at', { ascending: false });
-
-    if (membersError) {
-      throw membersError;
-    }
-
+    if (membersRes.error) throw membersRes.error;
+    const members = membersRes.data;
     if (!members || members.length === 0) {
       return res.json([]);
     }
+    // Access check: the caller must be a member of this org (service role bypasses RLS).
+    if (!members.some((m: any) => m.user_id === userId)) {
+      return res.status(404).json({ error: 'Organization not found or access denied' });
+    }
 
-    // Get all teams for this organization
-    const { data: orgTeams } = await supabase
-      .from('teams')
-      .select('id, name')
-      .eq('organization_id', id);
-
-    // Get all team memberships for this organization
-    const teamIds = (orgTeams || []).map(t => t.id);
-    const { data: allTeamMembers } = teamIds.length > 0 ? await supabase
-      .from('team_members')
-      .select('user_id, team_id, teams!inner(id, name)')
-      .in('team_id', teamIds) : { data: [] };
-
-    // Create a map of user_id -> teams
+    // user_id -> the teams they belong to (built from the embedded team_members).
     const userTeamsMap = new Map<string, Array<{ id: string; name: string }>>();
-    (allTeamMembers || []).forEach((tm: any) => {
-      if (!userTeamsMap.has(tm.user_id)) {
-        userTeamsMap.set(tm.user_id, []);
+    for (const t of ((orgTeamsRes.data ?? []) as any[])) {
+      for (const tm of (t.team_members ?? [])) {
+        if (!userTeamsMap.has(tm.user_id)) userTeamsMap.set(tm.user_id, []);
+        userTeamsMap.get(tm.user_id)!.push({ id: t.id, name: t.name });
       }
-      userTeamsMap.get(tm.user_id)!.push({
-        id: tm.teams.id,
-        name: tm.teams.name,
-      });
-    });
+    }
 
-    // Get all roles for this organization to map role name -> rank
-    const { data: orgRoles } = await supabase
-      .from('organization_roles')
-      .select('name, display_order, display_name, color')
-      .eq('organization_id', id);
-
+    // role name -> rank/display
     const roleRankMap = new Map<string, { rank: number; displayName?: string; color?: string }>();
-    (orgRoles || []).forEach((role: any) => {
+    for (const role of ((orgRolesRes.data ?? []) as any[])) {
       roleRankMap.set(role.name, {
         rank: role.display_order,
         displayName: role.display_name,
         color: role.color,
       });
-    });
+    }
 
     // Get user data for each member using admin API
     const formattedMembers = await Promise.all(
@@ -2545,25 +2517,19 @@ router.get('/:id/statuses', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    const { data: membership } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
+    // The membership check and the statuses fetch are independent — run them in parallel (the
+    // statuses are read into memory but only returned once membership is confirmed, so a non-member
+    // still gets a 404 and never sees the data).
+    const [membershipRes, statusesRes] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_statuses').select('*').eq('organization_id', id).order('rank', { ascending: true }),
+    ]);
 
-    if (!membership) {
+    if (!membershipRes.data) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    const { data: statuses, error } = await supabase
-      .from('organization_statuses')
-      .select('*')
-      .eq('organization_id', id)
-      .order('rank', { ascending: true });
-
-    if (error) throw error;
-    res.json(statuses ?? []);
+    if (statusesRes.error) throw statusesRes.error;
+    res.json(statusesRes.data ?? []);
   } catch (error: any) {
     fail(res, error, error.message || 'Failed to fetch statuses');
   }

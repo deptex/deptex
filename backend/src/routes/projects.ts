@@ -524,25 +524,19 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check if user is a member
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Membership + the caller's org-role permissions in ONE parallel hop. The role lookup doesn't
+    // need to wait on the membership round-trip — fetch the org's roles (a tiny set) alongside it and
+    // pick the caller's in JS. (Saves a sequential round-trip; matters most for local dev where each
+    // hop to the DB is ~100ms.)
+    const [membershipRes, orgRolesRes] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_roles').select('name, permissions').eq('organization_id', id),
+    ]);
+    const membership = membershipRes.data;
+    if (membershipRes.error || !membership) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    // Get user's organization role permissions
-    const { data: orgRole } = await supabase
-      .from('organization_roles')
-      .select('permissions')
-      .eq('organization_id', id)
-      .eq('name', membership.role)
-      .single();
+    const orgRole = (orgRolesRes.data ?? []).find((r: any) => r.name === membership.role) ?? null;
 
     const canViewAllProjects = membership.role === 'owner' || orgRole?.permissions?.manage_teams_and_projects === true;
 
@@ -754,68 +748,54 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fetch repository statuses for all projects in one query
+    // Repo statuses, active jobs, org statuses, and direct-dep counts are mutually independent and
+    // only need projectIds (or the org id) — fetch them in ONE parallel batch instead of three
+    // sequential round-trips.
+    const [repoStatusesRes, activeJobsRes, statusRes, directDepsResult] = await Promise.all([
+      projectIds.length > 0
+        ? supabase.from('project_repositories').select('project_id, status, extraction_step, extraction_error, last_extracted_at').in('project_id', projectIds)
+        : Promise.resolve({ data: [] as any[] }),
+      projectIds.length > 0
+        ? supabase.from('scan_jobs').select('project_id').in('project_id', projectIds).in('status', ['queued', 'processing'])
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
+      projectIds.length > 0
+        ? supabase.from('project_dependencies').select('project_id').in('project_id', projectIds).eq('is_direct', true).is('removed_at', null)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    // Repository statuses, with the "ready but a job is still queued/processing (or extraction_step
+    // not completed) → extracting" override so the org overview stays consistent with run history.
     const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null; last_extracted_at: string | null }> = {};
-    if (projectIds.length > 0) {
-      const { data: repoStatuses } = await supabase
-        .from('project_repositories')
-        .select('project_id, status, extraction_step, extraction_error, last_extracted_at')
-        .in('project_id', projectIds);
-      if (repoStatuses) {
-        for (const rs of repoStatuses) {
-          repoStatusByProject[rs.project_id] = {
-            status: rs.status,
-            extraction_step: (rs as any).extraction_step ?? null,
-            extraction_error: (rs as any).extraction_error ?? null,
-            last_extracted_at: (rs as any).last_extracted_at ?? null,
-          };
-        }
-      }
-      // Match GET .../projects/:id/repositories: when DB row says ready but a job is still
-      // queued/processing (or extraction_step is not completed), expose extracting so org
-      // overview / project lists stay consistent with extraction run history.
-      if (projectIds.length > 0) {
-        const { data: activeJobs } = await supabase
-          .from('scan_jobs')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('status', ['queued', 'processing']);
-        const activeJobProjectIds = new Set((activeJobs ?? []).map((j: { project_id: string }) => j.project_id));
-        for (const pid of projectIds) {
-          const rs = repoStatusByProject[pid];
-          if (!rs || rs.status !== 'ready') continue;
-          const step = rs.extraction_step;
-          if (step && step !== 'completed') {
-            rs.status = 'extracting';
-          } else if (activeJobProjectIds.has(pid)) {
-            rs.status = 'extracting';
-          }
-        }
+    for (const rs of ((repoStatusesRes as any).data ?? [])) {
+      repoStatusByProject[rs.project_id] = {
+        status: rs.status,
+        extraction_step: rs.extraction_step ?? null,
+        extraction_error: rs.extraction_error ?? null,
+        last_extracted_at: rs.last_extracted_at ?? null,
+      };
+    }
+    const activeJobProjectIds = new Set(((activeJobsRes as any).data ?? []).map((j: { project_id: string }) => j.project_id));
+    for (const pid of projectIds) {
+      const rs = repoStatusByProject[pid];
+      if (!rs || rs.status !== 'ready') continue;
+      const step = rs.extraction_step;
+      if (step && step !== 'completed') {
+        rs.status = 'extracting';
+      } else if (activeJobProjectIds.has(pid)) {
+        rs.status = 'extracting';
       }
     }
 
-    // Fetch status display names/colors for list (org overview cards)
+    // Status display names/colors (org overview cards) + direct-dependency counts per project.
     const statusById: Record<string, { name: string; color: string | null; is_passing: boolean | null }> = {};
-    // Direct dependency counts per project (for org overview cards: "X direct deps")
     let directDepsByProject: Record<string, number> = {};
-    const [statusRes, directDepsResult] = await Promise.all([
-      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
-      projectIds.length > 0
-        ? supabase
-            .from('project_dependencies')
-            .select('project_id')
-            .in('project_id', projectIds)
-            .eq('is_direct', true)
-            .is('removed_at', null)
-        : Promise.resolve({ data: [] }),
-    ]);
-    const statusRows = (statusRes as any)?.data ?? [];
-    (statusRows || []).forEach((s: any) => {
+    for (const s of ((statusRes as any)?.data ?? [])) {
       statusById[s.id] = { name: s.name, color: s.color ?? null, is_passing: s.is_passing };
-    });
-    (directDepsResult.data || []).forEach((row: any) => {
+    }
+    for (const row of (directDepsResult.data ?? [])) {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
-    });
+    }
 
     // Per-project compliance % (share of deps with policy_result.allowed !== false) for Compliance tab
     const compliancePctByProject: Record<string, number | null> = {};
@@ -10840,7 +10820,6 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-
     // Scope to the projects this member can actually see (owner / manage_teams_and_projects ->
     // all; otherwise their team + directly-assigned projects). Matches the org /vulnerabilities
     // endpoint instead of leaking every project's posture to any member.
@@ -10853,44 +10832,36 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       return res.json({ projects: [] });
     }
 
-    const { data: projects } = await supabase
-      .from('projects')
-      .select('id, name, active_extraction_run_id, infra_types')
-      .eq('organization_id', id)
-      .in('id', accessibleProjectIds);
+    // All four reads key off the accessible project-id set and are mutually independent, so run
+    // them as ONE parallel batch instead of five sequential round-trips (each await is a separate
+    // network hop to Supabase). An id for a since-deleted project simply returns no rows here and is
+    // dropped by the projects-driven map below. The summary read is phase64's denormalized table —
+    // a single indexed PK lookup, not the old live 10-LATERAL aggregation.
+    const [projectsRes, projectTeamsRes, summaryRes, repoRes] = await Promise.all([
+      supabase.from('projects').select('id, name, active_extraction_run_id, infra_types').eq('organization_id', id).in('id', accessibleProjectIds),
+      supabase.from('project_teams').select('project_id, team_id, is_owner').in('project_id', accessibleProjectIds),
+      supabase.from('project_security_summaries').select('*').in('project_id', accessibleProjectIds),
+      supabase.from('project_repositories').select('project_id, provider, repo_full_name, last_extracted_at').in('project_id', accessibleProjectIds),
+    ]);
 
+    const projects = projectsRes.data;
     if (!projects || projects.length === 0) {
       return res.json({ projects: [] });
     }
-
     const projectIds = projects.map((p: any) => p.id);
 
-    const { data: projectTeams } = await supabase
-      .from('project_teams')
-      .select('project_id, team_id, is_owner')
-      .in('project_id', projectIds);
-
     const ownerTeamMap = new Map<string, string>();
-    for (const pt of projectTeams ?? []) {
+    for (const pt of projectTeamsRes.data ?? []) {
       if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
     }
 
-    // Read the denormalized per-project summaries (phase64) — a single indexed PK SELECT instead
-    // of re-running the 10-LATERAL security_summary_counts aggregation live on every overview load.
-    // The rows are kept fresh by recompute hooks at finalize + every finding mutation, backed by a
-    // daily self-heal cron. Columns mirror the RPC output, so the result.map below is unchanged.
-    const { data: summaryRows, error: countsError } = await supabase
-      .from('project_security_summaries')
-      .select('*')
-      .in('project_id', projectIds);
-    if (countsError) throw countsError;
+    if (summaryRes.error) throw summaryRes.error;
     const countsByProject = new Map<string, any>();
-    for (const c of summaryRows ?? []) countsByProject.set(c.project_id, c);
+    for (const c of summaryRes.data ?? []) countsByProject.set(c.project_id, c);
 
     // Lazy fallback: a project with no stored row yet (brand-new, or before the one-time post-deploy
-    // backfill runs) is computed on the spot so the overview is never wrong. Stale rows are handled
-    // by the recompute hooks + the daily cron, so this path stays rare (and a zero-finding project
-    // stores a zero row, self-healing after one load).
+    // backfill runs) is computed on the spot so the overview is never wrong. Rare — the recompute
+    // hooks + daily cron keep the table populated, so this almost never fires.
     const missing = projectIds.filter((pid: string) => !countsByProject.has(pid));
     if (missing.length) {
       await Promise.allSettled(
@@ -10903,12 +10874,7 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       for (const c of filled ?? []) countsByProject.set(c.project_id, c);
     }
 
-    // Primary linked repository per project (provider logo + repo name) — one row per project,
-    // bounded by project count, so a plain select is fine here.
-    const { data: repoRows } = await supabase
-      .from('project_repositories')
-      .select('project_id, provider, repo_full_name, last_extracted_at')
-      .in('project_id', projectIds);
+    const repoRows = repoRes.data;
 
     const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
     for (const r of repoRows ?? []) {

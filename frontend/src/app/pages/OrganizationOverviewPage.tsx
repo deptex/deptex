@@ -2525,9 +2525,14 @@ export default function OrganizationOverviewPage() {
     api.getOrgAcknowledgements(orgId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [orgId]);
 
+  // Tracker links / group-suppressions / acknowledgements feed ONLY the sidebar findings tables
+  // (project + team). Loading them on the bare overview is premature — defer until a findings
+  // surface actually opens, so the overview's first paint isn't competing for the (locally
+  // 6-per-host) connection pool with three calls it never renders.
   useEffect(() => {
+    if (!projectSidebarOpen && !teamSidebarOpen) return;
     void loadTrackerLinks();
-  }, [loadTrackerLinks]);
+  }, [projectSidebarOpen, teamSidebarOpen, loadTrackerLinks]);
 
   // IaC/container/DAST — not just ones with SCA rows.
   const loadTeamFindings = useCallback(async () => {
