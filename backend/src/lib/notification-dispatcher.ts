@@ -131,14 +131,6 @@ export async function dispatchNotification(eventId: string): Promise<void> {
     .eq('id', eventId);
 
   try {
-    // Check incident triggers inline during dispatch
-    try {
-      const { checkIncidentTriggers } = require('./incident-triggers');
-      await checkIncidentTriggers(event);
-    } catch (_) {
-      // Non-critical — incident trigger check failures should not block notification dispatch
-    }
-
     const rules = await resolveMatchingRules(event);
 
     if (rules.length === 0) {

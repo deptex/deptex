@@ -140,6 +140,13 @@ jobs:
         working-directory: depscanner
         run: npm run test:snapshot-runner
 
+      # Aegis Task rollup trigger (recompute_aegis_task_status) against PGLite +
+      # the phase9z migration. In-memory, <2s, no Docker. This is the only place
+      # the trigger is exercised (jest never transitions fix status).
+      - name: Run Aegis Task rollup trigger test
+        working-directory: depscanner
+        run: npm run test:aegis-task-rollup-pglite
+
   depscanner-fixtures:
     # End-to-end snapshot suite. Builds the Docker image once, then runs
     # `npm run test:fixtures` (default suite only — slow fixtures skipped

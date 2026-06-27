@@ -1,7 +1,10 @@
 /**
- * Aegis Autonomous Security Platform test suite.
+ * Aegis platform test suite.
  *
- * Backend: permissions, tool registry, task system, security debt, sprint orchestration.
+ * Backend: permissions, security debt, automations. (The legacy aegis-v2 task
+ * system, tool registry, and sprint orchestration were removed with the v2 task
+ * primitive; the new Aegis Task is covered by aegis-tasks tests + the PGLite
+ * rollup-trigger test.)
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -65,7 +68,7 @@ function setupSupabaseForOrgMember() {
     if (table === 'organization_roles') {
       return chainableQuery(membershipData ? { permissions: rolePermissions } : null, null);
     }
-    if (table === 'aegis_org_settings' || table === 'aegis_tasks' || table === 'aegis_task_steps' || table === 'aegis_tool_executions' || table === 'aegis_approval_requests') {
+    if (table === 'aegis_org_settings') {
       return chainableQuery(Array.isArray(mockFrom._lastResult) ? mockFrom._lastResult : [], null, 0);
     }
     if (table === 'projects') {
@@ -93,7 +96,7 @@ beforeEach(() => {
   setupSupabaseForOrgMember();
 });
 
-describe('Aegis Autonomous Security Platform', () => {
+describe('Aegis platform', () => {
   describe('Permissions (7B-P) — plan tests 61–66', () => {
     it('61: returns 401 when no user (missing X-Test-User-Id)', async () => {
       const res = await request(app)
@@ -118,14 +121,13 @@ describe('Aegis Autonomous Security Platform', () => {
       expect(res.body.error).toMatch(/permission/i);
     });
 
-    it('63: GET /settings and /tasks require org membership (200 with member)', async () => {
+    it('63: GET /settings requires org membership (200 with member)', async () => {
       membershipData = { role: 'member' };
       rolePermissions = { interact_with_aegis: true, manage_aegis: true };
       mockFrom.mockImplementation((table: string) => {
         if (table === 'organization_members') return chainableQuery(membershipData, null);
         if (table === 'organization_roles') return chainableQuery({ permissions: rolePermissions }, null);
         if (table === 'aegis_org_settings') return chainableQuery(null, null);
-        if (table === 'aegis_tasks') return chainableQuery([], null, 0);
         return chainableQuery(null, null);
       });
 
@@ -133,74 +135,6 @@ describe('Aegis Autonomous Security Platform', () => {
         .get(`/api/aegis/settings/${ORG_ID}`)
         .set('X-Test-User-Id', USER_ID);
       expect(settingsRes.status).toBe(200);
-
-      const tasksRes = await request(app)
-        .get(`/api/aegis/tasks/${ORG_ID}`)
-        .set('X-Test-User-Id', USER_ID);
-      expect(tasksRes.status).toBe(200);
-      expect(Array.isArray(tasksRes.body) || Array.isArray(tasksRes.body?.tasks)).toBe(true);
-    });
-  });
-
-  describe('Tool Registry (7B-B) — plan tests 9–16', () => {
-    it('9/10: tool registry exposes getAllToolMetas and buildToolSet', async () => {
-      const registry = await import('../../lib/aegis/tools/registry');
-      expect(typeof registry.getAllToolMetas).toBe('function');
-      expect(typeof registry.buildToolSet).toBe('function');
-      const metas = registry.getAllToolMetas();
-      expect(Array.isArray(metas)).toBe(true);
-      // Without loading all tool files (redis, vuln-counts, etc.), we only see tools
-      // registered by modules loaded so far (e.g. via aegis router). So we just assert
-      // the registry API exists and returns an array.
-      if (metas.length > 0) {
-        expect(metas[0]).toHaveProperty('name');
-        expect(metas[0]).toHaveProperty('meta');
-        expect(metas[0].meta).toHaveProperty('category');
-        expect(['safe', 'moderate', 'dangerous']).toContain(metas[0].meta.permissionLevel);
-      }
-    });
-  });
-
-  describe('Task System (7B-C) — plan tests 17–24', () => {
-    it('17/18: createTask inserts task and steps', async () => {
-      const { createTask } = await import('../../lib/aegis/tasks');
-      const insertedTaskId = 'task-uuid-1';
-
-      const taskChain = chainableQuery({ id: insertedTaskId }, null);
-      taskChain.insert = jest.fn().mockReturnValue(taskChain);
-      taskChain.select = jest.fn().mockReturnValue(taskChain);
-      taskChain.single = jest.fn().mockImplementation(() => Promise.resolve({ data: { id: insertedTaskId }, error: null }));
-
-      const stepsChain = chainableQuery(null, null);
-      stepsChain.insert = jest.fn().mockResolvedValue({ error: null });
-
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'aegis_tasks') return taskChain;
-        if (table === 'aegis_task_steps') return stepsChain;
-        return chainableQuery(null, null);
-      });
-
-      const taskId = await createTask(ORG_ID, USER_ID, null, {
-        title: 'Test plan',
-        description: 'Desc',
-        steps: [{ title: 'Step 1', toolName: 'listTeams', toolParams: {} }],
-        estimatedCost: 0.1,
-        estimatedTimeMinutes: 1,
-      });
-
-      expect(taskId).toBe(insertedTaskId);
-    });
-
-    it('getTaskStatus returns null for missing task', async () => {
-      const { getTaskStatus } = await import('../../lib/aegis/tasks');
-      mockFrom.mockImplementation(() => {
-        const c = chainableQuery(null, null);
-        c.single = jest.fn().mockResolvedValue({ data: null, error: null });
-        return c;
-      });
-
-      const status = await getTaskStatus('non-existent-id');
-      expect(status).toBeNull();
     });
   });
 
@@ -221,55 +155,6 @@ describe('Aegis Autonomous Security Platform', () => {
         codeIssues: 0,
         secrets: 0,
       });
-    });
-  });
-
-  describe('Sprint Orchestration (7B-N)', () => {
-    it('createSecuritySprint returns error when max concurrent sprints', async () => {
-      const { createSecuritySprint } = await import('../../lib/aegis/sprint-orchestrator');
-      const sprintChain = chainableQuery([], null);
-      (sprintChain as any).like = jest.fn().mockReturnValue(sprintChain);
-      (sprintChain as any).in = jest.fn().mockReturnValue(
-        Promise.resolve({ data: [], count: 3, error: null })
-      );
-
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'aegis_tasks') return sprintChain;
-        if (table === 'projects') return chainableQuery([]);
-        return chainableQuery(null, null);
-      });
-
-      const result = await createSecuritySprint({
-        organizationId: ORG_ID,
-        userId: USER_ID,
-        mode: 'auto',
-      });
-
-      expect(result.error).toMatch(/concurrent|maximum/i);
-    });
-
-    it('createSecuritySprint returns error when no fixable issues (no projects)', async () => {
-      const { createSecuritySprint } = await import('../../lib/aegis/sprint-orchestrator');
-      const sprintChain = chainableQuery([], null);
-      (sprintChain as any).like = jest.fn().mockReturnValue(sprintChain);
-      (sprintChain as any).in = jest.fn().mockReturnValue(
-        Promise.resolve({ data: [], count: 0, error: null })
-      );
-
-      mockFrom.mockImplementation((table: string) => {
-        if (table === 'aegis_tasks') return sprintChain;
-        if (table === 'projects') return chainableQuery([]);
-        return chainableQuery(null, null);
-      });
-
-      const result = await createSecuritySprint({
-        organizationId: ORG_ID,
-        userId: USER_ID,
-        mode: 'auto',
-      });
-
-      expect(result.error).toMatch(/no fixable|no fix/i);
-      expect(result.taskId).toBeUndefined();
     });
   });
 

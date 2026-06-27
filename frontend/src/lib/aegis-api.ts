@@ -74,6 +74,47 @@ export interface AegisMessage {
   createdAt: string;
 }
 
+// --- Aegis Tasks (a task is a chat with one goal) ---
+
+export type AegisTaskStatus =
+  | 'proposed'
+  | 'working'
+  | 'completed'
+  | 'completed_with_failures'
+  | 'failed'
+  | 'declined'
+  | 'cancelled'
+  | 'needs_input';
+
+export interface AegisTaskTarget {
+  findingType: 'vulnerability' | 'semgrep' | 'secret';
+  findingKey: string;
+  osvId?: string;
+  projectId: string;
+  label: string;
+}
+
+export interface AegisTask {
+  id: string;
+  organizationId: string;
+  projectId: string | null;
+  threadId: string | null;
+  kind: 'fix';
+  title: string;
+  description: string | null;
+  status: AegisTaskStatus;
+  source: 'chat' | 'finding';
+  targets: AegisTaskTarget[];
+  totalFixes: number;
+  completedFixes: number;
+  failedFixes: number;
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+  acceptedAt: string | null;
+  completedAt: string | null;
+}
+
 export const aegisApi = {
   async listThreads(organizationId: string): Promise<AegisThread[]> {
     const { threads } = await fetchWithAuth(
@@ -189,5 +230,50 @@ export const aegisApi = {
       `/api/aegis/organizations/${organizationId}/invitable-users${qs}`,
     );
     return users;
+  },
+
+  // --- Tasks ---
+
+  async listTasks(organizationId: string): Promise<AegisTask[]> {
+    const { tasks } = await fetchWithAuth(
+      `/api/aegis/tasks?organizationId=${encodeURIComponent(organizationId)}`,
+    );
+    return tasks;
+  },
+
+  async getTask(taskId: string, organizationId: string): Promise<AegisTask> {
+    const { task } = await fetchWithAuth(
+      `/api/aegis/tasks/${taskId}?organizationId=${encodeURIComponent(organizationId)}`,
+    );
+    return task;
+  },
+
+  async acceptTask(taskId: string, organizationId: string): Promise<{ threadId: string }> {
+    return fetchWithAuth(`/api/aegis/tasks/${taskId}/accept`, {
+      method: 'PATCH',
+      body: JSON.stringify({ organizationId }),
+    });
+  },
+
+  async declineTask(taskId: string, organizationId: string): Promise<{ success: boolean }> {
+    return fetchWithAuth(`/api/aegis/tasks/${taskId}/decline`, {
+      method: 'PATCH',
+      body: JSON.stringify({ organizationId }),
+    });
+  },
+
+  /** Send-to-Aegis: create a task from a finding. Returns the proposed task + its chat. */
+  async createTaskFromFinding(body: {
+    organizationId: string;
+    projectId: string;
+    findingType: 'vulnerability' | 'semgrep' | 'secret';
+    findingKey: string;
+    osvId?: string;
+    label?: string;
+  }): Promise<{ taskId: string; threadId: string; deduped?: boolean }> {
+    return fetchWithAuth('/api/aegis/tasks', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 };

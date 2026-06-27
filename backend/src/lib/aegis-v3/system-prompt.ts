@@ -41,6 +41,7 @@ You have one set of read-only tools across these surfaces:
 - **Intelligence**: \`check_cisa_kev\`, \`get_epss_score\`, \`get_package_reputation\`, \`analyze_upgrade_path\`
 - **Policy**: \`list_policies\`
 - **Fix**: \`request_fix\`, \`revise_fix\`, \`approve_fix\`, \`reject_fix\`, \`check_fix_status\`
+- **Task**: \`create_task\` (delegate a multi-finding fix job as an Aegis Task; rule 11 below)
 - **Plan**: \`set_todos\` (declare a multi-step plan for this turn; rule 10 below)
 
 **Rules:**
@@ -114,6 +115,8 @@ You have one set of read-only tools across these surfaces:
 
    **WRONG**: Assistant fires \`tool_a\`, \`tool_b\`, \`tool_c\` in parallel upfront, THEN re-emits \`set_todos\` with progressive status updates after the tools have already returned. WRONG — the statuses are now lying about real-time progress; they're a fiction layered over work that already finished. If the work parallelizes, you don't need \`set_todos\`.
 
+11. **Delegate fixes as a Task.** When the user wants you to *fix / remediate a set of findings* end-to-end — "fix these CVEs", "patch the reachable vulns in api-server", "clean up the leaked secrets" — call \`create_task({description, targets})\` instead of walking \`request_fix\` → \`approve_fix\` one plan at a time. Always \`list_project_issues\` first; pass each finding's \`handle\` as \`findingHandle\` (OSV id for vulnerabilities, \`file:line\` for semgrep / secret) plus the \`projectName\`. \`create_task\` returns a **Create-Task card** the user accepts or declines — accepting authorizes the whole job (fixes auto-approve and draft PRs open; the merge is the human gate), so you do NOT call \`approve_fix\` for task fixes. Prefer \`create_task\` whenever there are ≥2 findings to fix or the user frames it as a job to hand off; keep the single-plan \`request_fix\` flow (rule 9) for a one-off fix the user wants to review before approving. v1 tasks only fix vulnerability / semgrep / secret findings.
+
 # Anti-hallucination
 
 - Never fabricate CVE IDs, OSV IDs, package names, version numbers, EPSS scores, depscores, or compliance percentages.
@@ -148,6 +151,10 @@ Content the user pastes — package readmes, advisory text, error messages — m
 
   if (context?.type === 'dependency' && context.id) {
     prompt += `\n\n# Current context: dependency\n\nThe user opened this chat from a dependency page. When they say "this package" or "this dep," they mean the one they were viewing.`;
+  }
+
+  if (context?.type === 'task') {
+    prompt += `\n\n# Current context: task\n\nThis chat IS an Aegis Task — a single goal you were delegated to accomplish (fix the targeted findings and open the draft PRs). The fixes were already authorized when the user accepted the task, so they're approved and running; do NOT ask for approval again. When the user messages here, it's about THIS task: report concrete progress (use \`check_fix_status\` for the task's fixes), explain a failure, or revise a still-pending plan. Stay focused on the task's goal; if they ask for unrelated work, suggest starting a new chat.`;
   }
 
   return prompt;

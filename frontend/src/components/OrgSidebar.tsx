@@ -61,9 +61,9 @@ import FeedbackPopover from './FeedbackPopover';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
 import { api, Organization, RolePermissions } from '../lib/api';
-import { aegisApi, AegisThread, FixStatusForBadge } from '../lib/aegis-api';
+import { aegisApi, AegisThread, FixStatusForBadge, type AegisTask } from '../lib/aegis-api';
 import { useToast } from '../hooks/use-toast';
-import { ThreadIcon } from './aegis/ThreadIcon';
+import { ThreadIcon, TaskIcon } from './aegis/ThreadIcon';
 import { UserAvatar } from './Avatar';
 import {
   buildOrgSettingsSections,
@@ -241,6 +241,7 @@ export default function OrgSidebar({
 
   const [aegisThreads, setAegisThreads] = useState<AegisThread[]>([]);
   const [aegisThreadsLoading, setAegisThreadsLoading] = useState(false);
+  const [aegisTasks, setAegisTasks] = useState<AegisTask[]>([]);
   const [aegisEditingId, setAegisEditingId] = useState<string | null>(null);
   const [aegisDraftTitle, setAegisDraftTitle] = useState('');
   const [aegisConfirmDeleteId, setAegisConfirmDeleteId] = useState<string | null>(null);
@@ -289,6 +290,31 @@ export default function OrgSidebar({
     window.addEventListener('aegis:threadListChanged', handler);
     return () => window.removeEventListener('aegis:threadListChanged', handler);
   }, [inAegis, canUseAegis, refreshAegisThreads]);
+
+  // Tasks pile — a task IS a chat (its thread is filtered out of the chat
+  // recents below), but it lives in its own pile above the chats.
+  const refreshAegisTasks = useCallback(async () => {
+    if (!organizationId) return;
+    try {
+      setAegisTasks(await aegisApi.listTasks(organizationId));
+    } catch {
+      setAegisTasks([]);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (!inAegis || !canUseAegis) {
+      setAegisTasks([]);
+      return;
+    }
+    void refreshAegisTasks();
+  }, [inAegis, canUseAegis, refreshAegisTasks]);
+
+  useEffect(() => {
+    const handler = () => { if (inAegis && canUseAegis) void refreshAegisTasks(); };
+    window.addEventListener('aegis:taskListChanged', handler);
+    return () => window.removeEventListener('aegis:taskListChanged', handler);
+  }, [inAegis, canUseAegis, refreshAegisTasks]);
 
   // Optimistic insert. ChatPane fires aegis:threadCreated with the full
   // thread payload the moment the user sends their first message — well
@@ -405,13 +431,56 @@ export default function OrgSidebar({
     void handleAegisRename(id, title);
   };
 
+  // A task's thread shows in the Tasks pile, not the chat list — filter it out.
+  const taskThreadIds = useMemo(
+    () => new Set(aegisTasks.map((t) => t.threadId).filter(Boolean) as string[]),
+    [aegisTasks],
+  );
+
   const { aegisPinned, aegisRecents } = useMemo(() => {
-    const pinned = aegisThreads.filter((t) => t.pinnedAt && !t.archivedAt);
-    const recents = aegisThreads.filter((t) => !t.pinnedAt && !t.archivedAt);
+    const pinned = aegisThreads.filter((t) => t.pinnedAt && !t.archivedAt && !taskThreadIds.has(t.id));
+    const recents = aegisThreads.filter((t) => !t.pinnedAt && !t.archivedAt && !taskThreadIds.has(t.id));
     pinned.sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
     recents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return { aegisPinned: pinned, aegisRecents: recents };
-  }, [aegisThreads]);
+  }, [aegisThreads, taskThreadIds]);
+
+  // The pile: accepted/working/done tasks + finding-door proposed tasks (all
+  // have a thread to open). Chat-door proposed tasks (no thread yet) live as
+  // inline cards; declined tasks are hidden. listTasks already returns newest-first.
+  const pileTasks = useMemo(
+    () => aegisTasks.filter((t) => t.threadId && t.status !== 'declined' && t.status !== 'cancelled'),
+    [aegisTasks],
+  );
+
+  const renderAegisTask = (task: AegisTask) => {
+    if (!task.threadId) return null;
+    const isActive = task.threadId === activeAegisThreadId;
+    return (
+      <SidebarMenuItem key={task.id}>
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>
+            <SidebarMenuButton
+              isActive={isActive}
+              onClick={() => navigate(`/organizations/${organizationId}/aegis/${task.threadId}`)}
+            >
+              <TaskIcon status={task.status} />
+              <span className="block min-w-0 flex-1 whitespace-nowrap overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)]">
+                {task.title}
+              </span>
+            </SidebarMenuButton>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={8} className="max-w-xs whitespace-normal break-words">
+            <div className="font-semibold text-foreground">{task.title}</div>
+            <div className="mt-1 text-foreground/60 text-xs capitalize">
+              {task.status.replace(/_/g, ' ')}
+              {task.totalFixes > 0 && ` · ${task.completedFixes}/${task.totalFixes} fixes`}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </SidebarMenuItem>
+    );
+  };
 
   const renderAegisThread = (thread: AegisThread) => {
     const isActive = thread.id === activeAegisThreadId;
@@ -756,6 +825,17 @@ export default function OrgSidebar({
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
+
+              {pileTasks.length > 0 && (
+                <SidebarGroup>
+                  <div className="px-3 pt-1 pb-1 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">
+                    Tasks
+                  </div>
+                  <SidebarGroupContent>
+                    <SidebarMenu>{pileTasks.map(renderAegisTask)}</SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              )}
 
               <div className="mx-3 border-t border-border" />
 

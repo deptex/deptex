@@ -4,6 +4,7 @@ import { AlertCircle, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 import { PlanCard, PlanCardSkeleton } from './PlanCard';
+import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
@@ -119,6 +120,29 @@ export function MessageBubble({
           );
         } else {
           elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} revised={isRevise} />);
+        }
+        return;
+      }
+
+      // create_task renders the inline Create-Task card (Accept / Decline).
+      // Streaming (no taskId yet) shows the same skeleton chrome as a plan.
+      if (toolName === 'create_task' && !isError) {
+        flushTools();
+        const taskOut = part.output as
+          | { taskId?: string; description?: string; targets?: Array<{ findingType: string; label: string }> }
+          | undefined;
+        if (part.state === 'output-available' && taskOut?.taskId) {
+          elements.push(
+            <CreateTaskCard
+              key={`task-${i}`}
+              taskId={taskOut.taskId}
+              description={taskOut.description}
+              targets={taskOut.targets}
+              organizationId={organizationId}
+            />,
+          );
+        } else {
+          elements.push(<PlanCardSkeleton key={`task-skel-${i}`} />);
         }
         return;
       }

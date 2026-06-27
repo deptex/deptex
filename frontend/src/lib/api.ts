@@ -226,6 +226,11 @@ export interface OrganizationMember {
 export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
 
 export type TrackerProvider = 'jira' | 'linear' | 'github';
+// A tracker LINK's provider can also be 'aegis' (Aegis-as-a-tracker): the
+// finding shows an Aegis chip while a task works it, ✓ when it resolves clean.
+// 'aegis' is NOT a user-fileable provider (no picker / destination) — it's
+// created by Send-to-Aegis, so the filing types above stay jira|linear|github.
+export type LinkProvider = TrackerProvider | 'aegis';
 export type TrackerFindingType =
   | 'vulnerability' | 'secret' | 'semgrep' | 'iac' | 'container' | 'dast' | 'malicious' | 'taint_flow'
   | 'container_group' | 'iac_group';
@@ -251,7 +256,7 @@ export interface FindingTrackerLink {
   project_id?: string;
   finding_type: string;
   finding_key: string;
-  provider: TrackerProvider;
+  provider: LinkProvider;
   external_key: string | null;
   external_url: string | null;
   title: string | null;

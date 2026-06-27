@@ -1,0 +1,61 @@
+// Aegis Task primitive — "a task is a chat with one goal" (Henry's model).
+// A task is an aegis_chat_threads row (context_type='task') plus one
+// aegis_agent_tasks record; execution reuses the project_security_fixes
+// pipeline linked by task_id. v1 goal type = fix findings -> draft PR.
+
+export type AegisTaskStatus =
+  | 'proposed'
+  | 'working'
+  | 'completed'
+  | 'completed_with_failures'
+  | 'failed'
+  | 'declined'
+  | 'cancelled'
+  | 'needs_input'; // enum kept for Phase-2 forward-compat; nothing sets it in v1
+
+export type AegisTaskSource = 'chat' | 'finding';
+
+// The 3 finding types the fix pipeline can act on (aegis-fix.ts FINDING_TYPES).
+export type AegisTaskFindingType = 'vulnerability' | 'semgrep' | 'secret';
+
+// A target stores STABLE identity only — the live PDV/finding row id is
+// re-resolved from (project_id, finding_key) at accept time, because those row
+// uuids churn on every rescan.
+export interface AegisTaskTarget {
+  findingType: AegisTaskFindingType;
+  findingKey: string;
+  osvId?: string;
+  projectId: string;
+  label: string;
+}
+
+export interface AegisTask {
+  id: string;
+  organizationId: string;
+  projectId: string | null;
+  threadId: string | null;
+  kind: 'fix';
+  title: string;
+  description: string | null;
+  status: AegisTaskStatus;
+  source: AegisTaskSource;
+  targets: AegisTaskTarget[];
+  totalFixes: number;
+  completedFixes: number;
+  failedFixes: number;
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+  acceptedAt: string | null;
+  completedAt: string | null;
+}
+
+export const AEGIS_TASK_FINDING_TYPES: readonly AegisTaskFindingType[] = [
+  'vulnerability',
+  'semgrep',
+  'secret',
+] as const;
+
+// Blast-radius cap: a single task fans out at most this many fixes (each opens
+// a draft PR). Overridable via env for power orgs.
+export const AEGIS_TASK_MAX_TARGETS = Number(process.env.AEGIS_TASK_MAX_TARGETS) || 10;

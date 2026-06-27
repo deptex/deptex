@@ -3,8 +3,7 @@ import express from 'express';
 import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId, NO_ACTIVE_RUN } from '../lib/active-extraction';
 import { supabase } from '../lib/supabase';
-import { generateFixPlan } from '../lib/aegis-v3/fix-planner';
-import { signApprovalToken } from '../lib/aegis-v3/approval-token';
+import { persistPlanForFix } from '../lib/aegis-v3/fix-request';
 import {
   createInstallationToken,
   getBranchSha,
@@ -231,6 +230,9 @@ async function loadFixRow(fixId: string): Promise<FixRow | null> {
   return (data as FixRow | null) ?? null;
 }
 
+// Generate + persist a plan onto an existing fix row. Thin wrapper over the
+// shared persistPlanForFix helper (kept for the two call sites below + their
+// signature). On planner throw it marks the row failed and rethrows.
 async function runPlanForRow(
   fixId: string,
   organizationId: string,
@@ -239,58 +241,14 @@ async function runPlanForRow(
   findingId: string,
   triggeredByUserId: string,
 ): Promise<{ status: FixStatus; plan: FixPlan; baseSha: string; baseBranch: string }> {
-  let result;
-  try {
-    result = await generateFixPlan({
-      organizationId,
-      projectId,
-      findingType,
-      findingId,
-      triggeredByUserId,
-    });
-  } catch (err: any) {
-    await supabase
-      .from('project_security_fixes')
-      .update({
-        status: 'failed',
-        error_message: `Plan generation failed: ${err?.message ?? 'unknown error'}`,
-        completed_at: new Date().toISOString(),
-      })
-      .eq('id', fixId);
-    throw err;
-  }
-
-  // Some models (Qwen3, certain OpenAI configs) always populate optional
-  // schema fields with placeholders rather than omitting them. So
-  // refusal: { reason: "null" } shows up on perfectly fine plans. Detect
-  // sentinel values and strip the refusal before persisting; otherwise the
-  // PlanCard renders the refusal layout on what's actually an approvable plan.
-  const SENTINEL_REASONS = new Set(['', 'null', 'none', 'n/a', 'na', 'no', 'false']);
-  const rawReason = result.plan.refusal?.reason?.trim().toLowerCase();
-  const isRealRefusal = !!result.plan.refusal && !!rawReason && !SENTINEL_REASONS.has(rawReason);
-  const finalPlan: FixPlan = isRealRefusal
-    ? result.plan
-    : { ...result.plan, refusal: undefined };
-
-  const generatedAt = new Date().toISOString();
-  const status: FixStatus = isRealRefusal ? 'failed' : 'awaiting_approval';
-  const approvalToken = isRealRefusal ? null : signApprovalToken(fixId, organizationId, generatedAt);
-
-  await supabase
-    .from('project_security_fixes')
-    .update({
-      status,
-      plan: finalPlan,
-      plan_generated_at: generatedAt,
-      plan_base_sha: result.baseSha,
-      plan_base_branch: result.baseBranch,
-      approval_token: approvalToken,
-      error_message: isRealRefusal ? `Refusal: ${finalPlan.refusal?.reason}` : null,
-      completed_at: isRealRefusal ? generatedAt : null,
-    })
-    .eq('id', fixId);
-
-  return { status, plan: finalPlan, baseSha: result.baseSha, baseBranch: result.baseBranch };
+  return persistPlanForFix({
+    fixId,
+    organizationId,
+    projectId,
+    findingType,
+    findingId,
+    triggeredByUserId,
+  });
 }
 
 router.post('/request', async (req: AuthRequest, res) => {
