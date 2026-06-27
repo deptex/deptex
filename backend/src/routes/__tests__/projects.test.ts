@@ -963,4 +963,86 @@ describe('Project Routes', () => {
       expect(supabase.rpc).toHaveBeenCalledWith('recompute_project_summary', { p_project_id: 'proj-new' });
     });
   });
+
+  describe('GET /api/organizations/:id/overview bundles the 4 mount calls', () => {
+    // Mocks sufficient for ALL four builders (teams, projects, statuses, security-summary)
+    // so the bundle and the individual endpoints run against identical data.
+    const seedBundleMocks = () => {
+      const projectRow = {
+        id: 'proj-1', name: 'Proj One', organization_id: orgId, health_score: 90, status_id: null,
+        importance: 1.0, framework: 'react', active_extraction_run_id: 'r1', infra_types: [],
+        is_compliant: true, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      const teamRow = {
+        id: 'team-1', name: 'Team A', organization_id: orgId,
+        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      // One row that satisfies all three project_teams consumers (projects embed teams:{id,name};
+      // security-summary reads team_id+is_owner; teams counts by team_id).
+      const projectTeamRow = { project_id: 'proj-1', team_id: 'team-1', is_owner: true, teams: { id: 'team-1', name: 'Team A' } };
+      const statusRow = {
+        id: 's1', organization_id: orgId, name: 'Open', color: null, rank: 1, is_passing: false,
+        is_system: false, description: null, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      const summaryRow = {
+        project_id: 'proj-1', organization_id: orgId, vuln_count: 7, critical_count: 1, reachable_count: 2,
+        worst_depscore: 80, band_critical: 1, band_high: 2, band_medium: 0, band_low: 0, ignored_count: 0,
+        semgrep_count: 0, secret_count: 0, verified_secret_count: 0, has_container: false, has_dast: false,
+        last_scan_at: '2026-06-01T00:00:00.000Z',
+      };
+      setTableResponse('teams', 'then', { data: [teamRow], error: null });
+      setTableResponse('projects', 'then', { data: [projectRow], error: null });
+      setTableResponse('project_teams', 'then', { data: [projectTeamRow], error: null });
+      setTableResponse('project_security_summaries', 'then', { data: [summaryRow], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('team_roles', 'then', { data: [], error: null });
+      setTableResponse('scan_jobs', 'then', { data: [], error: null });
+      setTableResponse('organization_statuses', 'then', { data: [statusRow], error: null });
+      setTableResponse('project_dependencies', 'then', { data: [], error: null });
+    };
+
+    it('returns teams/projects/statuses/securitySummary identical to the 4 individual endpoints', async () => {
+      seedBundleMocks();
+      const auth = (r: request.Test) => r.set('Authorization', `Bearer ${mockToken}`) as request.Test;
+
+      const [bundle, projects, teams, statuses, security] = await Promise.all([
+        auth(request(app).get(`/api/organizations/${orgId}/overview`)),
+        auth(request(app).get(`/api/organizations/${orgId}/projects`)),
+        auth(request(app).get(`/api/organizations/${orgId}/teams`)),
+        auth(request(app).get(`/api/organizations/${orgId}/statuses`)),
+        auth(request(app).get(`/api/organizations/${orgId}/security-summary`)),
+      ]);
+
+      expect(bundle.status).toBe(200);
+      expect(projects.status).toBe(200);
+      expect(teams.status).toBe(200);
+      expect(statuses.status).toBe(200);
+      expect(security.status).toBe(200);
+
+      // The core guarantee: the bundle is exactly the union of the 4 endpoints, with no drift.
+      expect(bundle.body.projects).toEqual(projects.body);
+      expect(bundle.body.teams).toEqual(teams.body);
+      expect(bundle.body.statuses).toEqual(statuses.body);
+      expect(bundle.body.securitySummary).toEqual(security.body);
+
+      // Sanity that the seeded data actually flowed through (not 4 empty arrays).
+      expect(bundle.body.projects[0].name).toBe('Proj One');
+      expect(bundle.body.teams[0].id).toBe('team-1');
+      expect(bundle.body.securitySummary.projects[0].vuln_count).toBe(7);
+    });
+
+    it('propagates a 404 when the caller is not a member of the org', async () => {
+      seedBundleMocks();
+      // statuses builder is the membership gate — a missing membership row 404s it,
+      // and the bundle surfaces that.
+      setTableResponse('organization_members', 'single', { data: null, error: { message: 'no rows' } });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/overview`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
+    });
+  });
 });
