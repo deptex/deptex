@@ -21,7 +21,8 @@ import {
 import { Badge } from '../../components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../components/ui/dialog';
-import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression, type FindingAcknowledgement } from '../../lib/api';
+import { api, Organization, Team, Project, TeamWithRole, type ProjectStats, type ProjectVulnerability, type OrganizationStatus, type TeamStats, type TeamMember, type ProjectDependency, type OrganizationMember, type TeamRole, type TeamPermissions, type CiCdConnection, type ProjectSecuritySummary, type ProjectWithRole, type VulnerabilityDetail, type SecretFinding, type SemgrepFinding, type IaCFinding, type ContainerFinding, type MaliciousFinding, type DastFindingDTO, type BaseImageRecommendation, type DataFlowFinding, type FindingTrackerLink, type FindingGroupSuppression, type FindingAcknowledgement, type OverviewBundle } from '../../lib/api';
+import { readOverviewCache, writeOverviewCache } from '../../lib/overview-cache';
 import { cn } from '../../lib/utils';
 import { computeOverviewStatusRollup, type OverviewStatusRollup } from '../../lib/overviewStatusRollup';
 import { isExtractionOngoing, isInitialExtraction } from '../../lib/extractionStatus';
@@ -815,29 +816,16 @@ export default function OrganizationOverviewPage() {
   useEffect(() => {
     if (!organization?.id) return;
 
+    const orgId = organization.id;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    // Clear data from the previous org so stillShowingSkeleton (which gates on
-    // teamsWithProjects.length === 0) actually triggers and the canvas wipes
-    // before the new org's fetch lands. Otherwise the user briefly sees the
-    // prior org's nodes/teams in the new org's graph.
-    setRawTeamsWithProjects([]);
-    setTeamsById({});
-    setSecuritySummaryByProject(new Map());
 
-    // Gate the graph on the STRUCTURAL data only — teams + projects are all the nodes
-    // need to draw. Org statuses (team status rollups) and the org security summary
-    // (tile band pills) are decoration, and the summary is the heaviest call on the
-    // page (an org-wide counts RPC over every project's findings). Loading them on
-    // their own tracks lets the graph paint the instant teams/projects land instead of
-    // waiting behind that aggregate; the rollups + pills pop in a beat later.
-    Promise.all([
-      api.getTeams(organization.id),
-      api.getProjects(organization.id),
-    ])
-      .then(([teams, allProjects]) => {
+    // Process a bundle (cached or fresh) into all the overview state. Same logic the
+    // four separate mount fetches used to drive, fed from one payload so it can also
+    // run synchronously on the cached bundle for an instant repeat-visit paint.
+    const processBundle = (bundle: OverviewBundle) => {
         if (cancelled) return;
+        const teams = (bundle.teams ?? []) as TeamWithRole[];
+        const allProjects = (bundle.projects ?? []) as Project[];
         setAllProjectsFlat(allProjects as Project[]);
         const byId: Record<string, Team> = {};
         (teams as Team[]).forEach((t) => { byId[t.id] = t; });
@@ -925,27 +913,47 @@ export default function OrganizationOverviewPage() {
           });
         });
         applyResult(roleByTeamId);
+
+        // Decoration: org statuses + per-project security summary (band pills).
+        setStatuses((bundle.statuses ?? []) as OrganizationStatus[]);
+        const summaryProjects = bundle.securitySummary?.projects;
+        if (summaryProjects) {
+          setSecuritySummaryByProject(new Map(summaryProjects.map((x) => [x.project_id, x])));
+        }
+    };
+
+    // Stale-while-revalidate: paint the last-known bundle instantly (zero network),
+    // then refresh in the background and reconcile. The overview is the app's front
+    // door, so a repeat visit should never sit behind a spinner.
+    const cached = readOverviewCache(orgId);
+    if (cached) {
+      processBundle(cached.data);
+      setError(null);
+      setLoading(false);
+    } else {
+      setLoading(true);
+      setError(null);
+      // No cache → wipe any previous org's nodes so the skeleton shows instead of
+      // briefly rendering another org's stale graph.
+      setRawTeamsWithProjects([]);
+      setTeamsById({});
+      setSecuritySummaryByProject(new Map());
+    }
+
+    api.getOrgOverview(orgId)
+      .then((bundle) => {
+        if (cancelled) return;
+        processBundle(bundle);
+        writeOverviewCache(orgId, bundle);
       })
       .catch((err) => {
-        if (!cancelled) setError(err?.message ?? 'Failed to load data');
+        // A failed revalidate behind a good cached paint is silent; only surface an
+        // error when there was nothing to show.
+        if (!cancelled && !cached) setError(err?.message ?? 'Failed to load data');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-
-    // Decoration — independent of the graph paint. The status rollups and tile band
-    // pills enhance the nodes once they arrive; a failure or slow response here never
-    // holds back (or blanks) the graph.
-    api.getOrganizationStatuses(organization.id)
-      .then((d) => { if (!cancelled) setStatuses((d as OrganizationStatus[]) ?? []); })
-      .catch(() => {});
-    api.getOrgSecuritySummary(organization.id)
-      .then((s) => {
-        if (!cancelled && s?.projects) {
-          setSecuritySummaryByProject(new Map(s.projects.map((x) => [x.project_id, x])));
-        }
-      })
-      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -957,14 +965,15 @@ export default function OrganizationOverviewPage() {
     if (!organization?.id || silentRefreshTrigger === 0) return;
     let cancelled = false;
     const orgId = organization.id;
-    Promise.all([
-      api.getTeams(orgId),
-      api.getProjects(orgId),
-      api.getOrganizationStatuses(orgId).catch(() => []),
-      api.getOrgSecuritySummary(orgId).catch(() => null),
-    ])
-      .then(([teams, allProjects, statusesData, securitySummary]) => {
+    api.getOrgOverview(orgId)
+      .then((bundle) => {
         if (cancelled) return;
+        // Keep the SWR cache warm so the next mount paints this fresh state instantly.
+        writeOverviewCache(orgId, bundle);
+        const teams = bundle.teams ?? [];
+        const allProjects = bundle.projects ?? [];
+        const statusesData = bundle.statuses ?? [];
+        const securitySummary = bundle.securitySummary;
         setStatuses((statusesData as OrganizationStatus[]) ?? []);
         setAllProjectsFlat(allProjects as Project[]);
         if (securitySummary?.projects) {

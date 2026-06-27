@@ -415,6 +415,14 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   return response.json();
 }
 
+// Single response shape for the bundled org-overview mount call.
+export interface OverviewBundle {
+  teams: TeamWithRole[];
+  projects: Project[];
+  statuses: OrganizationStatus[];
+  securitySummary: { projects: ProjectSecuritySummary[] };
+}
+
 export const api = {
   _orgDataCache: new Map<string, Organization>(),
   _orgPrefetchCache: new Map<string, Promise<Organization>>(),
@@ -3026,6 +3034,21 @@ export const api = {
     organizationId: string
   ): Promise<{ projects: ProjectSecuritySummary[] }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/security-summary`);
+  },
+
+  // Single bundled mount call for the org overview — replaces the 4 separate
+  // bare-mount fetches (teams, projects, statuses, security-summary) with one
+  // round-trip. Warms the per-id caches the same way the individual getters do,
+  // so deferred getTeam/getProject lookups can still reuse them.
+  async getOrgOverview(organizationId: string): Promise<OverviewBundle> {
+    const data: OverviewBundle = await fetchWithAuth(`/api/organizations/${organizationId}/overview`);
+    (data.teams ?? []).forEach((team) => {
+      this._teamDataCache.set(`${organizationId}:${team.id}`, team);
+    });
+    (data.projects ?? []).forEach((project) => {
+      this._projectDataCache.set(`${organizationId}:${project.id}`, project as ProjectWithRole);
+    });
+    return data;
   },
 
   async getTeamSecuritySummary(
