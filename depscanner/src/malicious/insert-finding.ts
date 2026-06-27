@@ -73,16 +73,31 @@ export interface CachedScanRow {
   scanner: 'guarddog' | 'ai_review';
   scanner_version: string;
   findings: GuardDogRule[];
-  risk_level: FindingSeverity | 'none' | null;
+  /**
+   * `fetch_error` is a NEGATIVE-cache sentinel: a prior run could not fetch
+   * the tarball (private / workspace / yanked / transient registry blip), so
+   * GuardDog never ran. It is read back as a TTL-bounded cache hit so we stop
+   * re-attempting the download (and re-eating its timeout) on every scan —
+   * see `readGuardDogCache` in malicious-scan.ts. It is worker-internal and
+   * never surfaced to users (no finding rows are produced for it).
+   */
+  risk_level: FindingSeverity | 'none' | 'fetch_error' | null;
 }
 
 export async function upsertGuardDogCache(
   supabase: Storage,
   row: CachedScanRow,
 ): Promise<void> {
+  // Stamp scanned_at on every write (insert AND on-conflict update). The DB
+  // default only fires on INSERT, so without this an UPSERT that updates an
+  // existing row leaves scanned_at stale — which would break the fetch_error
+  // negative-cache TTL on the retry path (a re-written fetch_error row would
+  // keep its old timestamp and look stale forever). Mirrors
+  // upsertCapabilityCache, which already stamps scanned_at explicitly.
+  const payload = { ...row, scanned_at: new Date().toISOString() };
   await supabase
     .from('package_security_cache')
-    .upsert(row as unknown as Record<string, unknown>, {
+    .upsert(payload as unknown as Record<string, unknown>, {
       onConflict: 'package_name,version,ecosystem,scanner',
     });
 }
