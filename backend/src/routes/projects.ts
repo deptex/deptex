@@ -29,6 +29,7 @@ import { fetchGhsaVulnerabilitiesBatch, filterGhsaVulnsByVersion, ghsaSeverityTo
 import { getVulnCountsBatch, getVulnCountsForVersion, getVulnCountsForVersionsBatch, VulnCounts } from '../lib/vuln-counts';
 import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { recomputeProjectSummary } from '../lib/security-summary';
 import { toDataFlowFinding } from '../lib/code-flow-findings';
 import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
@@ -523,25 +524,19 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check if user is a member
-    const { data: membership, error: membershipError } = await supabase
-      .from('organization_members')
-      .select('role')
-      .eq('organization_id', id)
-      .eq('user_id', userId)
-      .single();
-
-    if (membershipError || !membership) {
+    // Membership + the caller's org-role permissions in ONE parallel hop. The role lookup doesn't
+    // need to wait on the membership round-trip — fetch the org's roles (a tiny set) alongside it and
+    // pick the caller's in JS. (Saves a sequential round-trip; matters most for local dev where each
+    // hop to the DB is ~100ms.)
+    const [membershipRes, orgRolesRes] = await Promise.all([
+      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
+      supabase.from('organization_roles').select('name, permissions').eq('organization_id', id),
+    ]);
+    const membership = membershipRes.data;
+    if (membershipRes.error || !membership) {
       return res.status(404).json({ error: 'Organization not found or access denied' });
     }
-
-    // Get user's organization role permissions
-    const { data: orgRole } = await supabase
-      .from('organization_roles')
-      .select('permissions')
-      .eq('organization_id', id)
-      .eq('name', membership.role)
-      .single();
+    const orgRole = (orgRolesRes.data ?? []).find((r: any) => r.name === membership.role) ?? null;
 
     const canViewAllProjects = membership.role === 'owner' || orgRole?.permissions?.manage_teams_and_projects === true;
 
@@ -753,68 +748,54 @@ router.get('/:id/projects', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fetch repository statuses for all projects in one query
+    // Repo statuses, active jobs, org statuses, and direct-dep counts are mutually independent and
+    // only need projectIds (or the org id) — fetch them in ONE parallel batch instead of three
+    // sequential round-trips.
+    const [repoStatusesRes, activeJobsRes, statusRes, directDepsResult] = await Promise.all([
+      projectIds.length > 0
+        ? supabase.from('project_repositories').select('project_id, status, extraction_step, extraction_error, last_extracted_at').in('project_id', projectIds)
+        : Promise.resolve({ data: [] as any[] }),
+      projectIds.length > 0
+        ? supabase.from('scan_jobs').select('project_id').in('project_id', projectIds).in('status', ['queued', 'processing'])
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
+      projectIds.length > 0
+        ? supabase.from('project_dependencies').select('project_id').in('project_id', projectIds).eq('is_direct', true).is('removed_at', null)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    // Repository statuses, with the "ready but a job is still queued/processing (or extraction_step
+    // not completed) → extracting" override so the org overview stays consistent with run history.
     const repoStatusByProject: Record<string, { status: string; extraction_step: string | null; extraction_error: string | null; last_extracted_at: string | null }> = {};
-    if (projectIds.length > 0) {
-      const { data: repoStatuses } = await supabase
-        .from('project_repositories')
-        .select('project_id, status, extraction_step, extraction_error, last_extracted_at')
-        .in('project_id', projectIds);
-      if (repoStatuses) {
-        for (const rs of repoStatuses) {
-          repoStatusByProject[rs.project_id] = {
-            status: rs.status,
-            extraction_step: (rs as any).extraction_step ?? null,
-            extraction_error: (rs as any).extraction_error ?? null,
-            last_extracted_at: (rs as any).last_extracted_at ?? null,
-          };
-        }
-      }
-      // Match GET .../projects/:id/repositories: when DB row says ready but a job is still
-      // queued/processing (or extraction_step is not completed), expose extracting so org
-      // overview / project lists stay consistent with extraction run history.
-      if (projectIds.length > 0) {
-        const { data: activeJobs } = await supabase
-          .from('scan_jobs')
-          .select('project_id')
-          .in('project_id', projectIds)
-          .in('status', ['queued', 'processing']);
-        const activeJobProjectIds = new Set((activeJobs ?? []).map((j: { project_id: string }) => j.project_id));
-        for (const pid of projectIds) {
-          const rs = repoStatusByProject[pid];
-          if (!rs || rs.status !== 'ready') continue;
-          const step = rs.extraction_step;
-          if (step && step !== 'completed') {
-            rs.status = 'extracting';
-          } else if (activeJobProjectIds.has(pid)) {
-            rs.status = 'extracting';
-          }
-        }
+    for (const rs of ((repoStatusesRes as any).data ?? [])) {
+      repoStatusByProject[rs.project_id] = {
+        status: rs.status,
+        extraction_step: rs.extraction_step ?? null,
+        extraction_error: rs.extraction_error ?? null,
+        last_extracted_at: rs.last_extracted_at ?? null,
+      };
+    }
+    const activeJobProjectIds = new Set(((activeJobsRes as any).data ?? []).map((j: { project_id: string }) => j.project_id));
+    for (const pid of projectIds) {
+      const rs = repoStatusByProject[pid];
+      if (!rs || rs.status !== 'ready') continue;
+      const step = rs.extraction_step;
+      if (step && step !== 'completed') {
+        rs.status = 'extracting';
+      } else if (activeJobProjectIds.has(pid)) {
+        rs.status = 'extracting';
       }
     }
 
-    // Fetch status display names/colors for list (org overview cards)
+    // Status display names/colors (org overview cards) + direct-dependency counts per project.
     const statusById: Record<string, { name: string; color: string | null; is_passing: boolean | null }> = {};
-    // Direct dependency counts per project (for org overview cards: "X direct deps")
     let directDepsByProject: Record<string, number> = {};
-    const [statusRes, directDepsResult] = await Promise.all([
-      supabase.from('organization_statuses').select('id, name, color, is_passing').eq('organization_id', id),
-      projectIds.length > 0
-        ? supabase
-            .from('project_dependencies')
-            .select('project_id')
-            .in('project_id', projectIds)
-            .eq('is_direct', true)
-            .is('removed_at', null)
-        : Promise.resolve({ data: [] }),
-    ]);
-    const statusRows = (statusRes as any)?.data ?? [];
-    (statusRows || []).forEach((s: any) => {
+    for (const s of ((statusRes as any)?.data ?? [])) {
       statusById[s.id] = { name: s.name, color: s.color ?? null, is_passing: s.is_passing };
-    });
-    (directDepsResult.data || []).forEach((row: any) => {
+    }
+    for (const row of (directDepsResult.data ?? [])) {
       directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
-    });
+    }
 
     // Per-project compliance % (share of deps with policy_result.allowed !== false) for Compliance tab
     const compliancePctByProject: Record<string, number | null> = {};
@@ -10445,6 +10426,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/suppress', async (
       metadata: { suppressed_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error suppressing vulnerability:', error);
@@ -10485,6 +10467,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unsuppress', async
       metadata: { unsuppressed_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error unsuppressing vulnerability:', error);
@@ -10561,6 +10544,7 @@ router.post('/:id/projects/:projectId/flow-suppressions', async (req: AuthReques
       .single();
     if (insertError) throw insertError;
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true, suppression: inserted });
   } catch (error: any) {
     console.error('Error creating flow suppression:', error);
@@ -10600,6 +10584,7 @@ router.delete('/:id/projects/:projectId/flow-suppressions/:hash', async (req: Au
       .eq('flow_signature_hash', flowSignatureHash);
     if (error) throw error;
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error deleting flow suppression:', error);
@@ -10649,6 +10634,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/accept-risk', asyn
       metadata: { accepted_by: userId, reason: reason ?? null },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error accepting risk:', error);
@@ -10694,6 +10680,7 @@ router.patch('/:id/projects/:projectId/vulnerabilities/:osvId/unaccept-risk', as
       metadata: { unaccepted_by: userId },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error revoking risk acceptance:', error);
@@ -10833,7 +10820,6 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-
     // Scope to the projects this member can actually see (owner / manage_teams_and_projects ->
     // all; otherwise their team + directly-assigned projects). Matches the org /vulnerabilities
     // endpoint instead of leaking every project's posture to any member.
@@ -10846,48 +10832,49 @@ router.get('/:id/security-summary', async (req: AuthRequest, res) => {
       return res.json({ projects: [] });
     }
 
-    const { data: projects } = await supabase
-      .from('projects')
-      .select('id, name, active_extraction_run_id, infra_types')
-      .eq('organization_id', id)
-      .in('id', accessibleProjectIds);
+    // All four reads key off the accessible project-id set and are mutually independent, so run
+    // them as ONE parallel batch instead of five sequential round-trips (each await is a separate
+    // network hop to Supabase). An id for a since-deleted project simply returns no rows here and is
+    // dropped by the projects-driven map below. The summary read is phase64's denormalized table —
+    // a single indexed PK lookup, not the old live 10-LATERAL aggregation.
+    const [projectsRes, projectTeamsRes, summaryRes, repoRes] = await Promise.all([
+      supabase.from('projects').select('id, name, active_extraction_run_id, infra_types').eq('organization_id', id).in('id', accessibleProjectIds),
+      supabase.from('project_teams').select('project_id, team_id, is_owner').in('project_id', accessibleProjectIds),
+      supabase.from('project_security_summaries').select('*').in('project_id', accessibleProjectIds),
+      supabase.from('project_repositories').select('project_id, provider, repo_full_name, last_extracted_at').in('project_id', accessibleProjectIds),
+    ]);
 
+    const projects = projectsRes.data;
     if (!projects || projects.length === 0) {
       return res.json({ projects: [] });
     }
-
     const projectIds = projects.map((p: any) => p.id);
-    // Phase 19: only include findings tagged with the project's currently active run
-    const activeRunIds = (projects as any[])
-      .map((p) => p.active_extraction_run_id)
-      .filter(Boolean) as string[];
-
-    const { data: projectTeams } = await supabase
-      .from('project_teams')
-      .select('project_id, team_id, is_owner')
-      .in('project_id', projectIds);
 
     const ownerTeamMap = new Map<string, string>();
-    for (const pt of projectTeams ?? []) {
+    for (const pt of projectTeamsRes.data ?? []) {
       if (pt.is_owner) ownerTeamMap.set(pt.project_id, pt.team_id);
     }
 
-    // All per-project finding counts + coverage flags are computed in SQL (no row transfer, no
-    // PostgREST 1000-row truncation). See backend/database/phase47_security_summary_counts_rpc.sql.
-    const { data: countRows, error: countsError } = await supabase.rpc('security_summary_counts', {
-      p_project_ids: projectIds,
-      p_active_run_ids: activeRunIds,
-    });
-    if (countsError) throw countsError;
+    if (summaryRes.error) throw summaryRes.error;
     const countsByProject = new Map<string, any>();
-    for (const c of countRows ?? []) countsByProject.set(c.project_id, c);
+    for (const c of summaryRes.data ?? []) countsByProject.set(c.project_id, c);
 
-    // Primary linked repository per project (provider logo + repo name) — one row per project,
-    // bounded by project count, so a plain select is fine here.
-    const { data: repoRows } = await supabase
-      .from('project_repositories')
-      .select('project_id, provider, repo_full_name, last_extracted_at')
-      .in('project_id', projectIds);
+    // Lazy fallback: a project with no stored row yet (brand-new, or before the one-time post-deploy
+    // backfill runs) is computed on the spot so the overview is never wrong. Rare — the recompute
+    // hooks + daily cron keep the table populated, so this almost never fires.
+    const missing = projectIds.filter((pid: string) => !countsByProject.has(pid));
+    if (missing.length) {
+      await Promise.allSettled(
+        missing.map((pid: string) => supabase.rpc('recompute_project_summary', { p_project_id: pid })),
+      );
+      const { data: filled } = await supabase
+        .from('project_security_summaries')
+        .select('*')
+        .in('project_id', missing);
+      for (const c of filled ?? []) countsByProject.set(c.project_id, c);
+    }
+
+    const repoRows = repoRes.data;
 
     const repoByProject = new Map<string, { provider: string | null; repo_full_name: string | null; last_extracted_at: string | null }>();
     for (const r of repoRows ?? []) {
@@ -11448,11 +11435,11 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     if (cached) return res.json(cached);
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+    const activeRunId = activeExtractionId ?? '__no_active_run__';
 
     const [
       projectRow,
-      depsRows,
-      vulnRows,
+      statsResult,
       semgrepResult,
       secretResult,
       verifiedSecretResult,
@@ -11460,17 +11447,23 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       lastFailedJob,
       maliciousResult,
       latestJobMaliciousStatus,
+      depNames,
     ] = await Promise.all([
       supabase.from('projects').select('health_score, status_id, importance').eq('id', projectId).single().then(r => r.data),
-      supabase.from('project_dependencies').select('id, is_direct, policy_result, is_outdated, dependency_id').eq('project_id', projectId).is('removed_at', null).then(r => r.data ?? []),
-      supabase.from('project_dependency_vulnerabilities').select('severity, depscore, is_reachable, project_dependency_id, sla_status').eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).then(r => r.data ?? []),
-      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
-      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('verified', true),
+      // SQL-aggregate vuln + dep counts (phase64b). Replaces the old client-side counting of the
+      // full project_dependency_vulnerabilities + project_dependencies row sets, which silently
+      // truncated at PostgREST's 1000-row cap for any project with >1000 vulns or deps.
+      supabase.rpc('project_stats_counts', { p_project_id: projectId, p_active_run_id: activeRunId }).then(r => r.data?.[0] ?? null),
+      supabase.from('project_semgrep_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId),
+      supabase.from('project_secret_findings').select('id', { count: 'exact', head: true }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('is_verified', true),
       supabase.from('project_repositories').select('status, extraction_step, updated_at, default_branch').eq('project_id', projectId).single().then(r => r.data),
       supabase.from('scan_jobs').select('error, created_at').eq('project_id', projectId).eq('status', 'failed').order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
-      supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__').eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
+      supabase.from('project_malicious_findings').select('severity', { count: 'exact' }).eq('project_id', projectId).eq('extraction_run_id', activeRunId).eq('suppressed', false).eq('risk_accepted', false).then(r => ({ data: r.data ?? [], count: r.count ?? 0 })),
       supabase.from('scan_jobs').select('malicious_scan_status').eq('project_id', projectId).order('created_at', { ascending: false }).limit(1).single().then(r => r.data),
+      // The 30 direct deps shown in the graph (names). Worst-severity per dep is fetched below,
+      // scoped to just these deps, so the graph never re-introduces an unbounded fetch.
+      supabase.from('project_dependencies').select('id, dependency_id, dependencies!inner(name)').eq('project_id', projectId).eq('is_direct', true).is('removed_at', null).limit(30).then(r => r.data ?? []),
     ]);
 
     // Status lookup
@@ -11481,26 +11474,31 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
     }
     const importance: number = typeof (projectRow as any)?.importance === 'number' ? (projectRow as any).importance : 1.0;
 
+    // All vuln + dep counts come from the SQL aggregate (phase64b). bigint columns arrive as
+    // strings over JSON → coerce with Number(). Defensive ?? 0 covers an RPC error (null row).
+    const n = (x: any) => Number(x ?? 0);
+
     // Compliance
-    const compliant = depsRows.filter((d: any) => d.policy_result?.allowed === true).length;
-    const failing = depsRows.filter((d: any) => d.policy_result?.allowed === false).length;
-    const notEvaluated = depsRows.length - compliant - failing;
-    const compliancePercent = depsRows.length > 0 ? Math.round((compliant / depsRows.length) * 100) : 100;
+    const depsTotal = n(statsResult?.deps_total);
+    const compliant = n(statsResult?.deps_compliant);
+    const failing = n(statsResult?.deps_failing);
+    const notEvaluated = depsTotal - compliant - failing;
+    const compliancePercent = depsTotal > 0 ? Math.round((compliant / depsTotal) * 100) : 100;
 
     // Vulnerabilities
-    const vulnCritical = vulnRows.filter((v: any) => v.severity === 'critical').length;
-    const vulnHigh = vulnRows.filter((v: any) => v.severity === 'high').length;
-    const vulnMedium = vulnRows.filter((v: any) => v.severity === 'medium').length;
-    const vulnLow = vulnRows.filter((v: any) => v.severity === 'low').length;
-    const reachableCount = vulnRows.filter((v: any) => v.is_reachable).length;
+    const vulnTotal = n(statsResult?.vuln_total);
+    const vulnCritical = n(statsResult?.vuln_critical);
+    const vulnHigh = n(statsResult?.vuln_high);
+    const vulnMedium = n(statsResult?.vuln_medium);
+    const vulnLow = n(statsResult?.vuln_low);
+    const reachableCount = n(statsResult?.reachable_count);
 
     // Dependencies
-    const directDeps = depsRows.filter((d: any) => d.is_direct === true);
-    const transitiveDeps = depsRows.filter((d: any) => d.is_direct === false);
-    const outdated = depsRows.filter((d: any) => d.is_outdated === true).length;
-    const vulnerableDepIds = new Set(vulnRows.map((v: any) => v.project_dependency_id));
-    const vulnerable = vulnerableDepIds.size;
-    const healthy = depsRows.length - vulnerable;
+    const directCount = n(statsResult?.deps_direct);
+    const transitiveCount = n(statsResult?.deps_transitive);
+    const outdated = n(statsResult?.deps_outdated);
+    const vulnerable = n(statsResult?.deps_vulnerable);
+    const healthy = depsTotal - vulnerable;
 
     // Action items
     const actionItems: any[] = [];
@@ -11537,25 +11535,25 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       });
     }
 
-    // Graph deps — direct deps with worst severity
-    const directDepIds = directDeps.map((d: any) => d.id);
-    const depIdToDepRow = new Map(depsRows.map((d: any) => [d.id, d]));
-
-    const { data: depNames } = await supabase
-      .from('project_dependencies')
-      .select('id, dependency_id, dependencies!inner(name)')
-      .eq('project_id', projectId)
-      .eq('is_direct', true)
-      .is('removed_at', null)
-      .limit(30);
-
+    // Graph deps — the 30 direct deps (fetched above) with their worst severity. Worst severity is
+    // derived from a fetch SCOPED to just those 30 deps, so it's bounded and never truncates.
     const severityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    const directDepRowIds = (depNames ?? []).map((d: any) => d.id);
     const vulnByPd = new Map<string, string>();
-    for (const v of vulnRows) {
-      const curr = vulnByPd.get(v.project_dependency_id) ?? 'none';
-      const newSev = v.severity ?? 'none';
-      if ((severityRank[newSev] ?? 0) > (severityRank[curr] ?? 0)) {
-        vulnByPd.set(v.project_dependency_id, newSev);
+    if (directDepRowIds.length > 0) {
+      const { data: directVulns } = await supabase
+        .from('project_dependency_vulnerabilities')
+        .select('project_dependency_id, severity')
+        .eq('project_id', projectId)
+        .eq('extraction_run_id', activeRunId)
+        .eq('suppressed', false)
+        .in('project_dependency_id', directDepRowIds);
+      for (const v of directVulns ?? []) {
+        const curr = vulnByPd.get(v.project_dependency_id) ?? 'none';
+        const newSev = v.severity ?? 'none';
+        if ((severityRank[newSev] ?? 0) > (severityRank[curr] ?? 0)) {
+          vulnByPd.set(v.project_dependency_id, newSev);
+        }
       }
     }
 
@@ -11565,13 +11563,13 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       worst_severity: vulnByPd.get(d.id) ?? 'none',
     }));
 
-    // SLA aggregates
-    const slaOnTrack = vulnRows.filter((v: any) => v.sla_status === 'on_track').length;
-    const slaWarning = vulnRows.filter((v: any) => v.sla_status === 'warning').length;
-    const slaBreached = vulnRows.filter((v: any) => v.sla_status === 'breached').length;
-    const slaExempt = vulnRows.filter((v: any) => v.sla_status === 'exempt').length;
-    const slaMet = vulnRows.filter((v: any) => v.sla_status === 'met').length;
-    const slaResolvedLate = vulnRows.filter((v: any) => v.sla_status === 'resolved_late').length;
+    // SLA aggregates (from the SQL aggregate)
+    const slaOnTrack = n(statsResult?.sla_on_track);
+    const slaWarning = n(statsResult?.sla_warning);
+    const slaBreached = n(statsResult?.sla_breached);
+    const slaExempt = n(statsResult?.sla_exempt);
+    const slaMet = n(statsResult?.sla_met);
+    const slaResolvedLate = n(statsResult?.sla_resolved_late);
     const slaTotalResolved = slaMet + slaResolvedLate;
     const slaCompliancePercent = slaTotalResolved > 0 ? Math.round((slaMet / slaTotalResolved) * 100) : 100;
 
@@ -11596,8 +11594,8 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
       health_score: projectRow?.health_score ?? 0,
       status,
       importance,
-      compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsRows.length },
-      vulnerabilities: { total: vulnRows.length, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
+      compliance: { percent: compliancePercent, compliant, failing, not_evaluated: notEvaluated, total: depsTotal },
+      vulnerabilities: { total: vulnTotal, critical: vulnCritical, high: vulnHigh, medium: vulnMedium, low: vulnLow, reachable_count: reachableCount },
       code_findings: { semgrep_count: semgrepCount, secret_count: secretCount, verified_secret_count: verifiedSecretCount },
       malicious_packages: {
         total: maliciousTotal,
@@ -11606,7 +11604,7 @@ router.get('/:id/projects/:projectId/stats', async (req: AuthRequest, res) => {
         medium: maliciousMedium,
         scan_status: maliciousScanStatus,
       },
-      dependencies: { total: depsRows.length, direct: directDeps.length, transitive: transitiveDeps.length, outdated, healthy, vulnerable },
+      dependencies: { total: depsTotal, direct: directCount, transitive: transitiveCount, outdated, healthy, vulnerable },
       sync: {
         status: repoRow?.status ?? 'not_connected',
         extraction_step: repoRow?.extraction_step ?? null,

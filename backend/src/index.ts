@@ -25,6 +25,7 @@ import billingRouter from './routes/billing';
 import internalBillingRouter from './routes/internal-billing';
 import billingStripeWebhooksRouter from './routes/billing-stripe-webhooks';
 import billingDriftCronRouter from './routes/billing-drift-cron';
+import securitySummaryCronRouter from './routes/security-summary-cron';
 import scannerCacheReaperRouter from './routes/scanner-cache-reaper';
 import ssoRouter from './routes/sso';
 import googleAuthRouter from './routes/google-auth';
@@ -99,13 +100,16 @@ app.use(cors({
   exposedHeaders: ['Authorization', 'X-Thread-Id'],
 }));
 
-// Log all incoming requests for debugging
+// Per-request response timing for every /api/ call. Logs the wall-clock duration on
+// finish so the overview's 4 parallel mount calls (teams / projects / statuses /
+// security-summary) are easy to compare — the page waits on the SLOWEST of them.
+// Requests >= 1s are tagged SLOW. (Diagnostic; cheap enough to keep.)
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
-    console.log(`${req.method} ${req.path}`, {
-      authorization: req.headers.authorization ? 'present' : 'missing',
-      origin: req.headers.origin,
-      allHeaders: Object.keys(req.headers),
+    const start = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - start;
+      console.log(`[timing] ${res.statusCode} ${req.method} ${req.originalUrl} — ${ms}ms${ms >= 1000 ? '  ⚠ SLOW' : ''}`);
     });
   }
   next();
@@ -188,6 +192,7 @@ app.use('/api/internal/aegis', aegisTaskStepRouter);
 app.use('/api/stripe/webhooks', billingStripeWebhooksRouter);
 app.use('/api/internal/billing', internalBillingRouter);
 app.use('/api/internal/billing', billingDriftCronRouter);
+app.use('/api/internal/security-summary', securitySummaryCronRouter);
 app.use('/api/workers', scannerCacheReaperRouter);
 app.use('/api/sso', ssoRouter);
 app.use('/api/auth', googleAuthRouter);

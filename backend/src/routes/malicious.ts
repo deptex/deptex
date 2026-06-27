@@ -17,6 +17,7 @@ import express from 'express';
 import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId } from '../lib/active-extraction';
+import { recomputeProjectSummary } from '../lib/security-summary';
 import { checkProjectAccess, checkProjectManagePermission } from './project-access';
 import { createActivity } from '../lib/activities';
 import { isValidInternalKey } from '../middleware/internal-key';
@@ -348,6 +349,7 @@ router.patch('/:id/projects/:projectId/malicious-findings/:findingId', async (re
       },
     });
 
+    await recomputeProjectSummary(projectId);
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error updating malicious finding:', error);

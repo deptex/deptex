@@ -1683,6 +1683,27 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   malicious_finding_id uuid,
   thread_id uuid
 );
+CREATE TABLE IF NOT EXISTS public.project_security_summaries (
+  project_id uuid NOT NULL,
+  organization_id uuid NOT NULL,
+  active_extraction_run_id text,
+  vuln_count bigint NOT NULL DEFAULT 0,
+  critical_count bigint NOT NULL DEFAULT 0,
+  reachable_count bigint NOT NULL DEFAULT 0,
+  worst_depscore numeric NOT NULL DEFAULT 0,
+  band_critical bigint NOT NULL DEFAULT 0,
+  band_high bigint NOT NULL DEFAULT 0,
+  band_medium bigint NOT NULL DEFAULT 0,
+  band_low bigint NOT NULL DEFAULT 0,
+  ignored_count bigint NOT NULL DEFAULT 0,
+  semgrep_count bigint NOT NULL DEFAULT 0,
+  secret_count bigint NOT NULL DEFAULT 0,
+  verified_secret_count bigint NOT NULL DEFAULT 0,
+  has_container boolean NOT NULL DEFAULT false,
+  has_dast boolean NOT NULL DEFAULT false,
+  last_scan_at timestamp with time zone,
+  summary_updated_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.project_semgrep_findings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid NOT NULL,
@@ -5309,6 +5330,48 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.project_stats_counts(p_project_id uuid, p_active_run_id text)
+ RETURNS TABLE(vuln_total bigint, vuln_critical bigint, vuln_high bigint, vuln_medium bigint, vuln_low bigint, reachable_count bigint, sla_on_track bigint, sla_warning bigint, sla_breached bigint, sla_exempt bigint, sla_met bigint, sla_resolved_late bigint, deps_total bigint, deps_direct bigint, deps_transitive bigint, deps_outdated bigint, deps_compliant bigint, deps_failing bigint, deps_vulnerable bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    v.vuln_total, v.vuln_critical, v.vuln_high, v.vuln_medium, v.vuln_low, v.reachable_count,
+    v.sla_on_track, v.sla_warning, v.sla_breached, v.sla_exempt, v.sla_met, v.sla_resolved_late,
+    d.deps_total, d.deps_direct, d.deps_transitive, d.deps_outdated,
+    d.deps_compliant, d.deps_failing, v.deps_vulnerable
+  FROM (
+    SELECT
+      count(*) FILTER (WHERE NOT suppressed) AS vuln_total,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'critical') AS vuln_critical,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'high') AS vuln_high,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'medium') AS vuln_medium,
+      count(*) FILTER (WHERE NOT suppressed AND severity = 'low') AS vuln_low,
+      count(*) FILTER (WHERE NOT suppressed AND is_reachable) AS reachable_count,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'on_track') AS sla_on_track,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'warning') AS sla_warning,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'breached') AS sla_breached,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'exempt') AS sla_exempt,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'met') AS sla_met,
+      count(*) FILTER (WHERE NOT suppressed AND sla_status = 'resolved_late') AS sla_resolved_late,
+      count(DISTINCT project_dependency_id) FILTER (WHERE NOT suppressed) AS deps_vulnerable
+    FROM project_dependency_vulnerabilities
+    WHERE project_id = p_project_id AND extraction_run_id = p_active_run_id
+  ) v
+  CROSS JOIN (
+    SELECT
+      count(*) AS deps_total,
+      count(*) FILTER (WHERE is_direct) AS deps_direct,
+      count(*) FILTER (WHERE NOT is_direct) AS deps_transitive,
+      count(*) FILTER (WHERE is_outdated) AS deps_outdated,
+      count(*) FILTER (WHERE policy_result->'allowed' = 'true'::jsonb) AS deps_compliant,
+      count(*) FILTER (WHERE policy_result->'allowed' = 'false'::jsonb) AS deps_failing
+    FROM project_dependencies
+    WHERE project_id = p_project_id AND removed_at IS NULL
+  ) d;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.queue_fix_job(p_project_id uuid, p_organization_id uuid, p_fix_type text, p_strategy text, p_triggered_by uuid, p_osv_id text DEFAULT NULL::text, p_dependency_id uuid DEFAULT NULL::uuid, p_project_dependency_id uuid DEFAULT NULL::uuid, p_semgrep_finding_id uuid DEFAULT NULL::uuid, p_secret_finding_id uuid DEFAULT NULL::uuid, p_target_version text DEFAULT NULL::text, p_payload jsonb DEFAULT '{}'::jsonb)
  RETURNS uuid
  LANGUAGE plpgsql
@@ -5725,6 +5788,28 @@ END;
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.recompute_all_project_summaries(p_stale_before timestamp with time zone DEFAULT NULL::timestamp with time zone)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+DECLARE r record; n integer := 0;
+BEGIN
+  FOR r IN
+    SELECT p.id
+    FROM projects p
+    LEFT JOIN project_security_summaries pss ON pss.project_id = p.id
+    WHERE p_stale_before IS NULL
+       OR pss.project_id IS NULL
+       OR pss.summary_updated_at < p_stale_before
+  LOOP
+    PERFORM recompute_project_summary(r.id);
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.recompute_dependency_is_malicious(p_dependency_ids uuid[])
  RETURNS void
  LANGUAGE plpgsql
@@ -5749,6 +5834,63 @@ BEGIN
     )
   )
   WHERE d.id = ANY(p_dependency_ids);
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recompute_project_summary(p_project_id uuid)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_org_id uuid;
+  v_run_id text;
+BEGIN
+  SELECT organization_id, active_extraction_run_id
+    INTO v_org_id, v_run_id
+    FROM projects WHERE id = p_project_id;
+  IF v_org_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO project_security_summaries AS pss (
+    project_id, organization_id, active_extraction_run_id,
+    vuln_count, critical_count, reachable_count, worst_depscore,
+    band_critical, band_high, band_medium, band_low, ignored_count,
+    semgrep_count, secret_count, verified_secret_count,
+    has_container, has_dast, last_scan_at, summary_updated_at
+  )
+  SELECT
+    p_project_id, v_org_id, v_run_id,
+    COALESCE(s.vuln_count, 0), COALESCE(s.critical_count, 0), COALESCE(s.reachable_count, 0),
+    COALESCE(s.worst_depscore, 0),
+    COALESCE(s.band_critical, 0), COALESCE(s.band_high, 0), COALESCE(s.band_medium, 0),
+    COALESCE(s.band_low, 0), COALESCE(s.ignored_count, 0),
+    COALESCE(s.semgrep_count, 0), COALESCE(s.secret_count, 0), COALESCE(s.verified_secret_count, 0),
+    COALESCE(s.has_container, false), COALESCE(s.has_dast, false), s.last_scan_at, now()
+  FROM security_summary_counts(
+         ARRAY[p_project_id]::uuid[],
+         CASE WHEN v_run_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[v_run_id] END
+       ) s
+  ON CONFLICT (project_id) DO UPDATE SET
+    organization_id          = EXCLUDED.organization_id,
+    active_extraction_run_id = EXCLUDED.active_extraction_run_id,
+    vuln_count               = EXCLUDED.vuln_count,
+    critical_count           = EXCLUDED.critical_count,
+    reachable_count          = EXCLUDED.reachable_count,
+    worst_depscore           = EXCLUDED.worst_depscore,
+    band_critical            = EXCLUDED.band_critical,
+    band_high                = EXCLUDED.band_high,
+    band_medium              = EXCLUDED.band_medium,
+    band_low                 = EXCLUDED.band_low,
+    ignored_count            = EXCLUDED.ignored_count,
+    semgrep_count            = EXCLUDED.semgrep_count,
+    secret_count             = EXCLUDED.secret_count,
+    verified_secret_count    = EXCLUDED.verified_secret_count,
+    has_container            = EXCLUDED.has_container,
+    has_dast                 = EXCLUDED.has_dast,
+    last_scan_at             = EXCLUDED.last_scan_at,
+    summary_updated_at       = now();
 END;
 $function$
 ;
@@ -6298,6 +6440,62 @@ CREATE OR REPLACE FUNCTION public.subvector(vector, integer, integer)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$subvector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.team_stats_counts(p_project_ids uuid[], p_active_run_ids text[])
+ RETURNS TABLE(vuln_total bigint, vuln_critical bigint, vuln_high bigint, vuln_medium bigint, vuln_low bigint, sla_on_track bigint, sla_warning bigint, sla_breached bigint, sla_exempt bigint, sla_met bigint, sla_resolved_late bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT
+    count(*) FILTER (WHERE NOT suppressed) AS vuln_total,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'critical') AS vuln_critical,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'high') AS vuln_high,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'medium') AS vuln_medium,
+    count(*) FILTER (WHERE NOT suppressed AND severity = 'low') AS vuln_low,
+    count(*) FILTER (WHERE sla_status = 'on_track') AS sla_on_track,
+    count(*) FILTER (WHERE sla_status = 'warning') AS sla_warning,
+    count(*) FILTER (WHERE sla_status = 'breached') AS sla_breached,
+    count(*) FILTER (WHERE sla_status = 'exempt') AS sla_exempt,
+    count(*) FILTER (WHERE sla_status = 'met') AS sla_met,
+    count(*) FILTER (WHERE sla_status = 'resolved_late') AS sla_resolved_late
+  FROM project_dependency_vulnerabilities
+  WHERE project_id = ANY(p_project_ids)
+    AND extraction_run_id = ANY(p_active_run_ids);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.team_top_vulns(p_project_ids uuid[], p_active_run_ids text[])
+ RETURNS TABLE(osv_id text, depscore numeric, severity text, worst_project_id uuid, affected_project_count bigint)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  WITH team_vulns AS (
+    SELECT project_id, osv_id, severity, depscore
+    FROM project_dependency_vulnerabilities
+    WHERE project_id = ANY(p_project_ids)
+      AND extraction_run_id = ANY(p_active_run_ids)
+      AND suppressed = false
+      AND osv_id IS NOT NULL
+  ),
+  affected AS (
+    SELECT osv_id AS oid, count(DISTINCT project_id) AS affected_project_count
+    FROM team_vulns
+    GROUP BY osv_id
+  ),
+  ranked AS (
+    SELECT tv.osv_id, tv.severity, tv.depscore, tv.project_id,
+           row_number() OVER (PARTITION BY tv.osv_id ORDER BY tv.depscore DESC NULLS LAST) AS rn
+    FROM team_vulns tv
+    WHERE tv.severity IN ('critical', 'high')
+  )
+  SELECT r.osv_id, r.depscore, r.severity, r.project_id AS worst_project_id, a.affected_project_count
+  FROM ranked r
+  JOIN affected a ON a.oid = r.osv_id
+  WHERE r.rn = 1
+  ORDER BY r.depscore DESC NULLS LAST
+  LIMIT 5;
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.trg_container_finding_status()
@@ -6967,6 +7165,7 @@ ALTER TABLE public.project_repositories ADD CONSTRAINT project_repositories_pkey
 ALTER TABLE public.project_roles ADD CONSTRAINT project_roles_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_secret_findings ADD CONSTRAINT project_secret_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_pkey PRIMARY KEY (id);
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_pkey PRIMARY KEY (project_id);
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_pkey PRIMARY KEY (id);
 ALTER TABLE public.project_usage_slices ADD CONSTRAINT project_usage_slices_pkey PRIMARY KEY (id);
@@ -7412,6 +7611,8 @@ ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_rejected_by_user_id_fkey FOREIGN KEY (rejected_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES aegis_chat_threads(id) ON DELETE SET NULL;
 ALTER TABLE public.project_security_fixes ADD CONSTRAINT project_security_fixes_triggered_by_fkey FOREIGN KEY (triggered_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
+ALTER TABLE public.project_security_summaries ADD CONSTRAINT project_security_summaries_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_semgrep_findings ADD CONSTRAINT project_semgrep_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE public.project_teams ADD CONSTRAINT project_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
