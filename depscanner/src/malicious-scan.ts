@@ -44,6 +44,7 @@ import {
   CAPABILITY_SCANNER_VERSION,
   detectCapabilities,
 } from './malicious/capabilities';
+import { emptyCapabilitySet } from './malicious/capabilities/types';
 import {
   buildReachabilityIndex,
   computeReachability,
@@ -148,6 +149,10 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   let feedHits = 0;
   let guarddogHits = 0;
   let guarddogSuppressed = 0;
+  // Packages fully served from cache (no tarball download, no GuardDog /
+  // capability re-run). Surfaced in the success log so the cache win is
+  // visible — on a warm re-scan this should be the overwhelming majority.
+  let cacheHits = 0;
   const lastHeartbeat = { at: Date.now() };
 
   const limit = pLimit(MALICIOUS_SCAN_CONCURRENCY);
@@ -228,18 +233,19 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
         //    scan share an unpacked tree to avoid downloading the tarball
         //    twice. We check both caches up front and only unpack when at
         //    least one consumer needs the source.
-        const cachedRules = guarddogAvailable
+        const guardDogLookup = guarddogAvailable
           ? await readGuardDogCache(ctx.supabase, pkg.name, pkg.version, canonical)
-          : [];
+          : { found: true, rules: [] as GuardDogRule[] };
         const cachedCapabilities = await readCapabilityCache(ctx.supabase, pkg.name, pkg.version, canonical);
 
-        const guarddogCacheHit = !guarddogAvailable || cachedRules.length > 0;
+        const guarddogCacheHit = !guarddogAvailable || guardDogLookup.found;
         const capabilityCacheHit =
           cachedCapabilities !== null &&
           cachedCapabilities.scanner_version === CAPABILITY_SCANNER_VERSION;
         const needsUnpack = !guarddogCacheHit || !capabilityCacheHit;
+        if (!needsUnpack) cacheHits++;
 
-        let rules: GuardDogRule[] = cachedRules;
+        let rules: GuardDogRule[] = guardDogLookup.rules;
 
         if (needsUnpack) {
           const entry = await cache.fetch(canonical, pkg.name, pkg.version);
@@ -270,6 +276,37 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
                 scanner_version: capResult.scanner_version,
                 capabilities: capResult.capabilities,
                 scan_error: capResult.scan_error,
+              });
+            }
+          } else {
+            // Tarball unavailable (private / workspace / yanked / transient
+            // registry blip). Negative-cache BOTH consumers so we don't
+            // re-attempt the download — and re-eat its timeout — on every
+            // scan. Read back as a TTL-bounded hit (see readGuardDogCache);
+            // the cheap feed lookup still runs every scan, so known-malware
+            // detection is never gated on this. Only write where that
+            // consumer actually missed, so a pre-existing good row (e.g. a
+            // clean GuardDog verdict whose capability scan was the miss)
+            // is never clobbered with a negative entry.
+            if (guarddogAvailable && !guarddogCacheHit) {
+              await upsertGuardDogCache(ctx.supabase, {
+                package_name: pkg.name,
+                version: pkg.version,
+                ecosystem: canonical,
+                scanner: 'guarddog',
+                scanner_version: GUARDDOG_VERSION,
+                findings: [],
+                risk_level: GUARDDOG_FETCH_ERROR_RISK_LEVEL,
+              });
+            }
+            if (!capabilityCacheHit) {
+              await upsertCapabilityCache(ctx.supabase, {
+                package_name: pkg.name,
+                version: pkg.version,
+                ecosystem: canonical,
+                scanner_version: CAPABILITY_SCANNER_VERSION,
+                capabilities: emptyCapabilitySet(),
+                scan_error: 'tarball_unavailable',
               });
             }
           }
@@ -372,7 +409,7 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
 
   await ctx.log.success(
     STEP,
-    `${scanned}/${ctx.packages.length} scanned, ${feedHits} feed + ${guarddogHits} GuardDog hits` +
+    `${scanned}/${ctx.packages.length} scanned (${cacheHits} from cache), ${feedHits} feed + ${guarddogHits} GuardDog hits` +
       (guarddogSuppressed > 0 ? ` (${guarddogSuppressed} low-precision suppressed)` : '') +
       `, ${inserted} new findings (${status})`,
     Date.now() - start,
@@ -390,23 +427,90 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
   };
 }
 
-async function readGuardDogCache(
+/**
+ * Negative-cache sentinel written to `risk_level` when a tarball can't be
+ * fetched (private / workspace / yanked / transient registry blip). Read
+ * back as a cache hit so we don't re-attempt the download every scan.
+ */
+export const GUARDDOG_FETCH_ERROR_RISK_LEVEL = 'fetch_error';
+
+/**
+ * How long a `fetch_error` negative-cache entry suppresses re-fetching
+ * before we try once more. Bounds the cost of a permanently-unfetchable
+ * package to one attempt per window while still eventually retrying a
+ * package that was only transiently unavailable. The cheap feed lookup runs
+ * on EVERY scan regardless, so known-malware detection is never gated on
+ * this TTL.
+ */
+export const GUARDDOG_FETCH_ERROR_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+export interface GuardDogCacheLookup {
+  /**
+   * A usable cache row exists for the current GuardDog version — skip the
+   * tarball download + GuardDog re-run. `false` is a genuine miss: no row,
+   * a stale scanner_version (new rules → must re-scan), or a `fetch_error`
+   * row past its retry TTL.
+   */
+  found: boolean;
+  /** Findings to surface. Empty for a clean scan or a fetch_error row. */
+  rules: GuardDogRule[];
+}
+
+/**
+ * Look up the GuardDog verdict for (package, version, ecosystem).
+ *
+ * A published tarball is immutable, so a prior GuardDog verdict — including
+ * a CLEAN one (zero findings) — is valid forever for the version that
+ * produced it. The previous implementation returned a bare `GuardDogRule[]`
+ * and the caller treated `length > 0` as the cache-hit signal, which meant
+ * every clean package (~92% of all packages) looked like a miss and got
+ * re-downloaded + re-scanned on every extraction. We now signal hit/miss by
+ * ROW EXISTENCE + scanner_version match (mirroring the capability cache),
+ * with a TTL carve-out for negative `fetch_error` rows.
+ *
+ * Exported for unit testing — production callers go through runMaliciousScan.
+ */
+export async function readGuardDogCache(
   supabase: Storage,
   packageName: string,
   version: string,
   ecosystem: string,
-): Promise<GuardDogRule[]> {
+  nowMs: number = Date.now(),
+): Promise<GuardDogCacheLookup> {
   const { data, error } = await supabase
     .from('package_security_cache')
-    .select('findings')
+    .select('findings, scanner_version, risk_level, scanned_at')
     .eq('package_name', packageName)
     .eq('version', version)
     .eq('ecosystem', ecosystem)
     .eq('scanner', 'guarddog')
     .maybeSingle();
-  if (error || !data) return [];
-  const rows = (data as { findings?: GuardDogRule[] }).findings ?? [];
-  return Array.isArray(rows) ? rows : [];
+  if (error || !data) return { found: false, rules: [] };
+
+  const row = data as {
+    findings?: GuardDogRule[] | null;
+    scanner_version?: string | null;
+    risk_level?: string | null;
+    scanned_at?: string | null;
+  };
+
+  // A cache entry is only valid for the GuardDog version that produced it —
+  // a scanner upgrade ships new rules, so a stale-version row must re-scan.
+  if (row.scanner_version !== GUARDDOG_VERSION) return { found: false, rules: [] };
+
+  // Negative cache: a prior run couldn't fetch the tarball. Treat as a hit
+  // (skip the re-fetch) only within the TTL so a transient failure is
+  // eventually retried; past the window, fall through to a miss.
+  if (row.risk_level === GUARDDOG_FETCH_ERROR_RISK_LEVEL) {
+    const scannedAtMs = row.scanned_at ? Date.parse(row.scanned_at) : NaN;
+    const fresh = Number.isFinite(scannedAtMs) && nowMs - scannedAtMs < GUARDDOG_FETCH_ERROR_TTL_MS;
+    return { found: fresh, rules: [] };
+  }
+
+  // Row exists for the current scanner version → HIT, even when the package
+  // scanned clean (empty findings array). This is the fix.
+  const rules = Array.isArray(row.findings) ? row.findings : [];
+  return { found: true, rules };
 }
 
 function highestSeverity(rules: GuardDogRule[]): 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none' {
