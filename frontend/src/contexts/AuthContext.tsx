@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { clearOverviewCache } from '../lib/overview-cache';
 
 interface AuthContextType {
   user: User | null;
@@ -119,6 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     Object.keys(localStorage)
       .filter((k) => k.startsWith('user_profile_'))
       .forEach((k) => localStorage.removeItem(k));
+    // Drop the cached org-overview bundles so the next user in this browser never
+    // paints the previous user's permission-scoped view.
+    clearOverviewCache();
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error('Error signing out:', error);

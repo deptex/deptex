@@ -14,6 +14,7 @@ import { updateAllProjectsCompliance } from './projects';
 import { invalidateAllProjectCachesInOrg, invalidateProjectCachesForTeam, getCached, setCached } from '../lib/cache';
 import { emitEvent } from '../lib/event-bus';
 import { getActiveExtractionId, getActiveExtractionIds } from '../lib/active-extraction';
+import { buildOrgStatuses } from '../lib/overview';
 
 const router = express.Router();
 
@@ -2514,22 +2515,9 @@ async function canManageStatuses(organizationId: string, userId: string): Promis
 // GET /api/organizations/:id/statuses
 router.get('/:id/statuses', async (req: AuthRequest, res) => {
   try {
-    const userId = req.user!.id;
-    const { id } = req.params;
-
-    // The membership check and the statuses fetch are independent — run them in parallel (the
-    // statuses are read into memory but only returned once membership is confirmed, so a non-member
-    // still gets a 404 and never sees the data).
-    const [membershipRes, statusesRes] = await Promise.all([
-      supabase.from('organization_members').select('role').eq('organization_id', id).eq('user_id', userId).single(),
-      supabase.from('organization_statuses').select('*').eq('organization_id', id).order('rank', { ascending: true }),
-    ]);
-
-    if (!membershipRes.data) {
-      return res.status(404).json({ error: 'Organization not found or access denied' });
-    }
-    if (statusesRes.error) throw statusesRes.error;
-    res.json(statusesRes.data ?? []);
+    const r = await buildOrgStatuses(req.user!.id, req.params.id);
+    if (r.error) return res.status(r.error.status).json({ error: r.error.message });
+    res.json(r.data);
   } catch (error: any) {
     fail(res, error, error.message || 'Failed to fetch statuses');
   }
