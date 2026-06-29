@@ -471,25 +471,12 @@ export async function buildOrgProjects(
     directDepsByProject[row.project_id] = (directDepsByProject[row.project_id] ?? 0) + 1;
   }
 
-  // Per-project compliance % (share of deps with policy_result.allowed !== false) for Compliance tab
-  const compliancePctByProject: Record<string, number | null> = {};
-  if (projectIds.length > 0) {
-    const { data: pdRows } = await supabase
-      .from('project_dependencies')
-      .select('project_id, policy_result')
-      .in('project_id', projectIds)
-      .is('removed_at', null);
-    const byProject: Record<string, { total: number; compliant: number }> = {};
-    for (const pid of projectIds) byProject[pid] = { total: 0, compliant: 0 };
-    (pdRows || []).forEach((row: any) => {
-      byProject[row.project_id].total += 1;
-      if (row.policy_result?.allowed !== false) byProject[row.project_id].compliant += 1;
-    });
-    for (const pid of projectIds) {
-      const { total, compliant } = byProject[pid];
-      compliancePctByProject[pid] = total === 0 ? null : Math.round((compliant / total) * 100);
-    }
-  }
+  // NOTE: per-project compliance % was removed here — it scanned EVERY dependency
+  // (incl. transitive) for every project on every overview/projects load (O(total
+  // deps)), but nothing consumed `compliance_score_pct`: the Compliance tab
+  // recomputes its own score client-side (ProjectComplianceContent). Deleting it
+  // keeps this endpoint O(projects). Re-add via the project_security_summaries
+  // spine (not a live scan) if a server-side compliance number is ever needed.
 
   // Format projects with team_ids, team_names, owner_team, role, and permissions
   const formattedProjects = (projects || []).map((project: any) => {
@@ -571,7 +558,6 @@ export async function buildOrgProjects(
       status_name: statusInfo?.name ?? null,
       status_color: statusInfo?.color ?? null,
       importance: typeof project.importance === 'number' ? project.importance : 1.0,
-      compliance_score_pct: compliancePctByProject[project.id] ?? null,
       policy_evaluated_at: project.policy_evaluated_at ?? null,
       status_violations: project.status_violations ?? [],
       canvas_position_x: project.canvas_position_x ?? null,
