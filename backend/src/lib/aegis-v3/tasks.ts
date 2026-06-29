@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supabase } from '../supabase';
 import { getActiveExtractionId } from '../active-extraction';
 import { logSecurityEvent } from '../security-audit';
@@ -52,6 +53,7 @@ async function resolveTargetFindingId(target: AegisTaskTarget): Promise<string |
   if (!activeRun) return null;
 
   if (target.findingType === 'vulnerability') {
+    // Vuln finding_key = sha256(package‖osv_id) is location-unique → safe to resolve by.
     const { data } = await supabase
       .from('project_dependency_vulnerabilities')
       .select('osv_id')
@@ -64,8 +66,30 @@ async function resolveTargetFindingId(target: AegisTaskTarget): Promise<string |
     return (data as any)?.osv_id ?? null;
   }
 
+  // semgrep / secret: resolve by LOCATION (findingHandle = `file:line`), because
+  // their finding_key is per-rule (shared across all occurrences). Falling back
+  // to finding_key would collapse N distinct findings to one row.
   const table =
     target.findingType === 'semgrep' ? 'project_semgrep_findings' : 'project_secret_findings';
+  if (target.findingHandle) {
+    const colon = target.findingHandle.lastIndexOf(':');
+    const filePath = colon > 0 ? target.findingHandle.slice(0, colon) : '';
+    const line = colon > 0 ? parseInt(target.findingHandle.slice(colon + 1), 10) : NaN;
+    if (filePath && Number.isFinite(line)) {
+      let q = supabase
+        .from(table)
+        .select('id')
+        .eq('project_id', target.projectId)
+        .eq('file_path', filePath)
+        .eq('start_line', line)
+        .eq('extraction_run_id', activeRun)
+        .eq('status', 'open');
+      if (target.findingType === 'secret') q = q.eq('is_current', true);
+      const { data } = await q.limit(1).maybeSingle();
+      return (data as any)?.id ?? null;
+    }
+  }
+  // Fallback (no location handle): resolve by finding_key (picks one occurrence).
   const { data } = await supabase
     .from(table)
     .select('id')
@@ -119,6 +143,30 @@ async function createTaskThread(args: {
   await supabase.from('aegis_chat_participants').insert({ thread_id: threadId, user_id: userId });
   await supabase.from('aegis_agent_tasks').update({ thread_id: threadId }).eq('id', taskId);
   return threadId;
+}
+
+/**
+ * Seed the task-chat with Aegis's opening turn: a short narration plus one
+ * inline fix card per fix. The card parts are shaped exactly like a persisted
+ * `request_fix` tool result so ChatPane's buildInitialMessages rehydrates them
+ * into live-updating PlanCards (each self-subscribes to its fix's realtime
+ * status) — that's how "the fixes read as part of the narrative". Best-effort.
+ */
+async function postTaskOpeningMessage(
+  threadId: string,
+  text: string,
+  fixIds: string[],
+): Promise<void> {
+  const parts: any[] = [{ type: 'text', text }];
+  for (const fixId of fixIds) {
+    const toolCallId = crypto.randomUUID();
+    parts.push({ type: 'tool-call', toolCallId, toolName: 'request_fix', args: {} });
+    parts.push({ type: 'tool-result', toolCallId, toolName: 'request_fix', result: { fixId }, isError: false });
+  }
+  await supabase
+    .from('aegis_chat_messages')
+    .insert({ thread_id: threadId, role: 'assistant', content: text, metadata: { parts } })
+    .then(undefined, (e: any) => console.error('[aegis-task] opening message insert failed:', e?.message));
 }
 
 /**
@@ -267,6 +315,11 @@ export async function acceptTask(args: {
         summary: 'Nothing to fix — the targeted findings are no longer present in the latest scan.',
       })
       .eq('id', taskId);
+    await postTaskOpeningMessage(
+      threadId,
+      "There's nothing to fix here — the findings I was sent are no longer present in the latest scan. Marking this task complete.",
+      [],
+    );
     await logSecurityEvent({
       organizationId,
       actorId: userId,
@@ -280,8 +333,8 @@ export async function acceptTask(args: {
 
   // 5. Fan out auto-approved fixes (best-effort; a single crash marks that fix
   //    failed and the loop continues). Each fix stamps task_id AND thread_id so
-  //    the rollup trigger fires and the realtime FixPanelHost shows progress.
-  let created = 0;
+  //    the rollup trigger fires and the inline PlanCards live-update.
+  const createdFixIds: string[] = [];
   for (const { target, findingId } of resolved) {
     const result = await createFixRequest({
       organizationId,
@@ -294,7 +347,7 @@ export async function acceptTask(args: {
       autoApprove: true,
       payloadSource: 'aegis_task',
     });
-    if (result.fixId) created += 1;
+    if (result.fixId) createdFixIds.push(result.fixId);
 
     // 6. File an 'aegis' tracker link so the finding shows the Aegis chip. The
     //    rollup trigger flips it to ✓ when the task resolves cleanly.
@@ -320,13 +373,23 @@ export async function acceptTask(args: {
       );
   }
 
+  // 7. Seed the task-chat: Aegis's opening turn + an inline live card per fix.
+  const n = createdFixIds.length;
+  const skipped = resolved.length - n;
+  const opening =
+    `On it — I'm fixing ${n} ${n === 1 ? 'finding' : 'findings'} and will open ` +
+    `${n === 1 ? 'a draft PR' : 'draft PRs'} for ${n === 1 ? 'it' : 'each'}. ` +
+    `You can watch each one below; I'll only stop to ask if something blocks me.` +
+    (skipped > 0 ? ` (${skipped} target${skipped === 1 ? '' : 's'} were no longer present and were skipped.)` : '');
+  await postTaskOpeningMessage(threadId, opening, createdFixIds);
+
   await logSecurityEvent({
     organizationId,
     actorId: userId,
     action: 'aegis_task_accepted',
     targetType: 'aegis_task',
     targetId: taskId,
-    metadata: { fixCount: created, targets: task.targets.length },
+    metadata: { fixCount: n, targets: task.targets.length },
   });
 
   return { threadId };
@@ -400,27 +463,36 @@ export async function findOpenTaskForFinding(args: {
   projectId: string;
   findingType: string;
   findingKey: string;
+  findingHandle?: string;
 }): Promise<{ taskId: string; threadId: string | null } | null> {
-  const { orgId, projectId, findingType, findingKey } = args;
+  const { orgId, projectId, findingType, findingKey, findingHandle } = args;
+
+  // semgrep / secret finding_key is per-RULE (shared across locations), so dedup
+  // those on the location handle; vulnerability finding_key is location-unique.
+  const locationKeyed = (findingType === 'semgrep' || findingType === 'secret') && !!findingHandle;
+  const targetMatch = locationKeyed ? { findingType, findingHandle } : { findingType, findingKey };
 
   // 1. A non-terminal task already targeting this finding — catches a
-  //    finding-door task that's still 'proposed' (no tracker link yet, so the
-  //    link check below would miss it) as well as a 'working' one. targets is
-  //    JSONB; @> matches array elements that contain these keys.
+  //    finding-door task that's still 'proposed' (no tracker link yet) as well
+  //    as a 'working' one. targets is JSONB; @> matches array elements that
+  //    contain these keys.
   const { data: openTasks } = await supabase
     .from('aegis_agent_tasks')
     .select('id, thread_id')
     .eq('organization_id', orgId)
     .eq('project_id', projectId)
     .in('status', ['proposed', 'working', 'needs_input'])
-    .contains('targets', [{ findingType, findingKey }])
+    .contains('targets', [targetMatch])
     .order('created_at', { ascending: false })
     .limit(1);
   if (openTasks && openTasks.length > 0) {
     return { taskId: openTasks[0].id as string, threadId: (openTasks[0].thread_id as string) ?? null };
   }
 
-  // 2. An existing aegis link points at the task via external_id (accepted task).
+  // 2. The aegis tracker link is keyed by finding_key, which is per-rule for
+  //    semgrep/secret — so it would over-match distinct locations. Only trust it
+  //    for vulnerabilities (location-unique finding_key).
+  if (locationKeyed) return null;
   const { data: link } = await supabase
     .from('finding_tracker_links')
     .select('external_id, external_state')

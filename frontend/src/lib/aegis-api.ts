@@ -90,6 +90,7 @@ export interface AegisTaskTarget {
   findingType: 'vulnerability' | 'semgrep' | 'secret';
   findingKey: string;
   osvId?: string;
+  findingHandle?: string;
   projectId: string;
   label: string;
 }
@@ -269,6 +270,7 @@ export const aegisApi = {
     findingType: 'vulnerability' | 'semgrep' | 'secret';
     findingKey: string;
     osvId?: string;
+    findingHandle?: string;
     label?: string;
   }): Promise<{ taskId: string; threadId: string; deduped?: boolean }> {
     return fetchWithAuth('/api/aegis/tasks', {

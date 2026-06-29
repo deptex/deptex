@@ -29,7 +29,7 @@ function statusForError(message: string): number {
  */
 router.post('/', async (req: AuthRequest, res) => {
   const userId = req.user!.id;
-  const { organizationId, projectId, findingType, findingKey, osvId, label } = req.body ?? {};
+  const { organizationId, projectId, findingType, findingKey, osvId, findingHandle, label } = req.body ?? {};
 
   if (!organizationId || !projectId || !findingType || !findingKey) {
     return res
@@ -41,12 +41,23 @@ router.post('/', async (req: AuthRequest, res) => {
       .status(400)
       .json({ error: `findingType must be one of ${AEGIS_TASK_FINDING_TYPES.join(', ')}` });
   }
+  // semgrep/secret need the location handle (their finding_key is per-rule).
+  if ((findingType === 'semgrep' || findingType === 'secret') && !findingHandle) {
+    return res.status(400).json({ error: 'findingHandle (file:line) is required for semgrep/secret findings' });
+  }
   if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
     return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
   }
 
   try {
-    const existing = await findOpenTaskForFinding({ orgId: organizationId, projectId, findingType, findingKey });
+    const handle = typeof findingHandle === 'string' ? findingHandle : undefined;
+    const existing = await findOpenTaskForFinding({
+      orgId: organizationId,
+      projectId,
+      findingType,
+      findingKey,
+      findingHandle: handle,
+    });
     if (existing) {
       return res.status(200).json({ taskId: existing.taskId, threadId: existing.threadId, deduped: true });
     }
@@ -61,6 +72,7 @@ router.post('/', async (req: AuthRequest, res) => {
         findingType: findingType as AegisTaskFindingType,
         findingKey,
         osvId: typeof osvId === 'string' ? osvId : undefined,
+        findingHandle: handle,
         projectId,
         label: targetLabel,
       },

@@ -85,6 +85,9 @@ async function resolveTaskTarget(
     target: {
       findingType: t.findingType,
       findingKey: row.finding_key,
+      // Location handle — the per-finding identity for semgrep/secret (their
+      // finding_key is per-rule, shared across occurrences).
+      findingHandle: `${filePath}:${line}`,
       projectId,
       label: `${t.findingType} finding at ${filePath}:${line}`,
     },

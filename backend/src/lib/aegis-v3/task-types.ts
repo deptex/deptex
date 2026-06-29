@@ -25,6 +25,10 @@ export interface AegisTaskTarget {
   findingType: AegisTaskFindingType;
   findingKey: string;
   osvId?: string;
+  // Location handle `file:line` for semgrep / secret. Their finding_key is
+  // per-RULE (shared across every occurrence), so the per-finding identity must
+  // be the location — otherwise N distinct findings collapse to one fix.
+  findingHandle?: string;
   projectId: string;
   label: string;
 }

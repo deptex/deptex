@@ -126,16 +126,25 @@ export async function getOrgInstallationId(
   supabase: SupabaseClient,
   organizationId: string,
   projectId: string,
-): Promise<{ installationId: string; repoFullName: string } | null> {
+): Promise<{ installationId: string; repoFullName: string; packageJsonPath: string } | null> {
   const { data: repo } = await supabase
     .from('project_repositories')
-    .select('repo_full_name, installation_id')
+    .select('repo_full_name, installation_id, package_json_path')
     .eq('project_id', projectId)
     .maybeSingle();
   if (!repo?.repo_full_name) return null;
 
+  // package_json_path is the project's subdirectory within a monorepo
+  // (TEXT, '' = repo root, e.g. 'frontend' / 'backend'). Setup + plan-apply +
+  // tests run inside this subdir; git ops stay at the clone root.
+  const packageJsonPath = (repo.package_json_path as string | null) ?? '';
+
   if (repo.installation_id) {
-    return { installationId: repo.installation_id as string, repoFullName: repo.repo_full_name };
+    return {
+      installationId: repo.installation_id as string,
+      repoFullName: repo.repo_full_name,
+      packageJsonPath,
+    };
   }
 
   const { data: org } = await supabase
@@ -144,5 +153,9 @@ export async function getOrgInstallationId(
     .eq('id', organizationId)
     .single();
   if (!org?.github_installation_id) return null;
-  return { installationId: org.github_installation_id as string, repoFullName: repo.repo_full_name };
+  return {
+    installationId: org.github_installation_id as string,
+    repoFullName: repo.repo_full_name,
+    packageJsonPath,
+  };
 }

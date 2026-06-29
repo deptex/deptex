@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import './instrument';
 import * as Sentry from '@sentry/node';
+import * as fs from 'fs';
+import * as path from 'path';
 import { captureInfraError, captureInfraMessage } from './observability/capture';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -96,14 +98,36 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       return;
     }
 
-    const setup = await setupForLanguage({ workDir: sandbox.workDir, language: plan.language, logger });
+    // Monorepo support: setup (install), plan file-edits, and tests run inside
+    // the project's subdirectory (project_repositories.package_json_path);
+    // '' = repo root. The clone + all git ops stay at sandbox.workDir (the repo
+    // root) so `git add -A` from the root captures edits made in the subdir.
+    const projectDir = repoInfo.packageJsonPath
+      ? path.join(sandbox.workDir, repoInfo.packageJsonPath)
+      : sandbox.workDir;
+
+    if (repoInfo.packageJsonPath) {
+      await logger.info('setup', `Project subdir: ${repoInfo.packageJsonPath} (running setup/tests in ${projectDir})`);
+      if (!fs.existsSync(projectDir)) {
+        await markFailed(
+          supabase,
+          job.id,
+          `package_json_path '${repoInfo.packageJsonPath}' not found in repo`,
+          'project_dir_missing',
+        );
+        return;
+      }
+    }
+
+    const setup = await setupForLanguage({ workDir: projectDir, language: plan.language, logger });
 
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
 
     const pipeline = await runFixPipeline({
       model,
       plan,
-      workDir: sandbox.workDir,
+      workDir: projectDir,
+      repoRoot: sandbox.workDir,
       logger,
       extraEnv: setup.extraEnv,
       pipelineStartMs,

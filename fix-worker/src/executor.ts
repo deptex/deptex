@@ -151,13 +151,15 @@ export async function runEditor(opts: {
   }
 }
 
-function cumulativeDiffLoc(workDir: string): number {
+function cumulativeDiffLoc(repoRoot: string): number {
   // Lines from the working tree against the base SHA. The clone reset us to
   // baseSha at start, so HEAD is the base; staged + unstaged together is the
   // entire fix delta. Counts every "+ "/"-" line including additions and
-  // deletions, ignoring file headers.
+  // deletions, ignoring file headers. MUST run at the repo root (where the
+  // branch/commit live) — `git diff HEAD` there captures edits made in a
+  // monorepo subdir too.
   try {
-    const out = execSync('git diff HEAD', { ...EXEC_OPTS, cwd: workDir });
+    const out = execSync('git diff HEAD', { ...EXEC_OPTS, cwd: repoRoot });
     return out
       .split('\n')
       .filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'))
@@ -176,7 +178,13 @@ export class FixPipelineError extends Error {
 export interface RunFixPipelineOpts {
   model: LanguageModel;
   plan: FixPlan;
+  // Project directory (the monorepo subdir, or the repo root when there is no
+  // subdir). Used as the cwd for tests and as the base for resolving the
+  // plan's file-edit paths (which are relative to the project root).
   workDir: string;
+  // The clone / repo root, where the branch + commit live. Used only for git
+  // ops (the cumulative-diff cap). Equals workDir for non-monorepo projects.
+  repoRoot: string;
   logger: FixLogger;
   extraEnv: Record<string, string>;
   pipelineStartMs: number;
@@ -207,7 +215,7 @@ export interface RunFixPipelineResult {
  *     line-count budget.
  */
 export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPipelineResult> {
-  const { model, plan, workDir, logger, extraEnv, pipelineStartMs } = opts;
+  const { model, plan, workDir, repoRoot, logger, extraEnv, pipelineStartMs } = opts;
 
   const wallClockBudgetMs = plan.wallClockBudgetSec * 1000;
   const checkBudget = (label: string) => {
@@ -232,7 +240,7 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
   };
 
   const checkDiffCap = (label: string) => {
-    const loc = cumulativeDiffLoc(workDir);
+    const loc = cumulativeDiffLoc(repoRoot);
     if (loc > MAX_DIFF_LOC) {
       throw new FixPipelineError(
         `Diff too large after ${label}: ${loc} LOC > cap ${MAX_DIFF_LOC}. Split this fix into smaller plans.`,
