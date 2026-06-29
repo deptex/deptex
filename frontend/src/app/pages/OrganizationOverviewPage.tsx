@@ -2534,14 +2534,14 @@ export default function OrganizationOverviewPage() {
     api.getOrgAcknowledgements(orgId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [orgId]);
 
-  // Tracker links / group-suppressions / acknowledgements feed ONLY the sidebar findings tables
-  // (project + team). Loading them on the bare overview is premature — defer until a findings
-  // surface actually opens, so the overview's first paint isn't competing for the (locally
-  // 6-per-host) connection pool with three calls it never renders.
+  // Tracker links / group-suppressions / acknowledgements feed the sidebar findings tables.
+  // The PROJECT findings tab now receives them inside the one findings bundle (see the open
+  // effect below), so this standalone fetch only runs for the TEAM sidebar — whose per-project
+  // fan-out isn't bundled yet.
   useEffect(() => {
-    if (!projectSidebarOpen && !teamSidebarOpen) return;
+    if (!teamSidebarOpen) return;
     void loadTrackerLinks();
-  }, [projectSidebarOpen, teamSidebarOpen, loadTrackerLinks]);
+  }, [teamSidebarOpen, loadTrackerLinks]);
 
   // IaC/container/DAST — not just ones with SCA rows.
   const loadTeamFindings = useCallback(async () => {
@@ -2820,9 +2820,9 @@ export default function OrganizationOverviewPage() {
   /**
    * Load the non-SCA finding types for the project sidebar's unified findings
    * table — IaC, container, malicious, and DAST. Resilient (allSettled) so a
-   * single failing scanner endpoint never blanks the others; DAST is per-target
-   * so we learn the latest scan's target before loading its findings. Shared by
-   * the open effect and the post-mutation refresh.
+   * single failing scanner endpoint never blanks the others; DAST is per-target,
+   * resolved server-side (one request) rather than a client jobs→findings
+   * waterfall. Shared by the open effect and the post-mutation refresh.
    */
   const loadProjectExtraFindings = useCallback(async (
     oid: string,
@@ -2843,10 +2843,10 @@ export default function OrganizationOverviewPage() {
     setProjectBaseImageRecs(baseImageRecs.status === 'fulfilled' ? baseImageRecs.value.recommendations ?? [] : []);
     setProjectCodeFlows(codeFlows.status === 'fulfilled' ? codeFlows.value.data ?? [] : []);
     try {
-      const jobs = await api.getDastJobs(pid, { limit: 5 });
-      if (isCancelled?.()) return;
-      const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
-      const dast = targetId ? await api.getDastFindings(pid, { limit: 200, targetId }) : [];
+      // The server resolves the latest scan's target and returns its findings
+      // in one request — previously this was a serial getDastJobs → find target
+      // → getDastFindings waterfall on the project-open critical path.
+      const dast = await api.getDastFindings(pid, { limit: 200, resolveLatestTarget: true });
       if (isCancelled?.()) return;
       setProjectDastFindings(dast);
     } catch {
@@ -2889,23 +2889,43 @@ export default function OrganizationOverviewPage() {
     setProjectSidebarProject(null);
     setProjectSidebarOrganization(null);
 
-    // Non-SCA finding types (IaC / container / malicious / DAST / code-flow) load on
-    // their own track and pop into the table as they arrive.
-    void loadProjectExtraFindings(orgId, pid, () => cancelled);
-
-    // CRITICAL PATH — the findings table appears as soon as these three settle.
-    // allSettled so one failing scanner endpoint never blanks the others.
+    // THE findings tab in one request — every scanner type plus the tracker/ignore
+    // row metadata, fetched server-side in parallel and co-located with the DB.
+    // (Was ~12 separate calls flooding the browser's 6-per-host connection pool on
+    // open.) The whole table renders when this settles instead of rows popping in.
     void (async () => {
-      const [vulnsR, secretsR, semgrepR] = await Promise.allSettled([
-        api.getProjectVulnerabilities(orgId, pid),
-        api.getProjectSecretFindings(orgId, pid, 1, 50),
-        api.getProjectSemgrepFindings(orgId, pid, 1, 50),
-      ]);
-      if (cancelled) return;
-      setProjectVulnerabilities(vulnsR.status === 'fulfilled' ? (vulnsR.value ?? []) : []);
-      setProjectSecrets(secretsR.status === 'fulfilled' ? (secretsR.value?.data ?? []) : []);
-      setProjectSemgrep(semgrepR.status === 'fulfilled' ? (semgrepR.value?.data ?? []) : []);
-      setProjectStatsLoading(false);
+      try {
+        const bundle = await api.getProjectFindings(orgId, pid);
+        if (cancelled) return;
+        setProjectVulnerabilities(bundle.vulnerabilities ?? []);
+        setProjectSecrets(bundle.secrets?.data ?? []);
+        setProjectSemgrep(bundle.semgrep?.data ?? []);
+        setProjectIacFindings(bundle.iac?.data ?? []);
+        setProjectContainerFindings(bundle.container?.data ?? []);
+        setProjectMaliciousFindings(bundle.malicious?.data ?? []);
+        setProjectBaseImageRecs(bundle.baseImageRecs?.recommendations ?? []);
+        setProjectCodeFlows(bundle.codeFlows?.data ?? []);
+        setProjectDastFindings(bundle.dast ?? []);
+        setTrackerLinks(bundle.trackerLinks ?? []);
+        setGroupSuppressions(bundle.groupSuppressions ?? []);
+        setAcknowledgements(bundle.acknowledgements ?? []);
+      } catch {
+        if (cancelled) return;
+        // Bundle failed wholesale — clear the table types (the per-clear above set
+        // vulns to null = "loading"); the table then renders empty rather than
+        // hanging on the skeleton. Org-wide tracker/ack state is left as-is.
+        setProjectVulnerabilities([]);
+        setProjectSecrets([]);
+        setProjectSemgrep([]);
+        setProjectIacFindings([]);
+        setProjectContainerFindings([]);
+        setProjectMaliciousFindings([]);
+        setProjectBaseImageRecs([]);
+        setProjectCodeFlows([]);
+        setProjectDastFindings([]);
+      } finally {
+        if (!cancelled) setProjectStatsLoading(false);
+      }
     })();
 
     // Stats feed only the partial-coverage banner + header chips — never the table rows.

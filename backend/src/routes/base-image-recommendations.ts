@@ -28,6 +28,7 @@ import {
 } from '../lib/project-access';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { createActivity } from '../lib/activities';
+import { buildBaseImageRecommendationsUnchecked } from '../lib/project-findings';
 
 const router = express.Router();
 router.use(authenticateUser);
@@ -51,7 +52,10 @@ interface RecommendationRow {
   created_at: string;
 }
 
-const RECOMMENDATION_COLUMNS =
+// Exported so the project findings-bundle builder
+// (lib/project-findings.ts) selects the exact same column set the standalone
+// GET endpoint returns — single source of truth, no shaping drift.
+export const RECOMMENDATION_COLUMNS =
   'id, dockerfile_path, current_image, current_image_digest, current_image_cve_count, ' +
   'recommended_image, recommended_image_cve_count, cve_delta, alternatives, ' +
   'shell_compat_verdict, shell_compat_evidence, drop_in_score, is_dismissed, created_at';
@@ -73,22 +77,10 @@ router.get(
       }
 
       // "Active" = the latest extraction run; older runs' rows are superseded.
+      // The query (RECOMMENDATION_COLUMNS + ordering) lives in
+      // lib/project-findings.ts so the findings-bundle slice is byte-identical.
       const activeRunId = await getActiveExtractionId(supabase, projectId);
-      if (!activeRunId) {
-        return res.json({ recommendations: [] });
-      }
-
-      const { data, error } = await supabase
-        .from('project_base_image_recommendations')
-        .select(RECOMMENDATION_COLUMNS)
-        .eq('project_id', projectId)
-        .eq('extraction_run_id', activeRunId)
-        .eq('is_dismissed', false)
-        .order('cve_delta', { ascending: false, nullsFirst: false })
-        .order('dockerfile_path', { ascending: true });
-      if (error) throw error;
-
-      res.json({ recommendations: (data ?? []) as unknown as RecommendationRow[] });
+      res.json(await buildBaseImageRecommendationsUnchecked(id, projectId, activeRunId));
     } catch (error: any) {
       console.error('[base-image-recommendations] list error:', error);
       res.status(500).json({ error: 'Failed to fetch base-image recommendations' });

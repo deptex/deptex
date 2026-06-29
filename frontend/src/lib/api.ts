@@ -423,6 +423,28 @@ export interface OverviewBundle {
   securitySummary: { projects: ProjectSecuritySummary[] };
 }
 
+// One response that backs the entire project-sidebar Findings tab. Replaces the
+// ~12 separate per-type requests the tab used to fan out on open; each slice
+// keeps the exact shape its standalone endpoint returns so the same setters
+// consume it. `degradedSlices` names any slice that fell back to empty on a
+// server-side error (so the UI can show "couldn't load X" rather than a
+// misleading empty).
+export interface ProjectFindingsBundle {
+  vulnerabilities: ProjectVulnerability[];
+  secrets: PaginatedResponse<SecretFinding>;
+  semgrep: PaginatedResponse<SemgrepFinding>;
+  iac: PaginatedResponse<IaCFinding>;
+  container: PaginatedResponse<ContainerFinding>;
+  malicious: PaginatedResponse<MaliciousFinding>;
+  codeFlows: { data: DataFlowFinding[]; total: number };
+  baseImageRecs: { recommendations: BaseImageRecommendation[] };
+  dast: DastFindingDTO[];
+  trackerLinks: FindingTrackerLink[];
+  groupSuppressions: FindingGroupSuppression[];
+  acknowledgements: FindingAcknowledgement[];
+  degradedSlices: string[];
+}
+
 export const api = {
   _orgDataCache: new Map<string, Organization>(),
   _orgPrefetchCache: new Map<string, Promise<Organization>>(),
@@ -1832,6 +1854,21 @@ export const api = {
     return data;
   },
 
+  // Status-only read for the project-sidebar status pill (useRealtimeStatus).
+  // Hits the repositories endpoint with status_only=1 so the server returns the
+  // connected-repo row WITHOUT the slow listRepositories() GitHub call — that full
+  // repo list is only needed by the Settings repo-picker. Never cached: the pill
+  // wants the freshest extraction status, and the realtime subscription pushes
+  // updates after this initial read.
+  async getProjectRepositoryStatus(
+    organizationId: string,
+    projectId: string
+  ): Promise<{ connectedRepository: (ProjectRepository & { provider?: string }) | null }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/repositories?status_only=1`
+    );
+  },
+
   async getRepositoryScan(
     organizationId: string,
     projectId: string,
@@ -2378,11 +2415,14 @@ export const api = {
 
   async getDastFindings(
     projectId: string,
-    opts: { limit?: number; targetId?: string } = {},
+    opts: { limit?: number; targetId?: string; resolveLatestTarget?: boolean } = {},
   ): Promise<DastFindingDTO[]> {
     const params = new URLSearchParams();
     params.set('limit', String(opts.limit ?? 100));
     if (opts.targetId) params.set('target_id', opts.targetId);
+    // Let the server pick the latest scan's target instead of a client-side
+    // jobs→findings waterfall (used by the project Findings tab open path).
+    if (opts.resolveLatestTarget) params.set('resolve_target', 'latest');
     return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
@@ -2391,6 +2431,14 @@ export const api = {
     projectId: string
   ): Promise<ProjectVulnerability[]> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities`);
+  },
+
+  // The whole Findings tab in one request — see ProjectFindingsBundle.
+  async getProjectFindings(
+    organizationId: string,
+    projectId: string
+  ): Promise<ProjectFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/findings`);
   },
 
   async getOrganizationVulnerabilities(

@@ -7835,6 +7835,7 @@ CREATE INDEX idx_pcf_carryforward ON public.project_container_findings USING btr
 CREATE INDEX idx_pcf_fingerprint ON public.project_container_findings USING btree (project_id, container_fingerprint) WHERE (container_fingerprint IS NOT NULL);
 CREATE INDEX idx_pcf_org_status_depscore ON public.project_container_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_pcf_project_run ON public.project_container_findings USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_pcf_project_run_open_depscore ON public.project_container_findings USING btree (project_id, extraction_run_id, depscore DESC NULLS LAST, severity, created_at DESC) WHERE (status = 'open'::text);
 CREATE INDEX idx_pcf_reachability ON public.project_container_findings USING btree (project_id, reachability_level) WHERE (reachability_level = 'module'::text);
 CREATE INDEX idx_pcf_severity ON public.project_container_findings USING btree (severity);
 CREATE INDEX idx_pci_credentials_id ON public.project_configured_images USING btree (credentials_id, organization_id) WHERE (credentials_id IS NOT NULL);
