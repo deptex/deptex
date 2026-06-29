@@ -95,6 +95,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
   // the synthetic module-initializer's map). Feeds the constant-host SSRF /
   // open-redirect guard so `fetch(GITHUB_API_BASE + path)` resolves the host.
   const constStrings = buildGlobalConstStrings(opts.stateById);
+  const validatorParams = buildValidatorParams(opts.stateById);
 
   const worklist = new Set<FunctionId>(opts.stateById.keys());
   let iterations = 0;
@@ -129,6 +130,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       diagSink: opts.diagSink,
       language: (opts.specs[0]?.language as MatcherLanguage | undefined),
       constStrings,
+      validatorParams,
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -173,6 +175,15 @@ interface AnalyzeArgs {
    * constant-host SSRF / open-redirect guard. Empty map when no consts captured.
    */
   constStrings: Map<string, string>;
+  /**
+   * Functions that validate (via a safe-regex-family check) specific parameter
+   * indices, keyed by FunctionId. When a caller passes a tainted value into one
+   * of those parameters, the value is treated as sanitized downstream — the
+   * engine otherwise can't see the in-callee `safeRegex(param)` guard +
+   * early-return (the validate-then-use ReDoS pattern). Built once by
+   * buildValidatorParams().
+   */
+  validatorParams: Map<FunctionId, Set<number>>;
 }
 
 /**
@@ -203,6 +214,134 @@ function buildGlobalConstStrings(
         poisoned.add(name);
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Substrings that prove a response is NOT HTML — set via res.writeHead /
+ * setHeader / res.type with a non-`text/html` Content-Type, or a file-download
+ * `Content-Disposition: attachment`. XSS requires the reflected value to render
+ * as markup in a browser; an SSE stream (`text/event-stream`), a JSON/API body,
+ * or an attachment download cannot execute injected script — so xss sinks in
+ * such a function are false positives. Matched as substrings of call-argument
+ * source text (writeHead/setHeader pass the MIME as a string/object literal).
+ */
+const NON_HTML_RESPONSE_MARKERS: readonly string[] = [
+  'text/event-stream',
+  'application/json',
+  'application/octet-stream',
+  'application/pdf',
+  'application/zip',
+  'application/xml',
+  'text/xml',
+  'text/plain',
+  'text/csv',
+  'image/',
+  'attachment', // Content-Disposition: attachment — a file download, not a page
+];
+
+/**
+ * Whether a function commits its response to a non-HTML content type (so any
+ * tainted value reaching res.write/res.send/res.end can't execute as markup).
+ * Conservative: only trips on an explicit non-HTML MIME / attachment marker in
+ * a call argument, so it never suppresses a real `res.send(userHtml)` (which
+ * sets text/html or no Content-Type at all).
+ */
+function responseFunctionIsNonHtml(steps: Step[]): boolean {
+  for (const step of steps) {
+    if (step.kind !== 'call') continue;
+    const texts = step.argTexts;
+    if (!texts) continue;
+    for (const t of texts) {
+      if (!t) continue;
+      for (const marker of NON_HTML_RESPONSE_MARKERS) {
+        if (t.includes(marker)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** RegExp instance methods that EXECUTE the compiled pattern against input. */
+const REGEX_EXEC_METHODS: ReadonlySet<string> = new Set([
+  'test',
+  'exec',
+  'match',
+  'matchAll',
+  'replace',
+  'replaceAll',
+  'split',
+  'search',
+]);
+
+/**
+ * Whether the RegExp object bound to `targetVar` is ever executed in `steps`
+ * (`.test`/`.exec`/`.match`/...). A `new RegExp(x)` whose result is never run
+ * is a validity probe (`try { new RegExp(x) } catch {}`), not a ReDoS execution
+ * sink — the attacker-controlled pattern can't backtrack against any input.
+ */
+function regexResultIsExecuted(steps: Step[], targetVar: string): boolean {
+  for (const step of steps) {
+    if (step.kind !== 'call') continue;
+    const callee = step.callee.calleeText;
+    if (receiverRoot(callee) !== targetVar) continue;
+    const method = callee.split('.').pop() ?? '';
+    if (REGEX_EXEC_METHODS.has(method)) return true;
+  }
+  return false;
+}
+
+/**
+ * safe-regex-family validators: `safe-regex`, `safe-regex2` (default export
+ * commonly imported as `safeRegex`/`safe`), `safe-regex-test`. A call to one of
+ * these on a value asserts the pattern is backtracking-safe; callers gate on
+ * the boolean and reject unsafe patterns.
+ */
+const REGEX_VALIDATOR_CALLEES: ReadonlySet<string> = new Set([
+  'safeRegex',
+  'safe',
+  'isSafeRegExp',
+  'isSafeRegex',
+]);
+
+function isRegexValidatorCallee(calleeText: string): boolean {
+  const last = calleeText.split('.').pop() ?? calleeText;
+  return REGEX_VALIDATOR_CALLEES.has(last);
+}
+
+/**
+ * Pre-pass: which parameter indices each function validates via a
+ * safe-regex-family check, keyed by FunctionId. When a function `f(x)` passes
+ * its k-th parameter into `safeRegex(param)` (and conventionally early-returns
+ * on failure), a caller that hands a tainted value into parameter k can treat
+ * it as sanitized downstream — the engine can't otherwise see the in-callee
+ * validate-then-use guard (the dast-credential `checkIndicatorRegex` pattern).
+ * Over-clears in the rare case where code calls `safeRegex(x)` but then ignores
+ * the result and uses `x` anyway; that is a separate bug and far less common
+ * than the validate-then-use shape this models.
+ */
+function buildValidatorParams(
+  stateById: Map<FunctionId, FunctionState>,
+): Map<FunctionId, Set<number>> {
+  const out = new Map<FunctionId, Set<number>>();
+  for (const state of stateById.values()) {
+    const params = state.ir.params;
+    if (!params || params.length === 0) continue;
+    let validated: Set<number> | undefined;
+    for (const step of state.ir.steps) {
+      if (step.kind !== 'call') continue;
+      if (!isRegexValidatorCallee(step.callee.calleeText)) continue;
+      for (const argName of step.args) {
+        if (!argName) continue;
+        const idx = params.indexOf(argName);
+        if (idx >= 0) {
+          if (!validated) validated = new Set<number>();
+          validated.add(idx);
+        }
+      }
+    }
+    if (validated) out.set(state.funcNode.id, validated);
   }
   return out;
 }
@@ -250,12 +389,15 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength, diagSink, language, constStrings } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, language, constStrings, validatorParams } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
     if (name) local.set(name, trace);
   }
+  // Computed once per function: does it commit its response to a non-HTML
+  // content type? Drives the xss-sink suppression below (SSE / JSON / download).
+  const responseNonHtml = responseFunctionIsNonHtml(state.ir.steps);
 
   let sourcesAddedThisPass = 0;
   // Track whether `return`-step taint grew this pass, but DO NOT bail out
@@ -324,6 +466,17 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
 
         const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
         if (sinkMatch) {
+          // Context guards (computed before fan-out so no variant emits a hit):
+          //  - xss sink in a non-HTML response (SSE / JSON / attachment download)
+          //    can't execute as markup — suppress.
+          //  - redos sink on a RegExp constructor whose compiled value is never
+          //    executed (`.test`/`.exec`/...) is a validity probe, not a ReDoS
+          //    execution sink — suppress.
+          const sinkSuppressed =
+            (sinkMatch.vuln_class === 'xss' && responseNonHtml) ||
+            (sinkMatch.vuln_class === 'redos' &&
+              (sinkMatch.pattern === 'RegExp(*)' || sinkMatch.pattern === 'new RegExp(*)') &&
+              (!step.target || !regexResultIsExecuted(state.ir.steps, step.target)));
           // When several CVEs share one vulnerable surface (e.g. lodash
           // `_.template` is the sink for BOTH CVE-2021-23337 and CVE-2026-4800),
           // emit one flow per CVE so the reachability classifier can promote
@@ -341,7 +494,9 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           //   caught by Gate 3 fixture round-trip in rule-generator validation;
           //   the engine prefers extra recall over missed flows.
           let idxs: number[];
-          if (sinkMatch.argument_indices.length === 0) {
+          if (sinkSuppressed) {
+            idxs = [];
+          } else if (sinkMatch.argument_indices.length === 0) {
             idxs = step.args.map((_, i) => i);
           } else if (step.kwargIndices && step.kwargIndices.length > 0) {
             const widened = new Set<number>(sinkMatch.argument_indices);
@@ -382,7 +537,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               state.sinkHits.push({ sink: variant, trace: sinkTrace, hit_node: sinkHopNode });
             }
           }
-          if (!anyHit) {
+          if (!anyHit && !sinkSuppressed) {
             // Spec sink matched the callee but none of the checked arg
             // positions held tainted locals. This is the dominant "engine
             // saw the sink but taint didn't reach it" diagnostic — emit one
@@ -429,6 +584,20 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               const augmented = extendPath(argTrace, hopFromStep(step, 'call'), maxPathLength);
               const grew = mergeParamTaint(callee, i, augmented);
               if (grew) worklist.add(callee.funcNode.id);
+            }
+            // Interprocedural validate-then-use guard: if the callee validates
+            // certain parameters via a safe-regex-family check (buildValidatorParams),
+            // a tainted value the caller passed into one of those parameters is
+            // sanitized downstream — model the wrapper as a sanitizer on those
+            // args so a later `new RegExp(arg).test(...)` in the caller doesn't
+            // fire a false ReDoS. (The taint still propagates INTO the callee
+            // above so flows that end at a sink INSIDE the callee are unaffected.)
+            const validatedParams = validatorParams.get(step.callee.functionId);
+            if (validatedParams && validatedParams.size > 0) {
+              for (const idx of validatedParams) {
+                const argName = step.args[idx];
+                if (argName && local.has(argName)) local.delete(argName);
+              }
             }
             if (step.target && callee.returnTaint) {
               local.set(

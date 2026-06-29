@@ -85,4 +85,18 @@ sinks:
     argument_indices: [0]
     description: Express res.redirect
 
-sanitizers: []
+sanitizers:
+  # SAML / IdP authorize-URL builders (passport-saml / node-saml / saml2-js).
+  # `saml.getAuthorizeUrl(Async)(host, ...)` returns a redirect URL whose
+  # destination is the IdP `entryPoint` — a domain-verified, server-side SSO
+  # config value, NOT an attacker-controlled host. The `host` / RelayState
+  # args ride along but cannot steer the destination origin. Clearing the
+  # return suppresses the open_redirect / ssrf false positive on
+  # `res.redirect(await saml.getAuthorizeUrlAsync(...))`. Method name is
+  # SAML-specific (length ≥ 7), so receiver-wildcard FP risk is bounded.
+  - pattern: "*.getAuthorizeUrlAsync(*)"
+    vuln_classes: [open_redirect, ssrf]
+    description: SAML/IdP authorize-URL builder — destination is the domain-verified IdP entryPoint (trusted server config)
+  - pattern: "*.getAuthorizeUrl(*)"
+    vuln_classes: [open_redirect, ssrf]
+    description: SAML/IdP authorize-URL builder (sync) — trusted IdP redirect target
