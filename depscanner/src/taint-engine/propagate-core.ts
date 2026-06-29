@@ -26,6 +26,7 @@ import type { DiagSink, DropRecord, Flow, FlowNode, SinkHit, TaintTrace } from '
 import { serializeTrace } from './flow';
 import type { IrFunction, Step } from './ir';
 import type { FunctionId, FunctionNode } from './types';
+import { urlHeadIsConstant } from './url-host';
 
 /** Per-function analysis state. Monotonically grown by the worklist. */
 export interface FunctionState {
@@ -89,6 +90,12 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
   const onWarn = opts.onWarn;
   const propStart = Date.now();
 
+  // Project-wide map of const string identifiers → their literal init text,
+  // merged from every function's `constStrings` (module-level consts live in
+  // the synthetic module-initializer's map). Feeds the constant-host SSRF /
+  // open-redirect guard so `fetch(GITHUB_API_BASE + path)` resolves the host.
+  const constStrings = buildGlobalConstStrings(opts.stateById);
+
   const worklist = new Set<FunctionId>(opts.stateById.keys());
   let iterations = 0;
   let sourcesFound = 0;
@@ -121,6 +128,7 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       maxPathLength,
       diagSink: opts.diagSink,
       language: (opts.specs[0]?.language as MatcherLanguage | undefined),
+      constStrings,
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -160,6 +168,43 @@ interface AnalyzeArgs {
    * runWorklistAndAggregate entry point; null when specs are empty.
    */
   language?: MatcherLanguage;
+  /**
+   * Project-wide const-string resolver (identifier → literal init text) for the
+   * constant-host SSRF / open-redirect guard. Empty map when no consts captured.
+   */
+  constStrings: Map<string, string>;
+}
+
+/**
+ * Merge every function's `constStrings` into one project-wide resolver map.
+ * Module-level consts (e.g. `const GITHUB_API_BASE = '...'`) live in the
+ * synthetic module-initializer function's map, so this is how a sink in one
+ * function resolves a base-URL const declared at module scope in the same file.
+ *
+ * Cross-function name collisions with DIFFERING init text are poisoned
+ * (dropped) so we never resolve `url` to the wrong function's value — a missing
+ * resolution is the safe default (the guard then keeps the flow).
+ */
+function buildGlobalConstStrings(
+  stateById: Map<FunctionId, FunctionState>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const poisoned = new Set<string>();
+  for (const state of stateById.values()) {
+    const cs = state.ir.constStrings;
+    if (!cs) continue;
+    for (const [name, init] of cs) {
+      if (poisoned.has(name)) continue;
+      const existing = out.get(name);
+      if (existing === undefined) {
+        out.set(name, init);
+      } else if (existing !== init) {
+        out.delete(name);
+        poisoned.add(name);
+      }
+    }
+  }
+  return out;
 }
 
 function emitDrop(
@@ -205,7 +250,7 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength, diagSink, language } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, language, constStrings } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
@@ -315,6 +360,17 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             if (seenArgs.has(argName)) continue;
             const trace = local.get(argName);
             if (!trace) continue;
+            // Constant-host guard: a tainted value reaching a URL sink whose
+            // scheme+host are a compile-time constant (literal or resolved via
+            // a const) can only influence the path/query — not SSRF / open
+            // redirect. Suppress those; a tainted HOST (`fetch(userUrl)`,
+            // `'https://' + host`) is not constant and still fires.
+            if (
+              (sinkMatch.vuln_class === 'ssrf' || sinkMatch.vuln_class === 'open_redirect') &&
+              urlHeadIsConstant(step.argTexts?.[i] ?? '', (name) => constStrings.get(name))
+            ) {
+              continue;
+            }
             seenArgs.add(argName);
             anyHit = true;
             // The source→sink trace + hit node are identical across CVE
@@ -769,6 +825,11 @@ function aggregateFlows(stateById: Map<FunctionId, FunctionState>, maxPathLength
   for (const state of stateById.values()) {
     for (const hit of state.sinkHits) {
       const flow = sinkHitToFlow(hit, state.funcNode, maxPathLength);
+      // Drop degenerate self-sinks: a single-node flow carries no propagation
+      // evidence (the source point and sink point collapsed to one program
+      // location — e.g. a sink pattern that also matched as the source). A
+      // real flow always has at least a distinct source node + sink node.
+      if (flow.flow_length <= 1) continue;
       if (seen.has(flow.id)) continue;
       // Drop degenerate self-referential "flows": a single node that is both
       // entry and sink at the same coordinates (flow_length ≤ 1 with the entry
