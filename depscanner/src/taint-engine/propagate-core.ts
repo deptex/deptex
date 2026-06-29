@@ -293,6 +293,23 @@ function regexResultIsExecuted(steps: Step[], targetVar: string): boolean {
 }
 
 /**
+ * js-yaml `load(text, { schema: ... })` with an explicit non-FULL schema is the
+ * documented mitigation against `!!js/function`/`!!js/regexp` construction — the
+ * caller has opted out of the dangerous default schema. Treat it as sanitized.
+ * (js-yaml v4's `load` is already safe-by-default; this also covers v3 with an
+ * explicit safe schema.) Python PyYAML uses `Loader=`, not `schema:`, so this
+ * never matches the genuinely-dangerous pyyaml.load default.
+ */
+function jsYamlLoadHasSafeSchema(argTexts: readonly (string | undefined)[] | undefined): boolean {
+  if (!argTexts) return false;
+  for (const t of argTexts) {
+    if (!t) continue;
+    if (/\bschema\s*:/.test(t) && !/FULL/i.test(t)) return true;
+  }
+  return false;
+}
+
+/**
  * safe-regex-family validators: `safe-regex`, `safe-regex2` (default export
  * commonly imported as `safeRegex`/`safe`), `safe-regex-test`. A call to one of
  * these on a value asserts the pattern is backtracking-safe; callers gate on
@@ -476,7 +493,12 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             (sinkMatch.vuln_class === 'xss' && responseNonHtml) ||
             (sinkMatch.vuln_class === 'redos' &&
               (sinkMatch.pattern === 'RegExp(*)' || sinkMatch.pattern === 'new RegExp(*)') &&
-              (!step.target || !regexResultIsExecuted(state.ir.steps, step.target)));
+              (!step.target || !regexResultIsExecuted(state.ir.steps, step.target))) ||
+            // js-yaml load with an explicit safe schema = documented mitigation
+            // (Python pyyaml uses `Loader=`, so its unsafe default is unaffected).
+            (sinkMatch.vuln_class === 'deserialization' &&
+              sinkMatch.pattern === 'yaml.load(*)' &&
+              jsYamlLoadHasSafeSchema(step.argTexts));
           // When several CVEs share one vulnerable surface (e.g. lodash
           // `_.template` is the sink for BOTH CVE-2021-23337 and CVE-2026-4800),
           // emit one flow per CVE so the reachability classifier can promote
