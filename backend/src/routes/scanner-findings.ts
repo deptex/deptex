@@ -25,6 +25,13 @@ import { checkProjectAccess, checkProjectManagePermission, checkOrgManageFinding
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { recomputeProjectSummary } from '../lib/security-summary';
 import {
+  buildIacFindingsUnchecked,
+  buildContainerFindingsUnchecked,
+  buildOrgTrackerLinksUnchecked,
+  buildOrgGroupSuppressionsUnchecked,
+  buildOrgAcknowledgementsUnchecked,
+} from '../lib/project-findings';
+import {
   getConnectedProviders,
   listJiraProjects,
   listLinearTeams,
@@ -42,7 +49,9 @@ import {
 // `project_iac_findings.framework` CHECK constraint (phase27a migration).
 const RISK_ACCEPTED_REASON_MAX_LEN = 4096;
 
-const IAC_FRAMEWORKS = [
+// Exported so the project findings-bundle builder (lib/project-findings.ts)
+// validates the framework filter against the exact same canonical set.
+export const IAC_FRAMEWORKS = [
   'terraform',
   'kubernetes',
   'dockerfile',
@@ -80,54 +89,18 @@ router.get('/:id/projects/:projectId/iac-findings', async (req: AuthRequest, res
       return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
-    const { page, perPage, offset } = parsePagination(req);
+    const { page, perPage } = parsePagination(req);
     const activeRunId = await getActiveExtractionId(supabase, projectId);
-    if (!activeRunId) {
-      return res.json({ data: [], total: 0, page, per_page: perPage });
-    }
-
-    const severityFilter = String(req.query.severity ?? '').trim().toUpperCase();
-    const statusFilter = String(req.query.status ?? '').trim().toLowerCase();
-    const frameworkFilter = String(req.query.framework ?? '').trim().toLowerCase();
-    const depscoreMin = parseInt(String(req.query.depscore_min ?? ''), 10);
-
-    let countQuery = supabase
-      .from('project_iac_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeRunId);
-    let dataQuery = supabase
-      .from('project_iac_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeRunId);
-
-    if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(severityFilter)) {
-      countQuery = countQuery.eq('severity', severityFilter);
-      dataQuery = dataQuery.eq('severity', severityFilter);
-    }
-    if (statusFilter === 'open' || statusFilter === 'ignored') {
-      countQuery = countQuery.eq('status', statusFilter);
-      dataQuery = dataQuery.eq('status', statusFilter);
-    }
-    if ((IAC_FRAMEWORKS as readonly string[]).includes(frameworkFilter)) {
-      countQuery = countQuery.eq('framework', frameworkFilter);
-      dataQuery = dataQuery.eq('framework', frameworkFilter);
-    }
-    if (Number.isFinite(depscoreMin)) {
-      countQuery = countQuery.gte('depscore', depscoreMin);
-      dataQuery = dataQuery.gte('depscore', depscoreMin);
-    }
-
-    const { count } = await countQuery;
-    const { data, error } = await dataQuery
-      .order('depscore', { ascending: false, nullsFirst: false })
-      .order('severity', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
-
-    if (error) throw error;
-    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json(
+      await buildIacFindingsUnchecked(id, projectId, activeRunId, {
+        page,
+        perPage,
+        severity: req.query.severity,
+        status: req.query.status,
+        framework: req.query.framework,
+        depscoreMin: req.query.depscore_min,
+      }),
+    );
   } catch (error: any) {
     console.error('[scanner-findings] iac list error:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch IaC findings' });
@@ -228,44 +201,16 @@ router.get('/:id/projects/:projectId/container-findings', async (req: AuthReques
       return res.status(access.error!.status).json({ error: access.error!.message });
     }
 
-    const { page, perPage, offset } = parsePagination(req);
+    const { page, perPage } = parsePagination(req);
     const activeRunId = await getActiveExtractionId(supabase, projectId);
-    if (!activeRunId) {
-      return res.json({ data: [], total: 0, page, per_page: perPage });
-    }
-
-    const severityFilter = String(req.query.severity ?? '').trim().toUpperCase();
-    const statusFilter = String(req.query.status ?? '').trim().toLowerCase();
-
-    let countQuery = supabase
-      .from('project_container_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeRunId);
-    let dataQuery = supabase
-      .from('project_container_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeRunId);
-
-    if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].includes(severityFilter)) {
-      countQuery = countQuery.eq('severity', severityFilter);
-      dataQuery = dataQuery.eq('severity', severityFilter);
-    }
-    if (statusFilter === 'open' || statusFilter === 'ignored') {
-      countQuery = countQuery.eq('status', statusFilter);
-      dataQuery = dataQuery.eq('status', statusFilter);
-    }
-
-    const { count } = await countQuery;
-    const { data, error } = await dataQuery
-      .order('depscore', { ascending: false, nullsFirst: false })
-      .order('severity', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
-
-    if (error) throw error;
-    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json(
+      await buildContainerFindingsUnchecked(id, projectId, activeRunId, {
+        page,
+        perPage,
+        severity: req.query.severity,
+        status: req.query.status,
+      }),
+    );
   } catch (error: any) {
     console.error('[scanner-findings] container list error:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch container findings' });
@@ -822,13 +767,7 @@ router.get('/:id/tracker-links', async (req: AuthRequest, res) => {
       .eq('user_id', userId)
       .maybeSingle();
     if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-    const { data, error } = await supabase
-      .from('finding_tracker_links')
-      .select('id, project_id, finding_type, finding_key, provider, external_key, external_url, title, external_state, created_at')
-      .eq('organization_id', id)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    res.json({ links: data ?? [] });
+    res.json({ links: await buildOrgTrackerLinksUnchecked(id) });
   } catch (error: any) {
     console.error('[scanner-findings] org tracker-links error:', error);
     res.status(500).json({ error: error.message || 'Failed to list tracker links' });
@@ -867,12 +806,7 @@ router.get('/:id/group-suppressions', async (req: AuthRequest, res) => {
       .eq('user_id', userId)
       .maybeSingle();
     if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-    const { data, error } = await supabase
-      .from('project_finding_group_suppressions')
-      .select('project_id, group_type, group_key, ignore_reason, ignore_note')
-      .eq('organization_id', id);
-    if (error) throw error;
-    res.json({ suppressions: data ?? [] });
+    res.json({ suppressions: await buildOrgGroupSuppressionsUnchecked(id) });
   } catch (error: any) {
     console.error('[scanner-findings] org group-suppressions error:', error);
     res.status(500).json({ error: error.message || 'Failed to list group suppressions' });
@@ -962,12 +896,7 @@ router.get('/:id/acknowledgements', async (req: AuthRequest, res) => {
       .eq('user_id', userId)
       .maybeSingle();
     if (!membership) return res.status(403).json({ error: 'Not a member of this organization' });
-    const { data, error } = await supabase
-      .from('project_finding_acknowledgements')
-      .select('project_id, finding_type, finding_key')
-      .eq('organization_id', id);
-    if (error) throw error;
-    res.json({ acknowledgements: data ?? [] });
+    res.json({ acknowledgements: await buildOrgAcknowledgementsUnchecked(id) });
   } catch (error: any) {
     console.error('[scanner-findings] org acknowledgements error:', error);
     res.status(500).json({ error: error.message || 'Failed to list acknowledgements' });

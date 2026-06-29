@@ -31,7 +31,20 @@ import { getEffectivePolicies, isLicenseAllowed } from '../lib/project-policies'
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { recomputeProjectSummary } from '../lib/security-summary';
 import { legacyProjectComplianceLabel, getAccessibleProjectIdsInOrganization, buildOrgProjects, buildOrgSecuritySummary, buildOrgTeams, buildOrgStatuses } from '../lib/overview';
-import { toDataFlowFinding } from '../lib/code-flow-findings';
+import {
+  buildProjectVulnerabilitiesUnchecked,
+  buildSecretFindingsUnchecked,
+  buildSemgrepFindingsUnchecked,
+  buildIacFindingsUnchecked,
+  buildContainerFindingsUnchecked,
+  buildMaliciousFindingsUnchecked,
+  buildCodeFlowFindingsUnchecked,
+  buildBaseImageRecommendationsUnchecked,
+  buildDastFindingsForProjectUnchecked,
+  buildOrgTrackerLinksUnchecked,
+  buildOrgGroupSuppressionsUnchecked,
+  buildOrgAcknowledgementsUnchecked,
+} from '../lib/project-findings';
 import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
@@ -4003,6 +4016,36 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       }
     }
 
+    const connectedRepository = repoRecord
+      ? {
+        repo_full_name: repoRecord.repo_full_name,
+        default_branch: repoRecord.default_branch,
+        status: effectiveStatus ?? repoRecord.status,
+        package_json_path: (repoRecord as { package_json_path?: string }).package_json_path ?? '',
+        extraction_step: (repoRecord as { extraction_step?: string }).extraction_step ?? null,
+        extraction_error: (repoRecord as { extraction_error?: string }).extraction_error ?? null,
+        provider: (repoRecord as any).provider ?? 'github',
+        pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
+        auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
+        connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
+        scan_on_commit: (repoRecord as { scan_on_commit?: boolean }).scan_on_commit === true,
+        sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
+        webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
+        last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
+        last_webhook_event: (repoRecord as { last_webhook_event?: string }).last_webhook_event ?? null,
+        last_extracted_at: (repoRecord as { last_extracted_at?: string }).last_extracted_at ?? null,
+      }
+      : null;
+
+    // Status-only fast path (the project-sidebar status pill / useRealtimeStatus).
+    // Returns just the connected-repo row and SKIPS the integrations listing
+    // below — that calls provider.listRepositories() against GitHub/GitLab on
+    // every request (seconds of latency), and the pill never uses the repo list.
+    // The Settings repo-picker still gets the full payload via the default path.
+    if (req.query.status_only === '1' || req.query.status_only === 'true') {
+      return res.json({ connectedRepository, repositories: [] });
+    }
+
     const GIT_PROVIDERS = ['github', 'gitlab', 'bitbucket'] as const;
     let integrations: OrgIntegration[];
     if (integration_id) {
@@ -4050,29 +4093,7 @@ router.get('/:id/projects/:projectId/repositories', async (req: AuthRequest, res
       }
     }
 
-    res.json({
-      connectedRepository: repoRecord
-        ? {
-          repo_full_name: repoRecord.repo_full_name,
-          default_branch: repoRecord.default_branch,
-          status: effectiveStatus ?? repoRecord.status,
-          package_json_path: (repoRecord as { package_json_path?: string }).package_json_path ?? '',
-          extraction_step: (repoRecord as { extraction_step?: string }).extraction_step ?? null,
-          extraction_error: (repoRecord as { extraction_error?: string }).extraction_error ?? null,
-          provider: (repoRecord as any).provider ?? 'github',
-          pull_request_comments_enabled: (repoRecord as { pull_request_comments_enabled?: boolean }).pull_request_comments_enabled !== false,
-          auto_fix_vulnerabilities_enabled: (repoRecord as { auto_fix_vulnerabilities_enabled?: boolean }).auto_fix_vulnerabilities_enabled === true,
-          connected_at: (repoRecord as { created_at?: string }).created_at ?? null,
-          scan_on_commit: (repoRecord as { scan_on_commit?: boolean }).scan_on_commit === true,
-          sync_frequency: (repoRecord as { sync_frequency?: string }).sync_frequency ?? 'daily',
-          webhook_status: (repoRecord as { webhook_status?: string }).webhook_status ?? null,
-          last_webhook_at: (repoRecord as { last_webhook_at?: string }).last_webhook_at ?? null,
-          last_webhook_event: (repoRecord as { last_webhook_event?: string }).last_webhook_event ?? null,
-          last_extracted_at: (repoRecord as { last_extracted_at?: string }).last_extracted_at ?? null,
-        }
-        : null,
-      repositories: allRepos,
-    });
+    res.json({ connectedRepository, repositories: allRepos });
   } catch (error: any) {
     console.error('Error fetching repositories:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch repositories' });
@@ -7101,146 +7122,18 @@ router.get('/:id/projects/:projectId/vulnerabilities', async (req: AuthRequest, 
     }
 
     // No finalized extraction run (scan never completed, or crashed mid-run).
-    // Returning the legacy run-unscoped `get_project_vulnerabilities` RPC below
-    // would surface ORPHANED vulns from a partial run — rows with no depscore /
-    // reachability that 404 on expand ("not in project"). There is nothing valid
-    // to show until a run finalizes; the UI renders an "incomplete scan" state.
+    // Returning the legacy run-unscoped `get_project_vulnerabilities` RPC inside
+    // the builder would surface ORPHANED vulns from a partial run — rows with no
+    // depscore / reachability that 404 on expand ("not in project"). There is
+    // nothing valid to show until a run finalizes; the UI renders an
+    // "incomplete scan" state.
     if (!activeExtractionId) {
       return res.json([]);
     }
 
-    // Prefer project_dependency_vulnerabilities (reachable vulns from extraction worker) when available
-    const { count: pdvCount } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .select('*', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-
-    const usePdv = (pdvCount ?? 0) > 0;
-    const rpcName = usePdv ? 'get_project_vulnerabilities_from_pdv' : 'get_project_vulnerabilities';
-    const { data: rows, error: rpcError } = await supabase.rpc(rpcName, {
-      p_project_id: projectId,
-    });
-
-    if (rpcError) {
-      // Fallback if RPC not yet deployed: two queries (no per-dep batching)
-      const { data: projectDeps, error: depsError } = await supabase
-        .from('project_dependencies')
-        .select('dependency_id, name, version')
-        .eq('project_id', projectId)
-        .is('removed_at', null);
-
-      if (depsError) throw depsError;
-
-      const dependencyIds = (projectDeps || [])
-        .map((pd: any) => pd.dependency_id)
-        .filter(Boolean);
-
-      if (dependencyIds.length === 0) return res.json([]);
-
-      const depInfoMap = new Map<string, { name: string; version: string }>();
-      (projectDeps || []).forEach((pd: any) => {
-        if (pd.dependency_id) depInfoMap.set(pd.dependency_id, { name: pd.name, version: pd.version });
-      });
-
-      const VULN_BATCH = 1000;
-      const allVulnerabilities: any[] = [];
-      for (let i = 0; i < dependencyIds.length; i += VULN_BATCH) {
-        const batch = dependencyIds.slice(i, i + VULN_BATCH);
-        const { data: vulns, error: vulnsError } = await supabase
-          .from('dependency_vulnerabilities')
-          .select('id, dependency_id, osv_id, severity, summary, details, aliases, fixed_versions, published_at, modified_at, created_at')
-          .in('dependency_id', batch)
-          .order('severity', { ascending: true })
-          .order('published_at', { ascending: false, nullsFirst: false });
-        if (vulnsError) throw vulnsError;
-        if (vulns) allVulnerabilities.push(...vulns);
-      }
-
-      const enrichedVulnerabilities = allVulnerabilities.map((vuln: any) => {
-        const depInfo = depInfoMap.get(vuln.dependency_id);
-        return {
-          id: vuln.id,
-          osv_id: vuln.osv_id,
-          severity: vuln.severity,
-          summary: vuln.summary,
-          details: vuln.details,
-          aliases: vuln.aliases || [],
-          fixed_versions: vuln.fixed_versions || [],
-          published_at: vuln.published_at,
-          modified_at: vuln.modified_at,
-          dependency_id: vuln.dependency_id,
-          dependency_name: depInfo?.name || 'Unknown',
-          dependency_version: depInfo?.version || 'Unknown',
-        };
-      });
-
-      const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-      enrichedVulnerabilities.sort((a, b) => {
-        const severityDiff = (severityOrder[a.severity] ?? 4) - (severityOrder[b.severity] ?? 4);
-        if (severityDiff !== 0) return severityDiff;
-        return new Date(b.published_at || 0).getTime() - new Date(a.published_at || 0).getTime();
-      });
-      return res.json(enrichedVulnerabilities);
-    }
-
-    const enrichedVulnerabilities = (rows || []).map((vuln: any) => ({
-      id: vuln.id,
-      osv_id: vuln.osv_id,
-      severity: vuln.severity,
-      summary: vuln.summary,
-      details: vuln.details ?? null,
-      aliases: vuln.aliases || [],
-      fixed_versions: vuln.fixed_versions || [],
-      published_at: vuln.published_at,
-      modified_at: vuln.modified_at,
-      dependency_id: vuln.dependency_id,
-      dependency_name: vuln.dependency_name ?? 'Unknown',
-      sla_status: vuln.sla_status ?? null,
-      sla_deadline_at: vuln.sla_deadline_at ?? null,
-      dependency_version: vuln.dependency_version ?? 'Unknown',
-      ...(usePdv && {
-        is_reachable: vuln.is_reachable ?? true,
-        reachability_level: vuln.reachability_level ?? null,
-        runtime_confirmed_at: vuln.runtime_confirmed_at ?? null,
-        epss_score: vuln.epss_score,
-        cvss_score: vuln.cvss_score ?? null,
-        cisa_kev: vuln.cisa_kev ?? false,
-        depscore: vuln.depscore ?? null,
-        contextual_depscore: vuln.contextual_depscore ?? null,
-        entry_point_classification: vuln.entry_point_classification ?? null,
-        epd_status: vuln.epd_status ?? null,
-        // Unified-status fields — without finding_key the status cell has no
-        // handle, so the ⋯ actions menu can't render on a dependency CVE row.
-        finding_key: vuln.finding_key ?? null,
-        status: vuln.status ?? null,
-        auto_ignored: vuln.auto_ignored ?? false,
-        auto_ignore_reason: vuln.auto_ignore_reason ?? null,
-        ignore_reason: vuln.ignore_reason ?? null,
-        ignore_note: vuln.ignore_note ?? null,
-        suppressed: vuln.suppressed ?? false,
-        risk_accepted: vuln.risk_accepted ?? false,
-      }),
-    }));
-
-    const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-    enrichedVulnerabilities.sort((a: any, b: any) => {
-      const rank = (x: any) => {
-        const c = x.contextual_depscore;
-        const d = x.depscore;
-        if (c != null && Number.isFinite(Number(c))) return Number(c);
-        if (d != null && Number.isFinite(Number(d))) return Number(d);
-        return -1;
-      };
-      const aScore = rank(a);
-      const bScore = rank(b);
-      if (aScore !== bScore) return bScore - aScore;
-      const severityDiff = (severityOrder[a.severity] ?? 4) - (severityOrder[b.severity] ?? 4);
-      if (severityDiff !== 0) return severityDiff;
-      return new Date(b.published_at || 0).getTime() - new Date(a.published_at || 0).getTime();
-    });
-
-    res.json(enrichedVulnerabilities);
+    // The probe + 3-branch RPC + enrichment + contextual-depscore sort all live
+    // in lib/project-findings.ts so the findings-bundle slice is byte-identical.
+    res.json(await buildProjectVulnerabilitiesUnchecked(id, projectId, activeExtractionId));
   } catch (error: any) {
     console.error('Error fetching project vulnerabilities:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch project vulnerabilities' });
@@ -9738,35 +9631,16 @@ router.get('/:id/projects/:projectId/semgrep-findings', async (req: AuthRequest,
 
     const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
     const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
-    const offset = (page - 1) * perPage;
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    const { count } = await supabase
-      .from('project_semgrep_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-
-    const { data, error } = await supabase
-      .from('project_semgrep_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-      .order('severity', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
-
-    if (error) throw error;
-
-    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json(await buildSemgrepFindingsUnchecked(id, projectId, activeExtractionId, { page, perPage }));
   } catch (error: any) {
     console.error('Error fetching semgrep findings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch semgrep findings' });
   }
 });
 
-// GET /api/organizations/:id/projects/:projectId/secret-findings (permission-gated)
+// GET /api/organizations/:id/projects/:projectId/secret-findings
 router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -9776,35 +9650,11 @@ router.get('/:id/projects/:projectId/secret-findings', async (req: AuthRequest, 
       return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
     }
 
-    const canManage = await checkProjectManagePermission(userId, id, projectId);
-    if (!canManage) {
-      return res.status(403).json({ error: 'Requires manage_projects or manage_teams_and_projects permission' });
-    }
-
     const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
     const perPage = Math.min(100, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
-    const offset = (page - 1) * perPage;
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-
-    const { count } = await supabase
-      .from('project_secret_findings')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
-
-    const { data, error } = await supabase
-      .from('project_secret_findings')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-      .order('is_verified', { ascending: false })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + perPage - 1);
-
-    if (error) throw error;
-
-    res.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage });
+    res.json(await buildSecretFindingsUnchecked(id, projectId, activeExtractionId, { page, perPage }));
   } catch (error: any) {
     console.error('Error fetching secret findings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch secret findings' });
@@ -9828,47 +9678,137 @@ router.get('/:id/projects/:projectId/code-flow-findings', async (req: AuthReques
     }
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-    if (!activeExtractionId) {
-      return res.json({ data: [], total: 0 });
-    }
-
-    // Flows + the user's suppressed flow hashes for this project, in parallel.
-    // A suppressed flow is hidden from the findings surface the same way a
-    // suppressed dep-flow drops out of the vulnerability detail (phase49).
-    const [flowsRes, supRes] = await Promise.all([
-      supabase
-        .from('project_reachable_flows')
-        .select(
-          'id, project_id, extraction_run_id, vuln_class, entry_point_file, entry_point_line, entry_point_method, entry_point_tag, entry_point_code, sink_file, sink_line, sink_method, sink_code, flow_length, flow_nodes, flow_signature_hash, created_at',
-        )
-        .eq('project_id', projectId)
-        .eq('extraction_run_id', activeExtractionId)
-        .eq('reachability_source', 'taint_engine')
-        .is('osv_id', null)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('project_reachable_flow_suppressions')
-        .select('flow_signature_hash')
-        .eq('project_id', projectId),
-    ]);
-
-    if (flowsRes.error) throw flowsRes.error;
-    const suppressed = new Set(
-      (supRes.data ?? []).map((r: any) => r.flow_signature_hash).filter(Boolean),
-    );
-
-    // Return suppressed flows too, flagged — the findings table filters Open vs
-    // Ignored client-side and lets the user restore them. (The count RPC still
-    // excludes suppressed flows, so the pills stay correct.)
-    const data = (flowsRes.data ?? []).map((row: any) => ({
-      ...toDataFlowFinding(row),
-      flow_suppressed: Boolean(row.flow_signature_hash && suppressed.has(row.flow_signature_hash)),
-    }));
-
-    res.json({ data, total: data.length });
+    // Flows + suppressed-hash flagging live in lib/project-findings.ts so the
+    // findings-bundle slice is byte-identical.
+    res.json(await buildCodeFlowFindingsUnchecked(id, projectId, activeExtractionId));
   } catch (error: any) {
     console.error('Error fetching code-flow findings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch code-flow findings' });
+  }
+});
+
+// GET /api/organizations/:id/projects/:projectId/findings
+//
+// Findings BUNDLE — collapses the ~12 per-project findings endpoints the
+// Findings tab used to call serially into ONE request behind a SINGLE access
+// check. Every slice runs the EXACT builder the standalone endpoint delegates
+// to (lib/project-findings.ts), so there is no shaping drift. Slices run
+// concurrently; one slice failing degrades only that slice (its empty default +
+// a `degradedSlices` entry) rather than 500-ing the whole tab.
+router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id, projectId } = req.params;
+
+    // ONE access check gates every slice below. The project-scoped finding
+    // tables filter by project_id/extraction_run_id only, so the builders are
+    // access-free by contract — this gate is the sole tenant boundary.
+    const accessCheck = await checkProjectAccess(userId, id, projectId);
+    if (!accessCheck.hasAccess) {
+      return res.status(accessCheck.error!.status).json({ error: accessCheck.error!.message });
+    }
+
+    const activeExtractionId = await getActiveExtractionId(supabase, projectId);
+    const runScoped = !!activeExtractionId;
+
+    const degradedSlices: string[] = [];
+
+    // Per-slice empty defaults (match each endpoint's no-data payload).
+    const defaults = {
+      vulnerabilities: [] as any[],
+      secrets: { data: [] as any[], total: 0, page: 1, per_page: 50 },
+      semgrep: { data: [] as any[], total: 0, page: 1, per_page: 50 },
+      iac: { data: [] as any[], total: 0, page: 1, per_page: 100 },
+      container: { data: [] as any[], total: 0, page: 1, per_page: 100 },
+      malicious: { data: [] as any[], total: 0, page: 1, per_page: 100 },
+      codeFlows: { data: [] as any[], total: 0 },
+      baseImageRecs: { recommendations: [] as any[] },
+      dast: [] as any[],
+      trackerLinks: [] as any[],
+      groupSuppressions: [] as any[],
+      acknowledgements: [] as any[],
+    };
+
+    // Each task = [sliceName, () => Promise]. Run-scoped slices are only invoked
+    // when a finalized run exists; otherwise they resolve to their empty default
+    // WITHOUT querying their row table (the no-active-run fast path). DAST and
+    // the org-wide chip maps are independent of the extraction run.
+    const tasks: Array<[keyof typeof defaults, (() => Promise<any>) | null]> = [
+      ['vulnerabilities', runScoped ? () => buildProjectVulnerabilitiesUnchecked(id, projectId, activeExtractionId) : null],
+      // skipCount: the bundle feeds only `.data` into the table and never reads
+      // `total`, so we skip the exact count(*) — on a large finding table (e.g.
+      // tens of thousands of container OS-CVE rows) that count scans every match
+      // and was the single slowest part of the bundle. Standalone endpoints keep
+      // their exact totals (they omit skipCount).
+      ['secrets', runScoped ? () => buildSecretFindingsUnchecked(id, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null],
+      ['semgrep', runScoped ? () => buildSemgrepFindingsUnchecked(id, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null],
+      ['iac', runScoped ? () => buildIacFindingsUnchecked(id, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null],
+      ['container', runScoped ? () => buildContainerFindingsUnchecked(id, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null],
+      ['malicious', runScoped ? () => buildMaliciousFindingsUnchecked(id, projectId, activeExtractionId, { page: 1, perPage: 100, skipCount: true }) : null],
+      ['codeFlows', runScoped ? () => buildCodeFlowFindingsUnchecked(id, projectId, activeExtractionId) : null],
+      ['baseImageRecs', runScoped ? () => buildBaseImageRecommendationsUnchecked(id, projectId, activeExtractionId) : null],
+      ['dast', () => buildDastFindingsForProjectUnchecked(projectId, { limit: 200 })],
+      ['trackerLinks', () => buildOrgTrackerLinksUnchecked(id)],
+      ['groupSuppressions', () => buildOrgGroupSuppressionsUnchecked(id)],
+      ['acknowledgements', () => buildOrgAcknowledgementsUnchecked(id)],
+    ];
+
+    const out: Record<string, any> = { ...defaults };
+    const sliceMs: Record<string, number> = {};
+
+    const settled = await Promise.allSettled(
+      tasks.map(async ([slice, run]) => {
+        if (!run) return undefined;
+        const started = Date.now();
+        try {
+          return await run();
+        } finally {
+          sliceMs[slice] = Date.now() - started;
+        }
+      }),
+    );
+
+    settled.forEach((result, i) => {
+      const [slice, run] = tasks[i];
+      if (!run) return; // skipped (no active run) → keep empty default
+      if (result.status === 'fulfilled') {
+        out[slice] = result.value;
+      } else {
+        degradedSlices.push(slice);
+        console.warn(`[findings-bundle] slice "${slice}" failed:`, result.reason?.message ?? result.reason);
+        captureInfraError(result.reason, `findings-bundle:${slice}`, {
+          project_id: projectId,
+          organization_id: id,
+        });
+      }
+    });
+
+    // The bundle's wall-time is its SLOWEST slice (they run concurrently), so log
+    // per-slice ms + the top 3 — a slow bundle then names the guilty slice.
+    const slowest = Object.entries(sliceMs)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([s, ms]) => `${s}:${ms}ms`);
+    console.log('[findings-bundle]', JSON.stringify({ project_id: projectId, slowest, ms: sliceMs, degraded: degradedSlices }));
+
+    res.json({
+      vulnerabilities: out.vulnerabilities,
+      secrets: out.secrets,
+      semgrep: out.semgrep,
+      iac: out.iac,
+      container: out.container,
+      malicious: out.malicious,
+      codeFlows: out.codeFlows,
+      baseImageRecs: out.baseImageRecs,
+      dast: out.dast,
+      trackerLinks: out.trackerLinks,
+      groupSuppressions: out.groupSuppressions,
+      acknowledgements: out.acknowledgements,
+      degradedSlices,
+    });
+  } catch (error: any) {
+    console.error('Error fetching findings bundle:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch findings bundle' });
   }
 });
 

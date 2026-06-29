@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase';
 import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { getActiveExtractionId } from '../lib/active-extraction';
 import { recomputeProjectSummary } from '../lib/security-summary';
+import { buildMaliciousFindingsUnchecked } from '../lib/project-findings';
 import { checkProjectAccess, checkProjectManagePermission } from './project-access';
 import { createActivity } from '../lib/activities';
 import { isValidInternalKey } from '../middleware/internal-key';
@@ -49,7 +50,6 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
 
     const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
     const perPage = Math.min(200, Math.max(1, parseInt(String(req.query.per_page ?? '50'), 10) || 50));
-    const offset = (page - 1) * perPage;
 
     // ?reachability= filter — single value or comma-separated list. The
     // sentinel 'unknown' selects rows where reachability_level IS NULL
@@ -63,86 +63,20 @@ router.get('/:id/projects/:projectId/malicious-findings', async (req: AuthReques
       : [];
     const reachabilityLevels = requested.filter(s => VALID_LEVELS.includes(s));
     const includeUnknown = requested.includes('unknown');
-    // Early-return shortcut: the param wasn't supplied (or contained only
-    // unrecognised values), so we have no filter to apply. Skip the
-    // closure-and-branch dance below entirely — the two callsites can hit
-    // the base query directly. Keeps the hot read path one stack frame
-    // shorter and makes the "sentinel only" / "levels only" branches the
-    // sole reason `applyReachabilityFilter` exists.
-    const hasReachabilityFilter = reachabilityLevels.length > 0 || includeUnknown;
 
     const activeExtractionId = await getActiveExtractionId(supabase, projectId);
 
-    const applyReachabilityFilter = <T extends { or: any; in: any; is: any }>(q: T): T => {
-      if (!hasReachabilityFilter) return q;
-      if (reachabilityLevels.length > 0 && includeUnknown) {
-        // mix of "function,unknown" — OR clause across the list + null check
-        const inList = reachabilityLevels.map(l => `"${l}"`).join(',');
-        return q.or(`reachability_level.in.(${inList}),reachability_level.is.null`);
-      }
-      if (reachabilityLevels.length > 0) {
-        return q.in('reachability_level', reachabilityLevels);
-      }
-      // includeUnknown — must be true here, since hasReachabilityFilter held
-      // and reachabilityLevels was empty.
-      return q.is('reachability_level', null);
-    };
-
-    const { count } = await applyReachabilityFilter(
-      supabase
-        .from('project_malicious_findings')
-        .select('id', { count: 'exact', head: true })
-        .eq('project_id', projectId)
-        .eq('organization_id', id)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
+    // The reachability-filtered query + package hydration live in
+    // lib/project-findings.ts so the findings-bundle slice is byte-identical
+    // (the bundle passes no reachability filter).
+    res.json(
+      await buildMaliciousFindingsUnchecked(id, projectId, activeExtractionId, {
+        page,
+        perPage,
+        reachabilityLevels,
+        includeUnknown,
+      }),
     );
-
-    const { data, error } = await applyReachabilityFilter(
-      supabase
-        .from('project_malicious_findings')
-        .select('*')
-        .eq('project_id', projectId)
-        .eq('organization_id', id)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__')
-        .order('severity', { ascending: true })
-        .order('created_at', { ascending: false })
-        .range(offset, offset + perPage - 1)
-    );
-
-    if (error) throw error;
-
-    const findings = data ?? [];
-    if (findings.length === 0) {
-      return res.json({ data: [], total: count ?? 0, page, per_page: perPage });
-    }
-
-    // Hydrate with package_name + ecosystem + version from project_dependencies + dependencies join
-    const pdIds = [...new Set(findings.map((f: any) => f.project_dependency_id))];
-    const { data: pds } = await supabase
-      .from('project_dependencies')
-      .select('id, version, dependency_id')
-      .in('id', pdIds);
-
-    const depIds = [...new Set((pds ?? []).map((pd: any) => pd.dependency_id).filter(Boolean))];
-    const { data: deps } = depIds.length > 0
-      ? await supabase.from('dependencies').select('id, name, ecosystem').in('id', depIds)
-      : { data: [] as any[] };
-
-    const pdById = new Map((pds ?? []).map((pd: any) => [pd.id, pd]));
-    const depById = new Map((deps ?? []).map((d: any) => [d.id, d]));
-
-    const enriched = findings.map((f: any) => {
-      const pd = pdById.get(f.project_dependency_id);
-      const dep = pd ? depById.get(pd.dependency_id) : null;
-      return {
-        ...f,
-        package_name: dep?.name ?? null,
-        ecosystem: dep?.ecosystem ?? null,
-        package_version: pd?.version ?? null,
-      };
-    });
-
-    res.json({ data: enriched, total: count ?? 0, page, per_page: perPage });
   } catch (error: any) {
     console.error('Error fetching malicious findings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch malicious findings' });
