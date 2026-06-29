@@ -1,15 +1,19 @@
 import type { OverviewBundle } from './api';
 
-// Stale-while-revalidate cache for the organization overview bundle.
+// In-memory-only cache for the organization overview bundle.
 //
-// The overview is the app's front door; its felt speed sets the baseline for
-// everything. On a repeat visit we paint the last-known bundle from this cache
-// INSTANTLY (zero network), then revalidate in the background and reconcile.
-// First visit of a session (cold cache) still hits the network once.
+// CURRENTLY DISABLED (CACHE_ENABLED = false): the overview fetches the bundle
+// fresh and shows its normal loading skeleton on every open. The bundle endpoint
+// already collapses the old 4 mount round-trips into 1, so a single quick load is
+// fast enough — and a brief skeleton reads as "fresh data just loaded" rather than
+// an instant paint that can feel oddly abrupt / possibly-stale.
 //
-// Keyed by org id. localStorage is inherently per-browser-profile (≈ per-user),
-// and every mount revalidates, so a stale paint is corrected within one
-// round-trip. Bump the `v1` namespace if the bundle shape changes.
+// Flip CACHE_ENABLED to true to re-enable an in-session (in-memory) cache: in-app
+// navigation back to the overview repaints instantly from the last bundle, while
+// every mount still revalidates in the background. It is in-memory only — nothing
+// is ever written to disk, so a reload / new tab always starts cold.
+
+const CACHE_ENABLED: boolean = false;
 
 export interface CachedOverview {
   data: OverviewBundle;
@@ -17,54 +21,32 @@ export interface CachedOverview {
 }
 
 const MEM = new Map<string, CachedOverview>();
-const STORAGE_PREFIX = 'deptex:overview:v1:';
-const storageKey = (orgId: string) => `${STORAGE_PREFIX}${orgId}`;
+
+// One-time cleanup: an earlier build persisted the overview bundle to localStorage.
+// Purge any leftover on-disk entries so nothing lingers between sessions, whether
+// or not the in-memory cache is enabled.
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('deptex:overview:v1:')) localStorage.removeItem(k);
+  }
+} catch {
+  /* localStorage unavailable (private mode) — nothing to purge. */
+}
 
 export function readOverviewCache(orgId: string): CachedOverview | null {
-  const mem = MEM.get(orgId);
-  if (mem) return mem;
-  try {
-    const raw = localStorage.getItem(storageKey(orgId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as CachedOverview;
-    if (!parsed?.data) return null;
-    MEM.set(orgId, parsed);
-    return parsed;
-  } catch {
-    // Corrupt entry or localStorage unavailable (private mode) — treat as miss.
-    return null;
-  }
+  if (!CACHE_ENABLED) return null;
+  return MEM.get(orgId) ?? null;
 }
 
 export function writeOverviewCache(orgId: string, data: OverviewBundle): void {
-  const entry: CachedOverview = { data, ts: Date.now() };
-  MEM.set(orgId, entry);
-  try {
-    localStorage.setItem(storageKey(orgId), JSON.stringify(entry));
-  } catch {
-    // localStorage full / blocked — the in-memory cache still serves this session.
-  }
+  if (!CACHE_ENABLED) return;
+  MEM.set(orgId, { data, ts: Date.now() });
 }
 
-// Clear one org's cache, or (no arg) every overview cache — call on sign-out so a
-// different user in the same browser never paints the previous user's view.
+// Clear one org's cache, or (no arg) every one — called on sign-out so a different
+// user in the same tab never reuses the previous user's view.
 export function clearOverviewCache(orgId?: string): void {
-  if (orgId) {
-    MEM.delete(orgId);
-    try {
-      localStorage.removeItem(storageKey(orgId));
-    } catch {
-      /* ignore */
-    }
-    return;
-  }
-  MEM.clear();
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(STORAGE_PREFIX)) localStorage.removeItem(k);
-    }
-  } catch {
-    /* ignore */
-  }
+  if (orgId) MEM.delete(orgId);
+  else MEM.clear();
 }
