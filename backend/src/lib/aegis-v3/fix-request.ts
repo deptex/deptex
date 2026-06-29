@@ -125,7 +125,12 @@ export interface CreateFixRequestResult {
  *   path needs no signed token — there's no verifier on it; we flip to
  *   `approved` directly.
  */
-export async function createFixRequest(args: {
+/**
+ * Just the row INSERT (status 'planning', no plan yet). Fast. Split out so the
+ * task fan-out can create all its fix rows instantly, return, and generate the
+ * (slow, ~60-80s each) plans in the background.
+ */
+export async function insertFixRow(args: {
   organizationId: string;
   projectId: string;
   findingType: FindingType;
@@ -133,66 +138,58 @@ export async function createFixRequest(args: {
   triggeredByUserId: string;
   threadId?: string;
   taskId?: string;
-  autoApprove?: boolean;
   payloadSource?: string;
-}): Promise<CreateFixRequestResult> {
-  const {
-    organizationId,
-    projectId,
-    findingType,
-    findingId,
-    triggeredByUserId,
-    threadId,
-    taskId,
-    autoApprove,
-    payloadSource,
-  } = args;
-
+}): Promise<{ fixId: string } | { error: string }> {
   const insertRow: Record<string, any> = {
-    project_id: projectId,
-    organization_id: organizationId,
-    fix_type: findingType,
-    strategy: strategyForFindingType(findingType),
+    project_id: args.projectId,
+    organization_id: args.organizationId,
+    fix_type: args.findingType,
+    strategy: strategyForFindingType(args.findingType),
     status: 'planning' as FixStatus,
-    triggered_by: triggeredByUserId,
-    [fixTypeColumn(findingType)]: findingId,
-    payload: { source: payloadSource ?? 'aegis_fix_request' },
+    triggered_by: args.triggeredByUserId,
+    [fixTypeColumn(args.findingType)]: args.findingId,
+    payload: { source: args.payloadSource ?? 'aegis_fix_request' },
   };
-  if (threadId) insertRow.thread_id = threadId;
-  if (taskId) insertRow.task_id = taskId;
+  if (args.threadId) insertRow.thread_id = args.threadId;
+  if (args.taskId) insertRow.task_id = args.taskId;
 
-  const { data: created, error: insertError } = await supabase
+  const { data: created, error } = await supabase
     .from('project_security_fixes')
     .insert(insertRow)
     .select('id')
     .single();
-  if (insertError || !created) {
-    return {
-      fixId: '',
-      status: 'failed',
-      plan: null,
-      error: insertError?.message ?? 'Failed to create fix request',
-    };
-  }
+  if (error || !created) return { error: error?.message ?? 'Failed to create fix request' };
+  return { fixId: created.id as string };
+}
 
+/**
+ * The slow half: generate + persist the plan on an existing fix row, optionally
+ * auto-approve + start the worker. Safe to run in the background (a planner
+ * crash marks the row failed, never throws out).
+ */
+export async function planAndApproveFix(args: {
+  fixId: string;
+  organizationId: string;
+  projectId: string;
+  findingType: FindingType;
+  findingId: string;
+  triggeredByUserId: string;
+  autoApprove?: boolean;
+}): Promise<CreateFixRequestResult> {
+  const { fixId, autoApprove, triggeredByUserId } = args;
   let planResult;
   try {
     planResult = await persistPlanForFix({
-      fixId: created.id,
-      organizationId,
-      projectId,
-      findingType,
-      findingId,
+      fixId,
+      organizationId: args.organizationId,
+      projectId: args.projectId,
+      findingType: args.findingType,
+      findingId: args.findingId,
       triggeredByUserId,
     });
   } catch (err: any) {
     // persistPlanForFix already marked the row failed before rethrowing.
-    return {
-      fixId: created.id,
-      status: 'failed',
-      plan: null,
-      error: err?.message ?? 'Plan generation failed',
-    };
+    return { fixId, status: 'failed', plan: null, error: err?.message ?? 'Plan generation failed' };
   }
 
   const { status, plan } = planResult;
@@ -206,7 +203,7 @@ export async function createFixRequest(args: {
         approved_at: new Date().toISOString(),
         approved_by_user_id: triggeredByUserId,
       })
-      .eq('id', created.id)
+      .eq('id', fixId)
       .eq('status', 'awaiting_approval');
 
     // Best-effort: start a fix-worker machine. If it fails, the fix-recovery
@@ -217,8 +214,32 @@ export async function createFixRequest(args: {
       console.warn(`[aegis-fix-request] Failed to start fix-worker machine: ${e?.message ?? e}`);
     }
 
-    return { fixId: created.id, status: 'approved', plan };
+    return { fixId, status: 'approved', plan };
   }
 
-  return { fixId: created.id, status, plan, refusal };
+  return { fixId, status, plan, refusal };
+}
+
+export async function createFixRequest(args: {
+  organizationId: string;
+  projectId: string;
+  findingType: FindingType;
+  findingId: string;
+  triggeredByUserId: string;
+  threadId?: string;
+  taskId?: string;
+  autoApprove?: boolean;
+  payloadSource?: string;
+}): Promise<CreateFixRequestResult> {
+  const ins = await insertFixRow(args);
+  if ('error' in ins) return { fixId: '', status: 'failed', plan: null, error: ins.error };
+  return planAndApproveFix({
+    fixId: ins.fixId,
+    organizationId: args.organizationId,
+    projectId: args.projectId,
+    findingType: args.findingType,
+    findingId: args.findingId,
+    triggeredByUserId: args.triggeredByUserId,
+    autoApprove: args.autoApprove,
+  });
 }

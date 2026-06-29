@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { supabase } from '../supabase';
 import { getActiveExtractionId } from '../active-extraction';
 import { logSecurityEvent } from '../security-audit';
-import { createFixRequest } from './fix-request';
+import { insertFixRow, planAndApproveFix } from './fix-request';
 import {
   AEGIS_TASK_MAX_TARGETS,
   type AegisTask,
@@ -331,12 +331,12 @@ export async function acceptTask(args: {
     return { threadId };
   }
 
-  // 5. Fan out auto-approved fixes (best-effort; a single crash marks that fix
-  //    failed and the loop continues). Each fix stamps task_id AND thread_id so
-  //    the rollup trigger fires and the inline PlanCards live-update.
-  const createdFixIds: string[] = [];
+  // 5. Create all the fix ROWS instantly (status 'planning', no plan yet) and
+  //    file the Aegis chip per target. This is FAST — no LLM calls — so the
+  //    accept request returns in well under a second.
+  const pending: Array<{ fixId: string; target: AegisTaskTarget; findingId: string }> = [];
   for (const { target, findingId } of resolved) {
-    const result = await createFixRequest({
+    const ins = await insertFixRow({
       organizationId,
       projectId: target.projectId,
       findingType: target.findingType,
@@ -344,13 +344,12 @@ export async function acceptTask(args: {
       triggeredByUserId: userId,
       threadId,
       taskId,
-      autoApprove: true,
       payloadSource: 'aegis_task',
     });
-    if (result.fixId) createdFixIds.push(result.fixId);
+    if ('fixId' in ins) pending.push({ fixId: ins.fixId, target, findingId });
 
-    // 6. File an 'aegis' tracker link so the finding shows the Aegis chip. The
-    //    rollup trigger flips it to ✓ when the task resolves cleanly.
+    // File an 'aegis' tracker link so the finding shows the Aegis chip. The
+    // rollup trigger flips it to ✓ when the task resolves cleanly.
     await supabase
       .from('finding_tracker_links')
       .upsert(
@@ -373,15 +372,21 @@ export async function acceptTask(args: {
       );
   }
 
-  // 7. Seed the task-chat: Aegis's opening turn + an inline live card per fix.
-  const n = createdFixIds.length;
+  // Correct total_fixes to the rows actually created (an insert failure would
+  // otherwise wedge the task at 'working' forever — v_total < v_planned).
+  await supabase.from('aegis_agent_tasks').update({ total_fixes: pending.length }).eq('id', taskId);
+
+  // 6. Seed the task-chat NOW (before any slow plan-gen): Aegis's opening turn +
+  //    a live card per fix. The cards render as 'planning' and fill in as plans
+  //    generate in the background below.
+  const n = pending.length;
   const skipped = resolved.length - n;
   const opening =
     `On it — I'm fixing ${n} ${n === 1 ? 'finding' : 'findings'} and will open ` +
     `${n === 1 ? 'a draft PR' : 'draft PRs'} for ${n === 1 ? 'it' : 'each'}. ` +
     `You can watch each one below; I'll only stop to ask if something blocks me.` +
     (skipped > 0 ? ` (${skipped} target${skipped === 1 ? '' : 's'} were no longer present and were skipped.)` : '');
-  await postTaskOpeningMessage(threadId, opening, createdFixIds);
+  await postTaskOpeningMessage(threadId, opening, pending.map((p) => p.fixId));
 
   await logSecurityEvent({
     organizationId,
@@ -391,6 +396,28 @@ export async function acceptTask(args: {
     targetId: taskId,
     metadata: { fixCount: n, targets: task.targets.length },
   });
+
+  // 7. Generate plans + auto-approve + start the worker IN THE BACKGROUND so the
+  //    accept request returns immediately. Sequential to respect the AI
+  //    concurrency limit; each card live-updates as its plan lands. (The backend
+  //    is a long-running server — same pattern as the billing setImmediate work.)
+  void (async () => {
+    for (const p of pending) {
+      try {
+        await planAndApproveFix({
+          fixId: p.fixId,
+          organizationId,
+          projectId: p.target.projectId,
+          findingType: p.target.findingType,
+          findingId: p.findingId,
+          triggeredByUserId: userId,
+          autoApprove: true,
+        });
+      } catch (e: any) {
+        console.error('[aegis-task] background plan/approve failed', p.fixId, e?.message);
+      }
+    }
+  })();
 
   return { threadId };
 }
