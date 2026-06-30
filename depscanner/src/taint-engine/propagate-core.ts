@@ -111,7 +111,17 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       break;
     }
     if (iterations >= maxIterations) {
-      onWarn?.(`taint propagator hit maxIterations=${maxIterations}; stopping early`);
+      // LOUD: hitting the iteration budget means the fixpoint was NOT reached,
+      // so the emitted flows are a PARTIAL set — a reachable vuln can be left
+      // looking module/unreachable and get auto-ignored (a silence
+      // false-negative, the worst failure mode). Keep the `maxIterations=<n>`
+      // token (asserted by the invariants suite) and add the diagnostic
+      // dimensions so the truncation is debuggable from logs/telemetry.
+      onWarn?.(
+        `taint propagator budget exhausted — FLOWS MAY BE TRUNCATED (silence-FN risk): ` +
+          `hit maxIterations=${maxIterations} (iterations=${iterations}, ` +
+          `functions=${opts.stateById.size}, worklistRemaining=${worklist.size})`,
+      );
       stoppedEarly = true;
       break;
     }
@@ -409,14 +419,17 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
   const responseNonHtml = responseFunctionIsNonHtml(state.ir.steps);
 
   let sourcesAddedThisPass = 0;
-  // Track whether `return`-step taint grew this pass, but DO NOT bail out
-  // mid-IR. The IR flattens branches into a straight-line list per design
-  // (see ir.ts `walkStatement` — if/else/try/switch all flatten), so a
-  // mid-body `return` step is regularly followed by post-return sinks,
-  // sources, and calls from other branches. Bailing on the first growth
-  // would silently drop those (bad FN). Convergence is still bounded by
-  // worklist iterations + monotonic state growth.
-  let changedReturn = false;
+  // The IR flattens branches into a straight-line list per design (see ir.ts
+  // `walkStatement` — if/else/try/switch all flatten), so a mid-body `return`
+  // step is regularly followed by post-return sinks, sources, and calls from
+  // other branches — we must analyse the WHOLE list, never bail on the first
+  // return. `changedReturn` (did this function's PUBLISHED returnTaint advance
+  // this pass, so callers must be re-analysed?) is therefore computed ONCE
+  // after the loop from the net returnTaint vs its value at pass start — NOT
+  // from in-pass writes, which oscillate between distinct-source returns and
+  // re-enqueued callers forever inside any call cycle (see the `return` case +
+  // TSCALE1 in runWorklistAndAggregate).
+  const returnBefore = state.returnTaint;
 
   for (const step of state.ir.steps) {
     switch (step.kind) {
@@ -694,11 +707,18 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         const trace = step.from ? local.get(step.from) : null;
         if (trace) {
           const augmented = extendPath(trace, hopFromStep(step, 'return'), maxPathLength);
-          if (subsumes(state.returnTaint, augmented) === SUBSUMED) {
-            // already subsumed
-          } else {
+          // Adopt the new value when it isn't subsumed by the current in-pass
+          // value (last-write-wins across multiple distinct-source returns —
+          // the pre-existing single-slot model; the net value is byte-identical
+          // to before this change). Deliberately NOT flagging changedReturn
+          // here: a function with two distinct-source returns flips this slot
+          // back and forth WITHIN one pass, so deciding re-enqueue from an
+          // in-pass write re-enqueued callers every pass forever inside any
+          // call cycle and spun the worklist to maxIterations (TSCALE1 —
+          // express@4.18.2 ran to 168,600 iterations and silently truncated
+          // flows). changedReturn is computed once after the loop instead.
+          if (subsumes(state.returnTaint, augmented) !== SUBSUMED) {
             state.returnTaint = augmented;
-            changedReturn = true;
           }
         }
         break;
@@ -706,6 +726,15 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
     }
   }
 
+  // Re-enqueue callers only when the function's published returnTaint genuinely
+  // advanced vs the start of this pass — using the same subsumption check the
+  // param side (mergeParamTaint) already applies. This keeps the fixpoint VALUE
+  // identical (so no fixture flow changes) while making convergence real: a
+  // stable returnTaint — including the within-pass flip between two
+  // distinct-source returns — no longer re-enqueues callers, so call cycles
+  // converge instead of spinning to the iteration cap and truncating flows.
+  const changedReturn =
+    state.returnTaint !== null && subsumes(returnBefore, state.returnTaint) !== SUBSUMED;
   return { changedReturn, sourcesAddedThisPass };
 }
 
