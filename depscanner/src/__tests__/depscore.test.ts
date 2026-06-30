@@ -4,6 +4,7 @@ import {
   calculateSecretDepscore,
   calculateSemgrepDepscore,
   calculateLicenseDepscore,
+  calculateDastDepscore,
   type DepscoreContext,
 } from '../depscore';
 import { scoreVulnRow } from '../pipeline-steps/dep-scan';
@@ -259,6 +260,56 @@ describe('calculateLicenseDepscore', () => {
       reasons: ['agpl'], isDirect: true, isDevDependency: true, importance: 1.0,
     });
     expect(dev).toBeLessThan(prod);
+  });
+});
+
+// N2: DAST findings need a depscore so ZAP/Nuclei rows rank in the unified
+// findings order. Score = severity-band base × importance, at the implicit
+// confirmed reachability tier (a DAST hit is runtime proof).
+describe('calculateDastDepscore', () => {
+  it('every severity band yields a non-null, in-range score', () => {
+    for (const severity of ['critical', 'high', 'medium', 'low', 'info']) {
+      const s = calculateDastDepscore({ severity, importance: 1.0 });
+      expect(typeof s).toBe('number');
+      expect(s).toBeGreaterThan(0);
+      expect(s).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('orders strictly by severity at fixed importance', () => {
+    const critical = calculateDastDepscore({ severity: 'critical', importance: 1.0 });
+    const high = calculateDastDepscore({ severity: 'high', importance: 1.0 });
+    const medium = calculateDastDepscore({ severity: 'medium', importance: 1.0 });
+    const low = calculateDastDepscore({ severity: 'low', importance: 1.0 });
+    const info = calculateDastDepscore({ severity: 'info', importance: 1.0 });
+    expect(critical).toBeGreaterThan(high);
+    expect(high).toBeGreaterThan(medium);
+    expect(medium).toBeGreaterThan(low);
+    expect(low).toBeGreaterThan(info);
+    // Mirrors the container/IaC severityToDepscore bands.
+    expect(critical).toBe(90);
+    expect(high).toBe(70);
+    expect(medium).toBe(50);
+    expect(low).toBe(30);
+    expect(info).toBe(10);
+  });
+
+  it('folds in project importance (tierWeight), clamped to [0.5, 2.0]', () => {
+    const base = calculateDastDepscore({ severity: 'medium', importance: 1.0 });
+    const heavy = calculateDastDepscore({ severity: 'medium', importance: 2.0 });
+    const light = calculateDastDepscore({ severity: 'medium', importance: 0.5 });
+    expect(heavy).toBeGreaterThan(base);
+    expect(light).toBeLessThan(base);
+    // 50 × 2.0 = 100; 50 × 0.5 = 25; out-of-range importance clamps.
+    expect(heavy).toBe(100);
+    expect(light).toBe(25);
+    expect(calculateDastDepscore({ severity: 'medium', importance: 9 })).toBe(100);
+  });
+
+  it('caps at 100 and falls back to the LOW band for an unknown severity', () => {
+    expect(calculateDastDepscore({ severity: 'critical', importance: 2.0 })).toBe(100);
+    const unknown = calculateDastDepscore({ severity: 'bogus', importance: 1.0 });
+    expect(unknown).toBe(30);
   });
 });
 

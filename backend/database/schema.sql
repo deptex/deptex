@@ -1147,7 +1147,8 @@ CREATE TABLE IF NOT EXISTS public.project_dast_findings (
   ignored_at timestamp with time zone,
   auto_ignored boolean NOT NULL DEFAULT false,
   auto_ignore_reason text,
-  resolved_at timestamp with time zone
+  resolved_at timestamp with time zone,
+  depscore integer
 );
 CREATE TABLE IF NOT EXISTS public.project_dast_targets (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -3752,7 +3753,15 @@ BEGIN
        SET reachability_level             = 'confirmed',
            runtime_confirmed_at           = now(),
            runtime_confirmed_dast_finding_id = m.dast_finding_id,
-           runtime_confirmed_prior_level  = m.prior_level
+           runtime_confirmed_prior_level  = m.prior_level,
+           contextual_depscore = CASE
+             WHEN pdv.contextual_depscore IS NULL THEN
+               ROUND(
+                 COALESCE(pdv.base_depscore_no_reachability, pdv.depscore, 0)
+                   * COALESCE(pdv.epd_factor, 1.0),
+                 4)
+             ELSE pdv.contextual_depscore
+           END
       FROM matches m
      WHERE pdv.id = m.pdv_id
     RETURNING pdv.id, pdv.osv_id, m.prior_level AS prior_level,

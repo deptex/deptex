@@ -138,6 +138,48 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   return Math.min(100, Math.round(score));
 }
 
+// --- DAST finding depscore ---
+
+/**
+ * Severity-band base for a DAST finding. Mirrors the container / IaC
+ * `severityToDepscore` convention in `scanners/storage.ts`
+ * (critical 90 / high 70 / medium 50 / low 30 / info 10) — kept in sync
+ * deliberately so a DAST hit and an equal-severity container CVE share a base.
+ * An unknown severity falls back to the LOW band (30) so the score is always
+ * non-null and the finding can still rank.
+ */
+const DAST_SEVERITY_BAND_BASE: Record<string, number> = {
+  critical: 90,
+  high: 70,
+  medium: 50,
+  low: 30,
+  info: 10,
+};
+
+export interface DastDepscoreContext {
+  severity: string;
+  importance: number;
+}
+
+/**
+ * Depscore for a DAST (ZAP / Nuclei) finding.
+ *
+ * A DAST hit is literal runtime proof that the vulnerable path executed, so
+ * the finding ranks at the CONFIRMED reachability tier — the strongest signal
+ * the platform has (weight 1.0, the same tier `confirm_pdvs_from_dast_run`
+ * independently promotes the cross-linked PDV to). The score therefore reduces
+ * to the shared severity band folded with the per-project `importance` scalar,
+ * exactly the shape the secret / semgrep / license scorers use (base ×
+ * importance) — the confirmed-tier reachability weight of 1.0 is implicit and
+ * never demotes a runtime-proven finding.
+ */
+export function calculateDastDepscore(ctx: DastDepscoreContext): number {
+  const base = DAST_SEVERITY_BAND_BASE[(ctx.severity ?? '').toLowerCase()] ?? 30;
+  const tierWeight = clampImportance(ctx.importance);
+  const score = base * tierWeight;
+  return Math.min(100, Math.round(score));
+}
+
 // --- Secret finding depscore ---
 
 /** Detector type weights — higher-impact credential types score higher. */

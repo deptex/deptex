@@ -24,13 +24,14 @@
  * it does NOT touch the database. It runs in jest via the backend
  * preset (`roots: [...depscanner/src]` per backend/jest.config.js).
  *
- * NOTE on out-of-band writers: DAST v2.1c's `confirm_pdvs_from_dast_run`
- * RPC at phase25a:117-136 also touches PDVs (it updates
- * reachability_level to 'confirmed' WITHOUT recomputing
- * contextual_depscore — pre-existing tech debt, separately tracked).
- * That RPC lives in SQL, not depscanner TS, so the grep test below
+ * NOTE on out-of-band writers: DAST's `confirm_pdvs_from_dast_run` RPC also
+ * touches PDVs — it promotes a cross-linked PDV to reachability_level
+ * 'confirmed' AND (as of phase67 / SC2) recomputes contextual_depscore to the
+ * confirmed tier when it was NULL, so a DAST-proven vuln ranks at its full
+ * severity. That RPC lives in SQL, not depscanner TS, so the grep test below
  * does not see it — which is intentional: this enforces the
- * within-depscanner-pipeline scope of the sole-writer invariant.
+ * within-depscanner-pipeline scope of the sole-writer invariant. The RPC's
+ * recompute is covered by test/dast-confirm-contextual-depscore-pglite.ts.
  */
 
 import * as fs from 'fs';
