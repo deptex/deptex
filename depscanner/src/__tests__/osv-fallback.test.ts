@@ -12,8 +12,10 @@ import * as path from 'node:path';
 import {
   extractPurlsFromSbom,
   osvFallbackMode,
+  parseCvss3Vector,
   queryOsvBatch,
   runOsvFallback,
+  severityBandFromScore,
 } from '../pipeline-steps/osv-vuln-scan';
 
 describe('extractPurlsFromSbom', () => {
@@ -52,6 +54,53 @@ describe('extractPurlsFromSbom', () => {
       ],
     }, null);
     expect(purls).toEqual(['pkg:gem/sinatra@2.0.0']);
+  });
+});
+
+// O1: OSV advisories that supply ONLY a CVSS vector string (common on
+// cargo/maven/PYSEC) used to deflate to null severity → medium. The vector
+// parser must recover the real base score so criticals aren't buried.
+describe('parseCvss3Vector', () => {
+  it('scores the canonical AV:N critical (9.8)', () => {
+    expect(parseCvss3Vector('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H')).toBe(9.8);
+  });
+
+  it('scores a network availability-only impact as 7.5 (high)', () => {
+    expect(parseCvss3Vector('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H')).toBe(7.5);
+  });
+
+  it('applies the 1.08 scope-changed multiplier (10.0)', () => {
+    expect(parseCvss3Vector('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H')).toBe(10.0);
+  });
+
+  it('scores a low-severity local vector (~1.8)', () => {
+    expect(parseCvss3Vector('CVSS:3.0/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N')).toBe(1.8);
+  });
+
+  it('accepts both CVSS:3.0 and CVSS:3.1 prefixes', () => {
+    expect(parseCvss3Vector('CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H')).toBe(9.8);
+  });
+
+  it('returns undefined for non-v3 (v2 / v4) vectors and garbage', () => {
+    expect(parseCvss3Vector('AV:N/AC:L/Au:N/C:P/I:P/A:P')).toBeUndefined();        // v2
+    expect(parseCvss3Vector('CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N')).toBeUndefined();  // v4
+    expect(parseCvss3Vector('not-a-vector')).toBeUndefined();
+    expect(parseCvss3Vector(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined when a mandatory base metric is missing', () => {
+    expect(parseCvss3Vector('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H')).toBeUndefined();
+  });
+});
+
+describe('severityBandFromScore', () => {
+  it('maps scores to the CVSS qualitative bands', () => {
+    expect(severityBandFromScore(9.8)).toBe('critical');
+    expect(severityBandFromScore(9.0)).toBe('critical');
+    expect(severityBandFromScore(7.5)).toBe('high');
+    expect(severityBandFromScore(5.0)).toBe('medium');
+    expect(severityBandFromScore(1.8)).toBe('low');
+    expect(severityBandFromScore(0)).toBeNull();
   });
 });
 
@@ -211,6 +260,77 @@ describe('runOsvFallback', () => {
         'pkg:npm/affected-a@1.0.0',
         'pkg:npm/affected-b@2.0.0',
       ]));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('O1: derives severity + numeric CVSS from a vector-only advisory (no severity word)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'osv-fb-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'sbom-cargo.cdx.json'), JSON.stringify({ components: [
+        { purl: 'pkg:cargo/openssl@0.10.0' },
+      ]}));
+      global.fetch = jest.fn(async (url: any) => {
+        if (String(url).includes('querybatch')) {
+          return new Response(JSON.stringify({ results: [{ vulns: [{ id: 'RUSTSEC-2099-0001' }] }] }), { status: 200 });
+        }
+        if (String(url).endsWith('/RUSTSEC-2099-0001')) {
+          // No database_specific.severity — ONLY a CVSS v3 vector string.
+          return new Response(JSON.stringify({
+            id: 'RUSTSEC-2099-0001',
+            summary: 'critical openssl flaw',
+            aliases: ['CVE-2099-5555'],
+            severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }],
+          }), { status: 200 });
+        }
+        return new Response('', { status: 404 });
+      }) as any;
+      const noop: any = { info: jest.fn(), warn: jest.fn() };
+      const res = await runOsvFallback({ reportsDir: dir, jobEcosystem: 'cargo', logger: noop });
+      expect(res.wrote).toBe(true);
+      const written = JSON.parse(fs.readFileSync(path.join(dir, 'osv-fallback.vdr.json'), 'utf8'));
+      const rating = written.vulnerabilities[0].ratings?.[0];
+      // Was previously buried to null severity → medium; now recovered to critical/9.8.
+      expect(rating.severity).toBe('critical');
+      expect(rating.score).toBe(9.8);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('O2: a failed OSV batch query is flagged degraded (failed=true), not silent zero', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'osv-fb-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'sbom-npm.cdx.json'), JSON.stringify({ components: [
+        { purl: 'pkg:npm/lodash@4.17.20' },
+      ]}));
+      // querybatch returns 5xx → queryOsvBatch throws → runOsvFallback must
+      // surface failed=true rather than returning a clean "no vulns" result.
+      global.fetch = jest.fn(async () => new Response('upstream down', { status: 502 })) as any;
+      const noop: any = { info: jest.fn(), warn: jest.fn() };
+      const res = await runOsvFallback({ reportsDir: dir, jobEcosystem: 'npm', logger: noop, force: true });
+      expect(res.wrote).toBe(false);
+      expect(res.failed).toBe(true);
+      expect(res.reason).toMatch(/osv-batch failed/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('queried-none (zero matches) is NOT flagged degraded', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'osv-fb-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'sbom-npm.cdx.json'), JSON.stringify({ components: [
+        { purl: 'pkg:npm/lodash@4.17.20' },
+      ]}));
+      global.fetch = jest.fn(async () =>
+        new Response(JSON.stringify({ results: [{ vulns: [] }] }), { status: 200 })) as any;
+      const noop: any = { info: jest.fn(), warn: jest.fn() };
+      const res = await runOsvFallback({ reportsDir: dir, jobEcosystem: 'npm', logger: noop, force: true });
+      expect(res.wrote).toBe(true);
+      expect(res.vulnCount).toBe(0);
+      expect(res.failed).toBeFalsy();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

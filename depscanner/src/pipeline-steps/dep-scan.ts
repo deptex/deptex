@@ -187,6 +187,58 @@ export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, str
   return pdByNameVersion;
 }
 
+/** The slice of a project_dependencies row the vuln-depscore multiplier reads. */
+export interface PdScoringContext {
+  /** `false` ⇒ transitive (0.75× directness taper); true/null/undefined ⇒ direct. */
+  is_direct?: boolean | null;
+  /** `'dev'` ⇒ dev/test/build scope (0.4× env taper). */
+  environment?: string | null;
+}
+
+/**
+ * Compute a PDV's depscore + reachability-independent base depscore, threading
+ * the dependency-context multiplier (directness 0.75×, dev-scope 0.4×) from the
+ * matched project_dependencies row.
+ *
+ * SC1 fix: the old call site only passed `{cvss, epss, cisaKev, isReachable,
+ * importance}`, so `calculateDepscore`'s directness/env/malicious/reputation
+ * taper was dead — every vuln scored as if direct + prod. Wiring `is_direct`
+ * and `environment` restores the intended taper for non-unreachable rows
+ * (dev-scope's hard `unreachable` floor still comes later, from the
+ * reachability classifier).
+ *
+ * NOTE — malicious + reputation are intentionally NOT passed here: the malicious
+ * flag and the package reputation score are both populated AFTER extraction
+ * (malicious-package scan + the QStash populate-dependencies pass), so they are
+ * not yet known at dep-scan time. They taper correctly once the reachability
+ * step's rescore picks them up — see the boundary note at the call site.
+ */
+export function scoreVulnRow(
+  row: {
+    cvss_score: number | null;
+    epss_score: number | null;
+    cisa_kev: boolean;
+    severity: string | null;
+    is_reachable: boolean;
+  },
+  pd: PdScoringContext | undefined,
+  importance: number,
+): { depscore: number; base_depscore_no_reachability: number } {
+  const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
+  const epss = row.epss_score ?? 0;
+  const isDirect = pd?.is_direct ?? undefined;
+  const isDevDependency = pd?.environment === 'dev';
+  return {
+    base_depscore_no_reachability: calculateBaseDepscoreNoReachability({
+      cvss, epss, cisaKev: row.cisa_kev, importance, isDirect, isDevDependency,
+    }),
+    depscore: calculateDepscore({
+      cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable,
+      importance, isDirect, isDevDependency,
+    }),
+  };
+}
+
 export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
   const { supabase, job, projectId, log, workspaceRoot, jobEcosystem, runId, heartbeat, importance } = ctx;
 
@@ -418,6 +470,20 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         // legitimately found zero vulns) IS the vulnerability scan — don't let
         // the "fail loudly" guard below treat a vuln-free project as a failure.
         depScanSucceeded = true;
+      } else if (result.failed) {
+        // O2: the OSV query itself FAILED (network / non-2xx batch / unreadable
+        // reportsDir) — this is NOT a clean "zero vulns". Treat it as a degraded
+        // run: keep depScanSucceeded false so the loud-fail guard below fires
+        // when OSV was the sole vulnerability source (forced fallback) or
+        // dep-scan also failed. Capture the cause so the failure message names it
+        // rather than reporting a misleading empty CVE picture.
+        if (fallbackMode === 'force' || !depScanSucceeded) {
+          depScanFailureDetail = `OSV fallback degraded — ${result.reason ?? 'query failed'}`;
+        }
+        await log.warn(
+          'vuln_scan_osv',
+          `OSV fallback degraded (${result.reason ?? 'query failed'}); pipeline purls captured: ${pipelinePurls.length}`,
+        );
       } else if (!result.wrote && result.reason) {
         // Surface the skip reason to the run log (not just worker stdout) so a
         // "0 CVEs but deps resolved" outcome is diagnosable after the fact.
@@ -548,7 +614,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       const { data: pdRows } = await supabase
         .from('project_dependencies')
-        .select('id, name, version, environment')
+        .select('id, name, version, environment, is_direct')
         .eq('project_id', projectId)
         .eq('last_seen_extraction_run_id', runId);
 
@@ -556,6 +622,12 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       // devDependency and pulled as a production transitive — the PDV attaches
       // to the production-scope row (see resolveDualScopePdMap).
       const pdByNameVersion = resolveDualScopePdMap((pdRows ?? []) as DualScopePdRow[]);
+
+      // id → directness/scope, for the SC1 dependency-context depscore taper.
+      const pdById = new Map<string, PdScoringContext>();
+      for (const r of (pdRows ?? []) as Array<{ id: string; environment: string | null; is_direct: boolean | null }>) {
+        pdById.set(r.id, { is_direct: r.is_direct, environment: r.environment });
+      }
 
       const kevCveSet = new Set<string>();
       try {
@@ -689,16 +761,25 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       for (const row of vulnRows) {
         const allIds = [row.osv_id, ...(row.aliases ?? [])];
         row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
-        const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
-        const epss = row.epss_score ?? 0;
-        row.base_depscore_no_reachability = calculateBaseDepscoreNoReachability({
-          cvss,
-          epss,
-          cisaKev: row.cisa_kev,
+        // SC1: thread directness + dev-scope from the matched project_dependencies
+        // row so the dependency-context taper (0.75× transitive, 0.4× dev) is no
+        // longer dead. See scoreVulnRow.
+        //
+        // BOUNDARY (cross-owner): this is the INITIAL score. The authoritative
+        // FINAL rescore lives in pipeline-steps/reachability.ts (after the taint
+        // classifier sets reachability_level) and is the value that actually
+        // ships. That rescore currently re-reads only PDV columns and does NOT
+        // join project_dependencies, so it still passes no directness/scope and
+        // overwrites this taper away in the full pipeline. For SC1 to be durable
+        // end-to-end, reachability.ts's rescore must join is_direct + environment
+        // and pass them through the same way — flagged for the reachability owner.
+        const { depscore, base_depscore_no_reachability } = scoreVulnRow(
+          row,
+          pdById.get(row.project_dependency_id),
           importance,
-        });
-        // Keep legacy depscore for compatibility during rollout.
-        row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, importance });
+        );
+        row.base_depscore_no_reachability = base_depscore_no_reachability;
+        row.depscore = depscore;
       }
 
       if (vulnRows.length > 0) {

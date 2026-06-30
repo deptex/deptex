@@ -6,6 +6,7 @@ import {
   calculateLicenseDepscore,
   type DepscoreContext,
 } from '../depscore';
+import { scoreVulnRow } from '../pipeline-steps/dep-scan';
 
 describe('calculateDepscore', () => {
   describe('regression - existing formula without new optional fields', () => {
@@ -86,6 +87,64 @@ describe('calculateDepscore', () => {
       const at_10 = calculateDepscore({ ...base, importance: 1.0 });
       const at_nan = calculateDepscore({ ...base, importance: Number.NaN });
       expect(at_nan).toBe(at_10);
+    });
+  });
+
+  // SC1: the dependency-context multiplier (directness / dev-scope / malicious /
+  // reputation) was dead on the vuln path because the worker call site never
+  // passed these fields. These pin that the multiplier actually moves the score.
+  describe('dependency context multiplier', () => {
+    // cvss=4 / epss=0.1 keeps every variant well below the 100 cap so the
+    // multiplier is visible (not saturated).
+    const base: DepscoreContext = {
+      cvss: 4, epss: 0.1, cisaKev: false, isReachable: true, importance: 1.0,
+    };
+
+    it('transitive (isDirect=false) tapers to 0.75× of direct', () => {
+      const direct = calculateDepscore({ ...base, isDirect: true });
+      const transitive = calculateDepscore({ ...base, isDirect: false });
+      expect(transitive).toBeLessThan(direct);
+      expect(transitive).toBeCloseTo(direct * 0.75, 0);
+    });
+
+    it('omitting isDirect behaves the same as direct (no accidental taper)', () => {
+      const direct = calculateDepscore({ ...base, isDirect: true });
+      const unset = calculateDepscore({ ...base });
+      expect(unset).toBe(direct);
+    });
+
+    it('dev-scope (isDevDependency=true) tapers hard to 0.4×', () => {
+      const prod = calculateDepscore({ ...base, isDevDependency: false });
+      const dev = calculateDepscore({ ...base, isDevDependency: true });
+      expect(dev).toBeLessThan(prod);
+      expect(dev).toBeCloseTo(prod * 0.4, 0);
+    });
+
+    it('malicious dep boosts 1.3×', () => {
+      const benign = calculateDepscore({ ...base, isMalicious: false });
+      const malicious = calculateDepscore({ ...base, isMalicious: true });
+      expect(malicious).toBeGreaterThan(benign);
+      // ratio (rather than absolute) avoids integer-rounding flake at low scores.
+      expect(malicious / benign).toBeCloseTo(1.3, 1);
+    });
+
+    it('package reputation: low score (<30) raises 1.15×, high (>70) lowers 0.95×', () => {
+      const neutral = calculateDepscore({ ...base, packageScore: 50 });
+      const sketchy = calculateDepscore({ ...base, packageScore: 10 });
+      const trusted = calculateDepscore({ ...base, packageScore: 90 });
+      expect(sketchy).toBeGreaterThan(neutral);
+      expect(trusted).toBeLessThan(neutral);
+    });
+
+    it('the base (no-reachability) score honors the same multiplier', () => {
+      const direct = calculateBaseDepscoreNoReachability({
+        cvss: 4, epss: 0.1, cisaKev: false, importance: 1.0, isDirect: true, isDevDependency: false,
+      });
+      const devTransitive = calculateBaseDepscoreNoReachability({
+        cvss: 4, epss: 0.1, cisaKev: false, importance: 1.0, isDirect: false, isDevDependency: true,
+      });
+      expect(devTransitive).toBeLessThan(direct);
+      expect(devTransitive / direct).toBeCloseTo(0.75 * 0.4, 1);
     });
   });
 
@@ -200,5 +259,43 @@ describe('calculateLicenseDepscore', () => {
       reasons: ['agpl'], isDirect: true, isDevDependency: true, importance: 1.0,
     });
     expect(dev).toBeLessThan(prod);
+  });
+});
+
+// SC1 wiring: proves the worker's per-PDV scoring helper actually threads
+// directness + scope from the matched project_dependencies row into the
+// depscore math — the bug was that the call site passed neither.
+describe('scoreVulnRow (dep-scan worker wiring)', () => {
+  const row = {
+    cvss_score: 9 as number | null,
+    epss_score: 0.5 as number | null,
+    cisa_kev: false,
+    severity: 'critical' as string | null,
+    is_reachable: true,
+  };
+
+  it('a prod + direct dep scores far higher than the same vuln on a dev + transitive dep', () => {
+    const prodDirect = scoreVulnRow(row, { is_direct: true, environment: 'prod' }, 1.0);
+    const devTransitive = scoreVulnRow(row, { is_direct: false, environment: 'dev' }, 1.0);
+    expect(devTransitive.depscore).toBeLessThan(prodDirect.depscore);
+    // 0.75 (transitive) × 0.4 (dev) = 0.30× — a real, visible taper.
+    expect(devTransitive.depscore).toBeCloseTo(prodDirect.depscore * 0.3, 0);
+    expect(devTransitive.base_depscore_no_reachability)
+      .toBeLessThan(prodDirect.base_depscore_no_reachability);
+  });
+
+  it('a missing pd context defaults to direct + prod (no accidental taper)', () => {
+    const explicit = scoreVulnRow(row, { is_direct: true, environment: 'prod' }, 1.0);
+    const missing = scoreVulnRow(row, undefined, 1.0);
+    expect(missing.depscore).toBe(explicit.depscore);
+  });
+
+  it('derives cvss from the severity word when cvss_score is null', () => {
+    const withCvss = scoreVulnRow(row, { is_direct: true, environment: 'prod' }, 1.0);
+    const fromSeverity = scoreVulnRow(
+      { ...row, cvss_score: null }, { is_direct: true, environment: 'prod' }, 1.0,
+    );
+    // severity 'critical' → SEVERITY_TO_CVSS 9.0, same as the explicit cvss 9.
+    expect(fromSeverity.depscore).toBe(withCvss.depscore);
   });
 });

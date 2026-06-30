@@ -4,6 +4,29 @@
  * Per-project `importance` (numeric, [0.5, 2.0]) is multiplied directly into
  * the score as `tierWeight`. Replaces the legacy AssetTier enum + custom
  * organization_asset_tiers multiplier (both dropped in phase41).
+ *
+ * --- Score columns + ranking precedence (SC3) -----------------------------
+ * A PDV carries THREE depscore columns, computed by the functions below and
+ * progressively refined down the pipeline:
+ *
+ *   1. base_depscore_no_reachability  — `calculateBaseDepscoreNoReachability`.
+ *        Impact × threat × importance × dependency-context, IGNORING the
+ *        reachability tier. The "what if this were fully reachable" baseline.
+ *   2. depscore                       — `calculateDepscore`.
+ *        (1) additionally weighted by the reachability tier (confirmed 1.0 …
+ *        module 0.5, unreachable 0.0). Written first by dep-scan.ts, then
+ *        AUTHORITATIVELY rewritten by pipeline-steps/reachability.ts once the
+ *        taint classifier has set `reachability_level`.
+ *   3. contextual_depscore            — written by epd.ts / composition.ts.
+ *        `depscore × epd_factor` (EPD execution-path-dominance adjustment).
+ *        Only populated for confirmed/data_flow-tier vulns; null otherwise.
+ *
+ * CANONICAL RANKING SCORE = COALESCE(contextual_depscore, depscore, 0).
+ * Every consumer (security_summary band RPCs, depscore-bands.ts, findings
+ * ordering) prefers `contextual_depscore` when present and falls back to
+ * `depscore`. `base_depscore_no_reachability` is a diagnostic baseline only —
+ * it is NOT used for ranking. Keep this precedence in sync with
+ * backend/src/lib/depscore-bands.ts and the phase47+ security_summary RPCs.
  */
 
 export interface DepscoreContext {

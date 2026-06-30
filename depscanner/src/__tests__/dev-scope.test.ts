@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { updateReachabilityLevels, isDevScoped } from '../reachability';
-import { patchDevDependencies, type ParsedSbomDep } from '../sbom';
+import { patchDevDependencies, collectPyprojectDevNames, type ParsedSbomDep } from '../sbom';
 import type { Storage } from '../storage';
 
 // --- FakeStorage (self-contained, mirrors reachability-symbol-match.test.ts) -
@@ -222,6 +222,85 @@ describe('patchDevDependencies — scope detection', () => {
         expect(byName.predicates.devScoped).toBe(true);
         expect(byName.rexpect.devScoped).toBe(true);
         expect(byName.cc.devScoped).toBe(true);
+      },
+    );
+  });
+
+  // O3: modern Python tooling — PEP 735 dependency-groups, PDM, uv, Hatch,
+  // Poetry 1.2+ groups. cdxgen can't tell these are dev scope, so the manifest
+  // parser must.
+  it('flags dev deps across the modern pyproject tool matrix (not just poetry-classic)', () => {
+    const pyproject = [
+      '[project]',
+      'name = "app"',
+      'dependencies = ["requests", "flask"]',
+      '',
+      '[project.optional-dependencies]',
+      '# extras are NOT dev — must stay prod-eligible',
+      'plotting = ["matplotlib"]',
+      '',
+      '[dependency-groups]',                      // PEP 735
+      'dev = ["pytest>=7.0", "ruff"]',
+      'test = [',                                 // multi-line array
+      '  "coverage[toml]",',
+      '  "pytest-cov",',
+      '  { include-group = "dev" },',             // group ref, not a package
+      ']',
+      '',
+      '[tool.pdm.dev-dependencies]',              // PDM
+      'lint = ["mypy", "black"]',
+      '',
+      '[tool.uv]',                                // uv legacy
+      'dev-dependencies = ["pre-commit"]',
+      'package = true',                           // non-array key — ignored
+      '',
+      '[tool.hatch.envs.test]',                   // Hatch
+      'dependencies = ["tox", "nox"]',
+      '',
+      '[tool.poetry.group.docs.dependencies]',    // Poetry 1.2+ group
+      'sphinx = "^7"',
+      '',
+      '[tool.poetry.dev-dependencies]',           // Poetry classic
+      'flake8 = "^6"',
+      'python = "^3.11"',                         // constraint, not a package
+    ].join('\n');
+
+    const devNames = new Set<string>();
+    collectPyprojectDevNames(pyproject, devNames);
+
+    for (const expected of [
+      'pytest', 'ruff', 'coverage', 'pytest-cov', 'mypy', 'black',
+      'pre-commit', 'tox', 'nox', 'sphinx', 'flake8',
+    ]) {
+      expect(devNames.has(expected)).toBe(true);
+    }
+    // Prod deps + extras + group-include refs must NOT be flagged dev.
+    for (const notDev of ['requests', 'flask', 'matplotlib', 'python', 'include-group', 'dev', 'test']) {
+      expect(devNames.has(notDev)).toBe(false);
+    }
+  });
+
+  it('marks PEP 735 / PDM dev groups via patchDevDependencies (end-to-end)', () => {
+    withTmpRepo(
+      {
+        'pyproject.toml': [
+          '[project]',
+          'name = "app"',
+          'dependencies = ["requests"]',
+          '[dependency-groups]',
+          'dev = ["pytest"]',
+        ].join('\n'),
+      },
+      (dir) => {
+        const deps = [
+          mkDep({ name: 'requests', is_direct: true }),
+          mkDep({ name: 'pytest', is_direct: true }),
+        ];
+        patchDevDependencies(deps, dir, 'pypi');
+        const byName = Object.fromEntries(deps.map((d) => [d.name, d]));
+        expect(byName.requests.devScoped).toBe(false);
+        expect(byName.pytest.devScoped).toBe(true);
+        expect(byName.pytest.source).toBe('devDependencies');
       },
     );
   });
