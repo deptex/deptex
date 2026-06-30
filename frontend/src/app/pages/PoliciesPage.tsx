@@ -19,9 +19,14 @@ import { CODE_BLOCK_BG } from '../../components/policy-monaco-setup';
 import { JsLangBadge } from '../../components/JsLangBadge';
 import { Card, CardContent } from '../../components/ui/card';
 
+/** Escape special regex characters in a string so it can be used in a RegExp literal. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Extract the body of a named function from full code. */
 function extractFunctionBody(code: string, fnName: string): string | null {
-  const regex = new RegExp(`function\\s+${fnName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
+  const regex = new RegExp(`function\\s+${escapeRegExp(fnName)}\\s*\\([^)]*\\)\\s*\\{`, 'g');
   const match = regex.exec(code);
   if (!match) return null;
   const startIdx = match.index + match[0].length;
