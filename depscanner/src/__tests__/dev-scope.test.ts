@@ -20,7 +20,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { updateReachabilityLevels, isDevScoped } from '../reachability';
+import { updateReachabilityLevels, isDevScoped, DEV_SCOPES } from '../reachability';
 import { patchDevDependencies, collectPyprojectDevNames, type ParsedSbomDep } from '../sbom';
 import type { Storage } from '../storage';
 
@@ -63,6 +63,14 @@ class FakeStorage {
         });
       },
       insert: () => Promise.resolve({ data: null, error: null }),
+      // R3: the classifier now flushes verdicts via a batched upsert. Record
+      // each row in the same `updates` shape (keyed on id) the per-row update
+      // path used, so verdictOf() keeps working unchanged.
+      upsert: (rows: any) => {
+        const arr = Array.isArray(rows) ? rows : [rows];
+        for (const r of arr) this.updates.push({ table, filter: { id: r.id }, values: r });
+        return Promise.resolve({ data: null, error: null });
+      },
       update: (values: any) => {
         const currentFilters: Record<string, unknown> = {};
         for (const f of filters) currentFilters[f.col] = f.val;
@@ -164,12 +172,34 @@ function mkDep(over: Partial<ParsedSbomDep>): ParsedSbomDep {
 beforeEach(() => jest.clearAllMocks());
 
 describe('isDevScoped', () => {
-  it('is true only for environment "dev"', () => {
+  it('is true for the worker\'s "dev" value and false for prod/null/empty (unchanged on real data)', () => {
     expect(isDevScoped('dev')).toBe(true);
     expect(isDevScoped('prod')).toBe(false);
     expect(isDevScoped(null)).toBe(false);
     expect(isDevScoped(undefined)).toBe(false);
     expect(isDevScoped('')).toBe(false);
+  });
+
+  // R4 — centralized DEV_SCOPES set: case/whitespace-insensitive + the
+  // documented dev/test/build family (none of which the worker writes today,
+  // so real-data behaviour is identical).
+  it('is robust to case + whitespace variants of "dev"', () => {
+    expect(isDevScoped('DEV')).toBe(true);
+    expect(isDevScoped(' dev ')).toBe(true);
+    expect(isDevScoped('Dev')).toBe(true);
+  });
+
+  it('recognizes the documented dev/test/build scope family', () => {
+    expect(isDevScoped('development')).toBe(true);
+    expect(isDevScoped('test')).toBe(true);
+    expect(isDevScoped('build')).toBe(true);
+    expect(DEV_SCOPES.has('dev')).toBe(true);
+  });
+
+  it('still rejects production-ish scopes', () => {
+    expect(isDevScoped('production')).toBe(false);
+    expect(isDevScoped('runtime')).toBe(false);
+    expect(isDevScoped('optional')).toBe(false);
   });
 });
 

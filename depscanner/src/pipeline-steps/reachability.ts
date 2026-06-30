@@ -31,6 +31,61 @@ import {
 import { applyEpdScoringFallback, EpdBudgetExceededError } from '../epd';
 import type { PipelineContext } from '../pipeline-types';
 
+/** The slice of a project_dependencies row the rescore multiplier reads. */
+export interface RescorePdContext {
+  /** `false` ⇒ transitive (0.75× directness taper); true/null/undefined ⇒ direct. */
+  is_direct?: boolean | null;
+  /** `'dev'` ⇒ dev/test/build scope (0.4× env taper). */
+  environment?: string | null;
+}
+
+/**
+ * SC1 — the authoritative post-classifier rescore for one PDV.
+ *
+ * This is the FINAL depscore that ships: it runs after the taint classifier
+ * has set `reachability_level`, so it folds in the reachability tier weight
+ * (confirmed 1.0 … module 0.5, unreachable 0.0) AND the dependency-context
+ * taper (0.75× transitive, 0.4× dev) — mirroring dep-scan.ts's `scoreVulnRow`
+ * but additionally threading `reachabilityLevel`. Before SC1 this site re-read
+ * only PDV columns and passed no directness/scope, silently overwriting the
+ * initial taper dep-scan.ts applied back to flat for the full pipeline.
+ *
+ * Malicious + reputation are intentionally NOT threaded here either — they are
+ * populated later (malicious-package scan + QStash populate-dependencies), and
+ * taper correctly when that pass rescore picks them up.
+ */
+export function rescoreVulnRow(
+  row: {
+    cvss_score: number | null;
+    epss_score: number | null;
+    cisa_kev: boolean | null;
+    is_reachable: boolean | null;
+    reachability_level: string | null;
+    severity: string | null;
+  },
+  pd: RescorePdContext | undefined,
+  importance: number,
+): { depscore: number; base_depscore_no_reachability: number } {
+  // Preserve the prior site's CVSS default of 4.0 (medium) when both
+  // cvss_score and the severity lookup are absent.
+  const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 4.0) : 4.0);
+  const epss = row.epss_score ?? 0;
+  const cisaKev = row.cisa_kev ?? false;
+  const isDirect = pd?.is_direct ?? undefined;
+  const isDevDependency = pd?.environment === 'dev';
+  return {
+    depscore: calculateDepscore({
+      cvss, epss, cisaKev,
+      isReachable: row.is_reachable ?? false,
+      reachabilityLevel: row.reachability_level ?? undefined,
+      importance, isDirect, isDevDependency,
+    }),
+    base_depscore_no_reachability: calculateBaseDepscoreNoReachability({
+      cvss, epss, cisaKev, importance, isDirect, isDevDependency,
+    }),
+  };
+}
+
 
 export async function doReachabilityAndEpd(
   ctx: PipelineContext,
@@ -153,7 +208,7 @@ export async function doReachabilityAndEpd(
   try {
     const { data: pdvsForRescore } = await supabase
       .from('project_dependency_vulnerabilities')
-      .select('id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
+      .select('id, project_dependency_id, osv_id, cvss_score, epss_score, cisa_kev, is_reachable, reachability_level, severity')
       .eq('project_id', projectId)
       .eq('extraction_run_id', runId);
 
@@ -169,23 +224,45 @@ export async function doReachabilityAndEpd(
         const parsed = typeof rawImp === 'string' ? Number(rawImp) : rawImp;
         if (Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 2.0) rscoreImportance = parsed;
       }
-      for (const row of pdvsForRescore) {
-        const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 4.0) : 4.0);
-        const newScore = calculateDepscore({
-          cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
-          isReachable: row.is_reachable ?? false,
-          reachabilityLevel: row.reachability_level ?? undefined,
-          importance: rscoreImportance,
-        });
-        const newBase = calculateBaseDepscoreNoReachability({
-          cvss, epss: row.epss_score ?? 0, cisaKev: row.cisa_kev ?? false,
-          importance: rscoreImportance,
-        });
-        const { error: rescoreErr } = await supabase.from('project_dependency_vulnerabilities')
-          .update({ depscore: newScore, base_depscore_no_reachability: newBase })
-          .eq('id', row.id);
+
+      // SC1: join project_dependencies so the rescore can thread directness +
+      // dev-scope into calculateDepscore (mirrors dep-scan.ts's scoreVulnRow).
+      // Without this the dep-scan.ts initial taper is overwritten back to flat.
+      const { data: pdScopeRows } = await supabase
+        .from('project_dependencies')
+        .select('id, is_direct, environment')
+        .eq('project_id', projectId)
+        .eq('last_seen_extraction_run_id', runId);
+      const pdById = new Map<string, RescorePdContext>();
+      for (const r of (pdScopeRows ?? []) as Array<{ id: string; is_direct: boolean | null; environment: string | null }>) {
+        pdById.set(r.id, { is_direct: r.is_direct, environment: r.environment });
+      }
+
+      // R3: batch the rescore writes into a single upsert (onConflict id)
+      // instead of one UPDATE per PDV. project_id / project_dependency_id /
+      // osv_id carry existing values for the never-taken INSERT arm.
+      const rescoreRows = pdvsForRescore.map((row: any) => {
+        const { depscore, base_depscore_no_reachability } = rescoreVulnRow(
+          row,
+          pdById.get(row.project_dependency_id as string),
+          rscoreImportance,
+        );
+        return {
+          id: row.id,
+          project_id: projectId,
+          project_dependency_id: row.project_dependency_id,
+          osv_id: row.osv_id,
+          depscore,
+          base_depscore_no_reachability,
+        };
+      });
+      for (let i = 0; i < rescoreRows.length; i += 100) {
+        const chunk = rescoreRows.slice(i, i + 100);
+        const { error: rescoreErr } = await supabase
+          .from('project_dependency_vulnerabilities')
+          .upsert(chunk, { onConflict: 'id' });
         if (rescoreErr) {
-          await log.warn('reachability', `depscore rescore write failed for pdv ${row.id}: ${rescoreErr.message}`);
+          await log.warn('reachability', `depscore rescore upsert failed (${chunk.length} rows, chunk ${i}): ${rescoreErr.message}`);
         }
       }
     }
@@ -201,7 +278,7 @@ export async function doReachabilityAndEpd(
   // project_entry_points.
   const epdStart = Date.now();
   try {
-    await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, fpFilterCostUsd, job.jobId);
+    await applyEpdScoringFallback(supabase, projectId, workspaceRoot, log, fpFilterCostUsd, job.jobId, runId);
   } catch (epdErr: any) {
     // EpdBudgetExceededError must propagate WITHOUT persisting an
     // extraction_step_errors row — env / per-org `fail_job` is the only
