@@ -31,6 +31,7 @@ export async function buildProjectVulnerabilitiesUnchecked(
   orgId: string,
   projectId: string,
   activeExtractionId: string | null,
+  opts?: { limit?: number },
 ): Promise<any[]> {
   // No finalized run → nothing valid to show (orphaned partial-run rows would
   // 404 on expand). Mirrors the endpoint's early `res.json([])`.
@@ -168,6 +169,15 @@ export async function buildProjectVulnerabilitiesUnchecked(
     return new Date(b.published_at || 0).getTime() - new Date(a.published_at || 0).getTime();
   });
 
+  // The PDV RPC has no LIMIT — it returns every vuln for the project. The single-
+  // project bundle wants them all, but the TEAM bundle fans this across N projects,
+  // so an unbounded SCA slice breaks the "payload flat across team size" guarantee
+  // (SCA is the highest-volume type after container). Callers that fan in pass a
+  // worst-first cap; we slice AFTER the depscore-desc sort above so the cap keeps
+  // the most important rows. Omit opts.limit to keep the legacy uncapped behavior.
+  if (opts?.limit != null && enrichedVulnerabilities.length > opts.limit) {
+    return enrichedVulnerabilities.slice(0, opts.limit);
+  }
   return enrichedVulnerabilities;
 }
 
@@ -560,20 +570,25 @@ export async function buildBaseImageRecommendationsUnchecked(
 /**
  * ⚠️ ACCESS-FREE — see file banner. Gate with checkProjectAccess first.
  *
- * No orgId param: the bundle has already verified access to `projectId`. The
- * tenant guard inside loadDastFindings still needs the project's org, so we read
- * it off the project row (the same org the resolved target must belong to).
+ * The tenant guard inside loadDastFindings needs the project's org. The single-
+ * project bundle doesn't have it handy, so we read it off the project row. The
+ * TEAM bundle already validated every project against the org (one .eq(
+ * 'organization_id') read), so it passes `opts.organizationId` to skip N
+ * redundant single-row `projects` reads across the fan-in.
  */
 export async function buildDastFindingsForProjectUnchecked(
   projectId: string,
-  opts: { limit: number },
+  opts: { limit: number; organizationId?: string },
 ): Promise<DastFindingDTO[]> {
-  const { data: proj } = await supabase
-    .from('projects')
-    .select('organization_id')
-    .eq('id', projectId)
-    .single();
-  const organizationId = (proj as any)?.organization_id;
+  let organizationId = opts.organizationId;
+  if (!organizationId) {
+    const { data: proj } = await supabase
+      .from('projects')
+      .select('organization_id')
+      .eq('id', projectId)
+      .single();
+    organizationId = (proj as any)?.organization_id;
+  }
   if (!organizationId) return [];
 
   const result = await loadDastFindings(supabase, {
@@ -624,4 +639,100 @@ export async function buildOrgAcknowledgementsUnchecked(orgId: string): Promise<
     .eq('organization_id', orgId);
   if (error) throw error;
   return data ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Core fan-in helper — the 9 per-project finding slices as FLAT row arrays.
+// ---------------------------------------------------------------------------
+
+export interface ProjectFindingsCore {
+  vulnerabilities: any[];
+  secrets: any[];
+  semgrep: any[];
+  iac: any[];
+  container: any[];
+  malicious: any[];
+  codeFlows: any[];
+  baseImageRecs: any[];
+  dast: any[];
+  /** slice names whose builder threw (empty array kept in its place). */
+  degradedSlices: string[];
+  /** per-slice ms — the caller times the whole project and can log the slowest. */
+  sliceMs: Record<string, number>;
+}
+
+/**
+ * ⚠️ ACCESS-FREE — see file banner. Gate with checkProjectAccess / checkTeamAccess first.
+ *
+ * The 9 per-project finding slices the Findings tab renders, returned as FLAT row
+ * arrays — the paginated builders' `{data,…}` wrappers and baseImageRecs'
+ * `{recommendations}` are unwrapped here, so a caller fanning this across N projects
+ * concatenates each type uniformly (architect review: the builders return
+ * heterogeneous shapes). Slices run concurrently; a slice that throws degrades to
+ * `[]` + its name in `degradedSlices` (never rejects the whole project).
+ *
+ * Does NOT fetch the 3 org-wide chip maps (tracker/suppression/ack) — those are
+ * org-scoped, so the caller reads them ONCE per request, not once per project.
+ *
+ * `vulnLimit` caps the SCA slice worst-first (the team fan-in passes it to keep the
+ * cross-project payload bounded; the single-project bundle omits it). `organizationId`,
+ * when supplied, lets the DAST builder skip its per-project org read.
+ *
+ * The project `/findings` route keeps its own inline slice list (it re-wraps the
+ * paginated slices into `{data,…}` for back-compat and was deliberately left
+ * untouched per review). This helper is for the cross-project fan-in callers.
+ */
+export async function buildProjectFindingsCoreUnchecked(
+  orgId: string,
+  projectId: string,
+  activeExtractionId: string | null,
+  opts?: { vulnLimit?: number; organizationId?: string },
+): Promise<ProjectFindingsCore> {
+  const runScoped = !!activeExtractionId;
+  const out: ProjectFindingsCore = {
+    vulnerabilities: [], secrets: [], semgrep: [], iac: [], container: [],
+    malicious: [], codeFlows: [], baseImageRecs: [], dast: [],
+    degradedSlices: [], sliceMs: {},
+  };
+
+  // [sliceName, runner | null, unwrap]. Run-scoped slices skip their query entirely
+  // when no finalized run exists (null runner → stays empty). DAST is run-independent.
+  // Per-slice opts mirror the project /findings route EXACTLY (50/50/100/100/100,
+  // skipCount) so the two paths can't diverge on shaping/pagination.
+  const tasks: Array<[keyof ProjectFindingsCore, (() => Promise<any>) | null, (v: any) => any[]]> = [
+    ['vulnerabilities', runScoped ? () => buildProjectVulnerabilitiesUnchecked(orgId, projectId, activeExtractionId, { limit: opts?.vulnLimit }) : null, (v) => v ?? []],
+    ['secrets', runScoped ? () => buildSecretFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null, (v) => v?.data ?? []],
+    ['semgrep', runScoped ? () => buildSemgrepFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null, (v) => v?.data ?? []],
+    ['iac', runScoped ? () => buildIacFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null, (v) => v?.data ?? []],
+    ['container', runScoped ? () => buildContainerFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null, (v) => v?.data ?? []],
+    ['malicious', runScoped ? () => buildMaliciousFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, skipCount: true }) : null, (v) => v?.data ?? []],
+    ['codeFlows', runScoped ? () => buildCodeFlowFindingsUnchecked(orgId, projectId, activeExtractionId) : null, (v) => v?.data ?? []],
+    ['baseImageRecs', runScoped ? () => buildBaseImageRecommendationsUnchecked(orgId, projectId, activeExtractionId) : null, (v) => v?.recommendations ?? []],
+    ['dast', () => buildDastFindingsForProjectUnchecked(projectId, { limit: 200, organizationId: opts?.organizationId }), (v) => v ?? []],
+  ];
+
+  const settled = await Promise.allSettled(
+    tasks.map(async ([slice, run]) => {
+      if (!run) return undefined;
+      const started = Date.now();
+      try {
+        return await run();
+      } finally {
+        out.sliceMs[slice as string] = Date.now() - started;
+      }
+    }),
+  );
+
+  settled.forEach((result, i) => {
+    const [slice, run, unwrap] = tasks[i];
+    if (!run) return; // skipped (no active run) → keep empty default
+    if (result.status === 'fulfilled') {
+      (out as any)[slice] = unwrap(result.value);
+    } else {
+      out.degradedSlices.push(slice as string);
+      console.warn(`[findings-bundle] slice "${slice}" failed for project ${projectId}:`, result.reason?.message ?? result.reason);
+    }
+  });
+
+  return out;
 }
