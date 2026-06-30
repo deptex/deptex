@@ -178,6 +178,10 @@ export class FixPipelineError extends Error {
 export interface RunFixPipelineOpts {
   model: LanguageModel;
   plan: FixPlan;
+  // The finding type this fix targets ('vulnerability' | 'semgrep' | 'secret').
+  // Dependency bumps ('vulnerability') verify by re-resolving deps rather than
+  // running the app's full test suite (too slow + needs CI's full setup).
+  fixType?: string | null;
   // Project directory (the monorepo subdir, or the repo root when there is no
   // subdir). Used as the cwd for tests and as the base for resolving the
   // plan's file-edit paths (which are relative to the project root).
@@ -196,6 +200,40 @@ export interface RunFixPipelineResult {
   tokensUsed: number;
   toolCalls: number;
   repairAttempts: number;
+}
+
+// Verify a dependency bump by re-resolving deps. For JS/TS that's `npm install`
+// — it validates the bumped version exists and regenerates package-lock.json so
+// CI's `npm ci` passes; a non-existent version fails here (real signal, no PR).
+// For languages without a fast, reliable re-resolve in this sandbox, skip local
+// verification (soft-pass) and let the PR's CI be the gate.
+async function verifyDependencyBump(opts: {
+  workDir: string;
+  language: string;
+  logger: FixLogger;
+  timeoutMs: number;
+}): Promise<TestResult> {
+  if (opts.language === 'js' || opts.language === 'ts') {
+    return runTests({
+      workDir: opts.workDir,
+      testCommand: 'npm install --no-audit --no-fund',
+      logger: opts.logger,
+      timeoutMs: opts.timeoutMs,
+    });
+  }
+  await opts.logger.info(
+    'tests',
+    `No fast dependency re-resolve for language "${opts.language}" — opening PR; the PR's CI verifies`,
+  );
+  return {
+    passed: true,
+    exitCode: 0,
+    stdout: '',
+    stderr: '',
+    durationMs: 0,
+    timedOut: false,
+    noTestSuite: true,
+  };
 }
 
 /**
@@ -272,6 +310,18 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     return Math.min(remaining, 10 * 60 * 1000);
   };
 
+  // Verify the change. Dependency bumps RE-RESOLVE deps (fast — validates the
+  // bumped version exists + regenerates a consistent lockfile, which CI's
+  // `npm ci` checks) instead of running the app's full test suite (too slow for
+  // the wall-clock budget + needs the multi-package / service setup only CI
+  // has; the PR's CI runs build + tests). Code fixes run the suite. The SAME
+  // picker is used for the initial check and every repair re-check.
+  const isDependencyBump = (opts.fixType ?? '') === 'vulnerability';
+  const verify = (label: string): Promise<TestResult> =>
+    isDependencyBump
+      ? verifyDependencyBump({ workDir, language: plan.language, logger, timeoutMs: remainingBudgetMs(label) })
+      : runTests({ workDir, testCommand: plan.testCommand, logger, timeoutMs: remainingBudgetMs(label), extraEnv });
+
   let testResult: TestResult;
   if (editorResult.applyError) {
     testResult = {
@@ -285,16 +335,14 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     };
   } else {
     checkDiffCap('editor');
-    testResult = await runTests({
-      workDir,
-      testCommand: plan.testCommand,
-      logger,
-      timeoutMs: remainingBudgetMs('initial test'),
-      extraEnv,
-    });
+    testResult = await verify(isDependencyBump ? 'dependency install' : 'initial test');
   }
 
-  // 3. Repair cycles. REPAIR_BUDGET cycles, each is one LLM call + one test run.
+  // 3. Repair cycles. These recover from a patch that DIDN'T APPLY (re-emit the
+  // edit) as much as from a test failure — so a dependency bump repairs too: its
+  // package.json hunk can drift exactly like any other patch. It just re-verifies
+  // via the fast re-resolve; a version that still won't resolve after
+  // REPAIR_BUDGET is a real, unfixable failure.
   let repairAttempts = 0;
   while (!testResult.passed && repairAttempts < REPAIR_BUDGET) {
     repairAttempts += 1;
@@ -328,14 +376,7 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
       continue;
     }
     checkDiffCap(`repair ${repairAttempts}`);
-
-    testResult = await runTests({
-      workDir,
-      testCommand: plan.testCommand,
-      logger,
-      timeoutMs: remainingBudgetMs(`test after repair ${repairAttempts}`),
-      extraEnv,
-    });
+    testResult = await verify(`test after repair ${repairAttempts}`);
   }
 
   if (!testResult.passed) {

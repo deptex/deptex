@@ -146,6 +146,28 @@ async function createTaskThread(args: {
 }
 
 /**
+ * Idempotent thread-ensure: return the task's existing chat thread, or create
+ * one bound 1:1 to the task. Shared by the task runner and the dev `/run`
+ * endpoint so both agree on the single thread the task narrates into.
+ */
+export async function ensureTaskThread(taskId: string): Promise<string> {
+  const { data: row } = await supabase
+    .from('aegis_agent_tasks')
+    .select('id, organization_id, project_id, thread_id, title, created_by')
+    .eq('id', taskId)
+    .maybeSingle();
+  if (!row) throw new Error('Task not found');
+  if (row.thread_id) return row.thread_id as string;
+  return createTaskThread({
+    taskId,
+    organizationId: row.organization_id as string,
+    userId: row.created_by as string,
+    title: (row.title as string) ?? 'Aegis task',
+    projectId: (row.project_id as string) ?? null,
+  });
+}
+
+/**
  * Seed the task-chat with Aegis's opening turn: a short narration plus one
  * inline fix card per fix. The card parts are shaped exactly like a persisted
  * `request_fix` tool result so ChatPane's buildInitialMessages rehydrates them

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
-import { aegisApi, type AegisThread } from '../../lib/aegis-api';
+import { aegisApi, type AegisThread, type AegisTask } from '../../lib/aegis-api';
 import type { Organization, RolePermissions } from '../../lib/api';
 import { ChatPane } from '../../components/aegis/ChatPane';
 import { SearchChatsModal } from '../../components/aegis/SearchChatsModal';
@@ -8,6 +8,7 @@ import { PlanCard } from '../../components/aegis/PlanCard';
 import { RoutinesPanel } from '../../components/aegis/RoutinesPanel';
 import { FixPanelProvider } from '../../components/aegis/FixPanelContext';
 import { FixPanelHost } from '../../components/aegis/FixPanelHost';
+import { TaskDetailPanel } from '../../components/aegis/TaskDetailPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 
@@ -43,10 +44,20 @@ export default function AegisPage() {
 
   const [threads, setThreads] = useState<AegisThread[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Task-chats render their fixes inline (as live PlanCards in the conversation),
-  // so the right-side fix panel is suppressed for them.
-  const [taskThreadIds, setTaskThreadIds] = useState<Set<string>>(new Set());
-  const isTaskThread = activeThreadId ? taskThreadIds.has(activeThreadId) : false;
+  // Task-chats render their fixes inline (as live narration in the conversation),
+  // so the right-side fix panel is suppressed for them, and the active task is
+  // passed to ChatPane for its header.
+  const [tasks, setTasks] = useState<AegisTask[]>([]);
+  const activeTask = activeThreadId
+    ? tasks.find((t) => t.threadId === activeThreadId) ?? null
+    : null;
+  const isTaskThread = !!activeTask;
+  // The task detail slide-in (opened from the compact task row). Closed on
+  // every thread switch so it never bleeds across tasks.
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  useEffect(() => {
+    setTaskPanelOpen(false);
+  }, [activeThreadId]);
 
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just
@@ -94,8 +105,7 @@ export default function AegisPage() {
     if (!orgId || !canUseAegis) return;
     const load = async () => {
       try {
-        const tasks = await aegisApi.listTasks(orgId);
-        setTaskThreadIds(new Set(tasks.map((t) => t.threadId).filter(Boolean) as string[]));
+        setTasks(await aegisApi.listTasks(orgId));
       } catch {
         /* non-fatal */
       }
@@ -212,11 +222,21 @@ export default function AegisPage() {
                 displayName={displayName}
                 onThreadCreated={handleThreadCreated}
                 onThreadUpdated={handleThreadUpdated}
+                liveReload={isTaskThread}
+                task={activeTask}
+                onOpenTaskDetails={() => setTaskPanelOpen(true)}
               />
             </>
           )}
         </div>
         {!isTaskThread && <FixPanelHost />}
+        {isTaskThread && (
+          <TaskDetailPanel
+            task={activeTask}
+            open={taskPanelOpen}
+            onClose={() => setTaskPanelOpen(false)}
+          />
+        )}
       </div>
       <SearchChatsModal
         open={searchOpen}

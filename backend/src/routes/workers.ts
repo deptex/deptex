@@ -11,6 +11,7 @@ import {
   isQStashConfigured,
 } from '../lib/qstash';
 import { resolveAndUpsertTransitiveEdges } from '../lib/transitive-edges';
+import { runTaskAgent } from '../lib/aegis-v3/task-runner';
 import {
   type GhsaVuln,
   getGitHubToken,
@@ -1471,6 +1472,20 @@ router.post('/queue-populate', verifyWorkerSecret, async (req: express.Request, 
 
 // POST /api/workers/populate-dependencies - Called by QStash to populate a BATCH of new dependencies
 // Fetches npm info, creates version rows, GHSA vulns, OpenSSF, and calculates reputation score
+// Durable home for the Aegis task-agent loop. Dispatched by POST
+// /api/aegis/tasks/:taskId/run when a job backend is configured, so the loop
+// runs inside this delivered request instead of as background work after an
+// HTTP response (which a serverless host kills). The loop is best-effort: it
+// marks the task failed + posts an apology beat on error rather than throwing,
+// so we always 200 (retries: 0 on the publish — a fix-applying run must not be
+// blindly retried).
+router.post('/run-task', verifyQStash, async (req: express.Request, res: express.Response) => {
+  const taskId = (req.body?.taskId as string | undefined) ?? '';
+  if (!taskId) return res.status(400).json({ error: 'taskId is required' });
+  const result = await runTaskAgent(taskId);
+  return res.json({ ok: result.ok, threadId: result.threadId ?? null, error: result.error ?? null });
+});
+
 router.post('/populate-dependencies', verifyQStash, async (req: express.Request, res: express.Response) => {
   const { dependencies, ecosystem: batchEcosystem, projectId, organizationId } = req.body || {};
 

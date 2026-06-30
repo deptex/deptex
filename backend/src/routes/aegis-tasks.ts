@@ -4,11 +4,14 @@ import { userHasOrgPermission } from '../lib/permissions';
 import {
   acceptTask,
   declineTask,
+  ensureTaskThread,
   findOpenTaskForFinding,
   getTask,
   listTasks,
   proposeTaskFromFinding,
 } from '../lib/aegis-v3/tasks';
+import { runTaskAgent } from '../lib/aegis-v3/task-runner';
+import { isQStashConfigured, queueTaskRun } from '../lib/qstash';
 import { AEGIS_TASK_FINDING_TYPES, type AegisTaskFindingType } from '../lib/aegis-v3/task-types';
 
 const router = express.Router();
@@ -129,6 +132,52 @@ router.patch('/:taskId/accept', async (req: AuthRequest, res) => {
   } catch (err: any) {
     const message = err?.message ?? 'Failed to accept task';
     return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/**
+ * Run the task agent loop. Ensures the task's chat thread, returns its id
+ * immediately, then drives the agent so the caller can navigate to the thread
+ * and watch narration land live.
+ *
+ * The loop runs for ~1–2 minutes (investigate → apply_fix → the fix pipeline
+ * narrates its own steps). When a job backend is configured it's dispatched
+ * durably (it runs inside the delivered worker request, which a serverless host
+ * won't kill); locally — where the backend is a persistent process and QStash
+ * can't reach it anyway — it runs in-process.
+ */
+router.post('/:taskId/run', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const organizationId = (req.body?.organizationId as string | undefined) ?? '';
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to run tasks' });
+  }
+  const task = await getTask(req.params.taskId, organizationId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  try {
+    // Create the thread up front so we can hand the caller a destination to
+    // watch before the (slow) loop runs.
+    const threadId = await ensureTaskThread(req.params.taskId);
+    res.json({ threadId });
+
+    if (isQStashConfigured()) {
+      await queueTaskRun(req.params.taskId);
+    } else {
+      // Local dev: persistent process, no reachable job backend — run inline.
+      void runTaskAgent(req.params.taskId).catch((e: any) =>
+        console.error('[aegis-tasks] runTaskAgent failed', req.params.taskId, e?.message),
+      );
+    }
+  } catch (err: any) {
+    // The response is already sent in the happy path; only the pre-response
+    // ensureTaskThread can land here.
+    if (!res.headersSent) {
+      const message = err?.message ?? 'Failed to run task';
+      return res.status(statusForError(message)).json({ error: message });
+    }
+    console.error('[aegis-tasks] dispatch failed', req.params.taskId, err?.message);
   }
 });
 

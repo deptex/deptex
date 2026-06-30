@@ -330,6 +330,7 @@ export interface FixRecord {
   rejectedAt: string | null;
   prUrl: string | null;
   prNumber: number | null;
+  prBranch: string | null;
   diffSummary: string | null;
   errorMessage: string | null;
   createdAt: string;

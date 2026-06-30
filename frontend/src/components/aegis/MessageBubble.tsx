@@ -6,6 +6,7 @@ import { ToolCallGroup, type ToolCallEntry } from './ToolCallCard';
 import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
+import { ChangeCard } from './ChangeCard';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
 
@@ -121,6 +122,14 @@ export function MessageBubble({
         } else {
           elements.push(<PlanCardSkeleton key={`plan-skel-${i}`} revised={isRevise} />);
         }
+        return;
+      }
+
+      // apply_fix (task chats) renders the ChangeCard: the change Aegis applied
+      // + a link to the draft PR.
+      if (toolName === 'apply_fix' && !isError) {
+        flushTools();
+        elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
         return;
       }
 

@@ -2,10 +2,12 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
-import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
+import { aegisApi, type AegisMessage, type AegisTask, type AegisThread, type MessagePart } from '../../lib/aegis-api';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { MessageBubble } from './MessageBubble';
+import { TaskHeader } from './TaskHeader';
 import { ChatInput } from './ChatInput';
 import { ChatTodos } from './ChatTodos';
 import { ThreadIcon } from './ThreadIcon';
@@ -84,6 +86,16 @@ interface ChatPaneProps {
   // here so we don't duplicate logic between sidebar and landing.
   recents?: AegisThread[];
   onSelectRecent?: (threadId: string) => void;
+  // Task threads are driven by an autonomous server-side agent loop, not the
+  // user's SSE stream — so they won't see new messages unless we subscribe.
+  // When true, ChatPane realtime-reloads the thread on each new persisted
+  // message. Off (default) for normal chats so their useChat flow is untouched.
+  liveReload?: boolean;
+  // The task this chat belongs to (task threads only). When present, a compact
+  // task row is pinned above the conversation; clicking it opens the detail
+  // panel via onOpenTaskDetails.
+  task?: AegisTask | null;
+  onOpenTaskDetails?: () => void;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -139,6 +151,9 @@ export function ChatPane({
   onThreadUpdated,
   recents,
   onSelectRecent,
+  liveReload = false,
+  task,
+  onOpenTaskDetails,
 }: ChatPaneProps) {
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
@@ -444,6 +459,36 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Live narration for task threads. The task's agent loop runs server-side and
+  // persists each beat to aegis_chat_messages (already in the realtime
+  // publication); subscribe and reload the thread as beats land. Gated to
+  // liveReload so normal chats (driven by useChat/SSE) are never reloaded out
+  // from under an in-flight stream. We also skip while inFlightRef is set —
+  // the rare case where a user is actively sending in a task thread.
+  useEffect(() => {
+    if (!liveReload || !propThreadId) return;
+    const channel = supabase
+      .channel(`aegis-task-msgs-${propThreadId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${propThreadId}` },
+        async () => {
+          if (inFlightRef.current) return;
+          try {
+            const msgs = await aegisApi.getMessages(propThreadId);
+            setMessages(buildInitialMessages(msgs));
+          } catch {
+            /* transient — next beat reloads anyway */
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveReload, propThreadId]);
+
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -637,6 +682,7 @@ export function ChatPane({
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="py-4">
+          {task && <TaskHeader task={task} onOpenDetails={onOpenTaskDetails} />}
           {messages.map((m, i) => (
             <MessageBubble
               key={m.id}

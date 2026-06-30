@@ -23,6 +23,25 @@ import { FixLogger } from './logger';
 import { getLanguageModelForOrg } from './llm';
 import { isLanguageEnabled, getEnabledLanguages } from './plan-types';
 import { postFixTaskMeterEvent } from './meter-event';
+import {
+  makeTaskNarrator,
+  postPrReadyCard,
+  getProjectName,
+  markTaskFromFix,
+} from './task-chat';
+
+// Lower-case the first character so a plan summary reads naturally mid-sentence
+// ("I'm updating package.json — bump simple-git…").
+function lcFirst(s: string): string {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+}
+
+// Trim a failure reason to one short clause for the chat (the full message is on
+// the fix row + Sentry).
+function shortReason(message: string): string {
+  const firstLine = (message || 'an unexpected error').split('\n')[0].trim();
+  return firstLine.length > 140 ? `${firstLine.slice(0, 137)}…` : firstLine;
+}
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -49,6 +68,13 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   const sandbox = createSandbox(job.id);
   const pipelineStartMs = Date.now();
 
+  // Task fixes narrate their real steps into the task chat, in the first person.
+  // No-op (and no project-name lookup) for a standalone fix.
+  const narrate = makeTaskNarrator(supabase, fullRow.thread_id);
+  const projectName = fullRow.thread_id
+    ? await getProjectName(supabase, fullRow.project_id)
+    : 'the project';
+
   const heartbeat = setInterval(() => {
     sendHeartbeat(supabase, job.id).catch(() => {});
   }, HEARTBEAT_INTERVAL_MS);
@@ -70,6 +96,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
         `Language ${plan.language} not enabled on this fix-worker. Enabled: ${enabled}.`,
         'unsupported_language',
       );
+      await narrate(`I can't fix this one yet — ${plan.language} isn't supported here.`);
+      await markTaskFromFix(supabase, fullRow.task_id, {
+        status: 'failed',
+        summary: `Language ${plan.language} not supported`,
+      });
       return;
     }
 
@@ -84,6 +115,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const installationToken = await createInstallationToken(repoInfo.installationId);
 
+    await narrate(`Cloning the ${projectName} repository.`);
     await cloneAtSha({
       workDir: sandbox.workDir,
       installationToken,
@@ -115,6 +147,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
           `package_json_path '${repoInfo.packageJsonPath}' not found in repo`,
           'project_dir_missing',
         );
+        await narrate(`I couldn't find the project directory in the repository, so I had to stop.`);
+        await markTaskFromFix(supabase, fullRow.task_id, {
+          status: 'failed',
+          summary: 'Project directory not found in repo',
+        });
         return;
       }
     }
@@ -123,9 +160,14 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
 
+    const changedFiles = (plan.fileChanges ?? []).map((fc) => fc.path).filter(Boolean);
+    const primaryFile = changedFiles[0] ?? 'the affected file';
+    await narrate(`I'm updating ${primaryFile} — ${lcFirst(plan.summary)}.`);
+
     const pipeline = await runFixPipeline({
       model,
       plan,
+      fixType: fullRow.fix_type,
       workDir: projectDir,
       repoRoot: sandbox.workDir,
       logger,
@@ -133,6 +175,18 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       pipelineStartMs,
     });
     const totalTokens = pipeline.tokensUsed;
+
+    // Honest verification beat: only claim "checks out" when we actually ran the
+    // check locally (noTestSuite = we soft-passed and deferred to the PR's CI).
+    const verifiedLocally = !pipeline.testResult.noTestSuite;
+    const isDepBump = fullRow.fix_type === 'vulnerability';
+    await narrate(
+      verifiedLocally
+        ? isDepBump
+          ? `Reinstalled and confirmed the new version resolves cleanly.`
+          : `Ran the tests — they pass.`
+        : `Applied the change. The pull request's CI runs the full test suite.`,
+    );
 
     const { prBranch, diffSummary } = await commitAndPushFix({
       workDir: sandbox.workDir,
@@ -144,6 +198,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
     });
 
+    await narrate('Opening the pull request.');
     const pr = await openPullRequest({
       installationToken,
       repoFullName: repoInfo.repoFullName,
@@ -163,6 +218,10 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       tokensUsed: totalTokens,
     });
     await logger.success('complete', `Fix complete — PR #${pr.prNumber} opened`);
+    // The PR card lands LAST so the task chat reads top-to-bottom (reason →
+    // steps → card), then the task is marked done off the real PR.
+    await postPrReadyCard(supabase, fullRow.thread_id, job.id);
+    await markTaskFromFix(supabase, fullRow.task_id, { status: 'completed', summary: plan.summary });
   } catch (err: any) {
     const message = err?.message ?? String(err);
     const category = err instanceof FixPipelineError ? err.category : undefined;
@@ -173,6 +232,13 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     });
     await logger.error('complete', `Fix failed: ${message}`, err);
     await markFailed(supabase, job.id, message, category);
+    await narrate(
+      `I couldn't finish this safely — ${shortReason(message)}. I haven't opened a pull request.`,
+    );
+    await markTaskFromFix(supabase, fullRow.task_id, {
+      status: 'failed',
+      summary: `Fix failed: ${shortReason(message)}`,
+    });
   } finally {
     clearInterval(heartbeat);
     sandbox.cleanup();
