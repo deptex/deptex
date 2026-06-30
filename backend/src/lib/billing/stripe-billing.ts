@@ -20,6 +20,17 @@ function getStripe(): Stripe {
   return stripeClient;
 }
 
+// True when Stripe reports the referenced object doesn't exist under the active key —
+// e.g. a `stripe_customer_id` created in test mode while the live key is configured (or a
+// different account / a deleted customer). This is the signal to re-provision rather than
+// keep 404ing forever. Deliberately narrow: auth/rate-limit/network errors are NOT this,
+// and must surface instead of silently orphaning a real customer.
+export function isStripeResourceMissing(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: string; type?: string; statusCode?: number };
+  return e.code === 'resource_missing' || (e.type === 'StripeInvalidRequestError' && e.statusCode === 404);
+}
+
 export function constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
   const stripe = getStripe();
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -85,7 +96,35 @@ export async function ensureStripeCustomer(orgId: string): Promise<string> {
   if (error || !billing) {
     throw new Error(`ensureStripeCustomer: organization_billing not found for ${orgId}`);
   }
-  if (billing.stripe_customer_id) return billing.stripe_customer_id;
+
+  // Verify a stored customer still exists under the ACTIVE Stripe key before trusting it.
+  // A key/account switch (test ⇄ live) leaves a stale id that 404s on every billing call —
+  // listing payment methods, top-up, add-card all break with "No such customer". When that
+  // happens, clear the dead id (and its dependent default PM) and fall through to provision
+  // a fresh customer. Only resource_missing/deleted triggers this; a genuine auth/network
+  // error re-throws so we never orphan a real customer over a transient outage.
+  if (billing.stripe_customer_id) {
+    try {
+      const existing = await getStripe().customers.retrieve(billing.stripe_customer_id);
+      if (!('deleted' in existing) || !existing.deleted) {
+        return billing.stripe_customer_id;
+      }
+      console.warn('[stripe-billing] stored customer was deleted in Stripe — re-provisioning', {
+        orgId,
+        staleCustomerId: billing.stripe_customer_id,
+      });
+    } catch (err) {
+      if (!isStripeResourceMissing(err)) throw err;
+      console.warn('[stripe-billing] stored customer not found under active key — re-provisioning', {
+        orgId,
+        staleCustomerId: billing.stripe_customer_id,
+      });
+    }
+    await supabase
+      .from('organization_billing')
+      .update({ stripe_customer_id: null, stripe_default_payment_method_id: null })
+      .eq('organization_id', orgId);
+  }
 
   const { data: org } = await supabase
     .from('organizations')
@@ -503,11 +542,19 @@ export async function listSavedPaymentMethods(orgId: string): Promise<SavedPayme
   if (!billing?.stripe_customer_id) return [];
 
   const stripe = getStripe();
-  const pms = await stripe.paymentMethods.list({
-    customer: billing.stripe_customer_id,
-    type: 'card',
-    limit: 20,
-  });
+  let pms: Stripe.ApiList<Stripe.PaymentMethod>;
+  try {
+    pms = await stripe.paymentMethods.list({
+      customer: billing.stripe_customer_id,
+      type: 'card',
+      limit: 20,
+    });
+  } catch (err) {
+    // Stale customer under the active key (test ⇄ live switch) — surface no cards rather
+    // than a 500. ensureStripeCustomer re-provisions on the next add-card/top-up.
+    if (isStripeResourceMissing(err)) return [];
+    throw err;
+  }
   const defaultId = billing.stripe_default_payment_method_id ?? null;
   return pms.data
     .filter((pm) => !!pm.card)
