@@ -145,8 +145,14 @@ function DepositsTable({ organizationId, refreshKey = 0 }: { organizationId: str
         <p className="text-sm font-semibold text-foreground">Deposits</p>
       </div>
       {deposits == null ? (
-        <div className="divide-y divide-border">
-          {[0, 1, 2].map((i) => (
+        <div
+          className="divide-y divide-border pointer-events-none select-none"
+          style={{
+            maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+          }}
+        >
+          {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="grid grid-cols-[2fr_1fr_1fr] items-center gap-4 px-5 py-4">
               <div className="space-y-2">
                 <Skeleton className="h-4 w-32" />

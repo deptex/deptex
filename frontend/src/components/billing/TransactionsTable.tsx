@@ -83,14 +83,8 @@ export function TransactionsTable({ organizationId }: TransactionsTableProps) {
 
   if (loading && transactions.length === 0) {
     return (
-      <div
-        className="space-y-2 pointer-events-none select-none"
-        style={{
-          maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-          WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-        }}
-      >
-        {Array.from({ length: 7 }).map((_, i) => (
+      <div className="space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
           <Skeleton key={i} className="h-10 w-full" />
         ))}
       </div>
