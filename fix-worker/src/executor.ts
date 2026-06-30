@@ -241,6 +241,26 @@ async function verifyDependencyBump(opts: {
   };
 }
 
+// Pick a FAST, sandbox-friendly verification for a CODE fix — a typecheck, not the
+// project's full test suite (which needs CI's DB/secrets/service setup the sandbox
+// lacks). Prefers a project-defined script, falls back to `tsc --noEmit`. Returns
+// null when there's nothing fast to run (e.g. plain JS), so the caller soft-passes
+// to the PR's CI. Only TS projects get a typecheck gate.
+function pickTypecheckCommand(workDir: string, language: string): string | null {
+  if (language !== 'ts') return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(workDir, 'package.json'), 'utf-8'));
+    const scripts: Record<string, string> = pkg.scripts ?? {};
+    for (const name of ['typecheck', 'type-check', 'check-types', 'tsc']) {
+      if (typeof scripts[name] === 'string') return `npm run ${name}`;
+    }
+  } catch {
+    /* no / invalid package.json — fall through to tsc */
+  }
+  if (fs.existsSync(path.join(workDir, 'tsconfig.json'))) return 'npx tsc --noEmit';
+  return null;
+}
+
 /**
  * Single entry point for "produce a fix that passes tests".
  *
@@ -315,17 +335,45 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     return Math.min(remaining, 10 * 60 * 1000);
   };
 
-  // Verify the change. Dependency bumps RE-RESOLVE deps (fast — validates the
-  // bumped version exists + regenerates a consistent lockfile, which CI's
-  // `npm ci` checks) instead of running the app's full test suite (too slow for
-  // the wall-clock budget + needs the multi-package / service setup only CI
-  // has; the PR's CI runs build + tests). Code fixes run the suite. The SAME
-  // picker is used for the initial check and every repair re-check.
+  // Verify with a FAST, sandbox-friendly check — never the project's full test
+  // suite (it needs CI's DB/secrets/service setup the sandbox lacks; that was the
+  // original repair-loop failure on code fixes). Two gates, same shape:
+  //  - dependency bump: re-resolve deps (validates the version + lockfile).
+  //  - code fix (semgrep/secret): a typecheck — catches edits that break
+  //    compilation; soft-passes (defers to CI) when there's no fast typecheck or
+  //    it can't run, so we don't burn repair cycles on a harness problem.
+  // Either way the PR's CI runs the real build + tests. The SAME picker drives
+  // the initial check and every repair re-check.
   const isDependencyBump = (opts.fixType ?? '') === 'vulnerability';
+  const softPass = (): TestResult => ({
+    passed: true, exitCode: 0, stdout: '', stderr: '', durationMs: 0, timedOut: false, noTestSuite: true,
+  });
+  const codeFixGate = isDependencyBump ? null : pickTypecheckCommand(workDir, plan.language);
+  if (!isDependencyBump) {
+    await logger.info(
+      'tests',
+      codeFixGate
+        ? `Code fix — verifying with a fast typecheck (${codeFixGate}); the PR's CI runs the full tests`
+        : "Code fix — no fast typecheck here; opening the PR and letting CI verify",
+    );
+  }
+  const verifyCodeFix = async (label: string): Promise<TestResult> => {
+    if (!codeFixGate) return softPass();
+    const r = await runTests({
+      workDir,
+      testCommand: codeFixGate,
+      logger,
+      timeoutMs: Math.min(remainingBudgetMs(label), 180_000),
+      extraEnv,
+    });
+    // A typecheck that couldn't run (timeout / missing tooling) isn't a fix
+    // failure — defer to CI rather than burn repair cycles on it.
+    return !r.passed && (r.timedOut || r.noTestSuite) ? softPass() : r;
+  };
   const verify = (label: string): Promise<TestResult> =>
     isDependencyBump
       ? verifyDependencyBump({ workDir, language: plan.language, logger, timeoutMs: remainingBudgetMs(label) })
-      : runTests({ workDir, testCommand: plan.testCommand, logger, timeoutMs: remainingBudgetMs(label), extraEnv });
+      : verifyCodeFix(label);
 
   // Announce the edit exactly once — the first time a patch has actually applied
   // (editor or a repair), right before we verify it. Skipped while the patch

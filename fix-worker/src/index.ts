@@ -203,7 +203,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
           await step({ icon: 'edit', label: `Updated ${primaryFile}` });
           await voice(
             `applied the change to ${primaryFile}`,
-            isDepBump ? 'reinstall dependencies to update the lockfile' : 'run the tests to make sure nothing broke',
+            isDepBump ? 'reinstall dependencies to update the lockfile' : 'run a quick typecheck to make sure nothing broke',
           );
         } else {
           const ok = meta?.verifiedLocally !== false;
@@ -212,14 +212,14 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
             label: ok
               ? isDepBump
                 ? 'Verified the new version resolves'
-                : 'Ran the tests — they pass'
+                : 'Type-checked — no errors'
               : "Applied the change (the PR's CI runs the tests)",
           });
           await voice(
             ok
               ? isDepBump
                 ? 'reinstalled and confirmed the new version resolves with no conflicts'
-                : 'ran the tests and they passed'
+                : "type-checked the change and it's clean"
               : "applied the change (the project's CI will run the full test suite on the pull request)",
             'open the pull request for review',
           );

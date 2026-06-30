@@ -23,7 +23,7 @@ import { supabase } from '../src/lib/supabase';
 import { getActiveExtractionId } from '../src/lib/active-extraction';
 import { runTaskAgent } from '../src/lib/aegis-v3/task-runner';
 import { ensureTaskThread } from '../src/lib/aegis-v3/tasks';
-import type { AegisTaskTarget } from '../src/lib/aegis-v3/task-types';
+import type { AegisTaskTarget, AegisTaskFindingType } from '../src/lib/aegis-v3/task-types';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -116,6 +116,16 @@ async function main() {
         osvId: arg('osv'),
         projectId: project!,
         label: arg('label') ?? arg('osv')!,
+      });
+    } else if (arg('type') && arg('key') && arg('handle')) {
+      // A code finding: --type semgrep|secret --key <findingKey> --handle <file:line>
+      const ft = arg('type') as AegisTaskFindingType;
+      targets.push({
+        findingType: ft,
+        findingKey: arg('key')!,
+        findingHandle: arg('handle'),
+        projectId: project!,
+        label: arg('label') ?? `${ft} at ${arg('handle')}`,
       });
     }
 
