@@ -208,6 +208,12 @@ const webhookEventLabel = (eventType: string) =>
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
   const pulse = 'bg-muted animate-pulse rounded';
+  // Vercel-style downward fade — matches the app's other loading tables so the
+  // skeleton reads as "loading", not as a stalled table with a fixed row count.
+  const fadeMask = {
+    maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+    WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+  } as const;
   switch (section) {
     case 'general':
       return (
@@ -605,8 +611,11 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
               <div className={`h-5 w-24 ${pulse}`} />
               <div className={`h-3 w-64 ${pulse}`} />
             </div>
-            {/* Models table */}
-            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+            {/* Models table — fades downward like the app's other loading tables */}
+            <div
+              className="overflow-hidden rounded-lg border border-border bg-background-card pointer-events-none select-none"
+              style={fadeMask}
+            >
               <div className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 border-b border-border bg-background-card-header px-4 py-3">
                 <div className={`h-3 w-12 ${pulse}`} />
                 <div className={`h-3 w-20 ${pulse} ml-auto`} />
@@ -614,7 +623,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 <div className={`h-3 w-14 ${pulse} mx-auto`} />
               </div>
               <div className="divide-y divide-border">
-                {[0, 1, 2, 3, 4].map((i) => (
+                {[0, 1, 2, 3, 4, 5, 6].map((i) => (
                   <div
                     key={i}
                     className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 px-4 py-3"

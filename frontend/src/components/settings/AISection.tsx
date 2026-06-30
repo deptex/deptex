@@ -15,6 +15,14 @@ import {
   TooltipTrigger,
 } from '../ui/tooltip';
 
+// Vercel-style downward fade used by the app's other loading tables
+// (org-sidebar projects, security findings). Reads as "loading", not as a
+// stalled table with a fixed row count.
+const FADE_MASK = {
+  maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+  WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+} as const;
+
 interface AISectionProps {
   organizationId: string;
   canManageSettings: boolean;
@@ -147,9 +155,15 @@ export default function AISection({ organizationId, canManageSettings }: AISecti
             <h3 className="text-base font-semibold text-foreground">AI Models</h3>
             <p className="mt-0.5 text-xs text-foreground-secondary">Toggle which models Aegis can pick from.</p>
           </div>
-          <div className="rounded-lg border border-border bg-background-card overflow-hidden">
+          <div
+            className={cn(
+              'rounded-lg border border-border bg-background-card overflow-hidden',
+              (modelsLoading || !modelsState) && 'pointer-events-none select-none',
+            )}
+            style={modelsLoading || !modelsState ? FADE_MASK : undefined}
+          >
             {modelsLoading || !modelsState ? (
-              <table className="w-full">
+              <table className="w-full" aria-busy="true" aria-label="Loading AI models">
                 <thead className="bg-background-card-header border-b border-border">
                   <tr>
                     <th className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider text-foreground-secondary">Model</th>
@@ -158,8 +172,12 @@ export default function AISection({ organizationId, canManageSettings }: AISecti
                     <th className="text-center px-4 py-3 text-xs font-semibold uppercase tracking-wider text-foreground-secondary w-32">Enabled</th>
                   </tr>
                 </thead>
+                {/* animate-pulse lives on the placeholder blocks, NOT the <tr> — the divide-y
+                    borders belong to the rows, so pulsing the row flashes the borders. The
+                    wrapper's downward fade mask makes the row count read as "more below",
+                    not as a fixed-size table. */}
                 <tbody className="divide-y divide-border" data-testid="ai-models-skeleton">
-                  {[0, 1, 2, 3, 4].map((i) => (
+                  {[0, 1, 2, 3, 4, 5, 6].map((i) => (
                     <tr key={i}>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
