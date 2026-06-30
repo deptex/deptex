@@ -45,6 +45,7 @@ import {
   buildOrgGroupSuppressionsUnchecked,
   buildOrgAcknowledgementsUnchecked,
 } from '../lib/project-findings';
+import { assembleFindingsBundle, buildOrgVulnerabilitiesUnchecked, emptyFindingsBundle } from '../lib/findings-bundle';
 import { checkProjectAccess, checkProjectManagePermission, assertProjectInOrg } from '../lib/project-access';
 import { emitEvent } from '../lib/event-bus';
 import {
@@ -10482,6 +10483,63 @@ router.get('/:id/vulnerabilities', async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error fetching organization vulnerabilities:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch organization vulnerabilities' });
+  }
+});
+
+// GET /api/organizations/:id/findings
+//
+// Org Findings BUNDLE — collapses the org Findings page's old 1 + N×~8 per-project
+// browser fan-out into ONE request. SCA is read as ONE bounded cross-project query
+// (the PDV RPC has no DB LIMIT, so fanning it across an owner's whole org would be N
+// unbounded RPCs); the other finding types fan the per-project engine in server-side
+// (skipVulns) — light without the SCA RPC, so it stays sub-second even at the owner's
+// all-projects view. One response, swapped in once.
+router.get('/:id/findings', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id: organizationId } = req.params;
+
+    // The gate both authorizes and resolves the accessible project set (a non-member
+    // → 404; a DB failure throws → 500 via the catch). Same gate the org vuln read uses.
+    const { projectIds: accessibleIds, error: accessError } = await getAccessibleProjectIdsInOrganization(userId, organizationId);
+    if (accessError) {
+      return res.status(accessError.status).json({ error: accessError.message });
+    }
+    if (accessibleIds.length === 0) return res.json(emptyFindingsBundle());
+
+    // ONE read = the validated project set (name + framework + active run). The gate
+    // already org-scopes; .eq('organization_id') is redundant defense-in-depth.
+    const { data: validatedProjects } = await supabase
+      .from('projects')
+      .select('id, name, framework, active_extraction_run_id')
+      .eq('organization_id', organizationId)
+      .in('id', accessibleIds);
+    const projects = validatedProjects ?? [];
+    if (projects.length === 0) return res.json(emptyFindingsBundle());
+
+    const activeRunIds = projects.map((p: any) => p.active_extraction_run_id).filter(Boolean) as string[];
+    const nameById = new Map<string, string>(projects.map((p: any) => [p.id, p.name ?? 'Unknown']));
+    const frameworkById = new Map<string, string | null>(projects.map((p: any) => [p.id, p.framework ?? null]));
+
+    // SCA in ONE bounded cross-project query; the other 7 types fan in per-project
+    // (skipVulns). Both run concurrently.
+    const [scaRows, bundle] = await Promise.all([
+      buildOrgVulnerabilitiesUnchecked(accessibleIds, activeRunIds, { limit: 200 }),
+      assembleFindingsBundle(organizationId, projects as any, { scope: 'org', skipVulns: true }),
+    ]);
+
+    // Stamp project name/framework onto the bulk SCA rows (assembleFindingsBundle
+    // stamps the fan-in slices; the SCA slice is filled here).
+    bundle.vulnerabilities = scaRows.map((r: any) => ({
+      ...r,
+      project_name: nameById.get(r.project_id) ?? 'Unknown',
+      project_framework: frameworkById.get(r.project_id) ?? null,
+    }));
+
+    res.json(bundle);
+  } catch (error: any) {
+    console.error('Error fetching org findings bundle:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch org findings bundle' });
   }
 });
 

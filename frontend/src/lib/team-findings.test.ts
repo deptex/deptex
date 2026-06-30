@@ -61,4 +61,24 @@ describe('teamBundleToRows', () => {
     expect(rows).toEqual([]);
     expect(baseImageRecs).toEqual([]);
   });
+
+  it('passes server-stamped project_framework through to row data (org bundle)', () => {
+    const { rows } = teamBundleToRows(bundle({
+      vulnerabilities: [{ project_id: 'p1', dependency_id: 'd', osv_id: 'CVE-1', project_framework: 'node' }] as any,
+      secrets: [{ id: 's1', project_id: 'p1', project_framework: 'go' }] as any,
+    }));
+    const vuln = rows.find((r) => r.type === 'vulnerability');
+    const secret = rows.find((r) => r.type === 'secret');
+    expect((vuln!.data as any).project_framework).toBe('node');
+    expect((secret!.data as any).project_framework).toBe('go');
+  });
+
+  it('does not regress when project_framework is absent (team bundle)', () => {
+    const { rows } = teamBundleToRows(bundle({
+      vulnerabilities: [{ project_id: 'p1', dependency_id: 'd', osv_id: 'CVE-1' }] as any,
+    }));
+    const vuln = rows.find((r) => r.type === 'vulnerability');
+    expect(vuln).toBeDefined();
+    expect((vuln!.data as any).project_framework).toBeUndefined();
+  });
 });

@@ -2471,6 +2471,15 @@ export const api = {
     return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/findings`);
   },
 
+  // The whole ORG Findings page in one request — same bundle shape as the team
+  // findings (rows additionally carry project_framework). Replaces the page's old
+  // 1 + N×~8 per-project browser fan-out with one server-side aggregation.
+  async getOrgFindings(
+    organizationId: string
+  ): Promise<TeamFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/findings`);
+  },
+
   async getOrganizationVulnerabilities(
     organizationId: string,
     params?: { page?: number; per_page?: number; severity?: string }

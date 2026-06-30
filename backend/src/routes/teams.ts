@@ -5,31 +5,10 @@ import { authenticateUser, AuthRequest } from '../middleware/auth';
 import { createActivity } from '../lib/activities';
 import { getCached, setCached } from '../lib/cache';
 import { buildOrgTeams } from '../lib/overview';
-import {
-  buildProjectFindingsCoreUnchecked,
-  buildOrgTrackerLinksUnchecked,
-  buildOrgGroupSuppressionsUnchecked,
-  buildOrgAcknowledgementsUnchecked,
-} from '../lib/project-findings';
-import { Semaphore, withTimeout } from '../lib/concurrency';
+import { assembleFindingsBundle, SCA_CAP_PER_PROJECT } from '../lib/findings-bundle';
 
 const router = express.Router();
 router.use(authenticateUser);
-
-// --- Team findings bundle tuning ---------------------------------------------
-// Worst-first cap on the SCA slice PER PROJECT (the PDV RPC is otherwise unbounded;
-// see buildProjectVulnerabilitiesUnchecked). Keeps the cross-project payload bounded.
-const TEAM_SCA_CAP_PER_PROJECT = 100;
-// One slow/hung project degrades to empty rather than stalling the whole team.
-const TEAM_PROJECT_TIMEOUT_MS = 8000;
-// Process-wide: total per-project bundles in flight across ALL team-findings requests.
-// Each project fans ~9 slices internally, so this is ~PROJECT_CONCURRENCY×9 DB reads
-// globally — a fixed ceiling independent of how many users open team sidebars at once.
-const teamFindingsLimiter = new Semaphore(8);
-const TEAM_FINDING_SLICES = [
-  'vulnerabilities', 'secrets', 'semgrep', 'iac', 'container',
-  'malicious', 'codeFlows', 'dast', 'baseImageRecs',
-] as const;
 
 // Sanitize permissions: remove deprecated resolve_alerts and view_members
 function sanitizeRolePermissions(perms: Record<string, boolean> | undefined): Record<string, boolean> | undefined {
@@ -2039,81 +2018,14 @@ router.get('/:id/teams/:teamId/findings', async (req: AuthRequest, res) => {
     const projects = validatedProjects ?? [];
     if (projects.length === 0) return res.json(emptyBundle);
 
-    const nameById = new Map<string, string>();
-    for (const p of projects) nameById.set((p as any).id, (p as any).name ?? 'Unknown');
-
-    const degradedSlices: string[] = [];
-    const projectMs: Array<{ project_id: string; ms: number }> = [];
-    const merged: Record<string, any[]> = {};
-    for (const s of TEAM_FINDING_SLICES) merged[s] = [];
-
-    // The org-wide chip/disposition maps only need the org id — fire them NOW so their
-    // round-trips OVERLAP the per-project fan-in below instead of trailing it. A
-    // failure here degrades chips only, never the findings themselves.
-    const chipMapsPromise = Promise.all([
-      buildOrgTrackerLinksUnchecked(id).catch(() => [] as any[]),
-      buildOrgGroupSuppressionsUnchecked(id).catch(() => [] as any[]),
-      buildOrgAcknowledgementsUnchecked(id).catch(() => [] as any[]),
-    ]);
-
-    // Fan the per-project core builder in server-side. Each call is gated by the
-    // process-wide Semaphore and wrapped in a timeout; a timeout/throw degrades that
-    // ONE project (empty + a `${pid}:…` marker) without blanking the team.
-    await Promise.all(projects.map((p: any) => teamFindingsLimiter.run(async () => {
-      const pid = p.id;
-      const projectName = nameById.get(pid);
-      const started = Date.now();
-      try {
-        const core = await withTimeout(
-          buildProjectFindingsCoreUnchecked(id, pid, p.active_extraction_run_id ?? null, {
-            vulnLimit: TEAM_SCA_CAP_PER_PROJECT,
-            organizationId: id,
-          }),
-          TEAM_PROJECT_TIMEOUT_MS,
-        );
-        for (const s of TEAM_FINDING_SLICES) {
-          for (const row of (core as any)[s] as any[]) {
-            // Stamp project_id + project_name on EVERY row. Most slices carry
-            // project_id natively, but the SCA RPC does NOT select it — without this
-            // the cross-project dedup key (project_id:dependency_id:osv_id) collapses
-            // and project_name is on no finding table at all.
-            merged[s].push({ ...row, project_id: pid, project_name: projectName });
-          }
-        }
-        for (const ds of core.degradedSlices) degradedSlices.push(`${pid}:${ds}`);
-      } catch (err: any) {
-        degradedSlices.push(`${pid}:${err?.message === 'timeout' ? 'timeout' : 'project'}`);
-        captureInfraError(err, 'team-findings-bundle:project', { project_id: pid, organization_id: id, team_id: teamId });
-      } finally {
-        projectMs.push({ project_id: pid, ms: Date.now() - started });
-      }
-    })));
-
-    // Chips were fired before the fan-in (above) so they ran concurrently — collect
-    // them now (already settled, or nearly).
-    const [trackerLinks, groupSuppressions, acknowledgements] = await chipMapsPromise;
-
-    // Wall-time is set by the slowest project holding a Semaphore slot, so log the
-    // top-3 slowest PROJECTS (not just slices) — a slow team then names the culprit.
-    const slowestProjects = [...projectMs].sort((a, b) => b.ms - a.ms).slice(0, 3).map((x) => `${x.project_id}:${x.ms}ms`);
-    console.log('[findings-bundle]', JSON.stringify({ scope: 'team', team_id: teamId, projects: projects.length, slowestProjects, degraded: degradedSlices.length }));
-
-    res.json({
-      vulnerabilities: merged.vulnerabilities,
-      secrets: merged.secrets,
-      semgrep: merged.semgrep,
-      iac: merged.iac,
-      container: merged.container,
-      malicious: merged.malicious,
-      codeFlows: merged.codeFlows,
-      dast: merged.dast,
-      baseImageRecs: merged.baseImageRecs,
-      trackerLinks,
-      groupSuppressions,
-      acknowledgements,
-      projectIds: projects.map((p: any) => p.id),
-      degradedSlices,
+    // Team keeps SCA per-project (small N → the per-project PDV RPC is fine), capped
+    // worst-first. The shared engine handles fan-in / stamp / merge / chip maps / log.
+    const bundle = await assembleFindingsBundle(id, projects as any, {
+      scope: 'team',
+      logContext: { team_id: teamId },
+      vulnLimit: SCA_CAP_PER_PROJECT,
     });
+    res.json(bundle);
   } catch (error: any) {
     console.error('Error fetching team findings bundle:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch team findings bundle' });

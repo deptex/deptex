@@ -34,15 +34,19 @@ export async function getAccessibleProjectIdsInOrganization(
     return { projectIds: [], error: { status: 404, message: 'Organization not found or access denied' } };
   }
 
-  const { data: orgRole } = await supabase
-    .from('organization_roles')
-    .select('permissions')
-    .eq('organization_id', organizationId)
-    .eq('name', orgMembership.role)
-    .single();
-
-  const canViewAllProjects =
-    orgMembership.role === 'owner' || orgRole?.permissions?.manage_teams_and_projects === true;
+  // Owners always see all projects, so skip the org_roles read for them — one fewer
+  // sequential round-trip on the common case (this gate backs the org Findings page,
+  // /vulnerabilities, etc.). Only non-owners need the permission lookup.
+  let canViewAllProjects = orgMembership.role === 'owner';
+  if (!canViewAllProjects) {
+    const { data: orgRole } = await supabase
+      .from('organization_roles')
+      .select('permissions')
+      .eq('organization_id', organizationId)
+      .eq('name', orgMembership.role)
+      .single();
+    canViewAllProjects = orgRole?.permissions?.manage_teams_and_projects === true;
+  }
 
   if (canViewAllProjects) {
     const { data: projects, error } = await supabase

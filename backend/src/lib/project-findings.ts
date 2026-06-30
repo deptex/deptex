@@ -499,22 +499,28 @@ export async function buildCodeFlowFindingsUnchecked(
   orgId: string,
   projectId: string,
   activeExtractionId: string | null,
+  opts?: { limit?: number },
 ): Promise<{ data: any[]; total: number }> {
   if (!activeExtractionId) {
     return { data: [], total: 0 };
   }
 
+  // The flow table is otherwise unbounded; a cross-project fan-in (team/org bundle)
+  // passes a worst-first cap so one flow-heavy project can't dominate the payload.
+  let flowsQuery = supabase
+    .from('project_reachable_flows')
+    .select(
+      'id, project_id, extraction_run_id, vuln_class, entry_point_file, entry_point_line, entry_point_method, entry_point_tag, entry_point_code, sink_file, sink_line, sink_method, sink_code, flow_length, flow_nodes, flow_signature_hash, created_at',
+    )
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', activeExtractionId)
+    .eq('reachability_source', 'taint_engine')
+    .is('osv_id', null)
+    .order('created_at', { ascending: false });
+  if (opts?.limit != null) flowsQuery = flowsQuery.limit(opts.limit);
+
   const [flowsRes, supRes] = await Promise.all([
-    supabase
-      .from('project_reachable_flows')
-      .select(
-        'id, project_id, extraction_run_id, vuln_class, entry_point_file, entry_point_line, entry_point_method, entry_point_tag, entry_point_code, sink_file, sink_line, sink_method, sink_code, flow_length, flow_nodes, flow_signature_hash, created_at',
-      )
-      .eq('project_id', projectId)
-      .eq('extraction_run_id', activeExtractionId)
-      .eq('reachability_source', 'taint_engine')
-      .is('osv_id', null)
-      .order('created_at', { ascending: false }),
+    flowsQuery,
     supabase
       .from('project_reachable_flow_suppressions')
       .select('flow_signature_hash')
@@ -686,7 +692,7 @@ export async function buildProjectFindingsCoreUnchecked(
   orgId: string,
   projectId: string,
   activeExtractionId: string | null,
-  opts?: { vulnLimit?: number; organizationId?: string },
+  opts?: { vulnLimit?: number; organizationId?: string; skipVulns?: boolean; codeFlowLimit?: number },
 ): Promise<ProjectFindingsCore> {
   const runScoped = !!activeExtractionId;
   const out: ProjectFindingsCore = {
@@ -699,14 +705,19 @@ export async function buildProjectFindingsCoreUnchecked(
   // when no finalized run exists (null runner → stays empty). DAST is run-independent.
   // Per-slice opts mirror the project /findings route EXACTLY (50/50/100/100/100,
   // skipCount) so the two paths can't diverge on shaping/pagination.
+  //
+  // `skipVulns` nulls the SCA task: the ORG bundle reads SCA as ONE bounded
+  // cross-project query (the PDV RPC has no DB LIMIT, so fanning it across an
+  // owner's whole org = N unbounded heavy RPCs); skipping it here keeps the
+  // per-project fan-in light. The team bundle keeps SCA per-project (small N).
   const tasks: Array<[keyof ProjectFindingsCore, (() => Promise<any>) | null, (v: any) => any[]]> = [
-    ['vulnerabilities', runScoped ? () => buildProjectVulnerabilitiesUnchecked(orgId, projectId, activeExtractionId, { limit: opts?.vulnLimit }) : null, (v) => v ?? []],
+    ['vulnerabilities', (runScoped && !opts?.skipVulns) ? () => buildProjectVulnerabilitiesUnchecked(orgId, projectId, activeExtractionId, { limit: opts?.vulnLimit }) : null, (v) => v ?? []],
     ['secrets', runScoped ? () => buildSecretFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null, (v) => v?.data ?? []],
     ['semgrep', runScoped ? () => buildSemgrepFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 50, skipCount: true }) : null, (v) => v?.data ?? []],
     ['iac', runScoped ? () => buildIacFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null, (v) => v?.data ?? []],
     ['container', runScoped ? () => buildContainerFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, status: 'open', skipCount: true }) : null, (v) => v?.data ?? []],
     ['malicious', runScoped ? () => buildMaliciousFindingsUnchecked(orgId, projectId, activeExtractionId, { page: 1, perPage: 100, skipCount: true }) : null, (v) => v?.data ?? []],
-    ['codeFlows', runScoped ? () => buildCodeFlowFindingsUnchecked(orgId, projectId, activeExtractionId) : null, (v) => v?.data ?? []],
+    ['codeFlows', runScoped ? () => buildCodeFlowFindingsUnchecked(orgId, projectId, activeExtractionId, { limit: opts?.codeFlowLimit }) : null, (v) => v?.data ?? []],
     ['baseImageRecs', runScoped ? () => buildBaseImageRecommendationsUnchecked(orgId, projectId, activeExtractionId) : null, (v) => v?.recommendations ?? []],
     ['dast', () => buildDastFindingsForProjectUnchecked(projectId, { limit: 200, organizationId: opts?.organizationId }), (v) => v ?? []],
   ];
