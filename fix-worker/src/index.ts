@@ -117,9 +117,15 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     // short sentence the worker speaks between its steps. Best-effort and
     // no-op for a non-task fix (no thread).
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
-    const fixContext =
-      `You are Aegis, fixing ${fullRow.osv_id ?? 'a security finding'} in the ${projectName} project. ` +
-      `The change: ${plan.summary}.`;
+    // A dependency bump (vulnerability) re-resolves deps; semgrep/secret are code
+    // fixes that run the tests. The narration phrasing follows from this.
+    const isDepBump = fullRow.fix_type === 'vulnerability';
+    const findingLabel = fullRow.osv_id
+      ? fullRow.osv_id
+      : fullRow.fix_type === 'secret'
+        ? 'a hardcoded secret'
+        : 'a code security finding';
+    const fixContext = `You are Aegis, fixing ${findingLabel} in the ${projectName} project. The change: ${plan.summary}.`;
     const voice = async (justDid: string, next?: string): Promise<void> => {
       if (!fullRow.thread_id) return;
       const line = await generateVoiceLine(
@@ -138,7 +144,10 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
     });
     await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
-    await voice('cloned the repo into a clean sandbox', 'open the dependency manifest and apply the version bump');
+    await voice(
+      'cloned the repo into a clean sandbox',
+      isDepBump ? 'open the dependency manifest and apply the version bump' : 'open the affected file and apply the fix',
+    );
 
     if (await isJobCancelled(supabase, job.id)) {
       await logger.warn('complete', 'Fix cancelled by user before setup');
@@ -175,7 +184,6 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const changedFiles = (plan.fileChanges ?? []).map((fc) => fc.path).filter(Boolean);
     const primaryFile = changedFiles[0] ?? 'the affected file';
-    const isDepBump = fullRow.fix_type === 'vulnerability';
 
     // onPhase posts the edit/verify step + voice with REAL timing: the edit lands
     // before the slow install ("now let me reinstall…"), then the install runs,
@@ -193,7 +201,10 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       onPhase: async (phase, meta) => {
         if (phase === 'edit') {
           await step({ icon: 'edit', label: `Updated ${primaryFile}` });
-          await voice(`applied the change to ${primaryFile}`, 'reinstall dependencies to update the lockfile');
+          await voice(
+            `applied the change to ${primaryFile}`,
+            isDepBump ? 'reinstall dependencies to update the lockfile' : 'run the tests to make sure nothing broke',
+          );
         } else {
           const ok = meta?.verifiedLocally !== false;
           await step({
@@ -206,7 +217,9 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
           });
           await voice(
             ok
-              ? 'reinstalled and confirmed the new version resolves with no conflicts'
+              ? isDepBump
+                ? 'reinstalled and confirmed the new version resolves with no conflicts'
+                : 'ran the tests and they passed'
               : "applied the change (the project's CI will run the full test suite on the pull request)",
             'open the pull request for review',
           );

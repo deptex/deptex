@@ -5,7 +5,7 @@ import { getActiveExtractionId } from '../active-extraction';
 import { getLanguageModelForOrg } from './provider';
 import { ALL_AEGIS_TOOLS } from './tools';
 import { buildSDKTool, newTurnState, type AegisToolContext } from './tool-types';
-import { ensureTaskThread } from './tasks';
+import { ensureTaskThread, resolveTargetFindingId } from './tasks';
 import { insertFixRow, planAndApproveFix } from './fix-request';
 import type { AegisTaskTarget } from './task-types';
 
@@ -306,26 +306,36 @@ export async function runTaskAgent(
                   (t.label && f.includes(t.label.toLowerCase())),
               ) ?? task.targets[0];
         if (!target) return { error: 'No matching finding to fix.' };
-        // The real fix pipeline currently fixes vulnerabilities by osv_id.
-        if (target.findingType !== 'vulnerability' || !target.osvId) {
-          return { error: 'Real fixes currently support vulnerability findings only.' };
+
+        // Resolve the live finding id against the latest scan — works for all
+        // three types: vulnerability (osv_id), semgrep / secret (the finding row
+        // id, keyed by file:line). Row uuids churn on every rescan, so we never
+        // trust a stale one off the task target.
+        const findingId = await resolveTargetFindingId(target);
+        if (!findingId) {
+          return {
+            error:
+              'I could not find this finding in the latest scan — it may already be resolved or moved.',
+          };
         }
 
         // Kick-off beat — lands immediately, so the ~minute of plan generation
-        // that follows doesn't read as dead air before the pipeline's own
-        // step beats start. No version number here (the pipeline states the
-        // exact change once the plan is generated).
+        // that follows doesn't read as dead air before the pipeline's own step
+        // beats start. Phrasing is type-aware (a bump "upgrades to a safe
+        // version"; a code/secret fix just "works out the fix").
         const projName = projectNames.get(target.projectId) ?? 'the project';
         await postNarration(
           threadId,
-          `Working out the exact change for the ${projName} project and a safe version to upgrade to.`,
+          target.findingType === 'vulnerability'
+            ? `Working out the exact change for the ${projName} project and a safe version to upgrade to.`
+            : `Working out the fix for ${target.label} in the ${projName} project.`,
         );
 
         const ins = await insertFixRow({
           organizationId: orgId,
           projectId: target.projectId,
-          findingType: 'vulnerability',
-          findingId: target.osvId,
+          findingType: target.findingType,
+          findingId,
           triggeredByUserId: userId,
           threadId,
           taskId,
@@ -340,8 +350,8 @@ export async function runTaskAgent(
           fixId: ins.fixId,
           organizationId: orgId,
           projectId: target.projectId,
-          findingType: 'vulnerability',
-          findingId: target.osvId,
+          findingType: target.findingType,
+          findingId,
           triggeredByUserId: userId,
           autoApprove: true,
         });

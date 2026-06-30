@@ -48,7 +48,7 @@ function shapeTask(row: any): AegisTask {
 // Returns null when the finding is no longer present in the active run.
 // ---------------------------------------------------------------------------
 
-async function resolveTargetFindingId(target: AegisTaskTarget): Promise<string | null> {
+export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<string | null> {
   const activeRun = await getActiveExtractionId(supabase, target.projectId);
   if (!activeRun) return null;
 
