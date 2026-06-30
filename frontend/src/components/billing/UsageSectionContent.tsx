@@ -103,26 +103,36 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
     [projects],
   );
 
+  // The breakdown request is fully described by this query string. Deriving it as a
+  // memo means a state change that does NOT alter the actual request (e.g. the projects
+  // list resolving and pre-selecting every project while "all projects" is still on)
+  // produces an identical string, so loadBreakdown keeps its identity and the effect
+  // below does not re-fire. Previously those deps lived directly on loadBreakdown, so
+  // the projects-load triggered a second, identical fetch — the load → empty → load →
+  // empty flicker.
+  const breakdownQuery = useMemo(() => {
+    const params = new URLSearchParams({
+      granularity,
+      cumulative: String(cumulative),
+      start: range.start.toISOString(),
+      end: range.end.toISOString(),
+    });
+    if (selectedProducts.length < ALL_PRODUCT_VALUES.length) {
+      const expanded = expandGroupsToFeatures(selectedProducts);
+      params.set('features', expanded.length > 0 ? expanded.join(',') : '__none__');
+    }
+    if (!allProjectsSelected && projects.length > 0) {
+      params.set('project_ids', selectedProjects.length > 0 ? selectedProjects.join(',') : '__none__');
+    }
+    return params.toString();
+  }, [granularity, cumulative, range, selectedProducts, selectedProjects, allProjectsSelected, projects.length]);
+
   const loadBreakdown = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({
-        granularity,
-        cumulative: String(cumulative),
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-      });
-      if (selectedProducts.length < ALL_PRODUCT_VALUES.length) {
-        const expanded = expandGroupsToFeatures(selectedProducts);
-        params.set('features', expanded.length > 0 ? expanded.join(',') : '__none__');
-      }
-      if (!allProjectsSelected && projects.length > 0) {
-        params.set('project_ids', selectedProjects.length > 0 ? selectedProjects.join(',') : '__none__');
-      }
-
       const res = await authedFetch(
-        `${API_BASE_URL}/api/organizations/${organizationId}/billing/usage/breakdown?${params.toString()}`,
+        `${API_BASE_URL}/api/organizations/${organizationId}/billing/usage/breakdown?${breakdownQuery}`,
       );
       if (!res.ok) throw new Error(`Failed to load (${res.status})`);
       const body = (await res.json()) as UsageBreakdownResponse;
@@ -132,16 +142,7 @@ export function UsageSectionContent({ organizationId }: UsageSectionContentProps
     } finally {
       setLoading(false);
     }
-  }, [
-    organizationId,
-    granularity,
-    cumulative,
-    range,
-    selectedProducts,
-    selectedProjects,
-    allProjectsSelected,
-    projects.length,
-  ]);
+  }, [organizationId, breakdownQuery]);
 
   useEffect(() => {
     void loadBreakdown();
