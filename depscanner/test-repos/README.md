@@ -18,9 +18,9 @@ Depscanner ships four distinct fixture families, all serving different layers:
 | Corpus | Path | Purpose | Run as |
 |---|---|---|---|
 | **Unit / snapshot fixtures** | `depscanner/fixtures/test-*` | Snapshot the JSON the scanner emits per ecosystem; catches regressions in the pipeline itself. | `npm run test:fixtures` |
-| **Per-CVE rule fixtures** | `depscanner/reachability-rules/CVE-*/` | Each pinned CVE has a tiny vulnerable + safe pair to validate that one rule fires correctly. | `npm run test:taint-engine-all` |
-| **Dogfood corpus (this one)** | `depscanner/test-repos/<framework>/` | End-to-end *product* validation: real create-project flow, real UI walkthrough, all categories per fixture. | `npm run dogfood:check` |
-| **External reachability benchmark** | `depscanner/reachability-corpus/` | Cross-ecosystem ground truth (real OSS repos w/ hand-labelled CVEs) for tracking reachability precision/recall over time. | `npm run test:reachability-corpus` |
+| **Per-CVE flow fixtures** | `depscanner/test/cve-targeted-flow-fixtures/<lang>-*` | Each tagged CVE has a tiny cross-file fixture asserting the taint engine emits ≥1 flow with the expected `(osv_id, vuln_class)`. | `npm run test:taint-engine-all` |
+| **Dogfood corpus (this one)** | `depscanner/test-repos/<framework>/` | End-to-end *product* validation: real create-project flow, real UI walkthrough, all categories per fixture. | `npm run dogfood:check -- --fixture <name>` |
+| **External reachability benchmark** | `depscanner/scripts/reachability-corpus.yaml` | Cross-ecosystem ground truth (real OSS repos w/ hand-labelled CVEs) for tracking reachability precision/recall over time. | `npm run test:reachability-corpus` |
 
 > A subset of dogfood fixtures are **standalone copies** of the matching
 > `depscanner/fixtures/test-*` directory (e.g. `test-repos/nextjs/` copies
@@ -74,15 +74,17 @@ depscanner/test-repos/<framework>/
 
 ```bash
 cd depscanner
-# verify ONE fixture against its expected.yaml:
+# verify ONE fixture against its expected.yaml (the only mode built today):
 npm run dogfood:check -- --fixture express --project-id <uuid>
-
-# verify ALL fixtures (cross-batch gate used in M2-M5):
-npm run dogfood:check
 ```
 
+> **All-fixtures mode is not built yet.** Running `npm run dogfood:check`
+> without `--fixture` (and `--project-id`) prints a usage message and exits 2.
+> The cross-batch "verify ALL fixtures" gate is wired for M2 once a fixture →
+> project-id manifest exists; until then, run fixtures one at a time.
+
 The harness queries Supabase directly with the service-role key. See
-`bin/dogfood-check.ts` for env requirements.
+`scripts/dogfood-check.ts` for env requirements.
 
 ## Per-fixture walkthrough
 

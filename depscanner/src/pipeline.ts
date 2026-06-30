@@ -20,7 +20,11 @@ import type {
   RunPipelineResult,
 } from './pipeline-types';
 import type { Storage } from './storage';
-import { getSupabase, setError, clearDepscanCacheOnly } from './pipeline-helpers';
+// Import the Supabase adapter directly (not via the ./storage barrel) so the
+// runtime import graph doesn't pull in pglite.ts — the worker/pipeline never
+// needs the local PGLite backend, and heavily-mocked pipeline tests rely on it.
+import { createSupabaseStorage } from './storage/supabase';
+import { setError, clearDepscanCacheOnly } from './pipeline-helpers';
 import { doClone } from './pipeline-steps/clone';
 import { doResolve } from './pipeline-steps/resolve';
 import { doSbom } from './pipeline-steps/sbom';
@@ -49,7 +53,7 @@ export async function runPipeline(
   heartbeat?: () => Promise<void>,
   storage?: Storage,
 ): Promise<RunPipelineResult | undefined> {
-  const supabase: Storage = storage ?? (getSupabase() as unknown as Storage);
+  const supabase: Storage = storage ?? createSupabaseStorage();
 
   const log = logger ?? ({
     info: async () => {},

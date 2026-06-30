@@ -108,15 +108,15 @@ Note: `owner` is the only role guaranteed by name. The org-identity edits in Gen
 Connect repo -> queueExtractionJob() inserts scan_jobs (type='extraction'), starts Fly.io depscanner machine
   -> Worker claims via claim_scan_job(machine_id, ['extraction']) RPC (atomic, FOR UPDATE SKIP LOCKED)
   -> Clone -> cdxgen SBOM -> parse deps -> upsert -> tree-sitter usage extraction + framework entry points -> dep-scan
-  -> atom reachable flows + reachability_rules (Semgrep taint packs, per-CVE, upgrades matching PDVs to `confirmed`)
-  -> updateReachabilityLevels classifier -> Semgrep SAST -> TruffleHog
+  -> AI rule generation -> cross-file taint engine (framework-models/*.yaml specs: sources/sinks/sanitizers per vuln_class, upgrades matching PDVs to `confirmed`)
+  -> updateReachabilityLevels classifier + EPD -> IaC/container + malicious-package + Semgrep SAST + TruffleHog
   -> Logs stream to extraction_logs (Supabase Realtime)
   -> QStash: populate-dependencies (registry + GHSA + OpenSSF + policy eval + health score)
   -> QStash: backfill-dependency-trees (transitive edges via pacote)
   -> Fault tolerance: 60s heartbeat, 5min stuck detection, recovery cron, max 3 attempts
 ```
 
-Reachability rule packs live in `depscanner/reachability-rules/` — one folder per CVE (`CVE-YYYY-NNNNN-<slug>/rule.yml` + fixtures). See that directory's README for authoring conventions. `scripts/validate-reachability-rules.ts` runs in CI and fails on malformed/missing rules.
+Reachability comes from the cross-file taint engine (`depscanner/src/taint-engine/`): per-framework specs in `framework-models/*.yaml` declare sources, sinks (tagged with `vuln_class`), and sanitizers, and the framework spec loads alongside the stdlib spec (e.g. `node-stdlib.yaml`) so taint can flow across files. `npm run taint-engine:validate` runs the spec/fixture validation harness; the per-language `test:taint-engine-*` suites cover propagation.
 
 ### Aegis AI Agent
 ```

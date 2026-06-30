@@ -1,21 +1,21 @@
-# Deptex Extraction Worker
+# Deptex Depscanner
 
-Two modes share the same pipeline code:
+The unified scanner worker (`deptex-depscanner`). One Fly app, type-aware dispatch on `scan_jobs.type`: **extraction** (SCA/SBOM/reachability/SAST/secrets) and **DAST** (ZAP / Nuclei). Two modes share the same pipeline code:
 
 1. **Local CLI** (`./bin/deptex-scan`) — scan any local directory, Docker-only, no Supabase/Redis/GitHub required.
-2. **Fly.io worker** (`npm start`) — consumes jobs from Redis, writes results to Supabase. See [Fly.io worker mode](#flyio-worker-mode) below.
+2. **Fly.io worker** (`npm start`) — claims jobs from the Supabase `scan_jobs` table, writes results to Supabase. See [Fly.io worker mode](#flyio-worker-mode) below.
 
 ---
 
 ## Local CLI (deptex-scan)
 
-Scans a codebase for dependency vulnerabilities, SBOM, reachability (Atom), SAST (Semgrep), and secrets (TruffleHog), then prints a Trivy-style findings table.
+Scans a codebase for dependency vulnerabilities, SBOM, reachability (tree-sitter usage extraction + dep-scan + the cross-file taint engine), SAST (Semgrep), and secrets (TruffleHog), then prints a Trivy-style findings table.
 
 ### Prerequisites
 
 **Docker Desktop** (or a running Docker daemon on Linux). That's it.
 
-All heavy tooling (cdxgen, dep-scan, Semgrep, TruffleHog, Atom, Python, Go, Maven, JDK 21) ships inside the image.
+All heavy tooling (cdxgen, dep-scan, Semgrep, TruffleHog, Python, Go, Maven, JDK 21) ships inside the image.
 
 ### Build
 
@@ -70,10 +70,10 @@ npm run test:storage    # PGLite integration tests
 npm run test:fixtures   # deterministic output snapshot tests
 ```
 
-Framework detector unit tests run via Jest:
+Framework specs (sources/sinks/sanitizers) are validated against fixtures by the taint-engine preflight harness:
 
 ```bash
-NODE_OPTIONS=--experimental-vm-modules npx jest src/framework-rules/__tests__/
+npm run taint-engine:validate -- all   # validate every framework-models/*.yaml spec
 ```
 
 ---
@@ -93,15 +93,19 @@ Adding a new framework or debugging why a detector doesn't fire:
 
 ## Fly.io worker mode
 
-Worker that processes extraction jobs from Redis: clone repo, run cdxgen (SBOM), dep-scan, Semgrep, TruffleHog, and update Supabase.
+Worker that claims scan jobs from the Supabase `scan_jobs` table and dispatches on `scan_jobs.type`:
+
+- **`extraction`** — clone repo, run cdxgen (SBOM), dep-scan, tree-sitter usage extraction, the cross-file taint engine, Semgrep, TruffleHog, and update Supabase.
+- **`dast`** (and `dast_zap` / `dast_nuclei` variants) — dynamic scan of a running target via ZAP / Nuclei (added Phase 23+).
+
+Jobs are claimed atomically via the `claim_scan_job(p_machine_id, p_supported_types, p_max_per_org)` Postgres RPC (`FOR UPDATE SKIP LOCKED`), not from a Redis queue — Redis is used only for caching.
 
 ## Prerequisites
 
-- UPSTASH_REDIS_URL, UPSTASH_REDIS_TOKEN
 - SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 - GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_PRIVATE_KEY_PATH)
 - BACKEND_URL or API_BASE_URL (for queue-populate)
-- EXTRACTION_WORKER_SECRET (optional, for queue-populate auth)
+- UPSTASH_REDIS_URL, UPSTASH_REDIS_TOKEN (optional — caching only, not the job queue)
 
 ## Local Development
 
@@ -144,21 +148,18 @@ So the worker in Docker can reach your local backend for queue-populate.
 **Plain docker (no compose):**
 
 ```bash
-docker build -t deptex-extraction-worker .
-docker run --env-file .env -e BACKEND_URL=http://host.docker.internal:3001 -v "$(pwd)/github-app-private-key.pem:/app/github-app-private-key.pem:ro" deptex-extraction-worker
+docker build -t deptex-depscanner .
+docker run --env-file .env -e BACKEND_URL=http://host.docker.internal:3001 -v "$(pwd)/github-app-private-key.pem:/app/github-app-private-key.pem:ro" deptex-depscanner
 ```
 
-## Queue
+## Job intake
 
-Polls `extraction-jobs` (prod) or `extraction-jobs-local` (dev). Jobs are pushed by the backend when a user connects a repository.
+When a user connects a repository the backend inserts a row into the Supabase `scan_jobs` table (`type='extraction'`) and boots a Fly depscanner machine. The worker loops, claiming jobs atomically via the `claim_scan_job` RPC (`FOR UPDATE SKIP LOCKED`); after 60s with no claimable job it exits (scale-to-zero).
 
 ### Import says "Extracting" but worker shows nothing
 
-1. **Check the backend terminal** (where you run the main API, not this worker) when you click Import. You should see:
-   - `[EXTRACT] POST connect received: org=... project=... repo=...`
-   - Either `Queued extraction job for project ... (queue: extraction-jobs-local, length: 1)` or `[EXTRACT] Redis not configured - extraction job NOT queued.`
-   - If you see "Redis not configured", the **backend** is missing `UPSTASH_REDIS_URL` and `UPSTASH_REDIS_TOKEN` in **backend/.env** (not this folder).
+1. **Same Supabase project:** The backend (**backend/.env**) and this worker (**depscanner/.env**) must point at the same `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` — otherwise the worker claims from a different `scan_jobs` table than the backend writes to.
 
-2. **Same Redis and queue name:** The backend uses **backend/.env**; this worker uses **depscanner/.env**. Both need the same `UPSTASH_REDIS_URL` and `UPSTASH_REDIS_TOKEN`. Queue name is `extraction-jobs-local` when `NODE_ENV` is not `production`, and `extraction-jobs` when it is. If the backend runs with `NODE_ENV=production` and the worker without it (or vice versa), they use different queues and jobs never meet. Fix: set `NODE_ENV` the same for both, or set `EXTRACTION_QUEUE_NAME=extraction-jobs-local` in both .env files.
+2. **Check the row was inserted:** look for a pending row in `scan_jobs` for your project. If none was created, the issue is on the backend side (it never queued the job).
 
-3. **Verify worker startup:** When you run `npm start` here you should see `[EXTRACT] NODE_ENV=... → queue: extraction-jobs-local` and the Redis URL prefix. Compare with the backend’s "Backend Redis URL" log; they should match.
+3. **Verify the worker is claiming:** when a job is picked up you'll see `[ext-<id>] Claimed for project <id> ...`; an idle worker logs `[depscanner] No jobs for 60s, shutting down` and exits.

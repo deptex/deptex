@@ -126,14 +126,12 @@ interface SeedPcf {
 }
 async function insertPcf(storage: any, projId: string, p: SeedPcf): Promise<string> {
   const id = randomUUID();
-  // In production, vulnerability_id is GENERATED ALWAYS by Postgres
-  // (phase25:88-90). PGLite's schema dump loses the generation
-  // expression, so the test passes an explicit value matching the
-  // production COALESCE(osv_id, cve_id, 'unknown:...') shape.
-  const vulnerability_id =
-    p.osvId ??
-    p.cveId ??
-    `unknown:${id.slice(0, 12)}`;
+  // vulnerability_id is GENERATED ALWAYS AS
+  //   COALESCE(osv_id, cve_id, 'unknown:' || md5(image_digest:os_pkg:os_ver))
+  // STORED (schema.sql, phase25). The current schema dump preserves the
+  // generation expression and PGLite computes it, so the test must NOT pass an
+  // explicit value (Postgres rejects a non-DEFAULT write to a GENERATED ALWAYS
+  // column). Omit it and let the DB derive it.
   const res = await storage.from('project_container_findings').insert({
     id,
     project_id: projId,
@@ -148,7 +146,6 @@ async function insertPcf(storage: any, projId: string, p: SeedPcf): Promise<stri
     os_package_version: p.osPackageVersion ?? '1.0.0',
     osv_id: p.osvId,
     cve_id: p.cveId,
-    vulnerability_id,
     severity: 'HIGH',
     is_kev: false,
     fix_versions: [],
@@ -381,18 +378,29 @@ async function main(): Promise<void> {
   }
 
   // ============================================================
-  // Scenario 12 — RPC return shape exposes composition_factor
+  // Scenario 12 — RPC surfaces the composition-folded contextual_depscore.
+  //
+  // The phase30 RPC exposed a raw `composition_factor` column, but phase60
+  // (status fields) + phase63 (scoped npm name) rewrote
+  // get_project_vulnerabilities_from_pdv and dropped that column — it has no
+  // consumer; the composition result reaches the UI through the FOLDED
+  // contextual_depscore, not the raw factor. The RPC also filters on the
+  // project's active_extraction_run_id (phase24.3). So the live, consumed
+  // contract is: point the project at a composed run and the RPC returns that
+  // run's PDV with contextual_depscore already reduced by composition.
   // ============================================================
-  console.log('\nScenario 12: get_project_vulnerabilities_from_pdv exposes composition_factor');
+  console.log('\nScenario 12: RPC surfaces composition-folded contextual_depscore for the active run');
   {
+    // run-s2 was folded 70 → 25.2 (factor 0.36) and is never re-touched.
+    await supabase.from('projects').update({ active_extraction_run_id: 'run-s2' }).eq('id', projId);
     const { data } = await supabase.rpc('get_project_vulnerabilities_from_pdv', {
       p_project_id: projId,
     });
     assert(Array.isArray(data), 'RPC returns array');
-    const sample = (data ?? []).find((r: any) => r.composition_factor !== null);
-    assert(sample !== undefined, 'at least one row has a non-null composition_factor');
-    if (sample) {
-      assert(typeof Number(sample.composition_factor) === 'number', `composition_factor is numeric`);
+    const row = (data ?? []).find((r: any) => r.osv_id === 'CVE-2024-2222');
+    assert(row !== undefined, 'RPC returns the composed run-s2 PDV');
+    if (row) {
+      assert(Number(row.contextual_depscore) === 25.2, `contextual_depscore folded to 25.2 (got ${row.contextual_depscore})`);
     }
   }
 

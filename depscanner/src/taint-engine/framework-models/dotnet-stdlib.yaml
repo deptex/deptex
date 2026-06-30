@@ -26,18 +26,15 @@ sinks:
     vuln_class: sql_injection
     argument_indices: [0]
     description: System.Data.SqlClient.SqlCommand constructor — raw SQL
-  - pattern: "*.ExecuteReader(*)"
-    vuln_class: sql_injection
-    argument_indices: []
-    description: SqlCommand.ExecuteReader / similar
-  - pattern: "*.ExecuteNonQuery(*)"
-    vuln_class: sql_injection
-    argument_indices: []
-    description: SqlCommand.ExecuteNonQuery
-  - pattern: "*.ExecuteScalar(*)"
-    vuln_class: sql_injection
-    argument_indices: []
-    description: SqlCommand.ExecuteScalar
+  # NOTE: `*.ExecuteReader(*)` / `*.ExecuteNonQuery(*)` / `*.ExecuteScalar(*)`
+  # used to live here with `argument_indices: []` ("any tainted arg fires").
+  # They were removed: those methods carry NO SQL argument — the query enters
+  # via the `SqlCommand(*)` constructor / `CommandText`, or via the raw-SQL
+  # EF sinks below — so the only thing `[]` could match is an unrelated
+  # `x.ExecuteReader(taintedBehavior)` on ANY receiver (a wildcard-receiver +
+  # generic-method + any-arg sink, the exact broad-sink anti-pattern). They
+  # contributed zero recall (the constructor sink carries the .NET SQLi flow,
+  # proven by csharp-vulns/aspnet-sql-injection-vuln) and were pure FP surface.
   - pattern: "Database.ExecuteSqlRaw(*)"
     vuln_class: sql_injection
     argument_indices: [0]

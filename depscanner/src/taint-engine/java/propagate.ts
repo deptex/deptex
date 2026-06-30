@@ -37,6 +37,9 @@ export interface PropagateJavaStats {
   loweringMs: number;
   propagationMs: number;
   totalMs: number;
+  /** True when the worklist stopped at the iteration cap before the fixpoint
+   *  — flows are PARTIAL. See PropagateResult.stats.stoppedEarly. */
+  stoppedEarly?: boolean;
 }
 
 export interface PropagateJavaResult {
@@ -121,6 +124,7 @@ export async function propagateJava(options: PropagateJavaOptions): Promise<Prop
       loweringMs,
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
+      stoppedEarly: result.stoppedEarly,
     },
     irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };

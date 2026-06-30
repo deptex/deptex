@@ -122,27 +122,58 @@ export async function updateJobStatus(
 
 /**
  * Writes a heartbeat, guarded by machine_id + run_id when supplied. Returns
- * false when the guarded update affects 0 rows (claim revoked) so the caller
- * can stop.
+ * `true` while the claim is alive, `false` when it's been revoked (the guarded
+ * update affects 0 rows — machine_id/run_id no longer ours) so the caller can
+ * stop.
+ *
+ * Query errors are handled with a bounded retry so the two failure modes don't
+ * get conflated:
+ *   - A *transient* blip (one attempt errors, the next succeeds) must NOT read
+ *     as a revoked claim — that would needlessly abort a healthy long scan.
+ *     The retry absorbs it and the eventual clean result is authoritative.
+ *   - A *sustained* error (every attempt fails) must NOT keep reporting "alive"
+ *     forever — the old code returned `true` on any error, so a wedged DB
+ *     connection masked a genuinely revoked claim (run_id rotated by recovery)
+ *     and invited duplicate concurrent runs. Once the bounded attempts are
+ *     exhausted we report `false` (ownership unconfirmable → treat as revoked).
+ *     The guarded terminal writes + the 5-min recovery cron remain the backstop.
  */
 export async function sendHeartbeat(
   supabase: Storage,
   jobId: string,
   machineId?: string | null,
-  runId?: string | null
+  runId?: string | null,
+  opts: { retries?: number; retryDelayMs?: number } = {}
 ): Promise<boolean> {
-  let q = supabase
-    .from('scan_jobs')
-    .update({ heartbeat_at: new Date().toISOString() })
-    .eq('id', jobId);
-  if (machineId != null) q = q.eq('machine_id', machineId);
-  if (runId != null) q = q.eq('run_id', runId);
-  const { data, error } = await q.select('id');
-  if (error) {
-    console.error(`[EXTRACT] sendHeartbeat failed for ${jobId}: ${error.message}`);
-    return true; // transient query error — do not signal a revoked claim
+  const retries = opts.retries ?? 2; // 1 initial attempt + 2 retries
+  const retryDelayMs = opts.retryDelayMs ?? 250;
+
+  const attempt = () => {
+    let q = supabase
+      .from('scan_jobs')
+      .update({ heartbeat_at: new Date().toISOString() })
+      .eq('id', jobId);
+    if (machineId != null) q = q.eq('machine_id', machineId);
+    if (runId != null) q = q.eq('run_id', runId);
+    return q.select('id');
+  };
+
+  for (let i = 0; i <= retries; i++) {
+    const { data, error } = await attempt();
+    if (!error) {
+      // Clean query — the row count is authoritative. 0 rows means the guarded
+      // update matched nothing (claim revoked): signal the caller to stop.
+      return Array.isArray(data) && data.length > 0;
+    }
+    console.error(
+      `[EXTRACT] sendHeartbeat attempt ${i + 1}/${retries + 1} failed for ${jobId}: ${error.message}`,
+    );
+    if (i < retries) await new Promise((r) => setTimeout(r, retryDelayMs));
   }
-  return Array.isArray(data) && data.length > 0;
+  console.error(
+    `[EXTRACT] sendHeartbeat exhausted ${retries + 1} attempts for ${jobId}; reporting claim unconfirmed`,
+  );
+  return false;
 }
 
 /**

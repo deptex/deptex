@@ -9,7 +9,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
 
 export const MAX_RETRIES = 3;
@@ -33,11 +32,65 @@ export async function retry<T>(fn: () => Promise<T>, stepName: string): Promise<
   throw new Error('Unreachable');
 }
 
-export function getSupabase(): SupabaseClient {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
-  return createClient(url, key);
+// ---------------------------------------------------------------------------
+// KEV / EPSS feed cache (in-process, TTL)
+// ---------------------------------------------------------------------------
+//
+// The CISA KEV catalog (the whole feed) and FIRST EPSS scores are global —
+// identical across orgs / projects / runs — yet dep-scan.ts used to re-download
+// the full KEV JSON and re-query EPSS on every single scan, in the hot path.
+// The depscanner has no shared Upstash client wired (cost-cap.ts holds a private
+// one for the AI cost cap only), so we cache these feeds in module-level state
+// with a TTL. A scale-to-zero worker processes jobs serially, so back-to-back
+// scans on the same machine reuse the feed instead of re-fetching it; and the
+// process exits after ~60s idle, so even a long TTL can't drift far from the
+// daily-refreshed upstream.
+
+const FEED_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h — KEV + EPSS refresh ~daily.
+
+let kevCache: { set: Set<string>; expiresAt: number } | null = null;
+
+/**
+ * Return the CISA KEV CVE-id set, calling `fetcher` only on a cold/expired
+ * cache. A fetcher that yields an empty set (transient fetch failure) is NOT
+ * cached — pinning an empty set for the TTL would suppress KEV flags on every
+ * scan this machine runs until it restarts.
+ */
+export async function getCachedKevSet(
+  fetcher: () => Promise<Set<string>>,
+  now: number = Date.now(),
+  ttlMs: number = FEED_CACHE_TTL_MS,
+): Promise<Set<string>> {
+  if (kevCache && kevCache.expiresAt > now) return kevCache.set;
+  const set = await fetcher();
+  if (set.size > 0) kevCache = { set, expiresAt: now + ttlMs };
+  return set;
+}
+
+const epssCache = new Map<string, { score: number; expiresAt: number }>();
+
+/** Cached EPSS score for a CVE, or undefined on a cold/expired entry. */
+export function getCachedEpss(cve: string, now: number = Date.now()): number | undefined {
+  const e = epssCache.get(cve);
+  if (e && e.expiresAt > now) return e.score;
+  if (e) epssCache.delete(cve);
+  return undefined;
+}
+
+/** Cache an EPSS score for a CVE. */
+export function setCachedEpss(
+  cve: string,
+  score: number,
+  now: number = Date.now(),
+  ttlMs: number = FEED_CACHE_TTL_MS,
+): void {
+  epssCache.set(cve, { score, expiresAt: now + ttlMs });
+}
+
+/** Test hook: clear both feed caches between cases. */
+export function _resetFeedCache(): void {
+  kevCache = null;
+  epssCache.clear();
 }
 
 export async function updateStep(

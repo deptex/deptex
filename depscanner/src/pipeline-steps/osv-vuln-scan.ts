@@ -101,18 +101,97 @@ interface VdrVulnerability {
   aliases?: string[];
 }
 
-/** Heuristic: CVSS string from severity[0].score, e.g. "CVSS:3.1/AV:N/...". */
-function parseCvssScoreString(cvssString: string | undefined): number | undefined {
-  if (!cvssString) return undefined;
-  // Format we want isn't in querybatch detail; OSV provides vector strings,
-  // not pre-computed scores. Leave undefined; CVSS gets re-derived from
-  // severity-string via SEVERITY_TO_CVSS in dep-scan.ts.
-  return undefined;
+// --- CVSS v3.x vector → base score (O1) -----------------------------------
+//
+// OSV advisories on cargo/maven/PYSEC frequently carry severity ONLY as a CVSS
+// vector string (`severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N/...' }]`)
+// with no database_specific.severity word. The old stub returned undefined, so
+// the PDV landed with null severity + null CVSS and dep-scan.ts/reachability.ts
+// defaulted it to 4.0/medium — burying genuine criticals. We now compute the
+// base score from the vector per the CVSS v3.1 spec (the v3.0 formula is
+// identical) so the real band survives.
+
+const CVSS3_METRICS = {
+  AV: { N: 0.85, A: 0.62, L: 0.55, P: 0.2 },
+  AC: { L: 0.77, H: 0.44 },
+  UI: { N: 0.85, R: 0.62 },
+  // PR is scope-dependent — resolved in parseCvss3Vector.
+  PR_U: { N: 0.85, L: 0.62, H: 0.27 },
+  PR_C: { N: 0.85, L: 0.68, H: 0.5 },
+  CIA: { H: 0.56, L: 0.22, N: 0 },
+} as const;
+
+/** CVSS v3.1 Roundup: round UP to one decimal place (spec appendix A). */
+function cvssRoundup(input: number): number {
+  const intInput = Math.round(input * 100000);
+  if (intInput % 10000 === 0) return intInput / 100000;
+  return (Math.floor(intInput / 10000) + 1) / 10;
+}
+
+/**
+ * Parse a CVSS v3.0/v3.1 vector string to its numeric base score [0,10].
+ * Returns undefined for non-v3 vectors (v2/v4) or malformed input — callers
+ * then fall back to the severity word.
+ */
+export function parseCvss3Vector(vector: string | undefined): number | undefined {
+  if (!vector || typeof vector !== 'string') return undefined;
+  const trimmed = vector.trim();
+  if (!/^CVSS:3\.[01]\//i.test(trimmed)) return undefined;
+
+  const parts = new Map<string, string>();
+  for (const seg of trimmed.split('/')) {
+    const [k, v] = seg.split(':');
+    if (k && v) parts.set(k.toUpperCase(), v.toUpperCase());
+  }
+
+  const av = CVSS3_METRICS.AV[parts.get('AV') as keyof typeof CVSS3_METRICS.AV];
+  const ac = CVSS3_METRICS.AC[parts.get('AC') as keyof typeof CVSS3_METRICS.AC];
+  const ui = CVSS3_METRICS.UI[parts.get('UI') as keyof typeof CVSS3_METRICS.UI];
+  const scope = parts.get('S'); // 'U' | 'C'
+  const prTable = scope === 'C' ? CVSS3_METRICS.PR_C : CVSS3_METRICS.PR_U;
+  const pr = prTable[parts.get('PR') as keyof typeof prTable];
+  const c = CVSS3_METRICS.CIA[parts.get('C') as keyof typeof CVSS3_METRICS.CIA];
+  const i = CVSS3_METRICS.CIA[parts.get('I') as keyof typeof CVSS3_METRICS.CIA];
+  const a = CVSS3_METRICS.CIA[parts.get('A') as keyof typeof CVSS3_METRICS.CIA];
+
+  // Every base metric is mandatory; a missing/unknown one means we can't score.
+  if ([av, ac, ui, pr, c, i, a].some((x) => x === undefined) || (scope !== 'U' && scope !== 'C')) {
+    return undefined;
+  }
+
+  const iss = 1 - (1 - c) * (1 - i) * (1 - a);
+  const impact = scope === 'C'
+    ? 7.52 * (iss - 0.029) - 3.25 * Math.pow(iss - 0.02, 15)
+    : 6.42 * iss;
+  if (impact <= 0) return 0;
+
+  const exploitability = 8.22 * av * ac * pr * ui;
+  const raw = scope === 'C'
+    ? 1.08 * (impact + exploitability)
+    : impact + exploitability;
+  return cvssRoundup(Math.min(raw, 10));
+}
+
+/** Map a numeric CVSS base score to the qualitative band dep-scan.ts keys on. */
+export function severityBandFromScore(score: number): 'critical' | 'high' | 'medium' | 'low' | null {
+  if (score >= 9.0) return 'critical';
+  if (score >= 7.0) return 'high';
+  if (score >= 4.0) return 'medium';
+  if (score > 0) return 'low';
+  return null;
+}
+
+/** Pick the first CVSS v3.x vector from an OSV severity array and score it. */
+function scoreFromOsvSeverity(severities: OsvSeverity[]): number | null {
+  for (const s of severities) {
+    const score = parseCvss3Vector(s?.score);
+    if (score != null) return score;
+  }
+  return null;
 }
 
 function normalizeSeverity(detail: OsvVulnDetail): { severity: string | null; score: number | null } {
   // Prefer GHSA's database_specific.severity (UPPERCASE word: LOW/MODERATE/HIGH/CRITICAL).
-  // Fall back to OSV-native severity array.
   const dbSpec = detail.database_specific?.severity;
   if (dbSpec) {
     const upper = dbSpec.trim().toUpperCase();
@@ -123,13 +202,18 @@ function normalizeSeverity(detail: OsvVulnDetail): { severity: string | null; sc
       HIGH: 'high',
       CRITICAL: 'critical',
     };
-    if (normalized[upper]) return { severity: normalized[upper], score: null };
+    if (normalized[upper]) {
+      // Carry a numeric score too when a parseable vector is present, so the
+      // VDR rating exposes both the word and the precise base score.
+      const score = Array.isArray(detail.severity) ? scoreFromOsvSeverity(detail.severity) : null;
+      return { severity: normalized[upper], score };
+    }
   }
+  // O1: no severity word — derive band + numeric score from the CVSS v3.x vector
+  // instead of returning null (which the depscore path back-filled to medium).
   if (Array.isArray(detail.severity) && detail.severity.length > 0) {
-    // OSV severity rows are vector strings (no numeric score). The depscore
-    // path back-fills numeric CVSS from the severity word; just return the
-    // vector untouched and let downstream re-classify.
-    return { severity: null, score: parseCvssScoreString(detail.severity[0].score) ?? null };
+    const score = scoreFromOsvSeverity(detail.severity);
+    if (score != null) return { severity: severityBandFromScore(score), score };
   }
   return { severity: null, score: null };
 }
@@ -247,7 +331,7 @@ function pickCanonicalId(detail: OsvVulnDetail): string {
 
 function vulnToVdrEntry(detail: OsvVulnDetail, queriedPurl: string): VdrVulnerability {
   const canonical = pickCanonicalId(detail);
-  const { severity } = normalizeSeverity(detail);
+  const { severity, score } = normalizeSeverity(detail);
   // Carry every id this advisory is known by (its OSV-native id + all aliases)
   // minus the canonical id, so the PDV's `aliases` column lets the reachability
   // classifier bridge a flow keyed on a GHSA/RUSTSEC alias to a PDV keyed on
@@ -255,10 +339,19 @@ function vulnToVdrEntry(detail: OsvVulnDetail, queriedPurl: string): VdrVulnerab
   const aliasSet = new Set<string>([detail.id, ...(Array.isArray(detail.aliases) ? detail.aliases : [])]);
   aliasSet.delete(canonical);
   const aliases = [...aliasSet].filter((a) => typeof a === 'string' && a.length > 0);
+  // O1: emit the numeric base score alongside the band so dep-scan.ts reads a
+  // precise CVSS (it prefers ratings[0].score) instead of the SEVERITY_TO_CVSS
+  // bucket. Carry a rating whenever we have either signal.
+  const ratings = severity != null || score != null
+    ? [{
+        ...(severity != null ? { severity } : {}),
+        ...(score != null ? { score } : {}),
+      }]
+    : undefined;
   return {
     id: canonical,
     description: detail.summary ?? detail.details ?? undefined,
-    ratings: severity ? [{ severity }] : undefined,
+    ratings,
     affects: buildAffectsForVdr(detail, queriedPurl),
     properties: [{ name: 'depscan:insights', value: 'osv-fallback' }],
     published: detail.published,
@@ -286,7 +379,7 @@ export async function runOsvFallback(opts: {
    * real dependency set. Unioned with whatever SBOM/extra-purls are on disk.
    */
   callerPurls?: string[];
-}): Promise<{ wrote: boolean; vulnCount: number; reason?: string }> {
+}): Promise<{ wrote: boolean; vulnCount: number; reason?: string; failed?: boolean }> {
   const { reportsDir, jobEcosystem, logger } = opts;
   const callerPurls = (opts.callerPurls ?? []).filter(
     (p): p is string => typeof p === 'string' && p.startsWith('pkg:'),
@@ -313,7 +406,8 @@ export async function runOsvFallback(opts: {
       }
     }
   } catch (e) {
-    return { wrote: false, vulnCount: 0, reason: `reportsDir not readable: ${(e as Error).message}` };
+    // O2: an unreadable reportsDir is an infra failure, not "zero vulns".
+    return { wrote: false, vulnCount: 0, failed: true, reason: `reportsDir not readable: ${(e as Error).message}` };
   }
 
   if (existingVdrHasVulns && !opts.force) {
@@ -393,8 +487,12 @@ export async function runOsvFallback(opts: {
   try {
     batchResults = await queryOsvBatch(purls);
   } catch (e) {
+    // O2: the OSV API itself failed (network error / non-2xx batch response).
+    // We HAD PURLs to query but couldn't — that is a degraded run, NOT a clean
+    // "no vulns found". Flag it so the caller can fail loudly when OSV is the
+    // sole vulnerability source instead of silently shipping zero findings.
     await logger.warn?.('vuln_scan', `OSV batch query failed: ${(e as Error).message}`);
-    return { wrote: false, vulnCount: 0, reason: `osv-batch failed: ${(e as Error).message}` };
+    return { wrote: false, vulnCount: 0, failed: true, reason: `osv-batch failed: ${(e as Error).message}` };
   }
 
   // Collect unique OSV ids, mapping each id back to the (potentially multiple)

@@ -124,8 +124,10 @@ jobs:
         working-directory: depscanner
         run: npm run type-check
 
-      # 15-stage preflight: invariants, callgraph, propagator, 8 per-language
-      # propagator suites, validate, sanitizer-audit, CVE-targeted fixtures,
+      # 23-stage preflight: invariants, callgraph, propagator, 8 per-language
+      # propagator suites, the detector suites (const-resolver, regex-literal,
+      # insecure-default, detector-flows), param-harvest + dast-param-enrich,
+      # validate, sanitizer-audit, CVE-targeted fixtures, customer-app, and the
       # recall scoreboard. Tsx-driven (not jest) because tree-sitter WASM
       # dynamic imports don't survive jest's vm-isolate sandbox without
       # --experimental-vm-modules.
@@ -139,6 +141,45 @@ jobs:
       - name: Run snapshot-runner meta-test
         working-directory: depscanner
         run: npm run test:snapshot-runner
+
+  depscanner-integration:
+    # PGLite integration suites. Each boots an in-memory PGLite, loads
+    # backend/database/schema.sql, and exercises the RPCs / migrations / storage
+    # adapter end-to-end (finalize, recover, composition, claim fairness, fleet
+    # snapshot, stats, security-summary recompute, container-scan cache, tracker
+    # links, DAST v2.1b migration, rule-generation step). Pure tsx — no Docker,
+    # no network, no API keys — so it slots in alongside the preflight job.
+    # `test:integration-pglite` chains the green suites and bails on first
+    # failure. Two suites are intentionally NOT included because they assert
+    # removed behaviour against the current schema: test:finalize (re-review,
+    # dropped in phase62_finalize_container_carryforward_perf) and
+    # test:dast-v2-1c-migration-pglite (asset_tier, dropped in
+    # phase41_drop_asset_tiers + re-review). Re-add them once their fate is
+    # decided.
+    name: Depscanner (PGLite integration)
+    needs: changes
+    if: |
+      github.event_name != 'pull_request' ||
+      needs.changes.outputs.depscanner == 'true' ||
+      needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: depscanner/package-lock.json
+
+      - name: Install depscanner dependencies
+        working-directory: depscanner
+        run: npm ci
+
+      - name: Run PGLite integration suites
+        working-directory: depscanner
+        run: npm run test:integration-pglite
 
   depscanner-fixtures:
     # End-to-end snapshot suite. Builds the Docker image once, then runs
@@ -188,7 +229,8 @@ jobs:
   # neither. Tried promoting it to PR-triggered on 2026-05-21 and it
   # failed (4/8 scans timeout/fail, 174 findings matched 0 hand-labels).
   # The gate-evaluator logic IS covered by depscanner/src/__tests__/
-  # reachability-corpus.test.ts, which runs under the `depscanner` job above.
+  # reachability-gates.test.ts, which runs under the `backend` job's jest
+  # (its config `roots` cross into depscanner/src — see the backend job note).
   # Don't add this job back until the VDB caching problem is solved upstream.
 
   fix-worker:

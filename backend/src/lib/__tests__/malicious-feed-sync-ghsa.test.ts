@@ -159,6 +159,107 @@ describe('GHSA per-ecosystem fan-out', () => {
     expect(pypiRow!.package_name).toBe('django'); // canonicalized, NOT 'Django'
   });
 
+  it('stores an npm vulnerableVersionRange as a vulnerable_range row (N4)', async () => {
+    // An npm MALWARE advisory scoped to a version RANGE must land as a single
+    // `version=null, vulnerable_range=<semver>` row so the depscanner side can
+    // flag only installed versions that SATISFY the range — instead of either
+    // a name-only flag-all (FP) or a skipped advisory (FN).
+    const upsertSpy = queryBuilder.upsert as jest.Mock;
+    upsertSpy.mockClear();
+
+    global.fetch = jest.fn(async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      if (/ecosystem:\s*NPM/.test(body.query)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              securityVulnerabilities: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    package: { ecosystem: 'NPM', name: 'evil-lib' },
+                    vulnerableVersionRange: '>= 1.0.0, < 2.0.0',
+                    advisory: {
+                      ghsaId: 'GHSA-test-npm-range',
+                      summary: 'malware',
+                      description: 'malware',
+                      severity: 'CRITICAL',
+                      withdrawnAt: null,
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        } as any;
+      }
+      return emptyGhsaPage();
+    }) as any;
+
+    const result = await runMaliciousFeedSync('ghsa');
+    expect(result.state).toBe('completed');
+
+    const upsertedRows = upsertSpy.mock.calls.flatMap((c: any[]) => c[0] ?? []);
+    const npmRow = upsertedRows.find(
+      (r: any) => r.ecosystem === 'npm' && r.package_name === 'evil-lib',
+    );
+    expect(npmRow).toBeDefined();
+    // Range row: no concrete version, a worker-evaluable semver range string.
+    expect(npmRow!.version).toBeNull();
+    expect(npmRow!.vulnerable_range).toBe('>=1.0.0 <2.0.0');
+  });
+
+  it('keeps an npm exact `= X` advisory as a concrete-version row (N4)', async () => {
+    // A single exact pin is NOT a range — it stays an exact-version row
+    // (vulnerable_range null), so exact matching is untouched.
+    const upsertSpy = queryBuilder.upsert as jest.Mock;
+    upsertSpy.mockClear();
+
+    global.fetch = jest.fn(async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      if (/ecosystem:\s*NPM/.test(body.query)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              securityVulnerabilities: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    package: { ecosystem: 'NPM', name: 'evil-pin' },
+                    vulnerableVersionRange: '= 1.2.3',
+                    advisory: {
+                      ghsaId: 'GHSA-test-npm-pin',
+                      summary: 'malware',
+                      description: 'malware',
+                      severity: 'CRITICAL',
+                      withdrawnAt: null,
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        } as any;
+      }
+      return emptyGhsaPage();
+    }) as any;
+
+    const result = await runMaliciousFeedSync('ghsa');
+    expect(result.state).toBe('completed');
+
+    const upsertedRows = upsertSpy.mock.calls.flatMap((c: any[]) => c[0] ?? []);
+    const npmRow = upsertedRows.find(
+      (r: any) => r.ecosystem === 'npm' && r.package_name === 'evil-pin',
+    );
+    expect(npmRow).toBeDefined();
+    expect(npmRow!.version).toBe('1.2.3');
+    expect(npmRow!.vulnerable_range).toBeNull();
+  });
+
   it('beats the heartbeat mid-run so the watchdog 5-min stale window does not fire', async () => {
     // Feed-sync runs of the npm OSV bulk archive routinely take >5 min;
     // the watchdog declares any `state='running'` row stuck after 5 min
