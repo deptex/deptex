@@ -67,9 +67,16 @@ sinks:
     vuln_class: auth_bypass
     argument_indices: [0, 1, 2]
     description: jwt.sign with attacker-influenced payload/secret/options — forgery surface (CVE-2022-23539 family)
+  # argument_indices: [1, 2] — NOT [0]. arg0 is the *token*: a tainted token
+  # reaching jwt.verify is the library's CORRECT, intended use (verifying an
+  # untrusted token is the whole point), so flagging it produced a 100%-FP
+  # auth_bypass on every `jwt.verify(req.query.token, secret)`. The real
+  # CVE-2022-23540/23541 shapes need the SECRET (arg1) or OPTIONS/algorithms
+  # (arg2) attacker-influenced. This also matches the [1,2] design the comment
+  # above already documents.
   - pattern: jwt.verify(*)
     vuln_class: auth_bypass
-    argument_indices: [0, 1, 2]
-    description: jwt.verify with attacker-influenced token/secret/options — algorithm-confusion / weak-key / kid forgery (CVE-2022-23540 / 23541)
+    argument_indices: [1, 2]
+    description: jwt.verify with attacker-influenced secret/options — algorithm-confusion / weak-key / kid forgery (CVE-2022-23540 / 23541)
 
 sanitizers: []

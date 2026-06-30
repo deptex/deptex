@@ -42,12 +42,13 @@ sources: []
 sinks:
   # ---------- Weak crypto — signature verification family ----------
   # CVE-2024-21484 et al. — KJUR.crypto.Signature verify accepts crafted
-  # signatures from attacker input. Wildcard receiver covers both the
-  # canonical `sig.verifySignature(...)` and the destructured shape.
-  - pattern: "*.verify(*)"
-    vuln_class: weak_crypto
-    argument_indices: []
-    description: jsrsasign KJUR.crypto.Signature.verify — tainted signature accepted (CVE-2024-21484 family)
+  # signatures from attacker input. We target the jsrsasign-SPECIFIC verify
+  # method names below rather than a bare `*.verify(*)` wildcard: that wildcard
+  # matched ANY `.verify` callee — QStash `receiver.verify`, nodemailer
+  # `transporter.verify`, node `crypto.verify`, passport strategy `verify`, etc.
+  # — none of which are jsrsasign and all of which are signature-VERIFICATION
+  # controls (the opposite of a sink). The named patterns keep recall on the
+  # real jsrsasign surface without that cross-library false-positive blast.
   - pattern: "*.verifyHexSignatureForMessage(*)"
     vuln_class: weak_crypto
     argument_indices: []
@@ -74,13 +75,10 @@ sinks:
     description: jsrsasign KJUR.jws.JWS.verifyJWT — namespaced
 
   # ---------- Weak crypto — decrypt family ----------
-  # The AI fixture for CVE-2024-21484 uses `key.decrypt(ciphertext)`.
-  # Wildcard receiver matches the `RSAKey.decrypt` / `KEYUTIL.getKey(...).
-  # decrypt` instance call.
-  - pattern: "*.decrypt(*)"
-    vuln_class: weak_crypto
-    argument_indices: []
-    description: jsrsasign RSAKey.decrypt / instance decrypt — tainted ciphertext routed into RSA decryption (CVE-2024-21484 canonical AI shape)
+  # jsrsasign RSAKey decrypt surface for CVE-2024-21484. A bare `*.decrypt(*)`
+  # wildcard matched every `.decrypt` callee in any codebase (node `crypto`
+  # decipher, libsodium, app-level helpers) — too broad. The OAEP/PKCS1 named
+  # variants below are jsrsasign-specific; the generic decrypt entry is dropped.
   - pattern: "*.decryptOAEP(*)"
     vuln_class: weak_crypto
     argument_indices: []

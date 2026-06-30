@@ -15,7 +15,9 @@ async function handleUnsubscribe(req: any, res: any) {
   if (!secret) return res.status(500).json({ error: 'Server configuration error' });
 
   try {
-    const payload = jwt.verify(token as string, secret) as { email: string; orgId: string; type: string };
+    // Pin the algorithm to HS256 (the sign side uses the default HMAC) so a
+    // forged token can't downgrade to `alg:none` or attempt algorithm confusion.
+    const payload = jwt.verify(token as string, secret, { algorithms: ['HS256'] }) as { email: string; orgId: string; type: string };
     if (payload.type !== 'unsubscribe') return res.status(400).json({ error: 'Invalid token type' });
 
     const { data: users } = await supabase.auth.admin.listUsers();
