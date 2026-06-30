@@ -6,7 +6,7 @@
  * "should I merge this?" green-light check — every assertion across the
  * engine's regression matrix has to pass before the branch is mergeable.
  *
- * Stages (in order, bail-out on first failure):
+ * Stages (23, in order, bail-out on first failure):
  *   1. invariants          — language-agnostic core invariants (53+)
  *   2. failure-modes       — empty/recursion/4-hop/8-hop/malformed-yaml
  *   3. callgraph           — TS callgraph construction
@@ -22,12 +22,14 @@
  *  13. const-resolver      — Phase 2a JS single-assignment const resolver
  *  14. regex-literal       — Phase 3.2 regex-literal detector (substring + dedup)
  *  15. insecure-default    — Phase 3.3 insecure-default detector (kwarg presence/value)
- *      detector-flows      — Flow-coercion for the three detector regimes (id/hash/shape)
- *  16. validate            — all framework specs against fixture matrix
- *  17. sanitizer-audit     — every -safe fixture exercises its sanitizer
- *  18. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
- *  19. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
- *  20. recall              — global recall % across all -vulns/ fixture pairs
+ *  16. detector-flows      — Flow-coercion for the three detector regimes (id/hash/shape)
+ *  17. param-harvest       — endpoint/param harvest used for DAST spec enrichment
+ *  18. dast-param-enrich   — DAST spec param-enrichment from harvested params
+ *  19. validate            — all framework specs against fixture matrix
+ *  20. sanitizer-audit     — every -safe fixture exercises its sanitizer
+ *  21. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
+ *  22. customer-app        — Phase 1.3a real-customer-shaped multi-file fixtures
+ *  23. recall              — global recall % across all -vulns/ fixture pairs
  *
  * Run: npm run test:taint-engine-all
  *

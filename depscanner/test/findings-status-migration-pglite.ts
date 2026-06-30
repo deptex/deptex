@@ -281,15 +281,24 @@ async function main() {
   const tl1 = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc'`);
   assert(tl1.n === 1, 'tracker link inserts');
 
+  // phase62 relaxed the uniqueness from one-per-provider to
+  // (project_id, finding_type, finding_key, provider, external_id): a finding
+  // can now carry MULTIPLE tickets from the same provider as long as each has a
+  // distinct external_id. A true duplicate (same provider + external_id) is
+  // still rejected by finding_tracker_links_unique.
+  await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','jira','10002');`);
+  const tlMulti = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc' AND provider='jira'`);
+  assert(tlMulti.n === 2, 'a second jira ticket (distinct external_id) links to the same finding');
+
   let dupLink = false;
   try {
-    await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','jira','10002');`);
+    await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','jira','10001');`);
   } catch { dupLink = true; }
-  assert(dupLink, 'a second jira link for the same finding is rejected (one per provider)');
+  assert(dupLink, 'a true duplicate (same provider + external_id) is rejected');
 
   await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key) VALUES ('${ORG}','${PROJ}','vulnerability','fk_abc','github','42','#42');`);
   const tl2 = await one(db, `SELECT count(*)::int AS n FROM finding_tracker_links WHERE finding_key='fk_abc'`);
-  assert(tl2.n === 2, 'a different provider links to the same finding');
+  assert(tl2.n === 3, 'a different provider links to the same finding (jira x2 + github)');
 
   // Data-flow findings file by flow_signature_hash, stored as finding_type=taint_flow.
   await db.exec(`INSERT INTO finding_tracker_links (organization_id, project_id, finding_type, finding_key, provider, external_id, external_key) VALUES ('${ORG}','${PROJ}','taint_flow','flowhash_1','linear','L-9','ENG-9');`);

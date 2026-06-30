@@ -5926,7 +5926,6 @@ AS $function$
       heartbeat_at = NULL,
       run_id      = gen_random_uuid()
   WHERE status = 'processing'
-    AND type = 'extraction'
     AND heartbeat_at < NOW() - INTERVAL '5 minutes'
     AND attempts < max_attempts
   RETURNING *;
