@@ -151,6 +151,123 @@ export async function runEditor(opts: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Whole-file rewrite fallback.
+//
+// A unified diff only applies if the model reproduces the original lines (the
+// `-` and context lines) closely enough to MATCH. For escape-heavy / unusual
+// content (regex literals, template strings, deep indentation) the model drops
+// a backslash or a space and no hunk matches — even the repair, shown the file,
+// keeps re-reproducing it imperfectly. Aider's answer to this is the "whole"
+// edit format: when the diff won't land, have the model emit the COMPLETE
+// updated file and write it verbatim — no matching, nothing to drift.
+// ---------------------------------------------------------------------------
+
+const MAX_WHOLE_FILE_BYTES = 60_000;
+
+const WHOLE_FILE_SYSTEM = `You are the editor of Aegis Fix Agent. You are given one file and an approved plan, and you output the COMPLETE, updated content of that file with the fix applied — every line from first to last, exactly as it should be saved.
+
+RULES:
+- Output ONLY the file content. No explanation, no diff, no commentary.
+- You MAY wrap the whole file in a single \`\`\` code fence; put nothing else outside it.
+- Reproduce the ENTIRE file. NEVER elide with "// ... rest unchanged", "// existing code", "/* … */" or similar — every original line that you are not changing must be present verbatim.
+- Make the SMALLEST change that resolves the finding. Do not refactor or reformat unrelated code.`;
+
+function buildWholeFilePrompt(plan: FixPlan, relPath: string, content: string): string {
+  const fileNotes = plan.fileChanges
+    .filter((fc) => fc.path === relPath)
+    .map((fc) => `- ${fc.description}`);
+  return [
+    `PLAN SUMMARY: ${plan.summary}`,
+    `FINDING: ${plan.finding.type}/${plan.finding.id}`,
+    '',
+    'WHAT TO CHANGE:',
+    plan.description ?? plan.summary,
+    ...fileNotes,
+    '',
+    `FILE: ${relPath}`,
+    'CURRENT CONTENT:',
+    content,
+    '',
+    `Output the complete updated content of ${relPath} now.`,
+  ].join('\n');
+}
+
+function extractFileContent(text: string): string {
+  const trimmed = (text ?? '').trim();
+  // Prefer the largest fenced block if the model wrapped the file in one.
+  const fences = [...trimmed.matchAll(/```[a-zA-Z]*\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+  if (fences.length) return fences.sort((a, b) => b.length - a.length)[0];
+  return trimmed;
+}
+
+// Heuristics that a "whole file" output is actually elided / truncated.
+const ELISION_MARKER = /(\/\/|\/\*|#)\s*(\.\.\.|rest of|remaining|existing code|unchanged|truncated|snip)/i;
+
+/**
+ * Rewrite each file the plan modifies by asking the model for its COMPLETE
+ * updated content — the robust fallback when a diff won't apply. Resets the
+ * working tree first so a partially-applied diff doesn't corrupt the input,
+ * and rejects outputs that look elided or implausibly short.
+ */
+export async function rewriteFilesWhole(opts: {
+  model: LanguageModel;
+  plan: FixPlan;
+  workDir: string;
+  repoRoot: string;
+  logger: FixLogger;
+}): Promise<{ ok: boolean; tokensUsed: number; filesChanged: string[]; error?: string }> {
+  const { model, plan, workDir, repoRoot, logger } = opts;
+
+  // Discard any partial edit the failed diff left behind, so we rewrite from the
+  // clean base file rather than a half-patched one.
+  try {
+    execSync('git checkout -- .', { ...EXEC_OPTS, cwd: repoRoot });
+  } catch {
+    /* best effort — a clean clone is usually already clean */
+  }
+
+  const targets = plan.fileChanges.filter((fc) => fc.action !== 'create' && fc.action !== 'delete');
+  if (targets.length === 0) {
+    return { ok: false, tokensUsed: 0, filesChanged: [], error: 'no modifiable files for a whole-file rewrite' };
+  }
+
+  let tokensUsed = 0;
+  const filesChanged: string[] = [];
+  for (const fc of targets) {
+    const abs = path.join(workDir, fc.path);
+    if (!fs.existsSync(abs)) return { ok: false, tokensUsed, filesChanged, error: `file not found: ${fc.path}` };
+    const original = fs.readFileSync(abs, 'utf-8');
+    if (Buffer.byteLength(original, 'utf-8') > MAX_WHOLE_FILE_BYTES) {
+      return { ok: false, tokensUsed, filesChanged, error: `${fc.path} is too large to rewrite whole` };
+    }
+
+    await logger.info('edit', `Whole-file rewrite of ${fc.path} (the diff would not apply)`);
+    let result;
+    try {
+      result = await generateText({
+        model,
+        system: WHOLE_FILE_SYSTEM,
+        prompt: buildWholeFilePrompt(plan, fc.path, original),
+      });
+    } catch (err: any) {
+      return { ok: false, tokensUsed, filesChanged, error: `whole-file rewrite call failed: ${err?.message ?? err}` };
+    }
+    tokensUsed += (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
+
+    const next = extractFileContent(result.text ?? '');
+    if (!next.trim()) return { ok: false, tokensUsed, filesChanged, error: `empty rewrite for ${fc.path}` };
+    if (ELISION_MARKER.test(next) || next.length < original.length * 0.5) {
+      return { ok: false, tokensUsed, filesChanged, error: `rewrite of ${fc.path} looks elided/truncated` };
+    }
+
+    fs.writeFileSync(abs, next.endsWith('\n') ? next : `${next}\n`);
+    filesChanged.push(fc.path);
+  }
+
+  return { ok: true, tokensUsed, filesChanged };
+}
+
 function cumulativeDiffLoc(repoRoot: string): number {
   // Lines from the working tree against the base SHA. The clone reset us to
   // baseSha at start, so HEAD is the base; staged + unstaged together is the
@@ -387,15 +504,30 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
 
   let testResult: TestResult;
   if (editorResult.applyError) {
-    testResult = {
-      passed: false,
-      exitCode: -1,
-      stdout: '',
-      stderr: `Patch from editor did not apply: ${editorResult.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
-      durationMs: 0,
-      timedOut: false,
-      noTestSuite: false,
-    };
+    // The diff wouldn't apply (escape-heavy / unusual content the model can't
+    // reproduce byte-exact). Fall back to a WHOLE-FILE rewrite before treating
+    // this as a failure — the robust path for exactly these cases.
+    checkBudget('whole-file rewrite');
+    trackToolCall('whole-file rewrite');
+    const rewrite = await rewriteFilesWhole({ model, plan, workDir, repoRoot, logger });
+    totalTokens += rewrite.tokensUsed;
+    if (rewrite.ok) {
+      lastDiff = `whole-file rewrite of ${rewrite.filesChanged.join(', ')}`;
+      checkDiffCap('whole-file rewrite');
+      await announceEdit();
+      testResult = await verify('whole-file rewrite');
+    } else {
+      await logger.warn('edit', `Whole-file rewrite fallback failed: ${rewrite.error}`);
+      testResult = {
+        passed: false,
+        exitCode: -1,
+        stdout: '',
+        stderr: `Patch from editor did not apply: ${editorResult.applyError}\nFix the hunk so it matches the CURRENT file content shown below, then re-emit the full udiff.`,
+        durationMs: 0,
+        timedOut: false,
+        noTestSuite: false,
+      };
+    }
   } else {
     checkDiffCap('editor');
     await announceEdit();
