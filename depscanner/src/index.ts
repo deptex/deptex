@@ -46,6 +46,8 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
     repo_full_name: string;
     installation_id: string;
     default_branch: string;
+    branch?: string;
+    commit_sha?: string;
     package_json_path?: string;
     ecosystem?: string;
     provider?: string;
@@ -71,6 +73,8 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
       repo_full_name: payload.repo_full_name,
       installation_id: payload.installation_id,
       default_branch: payload.default_branch,
+      branch: payload.branch,
+      commit_sha: payload.commit_sha,
       package_json_path: payload.package_json_path,
       ecosystem: payload.ecosystem,
       provider: payload.provider,

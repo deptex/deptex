@@ -72,7 +72,7 @@ export async function doClone(ctx: PipelineContext): Promise<void> {
       await updateJobPayloadCommit(supabase, job.jobId, {
         commit_sha: commitSha,
         commit_message: commitMessage.slice(0, 2000) || undefined,
-        branch: job.default_branch,
+        branch: job.branch || job.default_branch,
       });
     } catch (e) {
       // non-fatal: UI will show trigger type only for this run
