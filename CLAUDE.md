@@ -163,10 +163,11 @@ Webhooks:  /api/stripe/webhooks — signature verified (rawBodyBuffer), atomic d
            billing_stripe_webhook_events. Handles payment_intent.succeeded,
            payment_intent.payment_failed, invoice.payment_failed,
            invoice.payment_action_required, payment_method.detached, customer.deleted.
-           Cross-tenant guard on every credit. Enforcement kill switch checked on
-           credit path.
-Kill switch: DEPTEX_BILLING_ENFORCEMENT=on enables charges; anything else returns
-           enforcement_off and stops all deductions and credits.
+           Cross-tenant guard on every credit.
+Enforcement: always on. The `DEPTEX_BILLING_ENFORCEMENT` kill switch was hard-removed
+           in the monetize-AI PR — deduction + Stripe credit always run; there is no
+           off-switch. (Was an env flag gating both `canCharge`/`recordMeterEvent` and
+           the webhook credit path during the prepaid soak.)
 Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emails
            BILLING_OPS_ALERT_EMAIL if assert_balance_matches_ledger() returns any rows.
 ```
@@ -189,7 +190,6 @@ Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emai
 | `INTERNAL_API_KEY` | Protects internal/worker API endpoints. Compared in constant time via `middleware/internal-key.ts`; never log fragments. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe SDK + webhook signature verification. SDK pinned to API version 2026-04-22.dahlia (the account's current version — must be one the account accepts or every call 400s). |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Resend transactional email (sender defaults to `Deptex <noreply@deptex.dev>`). When unset, falls back to Gmail SMTP via `EMAIL_USER`/`EMAIL_PASSWORD`. |
-| `DEPTEX_BILLING_ENFORCEMENT` | Must equal `on` for charges to actually deduct + Stripe webhooks to credit. Any other value → silent no-op + log line (`enforcement_off`). |
 | `BILLING_OPS_ALERT_EMAIL` | Recipient for the daily ledger-drift cron's alert (when set). |
 | `SENTRY_DSN` | Sentry error-tracking DSN for backend + both workers. When set, errors are captured + alerted; when unset, the SDK no-ops (local dev / CI / pre-launch). `SENTRY_ENVIRONMENT` + `SENTRY_RELEASE` (git SHA) tag events. |
 | `VITE_SENTRY_DSN` | Public Sentry DSN for the frontend (build-time). `VITE_SENTRY_RELEASE` optional. |

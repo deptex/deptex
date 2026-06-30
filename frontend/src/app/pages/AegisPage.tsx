@@ -191,6 +191,8 @@ export default function AegisPage() {
                 displayName={displayName}
                 onThreadCreated={handleThreadCreated}
                 onThreadUpdated={handleThreadUpdated}
+                canManageBilling={userPermissions?.manage_billing === true}
+                userEmail={user?.email ?? null}
               />
             </>
           )}

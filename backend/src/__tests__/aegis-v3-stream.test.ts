@@ -64,10 +64,19 @@ jest.mock('../lib/aegis-v3/provider', () => ({
   getEmbeddingModel: jest.fn(),
 }));
 
+// Mock the billing ledger so we can drive the prepaid pre-flight gate per-test.
+// Default (set in beforeEach) is allow-through (a funded org) so the other tests
+// are unaffected; the cost-cap tests override canCharge to deny.
+jest.mock('../lib/billing/ledger', () => ({
+  canCharge: jest.fn(),
+  recordMeterEvent: jest.fn().mockResolvedValue({ deducted: false, newBalanceCents: null }),
+}));
+
 import aegisV3Router from '../routes/aegis-v3';
 import { saveUserMessage, saveAssistantMessage } from '../lib/aegis-v3/persistence';
 import { getOrCreateThread } from '../lib/aegis-v3/thread';
 import { writeAegisChatError } from '../lib/aegis-v3/errors';
+import { canCharge } from '../lib/billing/ledger';
 
 function makeApp() {
   const app = express();
@@ -127,6 +136,9 @@ beforeEach(() => {
   (saveAssistantMessage as jest.Mock).mockClear();
   (getOrCreateThread as jest.Mock).mockClear();
   (writeAegisChatError as jest.Mock).mockClear();
+  // Default: balance is fine. Individual tests override to drive the gate.
+  (canCharge as jest.Mock).mockReset();
+  (canCharge as jest.Mock).mockResolvedValue({ allowed: true, balanceCents: 100_000 });
 });
 
 describe('POST /api/aegis/v3/stream', () => {
@@ -184,29 +196,51 @@ describe('POST /api/aegis/v3/stream', () => {
     expect(saveCall.parts).toEqual([{ type: 'text', text: 'Hello from Aegis.' }]);
   });
 
-  it('skips the model and persists a cost_cap error message when over budget', async () => {
+  it('skips the model and persists a cost_cap error when balance is insufficient_credit', async () => {
     setOwnerWithAegisPermission();
-    const { getProviderInfoForOrg } = jest.requireMock('../lib/aegis-v3/provider');
-    getProviderInfoForOrg.mockResolvedValueOnce({
-      provider: 'mock',
-      model: 'mock-1',
-      monthlyCostCap: 0.0001, // cents-low cap so the pre-flight blocks
+    (canCharge as jest.Mock).mockResolvedValue({
+      allowed: false,
+      balanceCents: 0,
+      reason: 'insufficient_credit',
     });
-
-    // Force the cost-cap module to report blocked. We mock the monthly-cost
-    // check by intercepting the import, but jest.doMock can't be late-applied
-    // here, so instead rely on the cost guard returning allowed: true on
-    // no-Redis and skip this assertion path. (Real cost-cap behavior is covered
-    // in cost-cap.test.ts; this test just confirms the route wires it up.)
     mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('should not stream'));
 
     const res = await request(makeApp())
       .post('/api/aegis/v3/stream')
       .send({ organizationId: ORG_ID, message: 'expensive query' });
 
-    // Without Redis configured, cost-cap allows through; this test mainly
-    // verifies the wiring compiles + the route doesn't crash.
-    expect([200]).toContain(res.status);
+    expect(res.status).toBe(200);
+    // The turn is blocked: a cost_cap error is persisted and the model never runs.
+    expect(writeAegisChatError).toHaveBeenCalledWith(
+      THREAD_ID,
+      expect.objectContaining({ type: 'cost_cap' }),
+    );
+    expect(mockGetLanguageModelForOrg).not.toHaveBeenCalled();
+    expect(res.text).not.toContain('should not stream');
+  });
+
+  it('fails OPEN (streams) when canCharge cannot read the balance (db_unavailable)', async () => {
+    // A Supabase blip must NOT block a turn — failing closed would brick every
+    // org, including well-funded ones, and surface a bogus "top up" CTA.
+    setOwnerWithAegisPermission();
+    (canCharge as jest.Mock).mockResolvedValue({
+      allowed: false,
+      balanceCents: 0,
+      reason: 'db_unavailable',
+    });
+    mockGetLanguageModelForOrg.mockResolvedValue(makeStreamingModel('streamed anyway'));
+
+    const res = await request(makeApp())
+      .post('/api/aegis/v3/stream')
+      .send({ organizationId: ORG_ID, message: 'hi' });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('streamed anyway');
+    // No cost_cap error written — the block only fires for insufficient_credit.
+    const costCapCalls = (writeAegisChatError as jest.Mock).mock.calls.filter(
+      ([, payload]) => payload?.type === 'cost_cap',
+    );
+    expect(costCapCalls).toHaveLength(0);
   });
 
   it('returns 500 with a generic message when the platform provider loader rejects', async () => {

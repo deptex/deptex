@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
 import { aegisApi, type AegisMessage, type AegisThread, type MessagePart } from '../../lib/aegis-api';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
@@ -9,8 +9,15 @@ import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
 import { ChatTodos } from './ChatTodos';
 import { ThreadIcon } from './ThreadIcon';
+import type { TopUpReason } from '../billing/TopUpModal';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:3001';
+
+// Lazy so the Stripe.js module-eval load (TopUpModal → TopUpForm → stripe-client)
+// only runs when a user actually opens the top-up modal — not on every Aegis page.
+const TopUpModal = lazy(() =>
+  import('../billing/TopUpModal').then((m) => ({ default: m.TopUpModal })),
+);
 
 const AEGIS_PROMPTS = [
   "What's my security posture?",
@@ -84,6 +91,10 @@ interface ChatPaneProps {
   // here so we don't duplicate logic between sidebar and landing.
   recents?: AegisThread[];
   onSelectRecent?: (threadId: string) => void;
+  // Billing: gates the in-chat "Top up" CTA on a cost_cap block, and prefills
+  // the add-card form. Sourced from OrganizationLayout's userPermissions.
+  canManageBilling?: boolean;
+  userEmail?: string | null;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -139,6 +150,8 @@ export function ChatPane({
   onThreadUpdated,
   recents,
   onSelectRecent,
+  canManageBilling,
+  userEmail,
 }: ChatPaneProps) {
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
@@ -162,6 +175,12 @@ export function ChatPane({
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // In-chat top-up modal, opened from a cost_cap error bubble's "Top up" CTA.
+  const [topUp, setTopUp] = useState<{ open: boolean; reason: TopUpReason }>({
+    open: false,
+    reason: 'manual',
+  });
 
   // Send queue: messages submitted while a previous response is still
   // streaming get parked here and dispatched FIFO when the in-flight stream
@@ -496,6 +515,13 @@ export function ChatPane({
     }
   }, [isStreaming, isRegenerating, regenerate]);
 
+  // After a confirmed top-up, re-run the blocked turn automatically. Regenerate
+  // slices off the trailing cost_cap error bubble and re-POSTs the user's
+  // question — no re-typing — and the server re-checks the (now funded) balance.
+  const handleCredited = useCallback(() => {
+    void handleRegenerate();
+  }, [handleRegenerate]);
+
   const handleStop = useCallback(() => {
     // useChat's stop() aborts the underlying fetch but doesn't reliably fire
     // onFinish/onError, so clear the inFlight flag here. Without this, a
@@ -645,6 +671,8 @@ export function ChatPane({
               organizationId={organizationId}
               onRegenerate={i === latestErrorIdx ? handleRegenerate : undefined}
               isRegenerating={i === latestErrorIdx && isRegenerating}
+              onTopUp={(reason) => setTopUp({ open: true, reason })}
+              canManageBilling={canManageBilling}
             />
           ))}
           {showThinkingDot && (
@@ -685,6 +713,19 @@ export function ChatPane({
         </div>
       </div>
 
+      <Suspense fallback={null}>
+        {topUp.open && (
+          <TopUpModal
+            open={topUp.open}
+            reason={topUp.reason}
+            organizationId={organizationId}
+            canManageBilling={!!canManageBilling}
+            userEmail={userEmail ?? null}
+            onOpenChange={(o) => setTopUp((s) => ({ ...s, open: o }))}
+            onCredited={handleCredited}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

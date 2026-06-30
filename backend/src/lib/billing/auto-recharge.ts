@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { supabase } from '../supabase';
-import { isBillingEnforcementEnabled } from './enforcement';
 import { createTopUpInvoice, voidOpenInvoice } from './stripe-billing';
 import { resolveBillingRecipients, sendAutoRechargeFailed, sendAutoRechargeCapReached } from './alerts';
 import { captureBillingError } from '../observability/capture';
@@ -15,7 +14,6 @@ const STUCK_FLAG_RECOVERY_MS = 60 * 60 * 1000;
 export interface AutoRechargeResult {
   attempted: boolean;
   reason?:
-    | 'enforcement_off'
     | 'disabled'
     | 'above_threshold'
     | 'no_payment_method'
@@ -57,10 +55,6 @@ async function sumLast30Days(orgId: string): Promise<number> {
 }
 
 export async function maybeAutoRecharge(orgId: string): Promise<AutoRechargeResult> {
-  if (!isBillingEnforcementEnabled()) {
-    return { attempted: false, reason: 'enforcement_off' };
-  }
-
   const { data: billing, error } = await supabase
     .from('organization_billing')
     .select('*')
