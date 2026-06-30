@@ -406,7 +406,8 @@ CREATE TABLE IF NOT EXISTS public.known_malicious_packages (
   description text,
   first_seen_at timestamp with time zone NOT NULL DEFAULT now(),
   last_seen_at timestamp with time zone NOT NULL DEFAULT now(),
-  withdrawn_at timestamp with time zone
+  withdrawn_at timestamp with time zone,
+  vulnerable_range text
 );
 CREATE TABLE IF NOT EXISTS public.license_obligations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

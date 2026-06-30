@@ -240,7 +240,8 @@ export class PGLiteStorage implements Storage {
 type Filter =
   | { type: 'eq'; col: string; val: unknown }
   | { type: 'in'; col: string; vals: readonly unknown[] }
-  | { type: 'gte'; col: string; val: unknown };
+  | { type: 'gte'; col: string; val: unknown }
+  | { type: 'like'; col: string; val: string };
 
 interface BuilderState {
   table: string;
@@ -324,6 +325,11 @@ class PGLiteFilterBuilder<T> implements FilterBuilder<T> {
 
   gte(col: string, val: unknown): FilterBuilder<T> {
     this.state.filters.push({ type: 'gte', col, val });
+    return this;
+  }
+
+  like(col: string, pattern: string): FilterBuilder<T> {
+    this.state.filters.push({ type: 'like', col, val: pattern });
     return this;
   }
 
@@ -531,6 +537,8 @@ function buildWhere(
       }
     } else if (f.type === 'gte') {
       parts.push(`${f.col} >= ${bind(f.val)}`);
+    } else if (f.type === 'like') {
+      parts.push(`${f.col} LIKE ${bind(f.val)}`);
     }
   }
   return parts.join(' AND ');
