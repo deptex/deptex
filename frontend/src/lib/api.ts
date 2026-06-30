@@ -445,6 +445,27 @@ export interface ProjectFindingsBundle {
   degradedSlices: string[];
 }
 
+// Team Findings tab in one request — every finding type for every project in the
+// team, as FLAT arrays (each row stamped with project_id + project_name), plus the
+// org-wide chip maps once and the authoritative resolved projectIds (drives the
+// empty-state without a separate project-list fetch). See the team /findings route.
+export interface TeamFindingsBundle {
+  vulnerabilities: ProjectVulnerability[];
+  secrets: SecretFinding[];
+  semgrep: SemgrepFinding[];
+  iac: IaCFinding[];
+  container: ContainerFinding[];
+  malicious: MaliciousFinding[];
+  codeFlows: DataFlowFinding[];
+  dast: DastFindingDTO[];
+  baseImageRecs: BaseImageRecommendation[];
+  trackerLinks: FindingTrackerLink[];
+  groupSuppressions: FindingGroupSuppression[];
+  acknowledgements: FindingAcknowledgement[];
+  projectIds: string[];
+  degradedSlices: string[];
+}
+
 export const api = {
   _orgDataCache: new Map<string, Organization>(),
   _orgPrefetchCache: new Map<string, Promise<Organization>>(),
@@ -2439,6 +2460,15 @@ export const api = {
     projectId: string
   ): Promise<ProjectFindingsBundle> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/findings`);
+  },
+
+  // The whole team Findings tab in one request — see TeamFindingsBundle. Replaces
+  // the old 1 + N×~10 per-project browser fan-out with one server-side aggregation.
+  async getTeamFindings(
+    organizationId: string,
+    teamId: string
+  ): Promise<TeamFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/findings`);
   },
 
   async getOrganizationVulnerabilities(

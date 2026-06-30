@@ -82,6 +82,7 @@ import {
   VulnerabilityOrgSidebarExpandedContent,
 } from '../../components/security/VulnerabilityOrgSidebarExpandedContent';
 import VulnerabilityExpandableTable, { type SecurityTableRow } from '../../components/security/VulnerabilityExpandableTable';
+import { teamBundleToRows } from '../../lib/team-findings';
 import OrganizationVulnerabilitiesTableSkeleton from '../../components/security/OrganizationVulnerabilitiesTableSkeleton';
 import { supabase } from '../../lib/supabase';
 
@@ -333,7 +334,10 @@ export default function OrganizationOverviewPage() {
   const [expandedEdges, setExpandedEdges] = useState<Edge[]>([]);
   const graphNodesRef = useRef<Node[]>([]);
   const rawTeamsWithProjectsRef = useRef<OverviewTeamWithProjects[]>([]);
-  const [teamSidebarStats, setTeamSidebarStats] = useState<TeamStats | null>(null);
+  // Authoritative team project count from the findings bundle — drives the Findings
+  // empty-state ("no projects yet" vs "all clean") WITHOUT eagerly loading the full
+  // project list (that's deferred to the Projects tab).
+  const [teamSidebarProjectCount, setTeamSidebarProjectCount] = useState(0);
   const [teamSidebarMembers, setTeamSidebarMembers] = useState<TeamMember[]>([]);
   const [teamSidebarProjects, setTeamSidebarProjects] = useState<Project[]>([]);
   const [teamSidebarSecuritySummary, setTeamSidebarSecuritySummary] = useState<ProjectSecuritySummary[]>([]);
@@ -2354,44 +2358,72 @@ export default function OrganizationOverviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, orgSidebarOpen, orgSidebarRefetch]);
 
-  // Fetch team stats, members, projects, org members, roles, and team data when team sidebar opens
+  // Team sidebar open / close / switch — RESET ONLY. The header + tab bar render from
+  // selectedTeamName + a static tab list, so opening needs ZERO fetches; each tab loads
+  // its own data lazily (per-tab effects below). This replaced an eager 6-call load that
+  // fired regardless of which tab the user landed on (almost always Findings).
   useEffect(() => {
     if (!orgId || !selectedTeamId || !teamSidebarOpen || selectedTeamId === UNGROUPED_TEAM_ID) {
-      setTeamSidebarStats(null);
       setTeamSidebarMembers([]);
       setTeamSidebarProjects([]);
+      setTeamSidebarSecuritySummary([]);
       setTeamSidebarOrgMembers([]);
       setTeamSidebarRoles([]);
       setTeamSidebarPermissions(null);
       setTeamSidebarTeamData(null);
       setTeamSidebarFindingRows([]);
       setTeamSidebarBaseImageRecs([]);
+      setTeamSidebarProjectCount(0);
+      // Reset every per-tab once-per-open guard so reopening reloads.
+      teamDataLoadedForRef.current = null;
+      teamProjectsLoadedForRef.current = null;
+      teamMembersLoadedForRef.current = null;
+      teamRolesLoadedForRef.current = null;
       return;
     }
-    let cancelled = false;
-    // Clear stale data from previous team immediately
+    // Clear stale findings/error immediately on team switch; the per-tab effects refill.
     setTeamSidebarFindingRows([]);
     setTeamSidebarBaseImageRecs([]);
-    setTeamSidebarDataLoading(true);
     setTeamSidebarError(false);
-    // Note: getOrganizationMembers is NOT loaded here — it only feeds the Add-Member dialog, so it's
-    // deferred to when the Members tab opens (see the effect below). Most sidebar opens land on the
-    // Findings tab and never need it, and it's the heaviest call (per-user auth lookups).
+  }, [orgId, selectedTeamId, teamSidebarOpen, teamSidebarRefetch]);
+
+  // getTeam (team row + the caller's team permissions) backs the Projects/Members/Settings
+  // tabs (Create-button gate, user_org_rank, role management) but NOT the default Findings
+  // tab. Load it lazily, once per open, shared by those three effects — tabs are mutually
+  // exclusive so the ref-guard (not a shared promise) is enough to avoid a double fetch.
+  const teamDataLoadedForRef = useRef<string | null>(null);
+  const teamProjectsLoadedForRef = useRef<string | null>(null);
+  const teamMembersLoadedForRef = useRef<string | null>(null);
+  const teamRolesLoadedForRef = useRef<string | null>(null);
+  const ensureTeamData = useCallback(async () => {
+    if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    if (teamDataLoadedForRef.current === selectedTeamId) return;
+    teamDataLoadedForRef.current = selectedTeamId;
+    try {
+      const teamData = await api.getTeam(orgId, selectedTeamId);
+      setTeamSidebarTeamData(teamData);
+      setTeamSidebarPermissions(teamData.permissions || null);
+    } catch {
+      teamDataLoadedForRef.current = null; // allow a later tab visit to retry
+    }
+  }, [orgId, selectedTeamId]);
+
+  // Projects tab — the team's project list + per-project security summary. Lazy + once-per-open.
+  useEffect(() => {
+    if (!teamSidebarOpen) return;
+    if (teamSidebarTab !== 'projects' || !orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    const loadKey = `${selectedTeamId}:${teamSidebarRefetch}`;
+    if (teamProjectsLoadedForRef.current === loadKey) return;
+    teamProjectsLoadedForRef.current = loadKey;
+    let cancelled = false;
+    setTeamSidebarDataLoading(true);
+    void ensureTeamData();
     Promise.all([
-      api.getTeamStats(orgId, selectedTeamId),
-      api.getTeamMembers(orgId, selectedTeamId),
       api.getProjects(orgId),
-      api.getTeamRoles(orgId, selectedTeamId),
-      api.getTeam(orgId, selectedTeamId),
       api.getTeamSecuritySummary(orgId, selectedTeamId),
     ])
-      .then(([stats, members, allProjects, roles, teamData, securitySummary]) => {
+      .then(([allProjects, securitySummary]) => {
         if (cancelled) return;
-        setTeamSidebarStats(stats);
-        setTeamSidebarMembers(members);
-        setTeamSidebarRoles(roles);
-        setTeamSidebarTeamData(teamData);
-        setTeamSidebarPermissions(teamData.permissions || null);
         const forTeam = allProjects.filter(
           (p: Project) => p.team_ids?.includes(selectedTeamId) || p.owner_team_id === selectedTeamId
         );
@@ -2399,24 +2431,46 @@ export default function OrganizationOverviewPage() {
         setTeamSidebarSecuritySummary(securitySummary.projects || []);
       })
       .catch(() => {
-        if (!cancelled) {
-          setTeamSidebarStats(null);
-          setTeamSidebarMembers([]);
-          setTeamSidebarProjects([]);
-          setTeamSidebarSecuritySummary([]);
-          setTeamSidebarOrgMembers([]);
-          setTeamSidebarRoles([]);
-          setTeamSidebarPermissions(null);
-          setTeamSidebarTeamData(null);
-          // Surface the failure — empty state with no error reads as "this team has no data".
-          setTeamSidebarError(true);
-        }
+        if (!cancelled) { teamProjectsLoadedForRef.current = null; setTeamSidebarError(true); }
       })
-      .finally(() => {
-        if (!cancelled) setTeamSidebarDataLoading(false);
-      });
+      .finally(() => { if (!cancelled) setTeamSidebarDataLoading(false); });
     return () => { cancelled = true; };
-  }, [orgId, selectedTeamId, teamSidebarOpen, teamSidebarRefetch]);
+  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, teamSidebarRefetch, ensureTeamData]);
+
+  // Members tab — the team's member list. Lazy + once-per-open. (Org members for the
+  // Add-Member dialog stay in their own even-lazier effect below.)
+  useEffect(() => {
+    if (!teamSidebarOpen) return;
+    if (teamSidebarTab !== 'members' || !orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    const loadKey = `${selectedTeamId}:${teamSidebarRefetch}`;
+    if (teamMembersLoadedForRef.current === loadKey) return;
+    teamMembersLoadedForRef.current = loadKey;
+    let cancelled = false;
+    setTeamSidebarDataLoading(true);
+    void ensureTeamData();
+    api.getTeamMembers(orgId, selectedTeamId)
+      .then((members) => { if (!cancelled) setTeamSidebarMembers(members); })
+      .catch(() => { if (!cancelled) { teamMembersLoadedForRef.current = null; setTeamSidebarError(true); } })
+      .finally(() => { if (!cancelled) setTeamSidebarDataLoading(false); });
+    return () => { cancelled = true; };
+  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, teamSidebarRefetch, ensureTeamData]);
+
+  // Settings tab — the team's roles (+ team data via ensureTeamData). Lazy + once-per-open.
+  useEffect(() => {
+    if (!teamSidebarOpen) return;
+    if (teamSidebarTab !== 'settings' || !orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
+    const loadKey = `${selectedTeamId}:${teamSidebarRefetch}`;
+    if (teamRolesLoadedForRef.current === loadKey) return;
+    teamRolesLoadedForRef.current = loadKey;
+    let cancelled = false;
+    setTeamSidebarDataLoading(true);
+    void ensureTeamData();
+    api.getTeamRoles(orgId, selectedTeamId)
+      .then((roles) => { if (!cancelled) setTeamSidebarRoles(roles); })
+      .catch(() => { if (!cancelled) { teamRolesLoadedForRef.current = null; setTeamSidebarError(true); } })
+      .finally(() => { if (!cancelled) setTeamSidebarDataLoading(false); });
+    return () => { cancelled = true; };
+  }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, teamSidebarRefetch, ensureTeamData]);
 
   // Org members feed only the Add-Member dialog's "available people" list — load them lazily when
   // the Members tab is opened (the default Findings tab never needs them). By the time the user
@@ -2441,89 +2495,10 @@ export default function OrganizationOverviewPage() {
     return () => { cancelled = true; };
   }, [teamSidebarOpen, teamSidebarTab, orgId, selectedTeamId, toast]);
 
-  // Load every finding type for ONE project into unified table rows — the exact
-  // same set the project Findings tab assembles (SCA + secrets + semgrep + IaC +
-  // container + DAST + malicious), so a team is just the union of its projects.
-  // Each row is stamped with project_id/project_name so the collapses (container,
-  // IaC hardening) group per-project and the table can attribute each finding.
-  const loadProjectFindingRows = useCallback(async (
-    oid: string,
-    project: { id: string; name?: string | null },
-  ): Promise<{ rows: SecurityTableRow[]; baseImageRecs: BaseImageRecommendation[] }> => {
-    const pid = project.id;
-    const projectName = project.name ?? undefined;
-    const [vulnsR, secretsR, semgrepR, iacR, containerR, maliciousR, recsR] = await Promise.allSettled([
-      api.getProjectVulnerabilities(oid, pid),
-      api.getProjectSecretFindings(oid, pid, 1, 100),
-      api.getProjectSemgrepFindings(oid, pid, 1, 100),
-      api.getProjectIaCFindings(oid, pid, { perPage: 100, status: 'open' }),
-      api.getProjectContainerFindings(oid, pid, { perPage: 100, status: 'open' }),
-      api.maliciousFindings.list(oid, pid, 1, 100),
-      api.getBaseImageRecommendations(oid, pid),
-    ]);
-
-    const rows: SecurityTableRow[] = [];
-
-    // SCA: one row per (dependency, CVE), keeping the highest depscore — mirrors
-    // the project tab's dedupedProjectVulnerabilities.
-    if (vulnsR.status === 'fulfilled') {
-      const vulns = (vulnsR.value ?? []) as ProjectVulnerability[];
-      const rowScore = (v: ProjectVulnerability) => {
-        const c = v.contextual_depscore;
-        if (c != null && Number.isFinite(Number(c))) return Number(c);
-        const d = v.depscore;
-        if (d != null && Number.isFinite(Number(d))) return Number(d);
-        return -1;
-      };
-      const byKey = new Map<string, ProjectVulnerability>();
-      for (const v of vulns) {
-        const key = `${v.dependency_id}:${v.osv_id}`;
-        const prev = byKey.get(key);
-        if (!prev || rowScore(v) > rowScore(prev)) byKey.set(key, { ...v, project_name: projectName ?? v.project_name });
-      }
-      for (const v of byKey.values()) rows.push({ type: 'vulnerability', data: v });
-    }
-    if (secretsR.status === 'fulfilled') {
-      for (const s of secretsR.value?.data ?? []) rows.push({ type: 'secret', data: { ...s, project_id: pid, project_name: projectName } });
-    }
-    if (semgrepR.status === 'fulfilled') {
-      for (const s of semgrepR.value?.data ?? []) rows.push({ type: 'semgrep', data: { ...s, project_id: pid, project_name: projectName } });
-    }
-    if (iacR.status === 'fulfilled') {
-      for (const f of iacR.value?.data ?? []) rows.push({ type: 'iac', data: { ...f, project_id: pid, project_name: projectName } });
-    }
-    if (containerR.status === 'fulfilled') {
-      for (const f of containerR.value?.data ?? []) rows.push({ type: 'container', data: { ...f, project_id: pid, project_name: projectName } });
-    }
-    if (maliciousR.status === 'fulfilled') {
-      for (const f of maliciousR.value?.data ?? []) rows.push({ type: 'malicious', data: { ...f, project_id: pid, project_name: projectName } });
-    }
-    // DAST is per-target: resolve the latest scan's target, then load its findings.
-    try {
-      const jobs = await api.getDastJobs(pid, { limit: 5 });
-      const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
-      const dast = targetId ? await api.getDastFindings(pid, { limit: 200, targetId }) : [];
-      for (const f of dast) rows.push({ type: 'dast', data: { ...f, project_name: projectName } });
-    } catch { /* no DAST target for this project */ }
-
-    // First-party data-flow findings — the taint engine's source→sink paths in
-    // the project's own code. One cheap request; empty for most projects.
-    try {
-      const cf = await api.getCodeFlowFindings(oid, pid);
-      for (const f of cf.data ?? []) rows.push({ type: 'taint_flow', data: { ...f, project_name: projectName } });
-    } catch { /* no code-flow findings for this project */ }
-
-    const baseImageRecs = recsR.status === 'fulfilled' ? (recsR.value.recommendations ?? []) : [];
-    return { rows, baseImageRecs };
-  }, []);
-
-  // Load the team Findings tab: fan out loadProjectFindingRows across every project
-  // in the team and concat. The team project list comes from the security-summary
-  // RPC (authoritative + race-free), so it covers projects whose only findings are
-  // Tracker links across the org — drives the linked-ticket chips on findings.
-  // One org-wide fetch covers both the project panel and the team sidebar (each
-  // row matches by its own project_id). Tracker links + group-level Ignore for
-  // the collapsed rows ride together so the status cell has both in one pass.
+  // Tracker links / group-suppressions / acknowledgements feed the findings tables.
+  // Initial values now ride along in the team findings bundle (loadTeamFindings sets
+  // them); this standalone refresh runs only AFTER a mutation (ticket filed / ignore /
+  // acknowledgement) so the status cell updates without a full findings reload.
   const loadTrackerLinks = useCallback(async () => {
     if (!orgId) return;
     // Two INDEPENDENT fetches — a failure in one (e.g. a route the running
@@ -2534,16 +2509,13 @@ export default function OrganizationOverviewPage() {
     api.getOrgAcknowledgements(orgId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [orgId]);
 
-  // Tracker links / group-suppressions / acknowledgements feed the sidebar findings tables.
-  // The PROJECT findings tab now receives them inside the one findings bundle (see the open
-  // effect below), so this standalone fetch only runs for the TEAM sidebar — whose per-project
-  // fan-out isn't bundled yet.
-  useEffect(() => {
-    if (!teamSidebarOpen) return;
-    void loadTrackerLinks();
-  }, [teamSidebarOpen, loadTrackerLinks]);
-
-  // IaC/container/DAST — not just ones with SCA rows.
+  // Load the team Findings tab in ONE request. The server fans every finding type
+  // across every team project (bounded per project, each row tagged with
+  // project_id/project_name), and returns the org-wide chip maps + the authoritative
+  // projectIds alongside — replacing the old 1 + N×~10 browser fan-out
+  // (getTeamSecuritySummary → loadProjectFindingRows per project). teamBundleToRows
+  // maps the bundle to the unified table rows (SCA deduped by
+  // project_id:dependency_id:osv_id so the same CVE in two projects stays two rows).
   const loadTeamFindings = useCallback(async () => {
     if (!orgId || !selectedTeamId || selectedTeamId === UNGROUPED_TEAM_ID) return;
     setTeamSidebarFindingsLoading(true);
@@ -2551,31 +2523,15 @@ export default function OrganizationOverviewPage() {
     setTeamSidebarFindingRows([]);
     setTeamSidebarBaseImageRecs([]);
     try {
-      const summary = await api
-        .getTeamSecuritySummary(orgId, selectedTeamId)
-        .catch(() => ({ projects: [] as ProjectSecuritySummary[] }));
-      const teamProjects = (summary.projects ?? []).map((p) => ({ id: p.project_id, name: p.project_name }));
-      if (teamProjects.length === 0) {
-        setTeamSidebarFindingRows([]);
-        setTeamSidebarBaseImageRecs([]);
-        return;
-      }
-      // Fan out across the team's projects, then swap the whole set in once. Appending
-      // each project's rows as it landed made the list visibly grow and grow ("it keeps
-      // loading more and more"); with the table paginated, settling first and rendering a
-      // stable, complete list reads better — the animated skeleton covers the wait. A
-      // single project failing is swallowed so it can't blank the team.
-      const collectedRows: SecurityTableRow[] = [];
-      const collectedRecs: BaseImageRecommendation[] = [];
-      await Promise.all(teamProjects.map(async (p) => {
-        try {
-          const { rows, baseImageRecs } = await loadProjectFindingRows(orgId, p);
-          if (rows.length) collectedRows.push(...rows);
-          if (baseImageRecs.length) collectedRecs.push(...baseImageRecs);
-        } catch { /* one project's findings failing shouldn't blank the rest of the team */ }
-      }));
-      setTeamSidebarFindingRows(collectedRows);
-      setTeamSidebarBaseImageRecs(collectedRecs);
+      const bundle = await api.getTeamFindings(orgId, selectedTeamId);
+      setTeamSidebarProjectCount(bundle.projectIds?.length ?? 0);
+      // Chip maps ride along in the bundle (org-wide, fetched once server-side).
+      setTrackerLinks(bundle.trackerLinks ?? []);
+      setGroupSuppressions(bundle.groupSuppressions ?? []);
+      setAcknowledgements(bundle.acknowledgements ?? []);
+      const { rows, baseImageRecs } = teamBundleToRows(bundle);
+      setTeamSidebarFindingRows(rows);
+      setTeamSidebarBaseImageRecs(baseImageRecs);
     } catch {
       setTeamSidebarFindingsError(true);
       setTeamSidebarFindingRows([]);
@@ -2583,7 +2539,7 @@ export default function OrganizationOverviewPage() {
     } finally {
       setTeamSidebarFindingsLoading(false);
     }
-  }, [orgId, selectedTeamId, loadProjectFindingRows]);
+  }, [orgId, selectedTeamId]);
 
   // Findings load once per team per sidebar-open. Without the ref, swapping to another tab and
   // back re-fires the effect (teamSidebarTab is a dep) and loadTeamFindings blanks the list before
@@ -3425,7 +3381,7 @@ export default function OrganizationOverviewPage() {
                         </div>
                         <h3 className="text-base font-medium text-foreground mb-1">No findings</h3>
                         <p className="text-sm text-foreground-secondary max-w-[240px]">
-                          {teamSidebarProjects.length === 0
+                          {teamSidebarProjectCount === 0
                             ? "This team doesn't have any projects yet."
                             : "All projects in this team are clean — no open findings across any scanner."}
                         </p>
