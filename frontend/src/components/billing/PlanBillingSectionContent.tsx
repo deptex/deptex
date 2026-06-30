@@ -140,18 +140,26 @@ function DepositsTable({ organizationId, refreshKey = 0 }: { organizationId: str
   }, [organizationId, refreshKey]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+    <div
+      className={`overflow-hidden rounded-lg border border-border bg-background-card${
+        deposits == null ? ' pointer-events-none select-none' : ''
+      }`}
+      // While loading, fade the whole card downward (like the app's other loading
+      // tables) so the rows dissolve instead of sitting in a solid-bordered box.
+      style={
+        deposits == null
+          ? {
+              maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+            }
+          : undefined
+      }
+    >
       <div className="border-b border-border bg-background-card-header px-5 py-3">
         <p className="text-sm font-semibold text-foreground">Deposits</p>
       </div>
       {deposits == null ? (
-        <div
-          className="divide-y divide-border pointer-events-none select-none"
-          style={{
-            maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
-          }}
-        >
+        <div className="divide-y divide-border">
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="grid grid-cols-[2fr_1fr_1fr] items-center gap-4 px-5 py-4">
               <div className="space-y-2">
