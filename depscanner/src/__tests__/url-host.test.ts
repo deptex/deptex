@@ -1,4 +1,4 @@
-import { urlHeadIsConstant } from './url-host';
+import { urlHeadIsConstant } from '../taint-engine/url-host';
 
 const noResolve = () => undefined;
 
