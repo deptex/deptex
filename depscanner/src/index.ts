@@ -2,8 +2,10 @@ import 'dotenv/config';
 import './instrument';
 import * as Sentry from '@sentry/node';
 import { captureInfraError } from './observability/capture';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
+// Direct adapter import (not the ./storage barrel) so the worker doesn't load
+// the local PGLite backend at startup.
+import { createSupabaseStorage } from './storage/supabase';
 import { runPipeline } from './pipeline';
 import { ScanFailedError } from './scan-errors';
 import { runDastPipeline } from './dast/pipeline';
@@ -33,13 +35,6 @@ const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
 // threading it through every call. Null in CLI / test paths that never run the
 // worker loop.
 let watchdog: WorkerWatchdog | null = null;
-
-function getSupabase(): Storage {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
-  return createClient(url, key) as unknown as Storage;
-}
 
 async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
   const payload = job.payload as {
@@ -245,7 +240,7 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
 }
 
 async function runWorker(): Promise<void> {
-  const supabase = getSupabase();
+  const supabase = createSupabaseStorage();
   // Startup probe: derive supported types ONCE so DAST is gated off cleanly
   // when DAST_CREDENTIAL_KEY is absent. Per plan §Task 7 — silent-anonymous-
   // fallback is the non-negotiable invariant; if the key is missing we want

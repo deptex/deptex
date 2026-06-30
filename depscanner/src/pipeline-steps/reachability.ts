@@ -106,6 +106,7 @@ export async function doReachabilityAndEpd(
     runId,
     astParsedSuccessfully,
     graphTrusted,
+    importance,
   } = ctx;
 
   // v3 precision — persist project_dependencies.callgraph_reached for every
@@ -213,17 +214,10 @@ export async function doReachabilityAndEpd(
       .eq('extraction_run_id', runId);
 
     if (pdvsForRescore && pdvsForRescore.length > 0) {
-      const { data: projForImp } = await supabase
-        .from('projects')
-        .select('importance')
-        .eq('id', projectId)
-        .single();
-      let rscoreImportance = 1.0;
-      const rawImp = (projForImp as { importance?: number | string } | null)?.importance;
-      if (rawImp != null) {
-        const parsed = typeof rawImp === 'string' ? Number(rawImp) : rawImp;
-        if (Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 2.0) rscoreImportance = parsed;
-      }
+      // Importance was already hydrated onto ctx by loadImportance() before any
+      // depscore-touching step ran (pipeline.ts), so reuse it rather than
+      // re-querying projects.importance a second time here.
+      const rscoreImportance = importance;
 
       // SC1: join project_dependencies so the rescore can thread directness +
       // dev-scope into calculateDepscore (mirrors dep-scan.ts's scoreVulnRow).

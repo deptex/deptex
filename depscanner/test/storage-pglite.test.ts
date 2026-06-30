@@ -244,6 +244,45 @@ async function main() {
     assert(data?.path.endsWith('test.txt'), 'returned path ends in test.txt');
   }
 
+  // --- P8: type-aware jsonb vs native-array parameter encoding ---
+  // A primitive string[] bound for a jsonb column must be JSON-encoded
+  // (["a","b"]), not emitted as the native-array literal {a,b} the type-blind
+  // heuristic produced — which Postgres rejects for jsonb. A real text[] column
+  // must still bind natively.
+  console.log('\nType-aware array encoding (jsonb string[] vs text[])...');
+  {
+    await storage.db.exec(
+      `CREATE TABLE jsonb_array_probe (id text PRIMARY KEY, tags jsonb, names text[]);`,
+    );
+    // The column-type map is built at boot; refresh so this post-boot table is
+    // visible to the binder.
+    await storage.refreshColumnTypes();
+
+    const { error: insErr } = await storage.from('jsonb_array_probe').insert({
+      id: 'probe-1',
+      tags: ['alpha', 'beta', 'gamma'], // jsonb column holding a primitive string[]
+      names: ['x', 'y'], // native text[] column
+    });
+    assert(insErr === null, `insert jsonb string[] succeeds (error=${insErr?.message ?? 'null'})`);
+
+    const { data: probe, error: selErr } = await storage
+      .from('jsonb_array_probe')
+      .select('tags, names')
+      .eq('id', 'probe-1')
+      .single();
+    assert(selErr === null, `select probe row (error=${selErr?.message ?? 'null'})`);
+    const tags = (probe as any)?.tags;
+    const names = (probe as any)?.names;
+    assert(
+      Array.isArray(tags) && tags.join(',') === 'alpha,beta,gamma',
+      `jsonb string[] round-trips as a JSON array (got ${JSON.stringify(tags)})`,
+    );
+    assert(
+      Array.isArray(names) && names.join(',') === 'x,y',
+      `text[] still round-trips natively (got ${JSON.stringify(names)})`,
+    );
+  }
+
   await storage.close();
 
   console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`} in ${Date.now() - t0}ms`);

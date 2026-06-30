@@ -40,6 +40,9 @@ import {
   stripAnsi,
   updateStep,
   clearVdbVolumeForRecovery,
+  getCachedKevSet,
+  getCachedEpss,
+  setCachedEpss,
 } from '../pipeline-helpers';
 import type { PipelineContext, PipelineLogger } from '../pipeline-types';
 import { runOsvFallback, osvFallbackMode } from './osv-vuln-scan';
@@ -698,16 +701,23 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         pdById.set(r.id, { is_direct: r.is_direct, environment: r.environment });
       }
 
-      const kevCveSet = new Set<string>();
-      try {
-        const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', { signal: AbortSignal.timeout(15000) });
-        if (kevRes.ok) {
-          const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
-          for (const entry of kevJson.vulnerabilities ?? []) {
-            if (entry.cveID) kevCveSet.add(entry.cveID);
+      // Cached: the full CISA KEV catalog is global + daily-refreshed, so a
+      // 6h in-process cache avoids re-downloading it on every scan (see
+      // getCachedKevSet). A transient fetch failure yields an empty set and is
+      // not cached, so the next scan retries.
+      const kevCveSet = await getCachedKevSet(async () => {
+        const set = new Set<string>();
+        try {
+          const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', { signal: AbortSignal.timeout(15000) });
+          if (kevRes.ok) {
+            const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
+            for (const entry of kevJson.vulnerabilities ?? []) {
+              if (entry.cveID) set.add(entry.cveID);
+            }
           }
-        }
-      } catch { /* non-fatal */ }
+        } catch { /* non-fatal */ }
+        return set;
+      });
 
       const vulnRows: Array<{
         project_id: string; project_dependency_id: string; osv_id: string;
@@ -804,9 +814,18 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       const cvesToFetch = [...new Set(vulnRows.map((r) => r.osv_id).filter((id) => CVE_ID_RE.test(id)))];
       if (cvesToFetch.length > 0) {
         const epssByCve = new Map<string, number>();
+        // Seed from the in-process EPSS cache; only query FIRST for CVEs we
+        // haven't scored recently (see getCachedEpss). EPSS refreshes ~daily, so
+        // the 6h TTL keeps the saved network round-trips fresh enough.
+        const uncached: string[] = [];
+        for (const cve of cvesToFetch) {
+          const cached = getCachedEpss(cve);
+          if (cached != null) epssByCve.set(cve, cached);
+          else uncached.push(cve);
+        }
         const EPSS_BATCH = 80;
-        for (let i = 0; i < cvesToFetch.length; i += EPSS_BATCH) {
-          const batch = cvesToFetch.slice(i, i + EPSS_BATCH);
+        for (let i = 0; i < uncached.length; i += EPSS_BATCH) {
+          const batch = uncached.slice(i, i + EPSS_BATCH);
           try {
             const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`, { signal: AbortSignal.timeout(15000) });
             if (epssRes.ok) {
@@ -814,7 +833,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
               for (const row of json.data ?? []) {
                 if (row?.cve && row?.epss != null) {
                   const score = parseFloat(row.epss);
-                  if (Number.isFinite(score)) epssByCve.set(row.cve, score);
+                  if (Number.isFinite(score)) {
+                    epssByCve.set(row.cve, score);
+                    setCachedEpss(row.cve, score);
+                  }
                 }
               }
             }

@@ -2,21 +2,14 @@ import simpleGit from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { createClient } from '@supabase/supabase-js';
+import { createSupabaseStorage } from './storage/supabase';
 import { cloneRepository, cleanupRepository, checkoutCommit } from './github';
 import type { ExtractionJob } from './pipeline';
 
 export { cloneRepository, cleanupRepository };
 
-function getSupabase() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
-  return createClient(url, key);
-}
-
 async function getIntegrationToken(integrationId: string): Promise<{ access_token: string; provider: string; metadata: any }> {
-  const supabase = getSupabase();
+  const supabase = createSupabaseStorage();
   const { data, error } = await supabase
     .from('organization_integrations')
     .select('access_token, provider, metadata')

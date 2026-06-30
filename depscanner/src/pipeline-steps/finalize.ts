@@ -24,7 +24,6 @@
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
 import { updateStep } from '../pipeline-helpers';
-import { updateJobStatus } from '../job-db';
 import type { ScannerSummary } from '../scanners/orchestrator';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -125,9 +124,29 @@ export async function doFinalize(
     .eq('project_id', projectId);
 
   // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
+  // Guarded: only flip a still-in-flight ('processing') job to 'completed'. The
+  // prior unguarded write would silently overwrite a user cancel landing during
+  // finalize — cancel sets status='cancelled' on this row WITHOUT rotating
+  // machine_id/run_id, so a machine/run guard can't catch it; a status guard
+  // can. A recovery requeue (status→'queued') is left intact for the same
+  // reason. The worker's post-pipeline completion write makes the equivalent
+  // isJobCancelled check, so the two stay consistent.
   const didUpdateJob = status === 'ready' && !!job.jobId;
   if (didUpdateJob) {
-    await updateJobStatus(supabase, job.jobId!, undefined, undefined, 'completed');
+    const { data: marked, error: markErr } = await supabase
+      .from('scan_jobs')
+      .update({ status: 'completed', error: null, completed_at: new Date().toISOString() })
+      .eq('id', job.jobId!)
+      .eq('status', 'processing')
+      .select('id');
+    if (markErr) {
+      await log.warn('finalize', `scan job completion write failed: ${markErr.message}`);
+    } else if (!Array.isArray(marked) || marked.length === 0) {
+      await log.warn(
+        'finalize',
+        'Scan job no longer in-flight (cancelled or requeued during finalize) — left its status untouched',
+      );
+    }
   }
 
   await supabase

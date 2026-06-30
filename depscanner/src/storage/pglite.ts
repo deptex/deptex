@@ -161,7 +161,32 @@ export async function createPGLiteStorage(
     await db.exec('SET check_function_bodies = off;\n' + stripPgliteIncompatible(schemaSql));
   }
 
-  return new PGLiteStorage(db, outputDir);
+  const columnTypes = await loadColumnTypes(db);
+  return new PGLiteStorage(db, outputDir, columnTypes);
+}
+
+/**
+ * Introspect `information_schema.columns` once at boot so the parameter binder
+ * can pick native-array vs jsonb encoding from the column's *actual* Postgres
+ * type instead of guessing from the JS value's shape. Keyed `table.column` →
+ * `data_type` ('jsonb', 'ARRAY', 'text', ...). Best-effort: on failure the
+ * binder falls back to the value-shape heuristic.
+ */
+async function loadColumnTypes(db: PGlite): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const res = await db.query<{ table_name: string; column_name: string; data_type: string }>(
+      `SELECT table_name, column_name, data_type
+         FROM information_schema.columns
+        WHERE table_schema = 'public'`,
+    );
+    for (const r of res.rows) {
+      map.set(`${r.table_name}.${r.column_name}`, r.data_type);
+    }
+  } catch {
+    /* best-effort — heuristic fallback in normalizeValue */
+  }
+  return map;
 }
 
 /** Public class so callers can reach .close() / .db / .outputDir for tests. */
@@ -171,12 +196,29 @@ export class PGLiteStorage implements Storage {
   constructor(
     public readonly db: PGlite,
     public readonly outputDir: string,
+    /**
+     * `table.column` → Postgres data_type, used by the binder to encode jsonb
+     * columns as JSON text even when the JS value is a primitive array. Same
+     * Map instance is handed to every builder, so refreshColumnTypes() updates
+     * propagate to in-flight call sites.
+     */
+    private readonly columnTypes: Map<string, string> = new Map(),
   ) {
     this.storage = new PGLiteStorageBuckets(outputDir);
   }
 
   from<T = any>(table: string): QueryBuilder<T> {
-    return new PGLiteQueryBuilder<T>(this.db, table);
+    return new PGLiteQueryBuilder<T>(this.db, table, this.columnTypes);
+  }
+
+  /**
+   * Re-introspect column types (for tables created after boot, e.g. in tests).
+   * Mutates the existing Map in place so builders holding the reference see it.
+   */
+  async refreshColumnTypes(): Promise<void> {
+    const fresh = await loadColumnTypes(this.db);
+    this.columnTypes.clear();
+    for (const [k, v] of fresh) this.columnTypes.set(k, v);
   }
 
   rpc<T = any>(
@@ -212,16 +254,19 @@ interface BuilderState {
   filters: Filter[];
   limit?: number;
   single?: 'single' | 'maybeSingle';
+  /** `table.column` → data_type, for type-aware parameter encoding. */
+  columnTypes?: Map<string, string>;
 }
 
 class PGLiteQueryBuilder<T> implements QueryBuilder<T> {
   constructor(
     private readonly db: PGlite,
     private readonly table: string,
+    private readonly columnTypes: Map<string, string> = new Map(),
   ) {}
 
   private freshState(): BuilderState {
-    return { table: this.table, op: null, filters: [] };
+    return { table: this.table, op: null, filters: [], columnTypes: this.columnTypes };
   }
 
   select(columns: string = '*'): FilterBuilder<T> {
@@ -356,8 +401,9 @@ class PGLiteFilterBuilder<T> implements FilterBuilder<T> {
 
 function buildSql(s: BuilderState): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
-  const bind = (v: unknown): string => {
-    params.push(normalizeValue(v));
+  const bind = (v: unknown, col?: string): string => {
+    const pgType = col ? s.columnTypes?.get(`${s.table}.${col}`) : undefined;
+    params.push(normalizeValue(v, pgType));
     return `$${params.length}`;
   };
 
@@ -385,7 +431,7 @@ function buildSql(s: BuilderState): { sql: string; params: unknown[] } {
         throw new Error('update: no columns supplied');
       }
       const setSql = Object.entries(s.updateValues)
-        .map(([k, v]) => `${k} = ${bind(v)}`)
+        .map(([k, v]) => `${k} = ${bind(v, k)}`)
         .join(', ');
       let sql = `UPDATE ${s.table} SET ${setSql}`;
       // Postgres doesn't support LIMIT on UPDATE. To preserve Supabase
@@ -492,7 +538,7 @@ function buildWhere(
 
 function buildInsertValues(
   rows: any[],
-  bind: (v: unknown) => string,
+  bind: (v: unknown, col?: string) => string,
 ): { cols: string[]; valuesSql: string } {
   // Union of columns across all rows, preserving first-seen order.
   const colOrder: string[] = [];
@@ -508,7 +554,7 @@ function buildInsertValues(
   const tuples: string[] = [];
   for (const row of rows) {
     const placeholders = colOrder.map((c) =>
-      Object.prototype.hasOwnProperty.call(row, c) ? bind(row[c]) : `DEFAULT`,
+      Object.prototype.hasOwnProperty.call(row, c) ? bind(row[c], c) : `DEFAULT`,
     );
     tuples.push(`(${placeholders.join(', ')})`);
   }
@@ -525,17 +571,25 @@ function buildInsertValues(
  *   - JSONB columns (including jsonb arrays-of-objects like flow_nodes)
  *     expect a JSON string.
  *
- * Heuristic: an array of primitives is almost always a native Postgres
- * array column in our schema (e.g. fixed_versions text[], aliases text[]).
- * An array containing any object is JSONB. Plain objects are JSONB.
+ * When the column's Postgres `data_type` is known (passed as `pgType`, sourced
+ * from the boot-time information_schema introspection), it is authoritative:
+ *   - jsonb/json column  → JSON-encode the array (so a primitive `string[]`
+ *     like `['a','b']` becomes `["a","b"]`, not the native-array literal
+ *     `{a,b}` that the type-blind heuristic emitted — which Postgres rejects
+ *     for a jsonb column with `invalid input syntax for type json`).
+ *   - native ARRAY column → pass the JS array through for native binding.
  *
- * This is good enough for every call site in the extraction pipeline. A
- * future type-aware version could introspect pg_catalog once at boot.
+ * Without a known type we fall back to the value-shape heuristic: an array of
+ * primitives is almost always a native Postgres array column in our schema
+ * (e.g. fixed_versions text[], aliases text[]); an array containing any object
+ * is JSONB. Plain objects are always JSONB.
  */
-function normalizeValue(v: unknown): unknown {
+function normalizeValue(v: unknown, pgType?: string): unknown {
   if (v === null || v === undefined) return null;
   if (v instanceof Date) return v.toISOString();
   if (Array.isArray(v)) {
+    if (pgType === 'jsonb' || pgType === 'json') return JSON.stringify(v);
+    if (pgType === 'ARRAY') return v;
     const hasObject = v.some(
       (el) => el !== null && typeof el === 'object' && !(el instanceof Date),
     );
