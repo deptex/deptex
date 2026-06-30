@@ -4608,6 +4608,32 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.get_usage_breakdown(p_organization_id uuid, p_start timestamp with time zone, p_end timestamp with time zone, p_granularity text DEFAULT 'day'::text, p_features text[] DEFAULT NULL::text[], p_project_ids uuid[] DEFAULT NULL::uuid[])
+ RETURNS TABLE(bucket date, feature text, event_type text, cents bigint, quantity numeric)
+ LANGUAGE sql
+ STABLE
+AS $function$
+  select
+    (case lower(p_granularity)
+       when 'month' then date_trunc('month', bt.created_at at time zone 'UTC')
+       when 'week'  then date_trunc('week',  bt.created_at at time zone 'UTC')
+       else              date_trunc('day',   bt.created_at at time zone 'UTC')
+     end)::date as bucket,
+    bt.feature,
+    bt.event_type,
+    sum(abs(bt.amount_cents))::bigint as cents,
+    sum(coalesce(bt.quantity, 0))::numeric as quantity
+  from billing_transactions bt
+  where bt.organization_id = p_organization_id
+    and bt.kind = 'usage_deduction'
+    and bt.created_at >= p_start
+    and bt.created_at <= p_end
+    and (p_features is null or bt.feature = any (p_features))
+    and (p_project_ids is null or bt.project_id = any (p_project_ids))
+  group by 1, bt.feature, bt.event_type;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.get_vulnerability_detail_bundle(p_project_id uuid, p_osv_id text)
  RETURNS jsonb
  LANGUAGE sql

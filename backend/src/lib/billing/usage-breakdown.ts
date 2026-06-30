@@ -83,36 +83,41 @@ function categoryMatches(category: FeatureCategory | undefined, eventType: strin
   return true;
 }
 
-interface UsageRow {
+// One pre-aggregated row from get_usage_breakdown (phase66). `bucket` is a date the
+// RPC already aligned to the UTC day/week/month; `cents`/`quantity` are SUMs. bigint /
+// numeric can come back as strings from PostgREST, so coerce with Number().
+interface AggRow {
+  bucket: string;
   feature: string | null;
   event_type: string | null;
-  amount_cents: number;
-  quantity: number | null;
-  created_at: string;
-  project_id: string | null;
+  cents: number | string;
+  quantity: number | string | null;
 }
 
 export async function loadUsageBreakdown(input: UsageBreakdownInput): Promise<UsageBreakdownResult> {
-  let query = supabase
-    .from('billing_transactions')
-    .select('feature, event_type, amount_cents, quantity, created_at, project_id')
-    .eq('organization_id', input.organizationId)
-    .eq('kind', 'usage_deduction')
-    .gte('created_at', input.start.toISOString())
-    .lte('created_at', input.end.toISOString());
+  const featureFilter =
+    input.featureFilters && input.featureFilters.length > 0
+      ? input.featureFilters
+      : input.featureFilter
+        ? [input.featureFilter]
+        : null;
+  const projectFilter =
+    input.projectIds && input.projectIds.length > 0
+      ? input.projectIds
+      : input.projectId
+        ? [input.projectId]
+        : null;
 
-  if (input.featureFilters && input.featureFilters.length > 0) {
-    query = query.in('feature', input.featureFilters);
-  } else if (input.featureFilter) {
-    query = query.eq('feature', input.featureFilter);
-  }
-  if (input.projectIds && input.projectIds.length > 0) {
-    query = query.in('project_id', input.projectIds);
-  } else if (input.projectId) {
-    query = query.eq('project_id', input.projectId);
-  }
-
-  const { data: rows, error } = await query;
+  // Aggregate in the DB (one row per bucket × feature × event_type) rather than pulling
+  // every transaction and summing in JS — see phase66_usage_breakdown_rpc.sql.
+  const { data: rows, error } = await supabase.rpc('get_usage_breakdown', {
+    p_organization_id: input.organizationId,
+    p_start: input.start.toISOString(),
+    p_end: input.end.toISOString(),
+    p_granularity: input.granularity,
+    p_features: featureFilter,
+    p_project_ids: projectFilter,
+  });
   if (error) {
     throw new Error(`loadUsageBreakdown: ${error.message}`);
   }
@@ -127,12 +132,11 @@ export async function loadUsageBreakdown(input: UsageBreakdownInput): Promise<Us
   >();
   let totalCents = 0;
 
-  for (const row of (rows ?? []) as UsageRow[]) {
+  for (const row of (rows ?? []) as AggRow[]) {
     if (!categoryMatches(input.category, row.event_type)) continue;
     const feature = row.feature ?? 'other';
-    const cents = Math.abs(row.amount_cents);
-    const created = new Date(row.created_at);
-    const key = bucketKey(created, input.granularity);
+    const cents = Number(row.cents) || 0;
+    const key = String(row.bucket);
     if (!bucketMap.has(key)) bucketMap.set(key, new Map());
     const bucket = bucketMap.get(key)!;
     bucket.set(feature, (bucket.get(feature) ?? 0) + cents);
