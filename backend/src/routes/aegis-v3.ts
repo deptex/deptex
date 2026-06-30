@@ -99,11 +99,29 @@ router.post('/stream', async (req: AuthRequest, res) => {
 
     const estimateCents = getAegisTurnEstimateCents(providerInfo.model);
     const gate = await canCharge(organizationId, estimateCents);
+    // Only block (and surface the top-up CTA) when the balance is genuinely too
+    // low. canCharge also returns reason:'db_unavailable' when it can't READ the
+    // balance (a Supabase blip) — failing closed there would block EVERY org,
+    // including well-funded ones, the instant the DB hiccups, and tell them to
+    // pay for our outage. Fail open on any non-credit reason: allow the turn and
+    // log it; metering reconciles post-hoc and the drift cron catches leaks.
+    const blockedForCredit = !gate.allowed && gate.reason === 'insufficient_credit';
+    if (!gate.allowed && gate.reason !== 'insufficient_credit') {
+      console.warn('[aegis-v3] canCharge non-credit block — failing open', {
+        organizationId,
+        reason: gate.reason ?? null,
+      });
+    }
+    if (blockedForCredit) {
+      // Funnel marker: a paywall block was shown. Pairs with the client-side
+      // topup_modal_opened / topup_credited events for launch conversion.
+      console.info('[monetize] aegis_cost_cap_block', { organizationId });
+    }
     const cap = {
-      allowed: gate.allowed,
-      message: gate.allowed
-        ? undefined
-        : `Your prepaid balance is too low to start a turn. Top up to continue.`,
+      allowed: !blockedForCredit,
+      message: blockedForCredit
+        ? `Your prepaid balance is too low to start a turn. Add credit to continue.`
+        : undefined,
     };
 
     // Build the agent here too — getLanguageModelForOrg throws on missing /

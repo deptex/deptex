@@ -1,6 +1,5 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
-import { isBillingEnforcementEnabled } from './enforcement';
 import { captureBillingError } from '../observability/capture';
 import type {
   RecordMeterEventInput,
@@ -105,17 +104,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function recordMeterEvent(input: RecordMeterEventInput): Promise<RecordMeterEventResult> {
-  if (!isBillingEnforcementEnabled()) {
-    console.info('[billing.enforcement_off]', {
-      orgId: input.organizationId,
-      feature: input.feature,
-      cogCents: input.cogCents,
-      chargedCents: input.chargedCents,
-      idempotencyKey: input.idempotencyKey,
-    });
-    return { deducted: false, newBalanceCents: null, reason: 'enforcement_off' };
-  }
-
   const existing = await existingEventForKey(input.organizationId, input.idempotencyKey);
   if (existing) {
     const { data: billing } = await supabase
@@ -280,19 +268,6 @@ export async function recordMeterEvent(input: RecordMeterEventInput): Promise<Re
 }
 
 export async function canCharge(orgId: string, estimatedCents: number): Promise<CanChargeResponse> {
-  if (!isBillingEnforcementEnabled()) {
-    const { data: billing } = await supabase
-      .from('organization_billing')
-      .select('balance_cents')
-      .eq('organization_id', orgId)
-      .single();
-    return {
-      allowed: true,
-      balanceCents: billing?.balance_cents ?? 0,
-      reason: 'enforcement_off',
-    };
-  }
-
   const { data: billing, error } = await supabase
     .from('organization_billing')
     .select('balance_cents')

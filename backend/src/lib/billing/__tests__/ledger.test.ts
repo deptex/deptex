@@ -24,62 +24,10 @@ function baseInput() {
   };
 }
 
-describe('billing ledger — enforcement off', () => {
-  const origEnv = process.env.DEPTEX_BILLING_ENFORCEMENT;
-  let infoSpy: jest.SpyInstance;
-
+describe('billing ledger', () => {
   beforeEach(() => {
     clearTableRegistry();
     clearRpcRegistry();
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'off';
-    infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    process.env.DEPTEX_BILLING_ENFORCEMENT = origEnv;
-    infoSpy.mockRestore();
-  });
-
-  it('recordMeterEvent skips deduct and writes NO DB row', async () => {
-    const rpcSpy = jest.fn();
-    setRpcResponse('deduct_balance', { data: null, error: { message: 'should not be called' } });
-
-    const result = await recordMeterEvent(baseInput());
-
-    expect(result).toEqual({
-      deducted: false,
-      newBalanceCents: null,
-      reason: 'enforcement_off',
-    });
-    expect(infoSpy).toHaveBeenCalledWith(
-      '[billing.enforcement_off]',
-      expect.objectContaining({ orgId: ORG_ID, feature: 'aegis.chat' }),
-    );
-    expect(rpcSpy).not.toHaveBeenCalled();
-  });
-
-  it('canCharge returns allowed:true with enforcement_off even when balance is $0', async () => {
-    setTableResponse('organization_billing', 'single', {
-      data: { balance_cents: 0 },
-      error: null,
-    });
-    const result = await canCharge(ORG_ID, 999_999);
-    expect(result.allowed).toBe(true);
-    expect(result.reason).toBe('enforcement_off');
-  });
-});
-
-describe('billing ledger — enforcement on', () => {
-  const origEnv = process.env.DEPTEX_BILLING_ENFORCEMENT;
-
-  beforeEach(() => {
-    clearTableRegistry();
-    clearRpcRegistry();
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'on';
-  });
-
-  afterEach(() => {
-    process.env.DEPTEX_BILLING_ENFORCEMENT = origEnv;
   });
 
   it('recordMeterEvent happy path returns new balance', async () => {

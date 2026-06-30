@@ -68,23 +68,6 @@ describe('handlePaymentIntentSucceeded', () => {
     process.env.DEPTEX_BILLING_ENFORCEMENT = ORIGINAL_ENFORCEMENT;
   });
 
-  it('skips credit when DEPTEX_BILLING_ENFORCEMENT is off', async () => {
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'off';
-    setRpcResponse('credit_balance', { data: 1500, error: null });
-
-    await handlePaymentIntentSucceeded({
-      id: 'pi_x',
-      amount: 1000,
-      customer: CUSTOMER_A,
-      metadata: { organization_id: ORG_A, purpose: 'topup' },
-    });
-
-    // credit_balance must NOT have been called; the mock would have provided 1500 if it did.
-    expect(queryBuilder.update).not.toHaveBeenCalledWith(
-      expect.objectContaining({ auto_recharge_in_progress: false }),
-    );
-  });
-
   it('returns early without crediting when metadata is missing and fallback fails', async () => {
     (getInvoiceMetadata as jest.Mock).mockResolvedValueOnce(null);
     await handlePaymentIntentSucceeded({

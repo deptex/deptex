@@ -7,6 +7,7 @@ import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { FixStatusCard } from './FixStatusCard';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
+import type { TopUpReason } from '../billing/TopUpModal';
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -14,6 +15,10 @@ interface MessageBubbleProps {
   organizationId?: string;
   onRegenerate?: () => void;
   isRegenerating?: boolean;
+  /** Opens the in-context top-up modal (cost_cap CTA). Absent → fall back to a link. */
+  onTopUp?: (reason: TopUpReason) => void;
+  /** Whether the viewer can actually pay — gates the "Top up" button. */
+  canManageBilling?: boolean;
 }
 
 function extractText(message: UIMessage): string {
@@ -38,6 +43,8 @@ export function MessageBubble({
   organizationId,
   onRegenerate,
   isRegenerating,
+  onTopUp,
+  canManageBilling,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const parts = (message as any).parts ?? [];
@@ -51,6 +58,8 @@ export function MessageBubble({
         organizationId={organizationId}
         onRegenerate={onRegenerate}
         isRegenerating={isRegenerating}
+        onTopUp={onTopUp}
+        canManageBilling={canManageBilling}
       />
     );
   }
@@ -151,13 +160,36 @@ interface ErrorBubbleProps {
   organizationId?: string;
   onRegenerate?: () => void;
   isRegenerating?: boolean;
+  onTopUp?: (reason: TopUpReason) => void;
+  canManageBilling?: boolean;
 }
 
-function ErrorBubble({ error, organizationId, onRegenerate, isRegenerating }: ErrorBubbleProps) {
+function ErrorBubble({
+  error,
+  organizationId,
+  onRegenerate,
+  isRegenerating,
+  onTopUp,
+  canManageBilling,
+}: ErrorBubbleProps) {
   const isCostCap = error.type === 'cost_cap';
   const message = isCostCap
-    ? error.message ?? 'Monthly AI budget reached.'
+    ? error.message ?? 'Your prepaid AI balance is too low.'
     : 'Something went wrong while generating a response.';
+
+  // The regenerate button re-runs the turn without re-typing — the client still
+  // holds the user message even though the cost_cap path skipped persisting it.
+  const retryButton = onRegenerate ? (
+    <button
+      type="button"
+      onClick={onRegenerate}
+      disabled={isRegenerating}
+      className="inline-flex items-center gap-1.5 rounded-md border border-foreground/40 bg-transparent px-2 py-1 text-xs font-medium text-foreground hover:bg-foreground/10 transition-colors disabled:opacity-60"
+    >
+      <RotateCcw className={`h-3 w-3 ${isRegenerating ? 'animate-spin' : ''}`} />
+      {isRegenerating ? 'Retrying' : 'Retry'}
+    </button>
+  ) : null;
 
   return (
     <div className="px-4 py-2">
@@ -166,28 +198,31 @@ function ErrorBubble({ error, organizationId, onRegenerate, isRegenerating }: Er
           <AlertCircle className="h-4 w-4 shrink-0 text-error/80 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="leading-relaxed">{message}</p>
-            <div className="mt-2 flex items-center gap-3">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               {isCostCap ? (
-                organizationId && (
-                  <a
-                    href={`/organizations/${organizationId}/settings/ai`}
-                    className="text-xs font-medium text-foreground/80 hover:text-foreground underline underline-offset-2"
-                  >
-                    Manage AI budget
-                  </a>
-                )
+                <>
+                  {onTopUp && canManageBilling ? (
+                    <button
+                      type="button"
+                      onClick={() => onTopUp('insufficient_credit')}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-foreground/40 bg-foreground/[0.08] px-2 py-1 text-xs font-medium text-foreground hover:bg-foreground/15 transition-colors"
+                    >
+                      Top up
+                    </button>
+                  ) : (
+                    organizationId && (
+                      <a
+                        href={`/organizations/${organizationId}/settings/billing`}
+                        className="text-xs font-medium text-foreground/80 hover:text-foreground underline underline-offset-2"
+                      >
+                        Billing settings
+                      </a>
+                    )
+                  )}
+                  {retryButton}
+                </>
               ) : (
-                onRegenerate && (
-                  <button
-                    type="button"
-                    onClick={onRegenerate}
-                    disabled={isRegenerating}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-foreground/40 bg-transparent px-2 py-1 text-xs font-medium text-foreground hover:bg-foreground/10 transition-colors disabled:opacity-60"
-                  >
-                    <RotateCcw className={`h-3 w-3 ${isRegenerating ? 'animate-spin' : ''}`} />
-                    {isRegenerating ? 'Regenerating' : 'Regenerate'}
-                  </button>
-                )
+                retryButton
               )}
             </div>
           </div>
