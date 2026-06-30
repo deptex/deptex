@@ -38,7 +38,7 @@ import type { PipelineContext } from '../pipeline-types';
  * before we strip it for storage.
  */
 const GITLAB_PAT_RE = /glpat-[0-9A-Za-z_-]{20,}/;
-function isLowConfidenceGitlabFinding(args: {
+export function isLowConfidenceGitlabFinding(args: {
   detectorType: string;
   isVerified: boolean;
   raw: string;
@@ -49,6 +49,56 @@ function isLowConfidenceGitlabFinding(args: {
   // Unverified GitLab match: keep only if it's actually `glpat-`-shaped.
   return !GITLAB_PAT_RE.test(args.raw);
 }
+
+/**
+ * Path segments that mark a third-party dependency tree. A secret reported under
+ * any of these belongs to an UPSTREAM package, not the user's first-party code,
+ * and is a large false-positive surface: example/placeholder tokens in a dep's
+ * README or CHANGELOG that TruffleHog's detectors flag as live secrets. cdxgen
+ * installs deps during SBOM generation, so the workspace holds these trees even
+ * for repos that don't commit them.
+ */
+const VENDORED_TREE_SEGMENTS: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.pnpm',
+  'bower_components',
+  '.yarn',
+  'vendor',
+  '.venv',
+  'venv',
+  'site-packages',
+  '.tox',
+  '.gradle',
+  '.cargo',
+]);
+
+/**
+ * True when `filePath` lives inside a vendored dependency tree (any path segment
+ * is a known vendor dir). This is the deterministic backstop to TruffleHog's
+ * `--exclude-paths` regex file: a real run leaked `node_modules/**\/*.md` example
+ * tokens (json5 / yargs / redis / keyv READMEs + CHANGELOGs) through the
+ * exclude, so we drop them here on the reported path regardless of how
+ * TruffleHog applied its own exclude. Segment-exact match, so a first-party dir
+ * like `src/vendoring-utils/` (segment `vendoring-utils` ≠ `vendor`) is kept.
+ *
+ * Exported for unit testing.
+ */
+export function isVendoredSecretPath(filePath: string): boolean {
+  if (!filePath) return false;
+  const segments = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  return segments.some((seg) => VENDORED_TREE_SEGMENTS.has(seg));
+}
+
+// Inner spawnSync timeout. CANNOT be raised toward the 10-min step budget:
+// spawnSync BLOCKS the event loop for its whole duration, so the 30s liveness
+// heartbeat can't fire while TruffleHog runs, and the worker watchdog SIGKILLs
+// the machine once liveness is stale for ~210s (WORKER_STALL_SOFT_MS) / ~255s
+// (hard). Worst-case staleness at spawnSync end ≈ this cap + up to one missed
+// 30s heartbeat, so 150s leaves ~30s of margin under the soft window. A repo
+// too large to finish in time SOFT-FAILS (warn + no secret findings this run)
+// rather than hard-failing the entire extraction — see the timeout handling
+// below. (Bumped from the old hardcoded 120s; env-tunable but keep it < ~170s.)
+const TRUFFLEHOG_TIMEOUT_MS = Number(process.env.DEPTEX_TRUFFLEHOG_TIMEOUT_MS ?? 150_000);
 
 export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
@@ -122,12 +172,22 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
           '.results/',
           '.buckets/',
           '.pglite-buckets/',
-          // vendored dependency trees (regex matched against the full path)
+          // Vendored dependency trees (regex matched against the full path).
+          // Best-effort optimization — the deterministic isVendoredSecretPath
+          // post-filter below is what actually guarantees these never surface,
+          // because TruffleHog's exclude-paths regex was observed to leak
+          // node_modules/**/*.md example tokens through.
           'node_modules/',
+          '.pnpm/',
+          'bower_components/',
+          '.yarn/',
           'vendor/',
           '.venv/',
           'venv/',
           'site-packages/',
+          '.tox/',
+          '.gradle/',
+          '.cargo/',
         ].join('\n') + '\n',
         'utf8',
       );
@@ -136,11 +196,17 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
       const thResult = require('child_process').spawnSync(
         'trufflehog',
         ['filesystem', workspaceRoot, '--json', '--no-update', `--exclude-paths=${excludeFile}`],
-        { encoding: 'utf8', timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+        { encoding: 'utf8', timeout: TRUFFLEHOG_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
       );
       const stdout = thResult.stdout ?? '';
       const stderr = thResult.stderr ?? '';
       const exitCode = thResult.status ?? -1;
+      // spawnSync sets `error.code === 'ETIMEDOUT'` and kills with the default
+      // SIGTERM when it hits the timeout. Detect either so a budget-exceeding
+      // scan is treated as incomplete, not a scanner crash.
+      const timedOut =
+        (thResult.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ||
+        thResult.signal === 'SIGTERM';
 
       if (exitCode !== 0) {
         // TruffleHog stderr can echo fragments of detected secrets. Keep raw
@@ -148,10 +214,32 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
         if (stderr.trim()) {
           console.error('[trufflehog] stderr:\n' + stderr.trim());
         }
-        // No usable output on a non-zero exit = a real scanner failure. Throw so
-        // the run hard-fails (severity: 'error'). When stdout DID land, TruffleHog
-        // merely exited non-zero on a partial scan — use the partial results.
         if (!stdout.trim()) {
+          // A timeout kill with no output is NOT a scanner failure — the repo is
+          // simply too large to secret-scan inside the budget. SOFT-FAIL: warn
+          // and finish the step cleanly (no findings this run) rather than
+          // throwing ScanFailedError and failing the WHOLE extraction (which
+          // would also discard already-resolved deps, CVEs, IaC + container
+          // findings). The inner cap can't be raised to fit a huge repo without
+          // tripping the liveness watchdog (see TRUFFLEHOG_TIMEOUT_MS).
+          if (timedOut) {
+            const msg = `Secret scan did not finish within ${Math.round(TRUFFLEHOG_TIMEOUT_MS / 1000)}s on a large repository — continuing without secret findings this run`;
+            await log.warn('trufflehog', msg);
+            if (job.jobId) {
+              await logStepError(supabase, {
+                jobId: job.jobId,
+                projectId,
+                step: 'trufflehog',
+                code: 'trufflehog_timeout',
+                message: msg,
+                severity: 'warn',
+              });
+            }
+            await log.success('trufflehog', 'Secret scan incomplete (timed out)', Date.now() - thStart);
+            return;
+          }
+          // No usable output on a non-timeout non-zero exit = a real scanner
+          // failure. Throw so the run hard-fails (severity: 'error').
           throw new Error(`TruffleHog exited with code ${exitCode} and produced no output`);
         }
         await log.warn('trufflehog', `TruffleHog exited with code ${exitCode}; using the partial output it produced`);
@@ -224,7 +312,12 @@ export async function doTruffleHog(ctx: PipelineContext): Promise<void> {
               .filter((f: any): f is NonNullable<typeof f> => f != null)
               .filter((f: any) => f.detector_type !== 'Unknown' || f.file_path !== 'unknown')
               // Filter out .git/ internals — these are clone credentials, not user code secrets
-              .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'));
+              .filter((f: any) => !f.file_path.startsWith('.git/') && !f.file_path.startsWith('.git\\'))
+              // Drop secrets reported inside vendored dependency trees (node_modules,
+              // vendor, .venv, …). These are example/placeholder tokens in upstream
+              // package docs, not first-party secrets — the headline TruffleHog FP
+              // source. Deterministic backstop to the --exclude-paths file.
+              .filter((f: any) => !isVendoredSecretPath(f.file_path));
 
             // TruffleHog can emit the same (detector_type, file_path, start_line)
             // tuple more than once per scan (e.g. when the same value matches

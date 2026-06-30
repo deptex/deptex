@@ -56,9 +56,74 @@ export const GUARDDOG_LOW_PRECISION_RULE_SUFFIXES = [
   'shady-links',
 ] as const;
 
+/**
+ * Canonicalize a GuardDog rule id for suffix matching: lowercase and fold `_`
+ * to `-`. GuardDog 2.9.0 emits hyphenated ids (`npm-api-obfuscation`), but
+ * folding underscores makes the suffix lists robust to a separator change in a
+ * future GuardDog without re-validating against live output. A no-op for the
+ * hyphenated ids we see today.
+ */
+function normalizeGuardDogRuleId(ruleId: string): string {
+  return (ruleId ?? '').toLowerCase().replace(/_/g, '-');
+}
+
 export function isLowPrecisionGuardDogRule(ruleId: string): boolean {
-  const id = (ruleId ?? '').toLowerCase();
+  const id = normalizeGuardDogRuleId(ruleId);
   return GUARDDOG_LOW_PRECISION_RULE_SUFFIXES.some((s) => id.endsWith(s));
+}
+
+/**
+ * Broad GuardDog METADATA heuristics that fire standalone on well-vetted
+ * packages and are too weak to stand alone as a "this package is malicious"
+ * verdict. Unlike GUARDDOG_LOW_PRECISION_RULE_SUFFIXES (dropped unconditionally
+ * because real malware ALWAYS also trips a behavioral rule), these are kept when
+ * something corroborates them but suppressed when they are the SOLE signal:
+ *   - `empty-information`            — no description/readme; ~every internal pkg.
+ *   - `release-zero`                 — version 0.0.x / pre-1.0; nearly universal.
+ *   - `single-python-file`           — one .py module; tons of legit utilities.
+ *   - `bundled-binary`               — ships a compiled artifact; common + legit
+ *                                      (esbuild, sharp, prebuilt addons).
+ *   - `deceptive-author` /           — author/metadata shape heuristics that
+ *     `metadata-mismatch` /            mis-fire on monorepo + re-published pkgs.
+ *     `repository-integrity-mismatch`
+ *   - `direct-url-dependency`        — a git/url dep; legitimate in many lockfiles.
+ *
+ * Deliberately EXCLUDES the genuinely-high-signal standalone heuristics —
+ * `typosquatting` and the `*-email-domain` account-takeover rules — which can be
+ * the ONLY indicator of real malware and are therefore always kept. The
+ * corroboration gate lives in malicious-scan.ts; this list is its policy.
+ */
+export const GUARDDOG_CORROBORATION_RULE_SUFFIXES = [
+  'empty-information',
+  'release-zero',
+  'single-python-file',
+  'bundled-binary',
+  'deceptive-author',
+  'metadata-mismatch',
+  'repository-integrity-mismatch',
+  'direct-url-dependency',
+] as const;
+
+/**
+ * True for a broad metadata heuristic that should only surface when corroborated
+ * by another signal on the same package (a high-signal GuardDog rule or a feed
+ * hit). See GUARDDOG_CORROBORATION_RULE_SUFFIXES.
+ */
+export function requiresCorroboration(ruleId: string): boolean {
+  const id = normalizeGuardDogRuleId(ruleId);
+  return GUARDDOG_CORROBORATION_RULE_SUFFIXES.some((s) => id.endsWith(s));
+}
+
+/**
+ * True for a GuardDog rule that, on its own, is strong enough to corroborate a
+ * package's other (weaker) findings: i.e. NOT an unconditionally-dropped
+ * low-precision structural flag and NOT a corroboration-requiring metadata
+ * heuristic. These are the behavioral / source-code rules (exfiltration, silent
+ * process execution, obfuscated code, …) plus the high-signal standalone
+ * metadata heuristics (typosquatting, compromised-email-domain).
+ */
+export function isCorroboratingGuardDogRule(ruleId: string): boolean {
+  return !isLowPrecisionGuardDogRule(ruleId) && !requiresCorroboration(ruleId);
 }
 
 export function isGuardDogAvailable(): boolean {

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  enrichContainerFindingsWithFeeds,
   extractGhcrOwner,
   normalizeDigest,
   parseDockerfileFinalStage,
@@ -13,6 +14,8 @@ import {
   type ConfiguredCredRef,
   type CraneRunner,
 } from '../trivy';
+import { _resetFeedCache } from '../../pipeline-helpers';
+import type { ContainerFinding } from '../types';
 
 function writeTempDockerfile(name: string, contents: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `deptex-trivy-test-${name}-`));
@@ -336,6 +339,100 @@ describe('parseTrivyImageOutput', () => {
     expect(byPkg.pkgb).toBe('LOW');
     expect(byPkg.pkgc).toBe('LOW');
     expect(findings.every((f) => f.severity !== null)).toBe(true);
+  });
+});
+
+// =============================================================================
+// N1 — KEV + EPSS enrichment of container OS-package CVEs
+// =============================================================================
+
+describe('enrichContainerFindingsWithFeeds (N1)', () => {
+  beforeEach(() => {
+    _resetFeedCache();
+  });
+
+  function finding(cve: string | null, osv: string | null = null): ContainerFinding {
+    return {
+      scanner_version: 'trivy@0.50.0',
+      image_reference: 'nginx:1.27',
+      image_digest: 'a'.repeat(64),
+      os_package_name: 'libssl3',
+      os_package_version: '3.0.10-r0',
+      os_package_ecosystem: 'alpine',
+      osv_id: osv,
+      cve_id: cve,
+      severity: 'HIGH',
+      cvss_score: 7.5,
+      epss_score: null,
+      is_kev: false,
+      fix_versions: [],
+      layer_digest: null,
+      description: null,
+      rule_doc_url: null,
+      container_fingerprint: cve ? `libssl3@${cve}` : null,
+    };
+  }
+
+  it('sets is_kev only for CVEs in the KEV set, and fills epss_score', async () => {
+    const findings = [finding('CVE-2024-1111'), finding('CVE-2024-2222')];
+    await enrichContainerFindingsWithFeeds(findings, {
+      kevFetcher: async () => new Set(['CVE-2024-1111']),
+      epssFetcher: async (cves) => new Map(cves.map((c) => [c, c === 'CVE-2024-1111' ? 0.97 : 0.01])),
+    });
+    expect(findings[0].is_kev).toBe(true);
+    expect(findings[0].epss_score).toBe(0.97);
+    expect(findings[1].is_kev).toBe(false);
+    expect(findings[1].epss_score).toBe(0.01);
+  });
+
+  it('leaves OSV-only findings (no CVE id) untouched', async () => {
+    const findings = [finding(null, 'GHSA-xxxx-yyyy-zzzz')];
+    await enrichContainerFindingsWithFeeds(findings, {
+      kevFetcher: async () => new Set(['CVE-2024-1111']),
+      epssFetcher: async (cves) => new Map(cves.map((c) => [c, 0.5])),
+    });
+    expect(findings[0].is_kev).toBe(false);
+    expect(findings[0].epss_score).toBeNull();
+  });
+
+  it('does no feed work and calls no fetcher when there are no CVE findings', async () => {
+    const kevFetcher = jest.fn(async () => new Set<string>());
+    const epssFetcher = jest.fn(async () => new Map<string, number>());
+    await enrichContainerFindingsWithFeeds([finding(null, 'GHSA-a-b-c')], { kevFetcher, epssFetcher });
+    expect(kevFetcher).not.toHaveBeenCalled();
+    expect(epssFetcher).not.toHaveBeenCalled();
+  });
+
+  it('reuses the shared in-process caches — a second call does not re-fetch', async () => {
+    const kevFetcher = jest.fn(async () => new Set(['CVE-2024-1111']));
+    const epssFetcher = jest.fn(async (cves: string[]) => new Map(cves.map((c) => [c, 0.42])));
+
+    const first = [finding('CVE-2024-1111')];
+    await enrichContainerFindingsWithFeeds(first, { kevFetcher, epssFetcher });
+    expect(first[0].is_kev).toBe(true);
+    expect(first[0].epss_score).toBe(0.42);
+
+    // Same CVE again on a fresh finding object: KEV set + EPSS score both served
+    // from the 6h in-process cache, so neither fetcher is invoked a 2nd time.
+    const second = [finding('CVE-2024-1111')];
+    await enrichContainerFindingsWithFeeds(second, { kevFetcher, epssFetcher });
+    expect(kevFetcher).toHaveBeenCalledTimes(1);
+    expect(epssFetcher).toHaveBeenCalledTimes(1);
+    expect(second[0].is_kev).toBe(true);
+    expect(second[0].epss_score).toBe(0.42);
+  });
+
+  it('dedupes CVE ids across findings into a single EPSS batch', async () => {
+    const epssFetcher = jest.fn(async (cves: string[]) => new Map(cves.map((c) => [c, 0.1])));
+    const findings = [finding('CVE-2024-1111'), finding('CVE-2024-1111'), finding('CVE-2024-3333')];
+    await enrichContainerFindingsWithFeeds(findings, {
+      kevFetcher: async () => new Set(),
+      epssFetcher,
+    });
+    // The two duplicate CVE-2024-1111 rows collapse to one queried id.
+    expect(epssFetcher).toHaveBeenCalledTimes(1);
+    const queried = epssFetcher.mock.calls[0][0] as string[];
+    expect([...queried].sort()).toEqual(['CVE-2024-1111', 'CVE-2024-3333']);
   });
 });
 
