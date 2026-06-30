@@ -707,8 +707,14 @@ export default function MembersPage({
           )}
         </div>
 
-        {/* Loading Skeleton for Members List */}
-        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+        {/* Loading Skeleton for Members List — fades downward like the app's other loading tables */}
+        <div
+          className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
+          style={{
+            maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+          }}
+        >
           <table className="w-full table-fixed">
             <colgroup>
               <col style={{ width: 'auto' }} />
@@ -727,22 +733,22 @@ export default function MembersPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {[1, 2, 3].map((i) => (
-                <tr key={i} className="animate-pulse">
+              {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+                <tr key={i}>
                   <td className="px-4 py-3 min-w-0 overflow-hidden">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
+                      <div className="h-10 w-10 rounded-full bg-muted animate-pulse flex-shrink-0" />
                       <div className="space-y-1">
-                        <div className="h-4 bg-muted rounded w-32" />
-                        <div className="h-3 bg-muted rounded w-48" />
+                        <div className="h-4 bg-muted animate-pulse rounded w-32" />
+                        <div className="h-3 bg-muted animate-pulse rounded w-48" />
                       </div>
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="h-5 w-16 bg-muted rounded" />
+                    <div className="h-5 w-16 bg-muted animate-pulse rounded" />
                   </td>
                   <td className="px-4 py-3">
-                    <div className="h-4 w-4 bg-muted rounded" />
+                    <div className="h-4 w-4 bg-muted animate-pulse rounded" />
                   </td>
                 </tr>
               ))}

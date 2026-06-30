@@ -437,13 +437,19 @@ function BillingSectionSkeleton() {
         </div>
       </div>
 
-      {/* Deposits table */}
-      <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+      {/* Deposits table — fades downward like the app's other loading tables */}
+      <div
+        className="overflow-hidden rounded-lg border border-border bg-background-card pointer-events-none select-none"
+        style={{
+          maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+        }}
+      >
         <div className="border-b border-border bg-background-card-header px-5 py-3">
           <Skeleton className="h-4 w-20" />
         </div>
         <div className="divide-y divide-border">
-          {[0, 1, 2].map((i) => (
+          {[0, 1, 2, 3, 4].map((i) => (
             <div
               key={i}
               className="grid grid-cols-[2fr_1fr_1fr_auto] items-center gap-4 px-5 py-4"
