@@ -1571,6 +1571,50 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   sink_code text,
   vuln_class text
 );
+-- phase66: silence-event log (workstream M / M1). Append-one-row-per-(run,pdv)
+-- durable record of the reachability classifier verdict + its inputs. Pure
+-- observability (nothing reads it on the prod silence path); M2 diffs the two
+-- most-recent runs to catch silence false-negatives. Written by depscanner
+-- reachability.updateReachabilityLevels via Storage.upsert(extraction_run_id,pdv_id).
+-- No FK constraints (matches project_reachable_flows): pdv_id/project_dependency_id
+-- point at rows reap_old_extractions() prunes; a CASCADE would erode the history.
+CREATE TABLE IF NOT EXISTS public.silence_events (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  pdv_id uuid NOT NULL,
+  project_dependency_id uuid NOT NULL,
+  dependency_id uuid NOT NULL,
+  osv_id text NOT NULL,
+  reachability_level text NOT NULL,
+  is_reachable boolean NOT NULL,
+  verdict text,
+  graph_trusted boolean NOT NULL,
+  ast_parsed boolean NOT NULL,
+  ecosystem text,
+  files_importing_count integer,
+  is_direct boolean,
+  dev_scoped boolean,
+  callgraph_reached boolean,
+  classifier_inputs jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT silence_events_run_pdv_uniq UNIQUE (extraction_run_id, pdv_id)
+);
+CREATE INDEX IF NOT EXISTS idx_silence_events_finding
+  ON public.silence_events (project_id, project_dependency_id, osv_id, extraction_run_id);
+CREATE INDEX IF NOT EXISTS idx_silence_events_project_run
+  ON public.silence_events (project_id, extraction_run_id);
+CREATE INDEX IF NOT EXISTS idx_silence_events_silenced
+  ON public.silence_events (project_id, extraction_run_id, verdict)
+  WHERE reachability_level IN ('unreachable', 'module');
+COMMENT ON TABLE public.silence_events IS
+  'M1 silence-event log: append-one-row-per-(run,pdv) durable record of the reachability classifier verdict + its inputs. Pure observability (nothing reads it on the prod silence path). M2 diffs the two most-recent runs to catch silence false-negatives. Written by depscanner reachability.updateReachabilityLevels via Storage.upsert(onConflict extraction_run_id,pdv_id).';
+COMMENT ON COLUMN public.silence_events.project_dependency_id IS
+  'Stable across runs (project_dependencies upserts on project_id+name+version+is_direct+source); the primary cross-run join key with osv_id. pdv_id is NOT stable across runs.';
+COMMENT ON COLUMN public.silence_events.verdict IS
+  'Fine-grained silence reason from reachability_details.verdict (dev_scope_unreachable / orphan_transitive_unreachable / transitive_of_reachable / callgraph_reached_transitive). NULL for non-silence / plain-module verdicts. M2 buckets transitions by this.';
+COMMENT ON COLUMN public.silence_events.callgraph_reached IS
+  'Whether the taint-engine callgraph confirmed a CallEdge into this dep (depMatchesUsedTransitives). A prior unreachable row later showing TRUE here is a silence false-negative signal.';
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid,
@@ -2427,6 +2471,74 @@ AS $function$
     LEFT JOIN billing_transactions bt ON bt.organization_id = ob.organization_id
     GROUP BY ob.organization_id, ob.balance_cents
     HAVING ob.balance_cents != COALESCE(SUM(bt.amount_cents), 0);
+$function$
+;
+
+-- phase66b: M2 cross-run silence-FN differ (read-only). For every project with a
+-- non-null previous_extraction_run_id, diffs the prior run's silenced findings
+-- (unreachable|module) against the current run via the stable
+-- (project_id, project_dependency_id, osv_id) key. Returns one row per
+-- (project, prior_verdict) bucket of PROMOTED findings. Called daily by
+-- POST /api/internal/silence/check-cross-run-drift; log-only, no writes.
+CREATE OR REPLACE FUNCTION public.silence_cross_run_drift()
+ RETURNS TABLE(project_id uuid, prior_verdict text, upgraded_count bigint, silence_fn_count bigint, to_levels text[])
+ LANGUAGE sql
+ STABLE
+AS $function$
+  WITH lvl(level, rnk) AS (
+    VALUES ('unreachable', 0), ('module', 1), ('function', 2), ('data_flow', 3), ('confirmed', 4)
+  ),
+  runs AS (   -- every project with a prior run to diff against
+    SELECT p.id                         AS project_id,
+           p.previous_extraction_run_id AS prev_run,
+           p.active_extraction_run_id   AS cur_run
+    FROM public.projects p
+    WHERE p.previous_extraction_run_id IS NOT NULL
+      AND p.active_extraction_run_id IS NOT NULL
+  ),
+  prev AS (   -- the prior run's SILENCED findings (unreachable|module = rnk <= 1)
+    SELECT r.project_id,
+           se.project_dependency_id,
+           se.osv_id,
+           COALESCE(se.verdict, se.reachability_level) AS prior_verdict,
+           pl.rnk                                      AS prior_rnk
+    FROM runs r
+    JOIN public.silence_events se
+      ON se.project_id = r.project_id
+     AND se.extraction_run_id = r.prev_run
+    JOIN lvl pl ON pl.level = se.reachability_level
+    WHERE se.reachability_level IN ('unreachable', 'module')
+  ),
+  cur AS (    -- the current run's verdict for every finding
+    SELECT r.project_id,
+           se.project_dependency_id,
+           se.osv_id,
+           se.reachability_level AS cur_level,
+           cl.rnk                AS cur_rnk
+    FROM runs r
+    JOIN public.silence_events se
+      ON se.project_id = r.project_id
+     AND se.extraction_run_id = r.cur_run
+    JOIN lvl cl ON cl.level = se.reachability_level
+  )
+  SELECT
+    prev.project_id,
+    prev.prior_verdict,
+    count(*)                                                      AS upgraded_count,
+    -- silence FN = prior tier SILENCED (prev CTE = unreachable|module) AND now
+    -- VISIBLE (cur_rnk >= 2: function|data_flow|confirmed). unreachable->module
+    -- stays silenced = a healthy R1 floor correction (fn=0); module->function is
+    -- a real silence FN (an auto-ignored vuln became visible).
+    count(*) FILTER (WHERE cur.cur_rnk >= 2)                      AS silence_fn_count,
+    array_agg(DISTINCT cur.cur_level)                             AS to_levels
+  FROM prev
+  JOIN cur
+    ON cur.project_id            = prev.project_id
+   AND cur.project_dependency_id = prev.project_dependency_id
+   AND cur.osv_id                = prev.osv_id
+  WHERE cur.cur_rnk > prev.prior_rnk   -- any upward move from a silenced tier
+  GROUP BY prev.project_id, prev.prior_verdict
+  ORDER BY prev.project_id, upgraded_count DESC;
 $function$
 ;
 

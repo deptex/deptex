@@ -1125,9 +1125,45 @@ export async function updateReachabilityLevels(
     is_reachable: boolean;
   }> = [];
 
+  // M1 silence-event log (workstream M). One durable row per (run, pdv)
+  // recording the verdict + the classifier inputs that produced it. PURE
+  // OBSERVABILITY — nothing reads it on the prod silence path; M2 diffs two
+  // runs to catch silence false-negatives. Accumulated beside `pdvUpdates`
+  // and flushed in a second fail-soft batched upsert after the PDV write.
+  const silenceEvents: Array<{
+    project_id: string;
+    extraction_run_id: string;
+    pdv_id: string;
+    project_dependency_id: string;
+    dependency_id: string;
+    osv_id: string;
+    reachability_level: string;
+    is_reachable: boolean;
+    verdict: string | null;
+    graph_trusted: boolean;
+    ast_parsed: boolean;
+    ecosystem: string | null;
+    files_importing_count: number | null;
+    is_direct: boolean | null;
+    dev_scoped: boolean | null;
+    callgraph_reached: boolean | null;
+    classifier_inputs: any;
+  }> = [];
+
   for (const pdv of pdvs) {
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
     if (!dependencyId) continue;
+
+    // M1: hoist the per-PDV meta + callgraph-reached signal to loop top so they
+    // are available at the silence_events push site regardless of which
+    // classification branch runs below. Pure observability — these do NOT change
+    // the level/details/is_reachable decision (the branches recompute what they
+    // need). The else-branch's former `const meta` now reuses this binding.
+    const meta = pdMetaMap.get(pdv.project_dependency_id);
+    const cgReached =
+      options.usedTransitives !== undefined &&
+      options.usedTransitives.size > 0 &&
+      depMatchesUsedTransitives(meta?.name ?? null, meta?.namespace ?? null, options.usedTransitives);
 
     // A PDV's primary osv_id may be a GHSA advisory while the taint engine
     // and CVE-targeted specs key on the CVE id. Match on the primary id plus
@@ -1319,7 +1355,7 @@ export async function updateReachabilityLevels(
         // timed-out — astParsedSuccessfully=false), the absence of slices is
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
-        const meta = pdMetaMap.get(pdv.project_dependency_id);
+        // `meta` is hoisted to loop top (M1) — reuse it here.
         // v3 precision: when the taint-engine callgraph confirms a CallEdge
         // crossed into this dep's code, demote it from `unreachable` to
         // `module`. Handles the jackson-vs-idna case where a framework's
@@ -1427,6 +1463,33 @@ export async function updateReachabilityLevels(
       is_reachable: isReachable,
     });
 
+    // M1: snapshot this verdict + its classifier inputs into the silence-event
+    // log. Additive — mirrors the value just pushed to `pdvUpdates`, never
+    // alters it.
+    silenceEvents.push({
+      project_id: projectId,
+      extraction_run_id: runId,
+      pdv_id: pdv.id,
+      project_dependency_id: pdv.project_dependency_id,
+      dependency_id: dependencyId,
+      osv_id: pdv.osv_id,
+      reachability_level: level,
+      is_reachable: isReachable,
+      verdict: details && typeof details === 'object' ? (details.verdict ?? null) : null,
+      graph_trusted: graphTrusted,
+      ast_parsed: astParsedSuccessfully,
+      ecosystem: options.ecosystem ?? null,
+      files_importing_count: meta ? meta.filesImporting : null,
+      is_direct: meta ? meta.isDirect : null,
+      dev_scoped: meta ? isDevScoped(meta.scope) : null,
+      callgraph_reached: cgReached,
+      classifier_inputs: {
+        used_transitives_count: options.usedTransitives?.size ?? null,
+        callgraph_ran: (options.usedTransitives?.size ?? 0) > 0,
+        is_client_spa: !!options.isClientSpaProject,
+      },
+    });
+
     if (details) detailsSetCount++;
     updatedCount++;
     if (level in levelCounts) levelCounts[level]++;
@@ -1441,6 +1504,25 @@ export async function updateReachabilityLevels(
       console.error(
         `[REACHABILITY] Failed to upsert reachability for ${chunk.length} vuln(s) (chunk ${i}): ${updateErr.message}`,
       );
+    }
+  }
+
+  // M1 silence-event log flush — a SECOND batched upsert, same Storage surface,
+  // chunked by 100, idempotent within a run via (extraction_run_id, pdv_id).
+  // PURE OBSERVABILITY: any failure (e.g. table missing on a not-yet-migrated DB,
+  // code 42P01) must NEVER fail the run — warn + break, never throw. Same
+  // fail-soft posture as the phase23-missing-column fallback above.
+  for (let i = 0; i < silenceEvents.length; i += 100) {
+    const chunk = silenceEvents.slice(i, i + 100);
+    const { error: seErr } = await supabase
+      .from('silence_events')
+      .upsert(chunk, { onConflict: 'extraction_run_id,pdv_id' });
+    if (seErr) {
+      await logger.warn(
+        'reachability',
+        `silence_events write skipped (${chunk.length} rows): ${seErr.message}`,
+      );
+      break; // table absent / write rejected ⇒ the rest will fail the same way
     }
   }
 
