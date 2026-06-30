@@ -40,6 +40,7 @@ import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 import { VALID_SETTINGS_SECTIONS } from '../../lib/orgSettingsSections';
 import { PlanBillingSectionContent } from '../../components/billing/PlanBillingSectionContent';
+import { BillingProvider } from '../../contexts/PlanContext';
 import { UsageSectionContent } from '../../components/billing/UsageSectionContent';
 
 interface OrganizationContextType {
@@ -3168,7 +3169,12 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'billing' && (
-                <PlanBillingSectionContent organizationId={id || ''} />
+                // Billing (prepaid AI credit) is fetched ONLY here — the provider is
+                // scoped to this subpage instead of the org layout, so /billing no
+                // longer runs on every org page.
+                <BillingProvider organizationId={id || ''}>
+                  <PlanBillingSectionContent organizationId={id || ''} />
+                </BillingProvider>
               )}
 
               {activeSection === 'sso' && id && (

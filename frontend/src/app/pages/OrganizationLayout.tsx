@@ -8,7 +8,6 @@ import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Toaster } from '../../components/ui/toaster';
-import { BillingProvider } from '../../contexts/PlanContext';
 
 export default function OrganizationLayout() {
   const { id } = useParams<{ id: string }>();
@@ -165,23 +164,25 @@ export default function OrganizationLayout() {
 
   return (
     <>
-      <BillingProvider organizationId={id}>
-        <SidebarProvider defaultOpen>
-          <OrgSidebar
-            organizationId={id}
-            organization={organization}
-            userPermissions={userPermissions}
-            onRefetchTeams={refetchTeamsAndNotify}
-            user={user}
-            avatarUrl={avatarUrl}
-            fullName={fullName}
-            onSignOut={signOut}
-          />
-          <SidebarInset>
-            <Outlet context={{ organization, reloadOrganization, userPermissions }} />
-          </SidebarInset>
-        </SidebarProvider>
-      </BillingProvider>
+      {/* BillingProvider is NOT mounted app-wide — billing (the prepaid AI-credit
+          balance) is only consumed by the Settings → Billing subpage, so the provider
+          wraps just that section there. Keeping it here fetched /billing on every org
+          page for data nothing else reads. */}
+      <SidebarProvider defaultOpen>
+        <OrgSidebar
+          organizationId={id}
+          organization={organization}
+          userPermissions={userPermissions}
+          onRefetchTeams={refetchTeamsAndNotify}
+          user={user}
+          avatarUrl={avatarUrl}
+          fullName={fullName}
+          onSignOut={signOut}
+        />
+        <SidebarInset>
+          <Outlet context={{ organization, reloadOrganization, userPermissions }} />
+        </SidebarInset>
+      </SidebarProvider>
 
       {organization && (
         <InviteMemberDialog
