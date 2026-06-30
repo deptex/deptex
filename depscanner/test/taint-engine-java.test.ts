@@ -52,6 +52,11 @@ const FIXTURE_PAIRS: FixtureCase[] = [
   { name: 'spring-sql-injection', expectVuln: 'sql_injection' },
   { name: 'spring-command-injection', expectVuln: 'command_injection' },
   { name: 'spring-path-traversal', expectVuln: 'path_traversal' },
+  // T2 — Spring4Shell setPropertyValue tightened to argument_indices: [0]
+  // (the attacker-controlled property PATH, not a benign tainted VALUE). The
+  // vuln fixture taints the path (arg 0) and must fire; the safe fixture taints
+  // only the value (arg 1) with a constant path and must stay quiet.
+  { name: 'spring4shell-code-injection', expectVuln: 'code_injection' },
   { name: 'jackson-deserialization', expectVuln: 'deserialization' },
   { name: 'log4j-code-injection', expectVuln: 'code_injection' },
   { name: 'commons-text-code-injection', expectVuln: 'code_injection' },

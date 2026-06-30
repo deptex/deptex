@@ -22,6 +22,7 @@
  *  13. const-resolver      — Phase 2a JS single-assignment const resolver
  *  14. regex-literal       — Phase 3.2 regex-literal detector (substring + dedup)
  *  15. insecure-default    — Phase 3.3 insecure-default detector (kwarg presence/value)
+ *      detector-flows      — Flow-coercion for the three detector regimes (id/hash/shape)
  *  16. validate            — all framework specs against fixture matrix
  *  17. sanitizer-audit     — every -safe fixture exercises its sanitizer
  *  18. cve-targeted        — Phase 6.5 cross-file CVE-tagged fixture suite
@@ -58,6 +59,7 @@ const STAGES: Stage[] = [
   { name: 'const-resolver',   cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-const-resolver'] },
   { name: 'regex-literal',    cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-regex-literal'] },
   { name: 'insecure-default', cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-insecure-default'] },
+  { name: 'detector-flows',   cmd: 'npm', args: ['run', '--silent', 'test:taint-engine-detector-flows'] },
   { name: 'param-harvest',    cmd: 'npm', args: ['run', '--silent', 'test:param-harvest'] },
   { name: 'dast-param-enrich', cmd: 'npm', args: ['run', '--silent', 'test:dast-param-enrich'] },
   { name: 'validate',         cmd: 'npm', args: ['run', '--silent', 'taint-engine:validate', '--', 'all'] },

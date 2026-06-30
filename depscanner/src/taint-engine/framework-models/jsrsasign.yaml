@@ -32,6 +32,13 @@
 # Sources NOT redeclared — Express/Fastify/NestJS request sources are
 # pre-tainted by the per-framework specs; the AI fixture relies on
 # express.yaml's `req.body.*`.
+#
+# argument_indices: [0] on every sink (was `[]` = "any tainted arg fires").
+# The attacker-controlled signature / ciphertext is always the FIRST argument
+# of these verify/decrypt primitives (e.g. `key.decryptOAEP(ciphertext)`,
+# `sig.verifyHexSignatureForMessage(hSig)`). Pinning to arg 0 keeps recall on
+# the real CVE shape while no longer firing on a benign call that merely
+# passes a tainted value as a SECONDARY argument (a label / encoding / option).
 
 framework: jsrsasign
 version: "*"
@@ -51,27 +58,27 @@ sinks:
   # real jsrsasign surface without that cross-library false-positive blast.
   - pattern: "*.verifyHexSignatureForMessage(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign verifyHexSignatureForMessage — tainted signature material
   - pattern: "*.verifySignature(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign verifySignature — tainted signature material
   - pattern: "*.verifyJWT(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWT — tainted JWT
   - pattern: "*.verifyJWS(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWS — tainted JWS
   - pattern: "KJUR.jws.JWS.verify(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verify — namespaced
   - pattern: "KJUR.jws.JWS.verifyJWT(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWT — namespaced
 
   # ---------- Weak crypto — decrypt family ----------
@@ -81,11 +88,11 @@ sinks:
   # variants below are jsrsasign-specific; the generic decrypt entry is dropped.
   - pattern: "*.decryptOAEP(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign RSAKey.decryptOAEP — tainted ciphertext through OAEP
   - pattern: "*.decryptPKCS1(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign RSAKey.decryptPKCS1 — tainted ciphertext through PKCS1
 
 sanitizers: []

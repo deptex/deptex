@@ -128,7 +128,6 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       worklist,
       maxPathLength,
       diagSink: opts.diagSink,
-      language: (opts.specs[0]?.language as MatcherLanguage | undefined),
       constStrings,
       validatorParams,
     });
@@ -163,13 +162,6 @@ interface AnalyzeArgs {
   worklist: Set<FunctionId>;
   maxPathLength: number;
   diagSink?: DiagSink;
-  /**
-   * Project language. Threaded into `matchesCallPattern` so dynamic-receiver
-   * languages (Python/Ruby/PHP) accept `Class.method` patterns matching
-   * `var.method` callee text. Derived from `specs[0].language` at the
-   * runWorklistAndAggregate entry point; null when specs are empty.
-   */
-  language?: MatcherLanguage;
   /**
    * Project-wide const-string resolver (identifier → literal init text) for the
    * constant-host SSRF / open-redirect guard. Empty map when no consts captured.
@@ -406,7 +398,7 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength, diagSink, language, constStrings, validatorParams } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, constStrings, validatorParams } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
@@ -468,20 +460,20 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         break;
       }
       case 'call': {
-        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs, language);
+        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs);
         if (callSourceMatch && step.target) {
           local.set(step.target, makeTraceFromCall(callSourceMatch, step));
           sourcesAddedThisPass++;
           break;
         }
 
-        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs, language);
+        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs);
         if (sanMatch) {
           if (step.target) local.delete(step.target);
           break;
         }
 
-        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
+        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs);
         if (sinkMatch) {
           // Context guards (computed before fan-out so no variant emits a hit):
           //  - xss sink in a non-HTML response (SSE / JSON / attachment download)
@@ -498,14 +490,17 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             // (Python pyyaml uses `Loader=`, so its unsafe default is unaffected).
             (sinkMatch.vuln_class === 'deserialization' &&
               sinkMatch.pattern === 'yaml.load(*)' &&
-              jsYamlLoadHasSafeSchema(step.argTexts));
+              jsYamlLoadHasSafeSchema(step.argTexts)) ||
+            // log4j logger-level sink on a non-logger receiver (Math.log,
+            // System.out.printf, metrics.info, ...) — see loggerSinkSuppressed.
+            loggerSinkSuppressed(sinkMatch, step.callee.calleeText);
           // When several CVEs share one vulnerable surface (e.g. lodash
           // `_.template` is the sink for BOTH CVE-2021-23337 and CVE-2026-4800),
           // emit one flow per CVE so the reachability classifier can promote
           // every affected PDV to `confirmed` — not just the first-listed CVE.
           // Single-CVE and framework-generic sinks return `[sinkMatch]`, so the
           // common path is unchanged.
-          const sinkVariants = matchSinkVariants(step.callee.calleeText, specs, language, sinkMatch);
+          const sinkVariants = matchSinkVariants(step.callee.calleeText, specs, sinkMatch);
           // Indices to check for taint at this call site.
           // - empty spec argument_indices → check every position (existing behaviour)
           // - non-empty + no kwargs → check the spec-declared positions only
@@ -824,12 +819,11 @@ function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSour
 function matchCallSourcePattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSource | null {
   for (const spec of specs) {
     for (const src of spec.sources) {
       if (!src.pattern.endsWith('(*)')) continue;
-      if (matchesCallPattern(src.pattern, calleeText, language)) return src;
+      if (matchesCallPattern(src.pattern, calleeText)) return src;
     }
   }
   return null;
@@ -838,11 +832,13 @@ function matchCallSourcePattern(
 function matchSinkPattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSink | null {
   for (const spec of specs) {
     for (const sink of spec.sinks) {
-      if (matchesCallPattern(sink.pattern, calleeText, language)) return sink;
+      // T6 — `taint_disabled` sinks exist only for the non-taint detector
+      // regime; they never participate in taint-flow matching.
+      if (sink.taint_disabled) continue;
+      if (matchesCallPattern(sink.pattern, calleeText)) return sink;
     }
   }
   return null;
@@ -867,7 +863,6 @@ function matchSinkPattern(
 function matchSinkVariants(
   calleeText: string,
   specs: FrameworkSpec[],
-  language: MatcherLanguage | undefined,
   firstMatch: FrameworkSink,
 ): FrameworkSink[] {
   if (!firstMatch.osv_id) return [firstMatch];
@@ -875,9 +870,10 @@ function matchSinkVariants(
   const seenOsv = new Set<string>();
   for (const spec of specs) {
     for (const sink of spec.sinks) {
+      if (sink.taint_disabled) continue; // T6 — never a taint-flow variant
       if (!sink.osv_id) continue;
       if (sink.vuln_class !== firstMatch.vuln_class) continue;
-      if (!matchesCallPattern(sink.pattern, calleeText, language)) continue;
+      if (!matchesCallPattern(sink.pattern, calleeText)) continue;
       if (seenOsv.has(sink.osv_id)) continue;
       seenOsv.add(sink.osv_id);
       variants.push(sink);
@@ -891,17 +887,14 @@ function matchSinkVariants(
 function matchSanitizerPattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSanitizer | null {
   for (const spec of specs) {
     for (const san of spec.sanitizers) {
-      if (matchesCallPattern(san.pattern, calleeText, language)) return san;
+      if (matchesCallPattern(san.pattern, calleeText)) return san;
     }
   }
   return null;
 }
-
-type MatcherLanguage = 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp';
 
 /**
  * Allowlist of method names where `Class.method` patterns may also match
@@ -977,11 +970,61 @@ function isContainerWriteCallee(calleeText: string): boolean {
   return CONTAINER_WRITE_METHODS.has(m[1]);
 }
 
+/**
+ * Bare wildcard-receiver logger-level sink patterns from log4j.yaml. These
+ * model the Log4Shell JNDI-substitution surface (`logger.info("${jndi:...}")`)
+ * as `code_injection` with `argument_indices: []` (any tainted arg fires).
+ * The method names are generic enough that a wildcard receiver matches every
+ * `.info()` / `.log()` / `.printf()` in the codebase — including non-loggers
+ * (`Math.log(x)`, `System.out.printf(...)`, `metrics.info(...)`). The
+ * `loggerSinkSuppressed` guard below restricts these specific sinks to
+ * receivers that look like a logger. See log4j.yaml's Wave 10 note.
+ */
+const LOGGER_LEVEL_SINK_PATTERNS: ReadonlySet<string> = new Set([
+  '*.info(*)',
+  '*.warn(*)',
+  '*.error(*)',
+  '*.debug(*)',
+  '*.trace(*)',
+  '*.fatal(*)',
+  '*.log(*)',
+  '*.printf(*)',
+]);
+
+/**
+ * Deterministic enabler gate for the log4j logger-level `code_injection`
+ * sinks (`LOGGER_LEVEL_SINK_PATTERNS`). Returns true when the sink should be
+ * SUPPRESSED because the receiver is not logger-shaped — killing the
+ * `Math.log(userValue)` / `System.out.printf(fmt, tainted)` /
+ * `metrics.info(tainted)` false positives the bare wildcard receiver
+ * otherwise produces.
+ *
+ * Heuristic: the receiver text (everything before the final call separator)
+ * must contain "log" (case-insensitive). This admits the conventional logger
+ * names (`logger`, `log`, `LOG`, `LOGGER`, `auditLogger`, `this.logger`) and
+ * the factory-chain forms (`LogManager.getLogger(...)`,
+ * `LoggerFactory.getLogger(...)`), and rejects non-logger receivers whose name
+ * has no "log" substring (`Math`, `out`, `metrics`, `stats`). Residual FP for
+ * a receiver that coincidentally contains "log" (`catalog`, `dialog`) is
+ * narrow and still backstopped by the FP-filter; the alternative (firing on
+ * EVERY receiver) is the larger evil. Scoped strictly to the bare logger-level
+ * patterns + `code_injection` so no other sink is affected.
+ */
+function loggerSinkSuppressed(sink: FrameworkSink, calleeText: string): boolean {
+  if (sink.vuln_class !== 'code_injection') return false;
+  if (!LOGGER_LEVEL_SINK_PATTERNS.has(sink.pattern)) return false;
+  const sepIdx = Math.max(
+    calleeText.lastIndexOf('.'),
+    calleeText.lastIndexOf('->'),
+    calleeText.lastIndexOf('::'),
+  );
+  const receiver = sepIdx > 0 ? calleeText.slice(0, sepIdx) : '';
+  return !/log/i.test(receiver);
+}
+
 export function matchesCallPattern(
   pattern: string,
   calleeText: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _language?: MatcherLanguage,
 ): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
   // Wildcard receiver: `*.method`, `*->method`, `*::method` — match any receiver

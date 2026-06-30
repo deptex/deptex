@@ -810,8 +810,9 @@ interface FpFilterStageOutput {
 
 /**
  * Resolve the org's filter settings, pre-check the cost cap, batch the
- * sub-threshold flows through Gemini Flash, and return the surviving
- * flows + telemetry.
+ * sub-threshold flows through DeepInfra Qwen (the model defaults to
+ * `Qwen/Qwen3-235B-A22B-Instruct-2507`; see `runFpFilterStage` below), and
+ * return the surviving flows + telemetry.
  */
 async function runFpFilterStage(
   flows: Flow[],

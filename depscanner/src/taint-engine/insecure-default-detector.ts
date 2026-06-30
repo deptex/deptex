@@ -1,5 +1,8 @@
 /**
- * Phase 3.3 — insecure-default detector (NOT WIRED INTO PIPELINE).
+ * Phase 3.3 — insecure-default detector.
+ *
+ * WIRED INTO PIPELINE: `runner.ts#runDetectors` calls `detectInsecureDefaults`
+ * per spec and coerces findings to `Flow` via `detector-flows.ts#insecureDefaultToFlow`.
  *
  * Walks IR call sites looking for call patterns declared in a FrameworkSpec's
  * top-level `insecure_defaults` array. Fires when either:
@@ -22,11 +25,10 @@
  *   - CVE-2024-35195 (requests `Session(verify=False)`) — `forbidden_value_shapes: ["False"]`.
  *   - CVE-2023-30861 (flask session-cookie-secure absent) — kwarg absence.
  *
- * IMPORTANT: this module ships as a standalone building block. It is not
- * imported by `runner.ts` or `propagator.ts`. Pipeline wiring (per-spec
- * call-site dispatch, finding-shape mapping into `project_reachable_flows`,
- * classifier integration) is a follow-up tracked alongside the rest of
- * the Phase 3 detector regime.
+ * Pipeline wiring: `runner.ts#runDetectors` dispatches per-spec
+ * (`detectInsecureDefaults({ specs: [spec], callsites })`), maps each finding
+ * into `project_reachable_flows` via `insecureDefaultToFlow`, and routes it
+ * through the same FP-filter re-check as sub-threshold taint flows.
  */
 
 import type { FrameworkSpec, InsecureDefault, VulnClass } from './spec';
