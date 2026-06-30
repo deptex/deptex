@@ -44,6 +44,54 @@ import {
 import type { PipelineContext, PipelineLogger } from '../pipeline-types';
 import { runOsvFallback, osvFallbackMode } from './osv-vuln-scan';
 
+/**
+ * dep-scan can exit 0 yet have produced ZERO usable vulnerability results
+ * because its bundled VDB refresh/download broke mid-stream. The live P0 was a
+ * transient `requests.exceptions.ChunkedEncodingError: Connection broken:
+ * IncompleteRead(... bytes read, ... more expected)` while pulling the
+ * vulnerability database. In that state dep-scan logs a WARNING
+ * ("No vulnerability scan results available"), writes an empty/no VDR, and
+ * STILL returns exit code 0. Keying success on the exit code alone therefore
+ * reports a genuinely-vulnerable repo as CLEAN — a silent false-negative
+ * (vulnerable express@4.18.2 scanned, 0 vulns written, scan exited OK).
+ *
+ * This inspects dep-scan's combined stdout+stderr for the DEGRADED signature so
+ * the caller can treat an exit-0-but-broken run as a failed run (force the OSV
+ * safety-net, and loud-fail if OSV is also unavailable) instead of a clean pass
+ * — mirroring how a non-zero dep-scan exit already drives `depScanSucceeded`.
+ *
+ * It keys on the ERROR CAUSE (a broken VDB download / DB load), NOT on "0
+ * results": a genuinely vuln-free project prints NONE of these strings
+ * (dep-scan's clean path logs "No oss vulnerabilities..." / "No vulnerabilities
+ * found"), so a legitimately clean scan is NOT turned into a failure.
+ */
+export function detectDegradedDepScan(
+  combinedOutput: string | null | undefined,
+): { degraded: boolean; reason?: string } {
+  if (!combinedOutput) return { degraded: false };
+  const signatures: Array<{ re: RegExp; reason: string }> = [
+    // The exact live failure: the VDB download stream was truncated.
+    { re: /ChunkedEncodingError/i, reason: 'VDB download connection broken (ChunkedEncodingError)' },
+    { re: /IncompleteRead/i, reason: 'VDB download truncated (IncompleteRead)' },
+    { re: /Connection broken/i, reason: 'VDB download connection broken' },
+    // Any urllib3 / requests network exception bubbling out of the VDB refresh.
+    { re: /requests\.exceptions\.\w+/, reason: 'VDB download network error (requests.exceptions)' },
+    { re: /\b(?:ConnectionError|ReadTimeoutError|ConnectTimeoutError|NewConnectionError|MaxRetryError|ProtocolError|SSLError)\b/, reason: 'VDB download network error' },
+    // dep-scan / VDB tooling could not obtain or load the vulnerability DB.
+    { re: /(?:unable|failed|could not|error)\b[^\n]{0,60}\b(?:download|refresh|update|sync|fetch|load|build|create|prepare)\b[^\n]{0,60}\b(?:vuln\w*|vdb|database|db)\b/i, reason: 'VDB refresh/load failed' },
+    { re: /\b(?:vdb|vulnerability database)\b[^\n]{0,40}\b(?:corrupt|malformed|missing|incomplete|empty|not (?:found|available))\b/i, reason: 'VDB missing/incomplete' },
+    // dep-scan's explicit "the scan produced no results object" WARNING. This is
+    // its degraded/error path — distinct from the clean "No vulnerabilities
+    // found" success line — so an exit-0 run carrying it has not actually
+    // checked the dependencies.
+    { re: /No vulnerability scan results available/i, reason: 'dep-scan produced no vulnerability scan results' },
+  ];
+  for (const s of signatures) {
+    if (s.re.test(combinedOutput)) return { degraded: true, reason: s.reason };
+  }
+  return { degraded: false };
+}
+
 function runDepScanProcess(
   depScanExe: string,
   args: string[],
@@ -397,7 +445,28 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
             await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrSnippet}`);
           }
         } else {
-          depScanSucceeded = true;
+          // Exit code 0 is necessary but NOT sufficient. dep-scan returns 0 even
+          // when its VDB refresh/download broke mid-stream and it produced zero
+          // usable results (the live P0: a transient ChunkedEncodingError while
+          // pulling the vulnerability DB → "No vulnerability scan results
+          // available" → exit 0 → 0 vulns written → a vulnerable repo reported
+          // CLEAN). Inspect the run output for that degraded signature; when
+          // present, keep depScanSucceeded=false so the OSV fallback force-fires
+          // (`force: !depScanSucceeded`) and the loud-fail guard trips if OSV is
+          // also down — instead of silently shipping a false-clean. Keyed on the
+          // error CAUSE, not on "0 results", so a genuinely vuln-free scan still
+          // passes.
+          const combinedOutput = `${stripAnsi((res.stdout ?? '').trim())}\n${stripAnsi((res.stderr ?? '').trim())}`;
+          const degraded = detectDegradedDepScan(combinedOutput);
+          if (degraded.degraded) {
+            depScanFailureDetail = `dep-scan exited 0 but produced no usable results — ${degraded.reason}`;
+            await log.warn(
+              'vuln_scan',
+              `Vulnerability scan degraded (${degraded.reason}); dep-scan exited 0 with no results — treating as failed so the OSV fallback runs`,
+            );
+          } else {
+            depScanSucceeded = true;
+          }
         }
 
         // Log stderr only on failure (exit code > 0)
