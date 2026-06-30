@@ -120,11 +120,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     const fixContext =
       `You are Aegis, fixing ${fullRow.osv_id ?? 'a security finding'} in the ${projectName} project. ` +
       `The change: ${plan.summary}.`;
-    const voice = async (justDid: string): Promise<void> => {
+    const voice = async (justDid: string, next?: string): Promise<void> => {
       if (!fullRow.thread_id) return;
       const line = await generateVoiceLine(
         model,
-        `${fixContext}\nYou just ${justDid}. In ONE short, natural first-person sentence, react and/or say what you're about to do next — do not restate the step verbatim.`,
+        `${fixContext}\nYou just ${justDid}.${next ? ` Your next step: ${next}.` : ''}`,
       );
       if (line) await narrate(line);
     };
@@ -138,7 +138,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
     });
     await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
-    await voice('cloned the repo into a clean sandbox');
+    await voice('cloned the repo into a clean sandbox', 'open the dependency manifest and apply the version bump');
 
     if (await isJobCancelled(supabase, job.id)) {
       await logger.warn('complete', 'Fix cancelled by user before setup');
@@ -193,7 +193,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       onPhase: async (phase, meta) => {
         if (phase === 'edit') {
           await step({ icon: 'edit', label: `Updated ${primaryFile}` });
-          await voice(`applied the change to ${primaryFile}`);
+          await voice(`applied the change to ${primaryFile}`, 'reinstall dependencies to update the lockfile');
         } else {
           const ok = meta?.verifiedLocally !== false;
           await step({
@@ -207,7 +207,8 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
           await voice(
             ok
               ? 'reinstalled and confirmed the new version resolves with no conflicts'
-              : "applied the change — the PR's CI will run the full test suite",
+              : "applied the change (the project's CI will run the full test suite on the pull request)",
+            'open the pull request for review',
           );
         }
       },
