@@ -1,4 +1,29 @@
+import { generateText, type LanguageModel } from 'ai';
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+const VOICE_SYSTEM = `You are Aegis, an autonomous security engineer, narrating your OWN work out loud in a task chat as you do it. Speak in the FIRST PERSON, exactly ONE short natural sentence (max ~16 words), conversational — like a senior engineer thinking out loud while they work. No markdown, no lists, no surrounding quotes. Refer to the project by name. React to what just happened and/or say what you're doing next; do NOT just restate the step. Never mention being an AI, a model, or a "worker".`;
+
+/**
+ * Generate one short first-person voice line for the live narration. Best-effort:
+ * returns null on any failure so narration never blocks (or fails) the fix.
+ */
+export async function generateVoiceLine(
+  model: LanguageModel,
+  context: string,
+): Promise<string | null> {
+  try {
+    const { text } = await generateText({
+      model,
+      system: VOICE_SYSTEM,
+      prompt: context,
+      maxOutputTokens: 80,
+    });
+    const line = (text ?? '').trim().replace(/^["']+|["']+$/g, '').trim();
+    return line || null;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Task-chat narration from the fix-worker.

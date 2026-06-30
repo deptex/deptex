@@ -192,6 +192,11 @@ export interface RunFixPipelineOpts {
   logger: FixLogger;
   extraEnv: Record<string, string>;
   pipelineStartMs: number;
+  // Live-narration hook: fired once when the edit has actually applied (before
+  // the verify/install runs) and once when verification passes (with whether it
+  // was checked locally vs soft-passed to CI). Lets the worker post its
+  // edit/verify step + voice lines with real timing around the slow install.
+  onPhase?: (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }) => Promise<void>;
 }
 
 export interface RunFixPipelineResult {
@@ -322,6 +327,16 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
       ? verifyDependencyBump({ workDir, language: plan.language, logger, timeoutMs: remainingBudgetMs(label) })
       : runTests({ workDir, testCommand: plan.testCommand, logger, timeoutMs: remainingBudgetMs(label), extraEnv });
 
+  // Announce the edit exactly once — the first time a patch has actually applied
+  // (editor or a repair), right before we verify it. Skipped while the patch
+  // still fails to apply (nothing was really edited yet).
+  let editAnnounced = false;
+  const announceEdit = async () => {
+    if (editAnnounced) return;
+    editAnnounced = true;
+    await opts.onPhase?.('edit');
+  };
+
   let testResult: TestResult;
   if (editorResult.applyError) {
     testResult = {
@@ -335,6 +350,7 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     };
   } else {
     checkDiffCap('editor');
+    await announceEdit();
     testResult = await verify(isDependencyBump ? 'dependency install' : 'initial test');
   }
 
@@ -376,6 +392,7 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
       continue;
     }
     checkDiffCap(`repair ${repairAttempts}`);
+    await announceEdit();
     testResult = await verify(`test after repair ${repairAttempts}`);
   }
 
@@ -385,6 +402,8 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
       'tests_failed',
     );
   }
+
+  await opts.onPhase?.('verify', { verifiedLocally: !testResult.noTestSuite });
 
   return {
     rawDiff: lastDiff,

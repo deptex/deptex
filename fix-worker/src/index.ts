@@ -26,6 +26,7 @@ import { postFixTaskMeterEvent } from './meter-event';
 import {
   makeTaskNarrator,
   narrateStep,
+  generateVoiceLine,
   postPrReadyCard,
   getProjectName,
   markTaskFromFix,
@@ -112,6 +113,22 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const installationToken = await createInstallationToken(repoInfo.installationId);
 
+    // The model powers both the editor and the live first-person VOICE — one
+    // short sentence the worker speaks between its steps. Best-effort and
+    // no-op for a non-task fix (no thread).
+    const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
+    const fixContext =
+      `You are Aegis, fixing ${fullRow.osv_id ?? 'a security finding'} in the ${projectName} project. ` +
+      `The change: ${plan.summary}.`;
+    const voice = async (justDid: string): Promise<void> => {
+      if (!fullRow.thread_id) return;
+      const line = await generateVoiceLine(
+        model,
+        `${fixContext}\nYou just ${justDid}. In ONE short, natural first-person sentence, react and/or say what you're about to do next — do not restate the step verbatim.`,
+      );
+      if (line) await narrate(line);
+    };
+
     await cloneAtSha({
       workDir: sandbox.workDir,
       installationToken,
@@ -121,6 +138,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
     });
     await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
+    await voice('cloned the repo into a clean sandbox');
 
     if (await isJobCancelled(supabase, job.id)) {
       await logger.warn('complete', 'Fix cancelled by user before setup');
@@ -155,11 +173,14 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const setup = await setupForLanguage({ workDir: projectDir, language: plan.language, logger });
 
-    const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
-
     const changedFiles = (plan.fileChanges ?? []).map((fc) => fc.path).filter(Boolean);
     const primaryFile = changedFiles[0] ?? 'the affected file';
+    const isDepBump = fullRow.fix_type === 'vulnerability';
 
+    // onPhase posts the edit/verify step + voice with REAL timing: the edit lands
+    // before the slow install ("now let me reinstall…"), then the install runs,
+    // then verify lands after it passes. (verifiedLocally false = we soft-passed
+    // and deferred to the PR's CI, so we don't claim a local check.)
     const pipeline = await runFixPipeline({
       model,
       plan,
@@ -169,22 +190,29 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
       extraEnv: setup.extraEnv,
       pipelineStartMs,
+      onPhase: async (phase, meta) => {
+        if (phase === 'edit') {
+          await step({ icon: 'edit', label: `Updated ${primaryFile}` });
+          await voice(`applied the change to ${primaryFile}`);
+        } else {
+          const ok = meta?.verifiedLocally !== false;
+          await step({
+            icon: 'verify',
+            label: ok
+              ? isDepBump
+                ? 'Verified the new version resolves'
+                : 'Ran the tests — they pass'
+              : "Applied the change (the PR's CI runs the tests)",
+          });
+          await voice(
+            ok
+              ? 'reinstalled and confirmed the new version resolves with no conflicts'
+              : "applied the change — the PR's CI will run the full test suite",
+          );
+        }
+      },
     });
     const totalTokens = pipeline.tokensUsed;
-
-    await step({ icon: 'edit', label: `Updated ${primaryFile}` });
-    // Honest verification step: only claim "verified" when we actually ran the
-    // check locally (noTestSuite = we soft-passed and deferred to the PR's CI).
-    const verifiedLocally = !pipeline.testResult.noTestSuite;
-    const isDepBump = fullRow.fix_type === 'vulnerability';
-    await step({
-      icon: 'verify',
-      label: verifiedLocally
-        ? isDepBump
-          ? 'Verified the new version resolves'
-          : 'Ran the tests — they pass'
-        : "Applied the change (the PR's CI runs the tests)",
-    });
 
     const { prBranch, diffSummary } = await commitAndPushFix({
       workDir: sandbox.workDir,
@@ -216,8 +244,9 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     });
     await logger.success('complete', `Fix complete — PR #${pr.prNumber} opened`);
     await step({ icon: 'pr', label: `Opened pull request #${pr.prNumber}` });
-    // The PR card lands LAST so the task chat reads top-to-bottom (reason →
-    // steps → card), then the task is marked done off the real PR.
+    // No voice line here — the PR card's caption ("The pull request is up …") is
+    // the closing beat, right above the card. The PR card lands LAST so the chat
+    // reads top-to-bottom (reason → steps → card); then the task is marked done.
     await postPrReadyCard(supabase, fullRow.thread_id, job.id);
     await markTaskFromFix(supabase, fullRow.task_id, { status: 'completed', summary: plan.summary });
   } catch (err: any) {
