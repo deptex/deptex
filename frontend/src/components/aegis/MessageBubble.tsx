@@ -7,6 +7,7 @@ import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
 import { ChangeCard } from './ChangeCard';
+import { TaskStepLine } from './TaskStepLine';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
 
@@ -90,6 +91,12 @@ export function MessageBubble({
       elements.push(<MarkdownRenderer key={`text-${i}`} content={part.text ?? ''} organizationId={organizationId} />);
       return;
     }
+    // Fix-worker tool-use step — a gray "did this" line.
+    if (part.type === 'step') {
+      flushTools();
+      elements.push(<TaskStepLine key={`step-${i}`} icon={part.icon} label={part.label ?? ''} />);
+      return;
+    }
     if (isToolPart(part)) {
       const toolName = toolNameFor(part);
       // set_todos is pure UI bookkeeping for the ChatTodos strip — it
@@ -170,8 +177,12 @@ export function MessageBubble({
   // skip the wrapping bubble entirely instead of rendering empty padding.
   if (!isUser && !error && elements.length === 0) return null;
 
+  // Step-only messages (the worker's tool-use lines) are stacked tight so a run
+  // of them reads as one activity list, not a column of spaced bubbles.
+  const isStepOnly = parts.length > 0 && parts.every((p: any) => p.type === 'step');
+
   return (
-    <div className="px-4 py-2">
+    <div className={isStepOnly ? 'px-4 py-0.5' : 'px-4 py-2'}>
       <div className="mx-auto max-w-3xl">
         <div className="space-y-2">{elements}</div>
       </div>

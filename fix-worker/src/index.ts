@@ -25,16 +25,12 @@ import { isLanguageEnabled, getEnabledLanguages } from './plan-types';
 import { postFixTaskMeterEvent } from './meter-event';
 import {
   makeTaskNarrator,
+  narrateStep,
   postPrReadyCard,
   getProjectName,
   markTaskFromFix,
+  type TaskStep,
 } from './task-chat';
-
-// Lower-case the first character so a plan summary reads naturally mid-sentence
-// ("I'm updating package.json — bump simple-git…").
-function lcFirst(s: string): string {
-  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
-}
 
 // Trim a failure reason to one short clause for the chat (the full message is on
 // the fix row + Sentry).
@@ -71,6 +67,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   // Task fixes narrate their real steps into the task chat, in the first person.
   // No-op (and no project-name lookup) for a standalone fix.
   const narrate = makeTaskNarrator(supabase, fullRow.thread_id);
+  const step = (s: TaskStep) => narrateStep(supabase, fullRow.thread_id, s);
   const projectName = fullRow.thread_id
     ? await getProjectName(supabase, fullRow.project_id)
     : 'the project';
@@ -115,7 +112,6 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const installationToken = await createInstallationToken(repoInfo.installationId);
 
-    await narrate(`Cloning the ${projectName} repository.`);
     await cloneAtSha({
       workDir: sandbox.workDir,
       installationToken,
@@ -124,6 +120,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       baseSha: fullRow.plan_base_sha,
       logger,
     });
+    await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
 
     if (await isJobCancelled(supabase, job.id)) {
       await logger.warn('complete', 'Fix cancelled by user before setup');
@@ -162,7 +159,6 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
     const changedFiles = (plan.fileChanges ?? []).map((fc) => fc.path).filter(Boolean);
     const primaryFile = changedFiles[0] ?? 'the affected file';
-    await narrate(`I'm updating ${primaryFile} — ${lcFirst(plan.summary)}.`);
 
     const pipeline = await runFixPipeline({
       model,
@@ -176,17 +172,19 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     });
     const totalTokens = pipeline.tokensUsed;
 
-    // Honest verification beat: only claim "checks out" when we actually ran the
+    await step({ icon: 'edit', label: `Updated ${primaryFile}` });
+    // Honest verification step: only claim "verified" when we actually ran the
     // check locally (noTestSuite = we soft-passed and deferred to the PR's CI).
     const verifiedLocally = !pipeline.testResult.noTestSuite;
     const isDepBump = fullRow.fix_type === 'vulnerability';
-    await narrate(
-      verifiedLocally
+    await step({
+      icon: 'verify',
+      label: verifiedLocally
         ? isDepBump
-          ? `Reinstalled and confirmed the new version resolves cleanly.`
-          : `Ran the tests — they pass.`
-        : `Applied the change. The pull request's CI runs the full test suite.`,
-    );
+          ? 'Verified the new version resolves'
+          : 'Ran the tests — they pass'
+        : "Applied the change (the PR's CI runs the tests)",
+    });
 
     const { prBranch, diffSummary } = await commitAndPushFix({
       workDir: sandbox.workDir,
@@ -198,7 +196,6 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       logger,
     });
 
-    await narrate('Opening the pull request.');
     const pr = await openPullRequest({
       installationToken,
       repoFullName: repoInfo.repoFullName,
@@ -218,6 +215,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       tokensUsed: totalTokens,
     });
     await logger.success('complete', `Fix complete — PR #${pr.prNumber} opened`);
+    await step({ icon: 'pr', label: `Opened pull request #${pr.prNumber}` });
     // The PR card lands LAST so the task chat reads top-to-bottom (reason →
     // steps → card), then the task is marked done off the real PR.
     await postPrReadyCard(supabase, fullRow.thread_id, job.id);

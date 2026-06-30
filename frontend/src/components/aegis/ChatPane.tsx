@@ -109,10 +109,15 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
     }
 
     let hasText = false;
+    let hasStep = false;
     for (const p of rawParts) {
       if (p.type === 'text') {
         parts.push({ type: 'text', text: p.text });
         hasText = true;
+      } else if ((p as any).type === 'step') {
+        // A fix-worker tool-use step (gray icon + label line).
+        parts.push({ type: 'step', icon: (p as any).icon, label: (p as any).label });
+        hasStep = true;
       } else if (p.type === 'tool-call') {
         // emitted via paired tool-result below
       } else if (p.type === 'tool-result') {
@@ -129,7 +134,10 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
       }
     }
 
-    if (!hasText && msg.content) parts.unshift({ type: 'text', text: msg.content });
+    // A `step` part carries its own label, so don't also prepend `content` (which
+    // mirrors that label) as a duplicate text line. A card message (tool-result,
+    // no text/step) still surfaces its content as the caption above the card.
+    if (!hasText && !hasStep && msg.content) parts.unshift({ type: 'text', text: msg.content });
     if (parts.length === 0) parts.push({ type: 'text', text: msg.content ?? '' });
 
     return {

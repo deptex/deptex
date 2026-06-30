@@ -14,6 +14,38 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type Narrator = (text: string) => Promise<void>;
 
+// A discrete tool-use step the chat renders as a gray icon + label line (past
+// tense — the action is done), distinct from the first-person prose beats. The
+// `icon` is a semantic key the frontend maps to a lucide glyph.
+export type StepIcon = 'clone' | 'edit' | 'verify' | 'pr';
+export interface TaskStep {
+  icon: StepIcon;
+  label: string;
+}
+
+/**
+ * Post a completed tool-use step into the task chat. Renders as a gray line
+ * ("✓ Cloned the repository") rather than prose, so the work reads as a sequence
+ * of actions the agent actually performed. content mirrors the label so the
+ * message is never empty; the frontend renders the `step` part, not the content.
+ */
+export async function narrateStep(
+  supabase: SupabaseClient,
+  threadId: string | null | undefined,
+  step: TaskStep,
+): Promise<void> {
+  if (!threadId) return;
+  const label = (step.label ?? '').trim();
+  if (!label) return;
+  const { error } = await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'assistant',
+    content: label,
+    metadata: { parts: [{ type: 'step', icon: step.icon, label, status: 'done' }] },
+  });
+  if (error) console.warn('[FIX] task step failed:', error.message);
+}
+
 /** A first-person beat into the task chat. No-op without a thread. */
 export function makeTaskNarrator(
   supabase: SupabaseClient,
