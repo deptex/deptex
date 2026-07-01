@@ -22,6 +22,13 @@ import {
   evaluateSymfonyDevOnlyDemotion,
   evaluateSymfonyAlwaysOnRuntimePromotion,
 } from './reachability-symfony-preconditions';
+import {
+  type RailsFeatureSignals,
+  gatherRailsFeatureSignals,
+  evaluateRailsFeaturePreconditionDemotion,
+  evaluateRailsDevOnlyDemotion,
+  evaluateRailsAlwaysOnRuntimePromotion,
+} from './reachability-rails-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -532,6 +539,20 @@ export interface UpdateReachabilityOptions {
    * directly. An unrecognized / non-Symfony signals object refuses every move.
    */
   symfonyFeatureSignals?: SymfonyFeatureSignals;
+  /**
+   * Ruby/Rails framework-mediated reachability signals — the RubyGems mirror of
+   * `symfonyFeatureSignals`. Used to DEMOTE `module`→`unreachable` when a CVE's
+   * required gem feature is provably absent (Rack::Static/Directory, Nokogiri
+   * XSLT/Schema, Oj streaming APIs, rails-ujs, a Windows-only bug) or the gem is
+   * DEV-ONLY (Gemfile `:development`/`:test`/`:assets` group), and to PROMOTE
+   * always-on request-path CVEs (Puma, Rack request parsing, ActionDispatch, Oj
+   * codec, the Rails HTML sanitizer stack) to a visible tier on a deployed app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `gem` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Rails signals object refuses every move.
+   */
+  railsFeatureSignals?: RailsFeatureSignals;
 }
 
 /**
@@ -1213,6 +1234,13 @@ export async function updateReachabilityLevels(
   const symfonySignals: SymfonyFeatureSignals | null =
     options.symfonyFeatureSignals ??
     (options.ecosystem === 'composer' ? gatherSymfonyFeatureSignals(workspaceRoot) : null);
+  // Ruby/Rails framework-mediated signals — the gem mirror of `symfonySignals`.
+  // Gathered ONCE per run; only the `gem` ecosystem is modelled (a non-Rails gem
+  // app yields unrecognized signals → the gate is a no-op). Tests inject
+  // `options.railsFeatureSignals`.
+  const railsSignals: RailsFeatureSignals | null =
+    options.railsFeatureSignals ??
+    (options.ecosystem === 'gem' ? gatherRailsFeatureSignals(workspaceRoot) : null);
   // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
   // this is a deployed web app, so a CVE in an always-on framework component is
   // genuinely on the request path. Gathered once per run from the already-
@@ -1710,6 +1738,58 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // RUBY/RAILS FEATURE-PRECONDITION + DEV-ONLY DEMOTION (gem mirror of the
+      // Java/PHP feature-precondition gates). Applies to ANY gem `module` finding
+      // regardless of which branch produced it (the coarse Ruby callgraph stamps
+      // nearly everything `callgraph_reached_transitive` / `transitive_of_reachable`
+      // and overrides the SBOM dev-scope for transitive dev gems). Demote-only,
+      // and runs BEFORE the always-on promotion post-pass so a demoted finding's
+      // `unreachable` is respected by the `level === 'module'` promotion guard.
+      // Fail-safe: unrecognized / non-Rails signals refuse every demotion.
+      if (railsSignals && level === 'module') {
+        // 1) Dev-only gem (Gemfile `:development`/`:test`/`:assets` group, direct
+        //    declaration only) — never loaded in production, so its CVE is
+        //    genuinely unreachable. The strongest lever; needs no summary match.
+        const railsDevOnly = evaluateRailsDevOnlyDemotion({
+          depName,
+          signals: railsSignals,
+        });
+        if (railsDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${railsDevOnly.gem} is a Gemfile development/test/assets group gem (not loaded in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: railsDevOnly.gem,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the Rails gem feature the CVE requires
+          //    (Rack::Static/Directory/CommonLogger, Nokogiri XSLT/Schema/JRuby,
+          //    Oj streaming parser, ActionPack dev pages, rails-ujs, the S3
+          //    encryption client, a Windows-only bug) is provably absent.
+          const railsDemotion = evaluateRailsFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: railsSignals,
+          });
+          if (railsDemotion.demote) {
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${railsDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: railsDemotion.feature,
+              matched_summary_pattern: railsDemotion.matchedPattern ?? null,
+              demoted_from: 'callgraph_reached_transitive',
+            };
+          }
+        }
+      }
+
       // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
       // recovery — the mirror image of the feature-precondition DEMOTION gate
       // above). A CVE in framework code that is UNCONDITIONALLY on the request
@@ -1734,18 +1814,30 @@ export async function updateReachabilityLevels(
       // library/CLI repo (0 routes) never gets a promotion.
       if (level === 'module' && hasHttpRouteEntryPoint) {
         const summaryStr = (pdv.summary ?? null) as string | null;
-        const wouldDemote = featureSignals
-          ? evaluateFeaturePreconditionDemotion({
-              depName,
-              summary: summaryStr,
-              signals: featureSignals,
-            }).demote
-          : false;
+        const wouldDemote =
+          (featureSignals
+            ? evaluateFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: featureSignals,
+              }).demote
+            : false) ||
+          // The gem models' demotions already ran above; this backstop refuses to
+          // promote a gem finding whose Rails feature is provably absent or whose
+          // gem is dev-only, in case it reached here via a non-callgraph branch.
+          (railsSignals
+            ? evaluateRailsDevOnlyDemotion({ depName, signals: railsSignals }).demote ||
+              evaluateRailsFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: railsSignals,
+              }).demote
+            : false);
         if (!wouldDemote) {
-          // Try the Java/Spring always-on model first, then the PHP/Symfony one.
-          // (The PHP demotion post-pass already ran above, so a Symfony
-          // finding this promotion would silence is already `unreachable` and
-          // never reaches here — the `level === 'module'` guard skips it.)
+          // Try the Java/Spring always-on model first, then PHP/Symfony, then
+          // Ruby/Rails. (Each language's demotion post-pass already ran above, so
+          // a finding those would silence is already `unreachable` and never
+          // reaches here — the `level === 'module'` guard skips it.)
           const promotion = evaluateAlwaysOnRuntimePromotion({
             depName,
             summary: summaryStr,
@@ -1761,7 +1853,22 @@ export async function updateReachabilityLevels(
                   signals: symfonySignals,
                 })
               : { promote: false as const };
-          const chosen = promotion.promote ? promotion : phpPromotion.promote ? phpPromotion : null;
+          const railsPromotion =
+            !promotion.promote && !phpPromotion.promote && railsSignals
+              ? evaluateRailsAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: railsSignals,
+                })
+              : { promote: false as const };
+          const chosen = promotion.promote
+            ? promotion
+            : phpPromotion.promote
+              ? phpPromotion
+              : railsPromotion.promote
+                ? railsPromotion
+                : null;
           if (chosen && chosen.promote && chosen.promoteTo) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
