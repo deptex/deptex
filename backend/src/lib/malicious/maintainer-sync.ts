@@ -202,6 +202,21 @@ export async function runMaintainerSignalSync(
       if (inserted > 0 && (finding.severity === 'critical' || finding.severity === 'high')) {
         await emitNotificationEvents(supabase, findings, finding.rule_id, finding.severity, runId);
       }
+
+      // ── 6.1 Refresh the denormalized overview summary per affected project ──
+      // Maintainer-sync inserts malicious findings OUTSIDE any scan or route, yet
+      // they feed the overview band counts. Recompute each affected project so the
+      // stored summary reflects the new findings. Non-fatal; the daily self-heal
+      // cron backstops any failure.
+      if (inserted > 0) {
+        const affectedProjectIds = Array.from(new Set(findings.map((f) => f.project_id)));
+        for (const pid of affectedProjectIds) {
+          const { error: recomputeErr } = await supabase.rpc('recompute_project_summary', { p_project_id: pid });
+          if (recomputeErr) {
+            console.warn(`[maintainer-sync] recompute_project_summary failed for ${pid}: ${recomputeErr.message}`);
+          }
+        }
+      }
     } catch (err: any) {
       result.errors += 1;
       console.warn(`[maintainer-sync] dep ${dep.name}/${dep.ecosystem} failed: ${err?.message ?? err}`);

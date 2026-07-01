@@ -19,6 +19,22 @@ export interface ExtractionJob {
   repo_full_name: string;
   installation_id: string;
   default_branch: string;
+  /**
+   * The branch the scan was actually requested against. Webhook pushes to a
+   * non-default branch set this to the pushed branch (the backend writes
+   * `payload.branch`); manual/initial/scheduled runs leave it unset. The clone
+   * step prefers this over `default_branch` so a feature-branch push is scanned
+   * on that branch — not silently on the repo default.
+   */
+  branch?: string;
+  /**
+   * The exact commit to scan, when pinned. Webhook pushes set this to the
+   * pushed commit SHA (the backend writes `payload.commit_sha`); a pinned
+   * re-scan sets it too. When present the clone step checks this commit out
+   * after cloning the branch (fetching it if the branch tip has since moved),
+   * so we scan the requested tree rather than whatever the branch HEAD is now.
+   */
+  commit_sha?: string;
   package_json_path?: string;
   ecosystem?: string;
   provider?: string;

@@ -351,14 +351,15 @@ sinks:
   # detector regime (CVE-2023-30861-class shape — Flask session cookies
   # without secure/HttpOnly). Modeled as weak_crypto because the underlying
   # failure mode is omitting a hardening flag, not a data-flow vulnerability.
-  # argument_indices: [99] is a sentinel — set_cookie's taint contract is
-  # not interesting (its name/value pair is server-generated), and we don't
-  # want the propagator to emit weak_crypto flows on legitimate session
-  # tokens passing through. The non-taint detector still fires from
-  # `required_arguments` below.
+  # taint_disabled: true — set_cookie's taint contract is not interesting
+  # (its name/value pair is server-generated), and we don't want the
+  # propagator to emit weak_crypto flows on legitimate session tokens passing
+  # through. The non-taint detector still fires from `required_arguments`
+  # below (it walks spec.sinks directly, ignoring taint_disabled).
   - pattern: response.set_cookie(*)
     vuln_class: weak_crypto
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: Flask response.set_cookie without secure=True / httponly=True
     required_arguments:
       - name: secure

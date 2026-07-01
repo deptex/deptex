@@ -168,6 +168,7 @@ router.post('/daily', async (req, res) => {
     '/api/internal/malicious/retention-prune',
     '/api/internal/malicious/maintainer-signal-sync',
     '/api/integrations/internal/refresh-jira-webhooks',
+    '/api/internal/silence/check-cross-run-drift',
   ];
   const results: JobResult[] = [];
   for (const path of jobs) {

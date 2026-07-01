@@ -1,10 +1,14 @@
 import request from 'supertest';
 import app from '../../index';
-import { supabase, queryBuilder, setTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
+import { supabase, queryBuilder, setTableResponse, setRpcResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 jest.mock('../../lib/activities', () => ({
   createActivity: jest.fn(),
+}));
+jest.mock('../../lib/cache', () => ({
+  getCached: jest.fn().mockResolvedValue(null),
+  setCached: jest.fn().mockResolvedValue(undefined),
 }));
 
 describe('Team Routes', () => {
@@ -60,6 +64,35 @@ describe('Team Routes', () => {
           name: 'New Team'
         }));
       }
+    });
+  });
+
+  describe('GET /api/organizations/:id/teams/:teamId/stats (truncation guard)', () => {
+    it('drives counts from team_stats_counts / team_top_vulns, never an unbounded row fetch', async () => {
+      const teamId = 'team-stats-1';
+      setTableResponse('teams', 'single', { data: { id: teamId, name: 'T', avatar_url: null, description: null }, error: null });
+      setTableResponse('project_teams', 'then', { data: [{ project_id: 'p1' }], error: null });
+      setTableResponse('projects', 'then', { data: [{ id: 'p1', name: 'P1', health_score: 50, status_id: null, active_extraction_run_id: 'run-1' }], error: null });
+      setRpcResponse('team_stats_counts', { data: [{
+        vuln_total: '1500', vuln_critical: '40', vuln_high: '60', vuln_medium: '900', vuln_low: '500',
+        sla_on_track: '0', sla_warning: '0', sla_breached: '0', sla_exempt: '0', sla_met: '0', sla_resolved_late: '0',
+      }], error: null });
+      setRpcResponse('team_top_vulns', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/teams/${teamId}/stats`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(supabase.rpc).toHaveBeenCalledWith('team_stats_counts', { p_project_ids: ['p1'], p_active_run_ids: ['run-1'] });
+      expect(supabase.rpc).toHaveBeenCalledWith('team_top_vulns', { p_project_ids: ['p1'], p_active_run_ids: ['run-1'] });
+      expect(res.body.vulnerabilities.total).toBe(1500);
+      expect(res.body.vulnerabilities.critical).toBe(40);
+      // Regression guard: the old code fetched every pdv row (vuln counts + topVulns) and every
+      // sla_status row, both unbounded → truncated at 1000. Neither signature may reappear.
+      const selectArgs = queryBuilder.select.mock.calls.map((c: any[]) => String(c[0] ?? ''));
+      expect(selectArgs.some((s: string) => s.includes('sla_status'))).toBe(false);
+      expect(selectArgs.some((s: string) => s.includes('depscore'))).toBe(false);
     });
   });
 });

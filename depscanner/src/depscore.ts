@@ -4,6 +4,29 @@
  * Per-project `importance` (numeric, [0.5, 2.0]) is multiplied directly into
  * the score as `tierWeight`. Replaces the legacy AssetTier enum + custom
  * organization_asset_tiers multiplier (both dropped in phase41).
+ *
+ * --- Score columns + ranking precedence (SC3) -----------------------------
+ * A PDV carries THREE depscore columns, computed by the functions below and
+ * progressively refined down the pipeline:
+ *
+ *   1. base_depscore_no_reachability  — `calculateBaseDepscoreNoReachability`.
+ *        Impact × threat × importance × dependency-context, IGNORING the
+ *        reachability tier. The "what if this were fully reachable" baseline.
+ *   2. depscore                       — `calculateDepscore`.
+ *        (1) additionally weighted by the reachability tier (confirmed 1.0 …
+ *        module 0.5, unreachable 0.0). Written first by dep-scan.ts, then
+ *        AUTHORITATIVELY rewritten by pipeline-steps/reachability.ts once the
+ *        taint classifier has set `reachability_level`.
+ *   3. contextual_depscore            — written by epd.ts / composition.ts.
+ *        `depscore × epd_factor` (EPD execution-path-dominance adjustment).
+ *        Only populated for confirmed/data_flow-tier vulns; null otherwise.
+ *
+ * CANONICAL RANKING SCORE = COALESCE(contextual_depscore, depscore, 0).
+ * Every consumer (security_summary band RPCs, depscore-bands.ts, findings
+ * ordering) prefers `contextual_depscore` when present and falls back to
+ * `depscore`. `base_depscore_no_reachability` is a diagnostic baseline only —
+ * it is NOT used for ranking. Keep this precedence in sync with
+ * backend/src/lib/depscore-bands.ts and the phase47+ security_summary RPCs.
  */
 
 export interface DepscoreContext {
@@ -112,6 +135,48 @@ export function calculateDepscore(ctx: DepscoreContext): number {
   }
 
   const score = baseImpact * threatMultiplier * tierWeight * reachabilityWeight * dependencyContextMultiplier;
+  return Math.min(100, Math.round(score));
+}
+
+// --- DAST finding depscore ---
+
+/**
+ * Severity-band base for a DAST finding. Mirrors the container / IaC
+ * `severityToDepscore` convention in `scanners/storage.ts`
+ * (critical 90 / high 70 / medium 50 / low 30 / info 10) — kept in sync
+ * deliberately so a DAST hit and an equal-severity container CVE share a base.
+ * An unknown severity falls back to the LOW band (30) so the score is always
+ * non-null and the finding can still rank.
+ */
+const DAST_SEVERITY_BAND_BASE: Record<string, number> = {
+  critical: 90,
+  high: 70,
+  medium: 50,
+  low: 30,
+  info: 10,
+};
+
+export interface DastDepscoreContext {
+  severity: string;
+  importance: number;
+}
+
+/**
+ * Depscore for a DAST (ZAP / Nuclei) finding.
+ *
+ * A DAST hit is literal runtime proof that the vulnerable path executed, so
+ * the finding ranks at the CONFIRMED reachability tier — the strongest signal
+ * the platform has (weight 1.0, the same tier `confirm_pdvs_from_dast_run`
+ * independently promotes the cross-linked PDV to). The score therefore reduces
+ * to the shared severity band folded with the per-project `importance` scalar,
+ * exactly the shape the secret / semgrep / license scorers use (base ×
+ * importance) — the confirmed-tier reachability weight of 1.0 is implicit and
+ * never demotes a runtime-proven finding.
+ */
+export function calculateDastDepscore(ctx: DastDepscoreContext): number {
+  const base = DAST_SEVERITY_BAND_BASE[(ctx.severity ?? '').toLowerCase()] ?? 30;
+  const tierWeight = clampImportance(ctx.importance);
+  const score = base * tierWeight;
   return Math.min(100, Math.round(score));
 }
 

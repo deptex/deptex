@@ -143,6 +143,15 @@ export interface RequiredArgument {
  * regime: a call-site walk that flags sanitizer-absence shapes (missing or
  * forbidden options). A sink may participate in BOTH regimes — taint flow
  * (via `argument_indices`) and non-taint (via `required_arguments`).
+ *
+ * `taint_disabled` (default false) removes the sink from the taint-flow
+ * regime entirely: the propagator never matches it (`matchSinkPattern` /
+ * `matchSinkVariants` skip it), so no `Flow` is ever emitted from it. The
+ * sink stays live for the non-taint detector regime (`required_arguments`),
+ * which walks `spec.sinks` directly. Use this for sinks that exist ONLY to
+ * drive a sanitizer-absence finding (e.g. `jwt.verify` missing `algorithms`)
+ * where a positional-argument taint contract would false-positive on the
+ * library's intended use. Replaces the legacy out-of-range `[99]` sentinel.
  */
 export interface FrameworkSink {
   pattern: string;
@@ -151,6 +160,7 @@ export interface FrameworkSink {
   description: string;
   osv_id?: string;
   required_arguments?: RequiredArgument[];
+  taint_disabled?: boolean;
 }
 
 /**

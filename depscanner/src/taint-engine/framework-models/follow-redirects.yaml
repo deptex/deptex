@@ -41,10 +41,11 @@
 # Shipped anyway because (a) the inline shape is also common, and (b) the
 # spec is structurally correct — the limitation is upstream of the YAML.
 #
-# argument_indices: [99] sentinel — see jsonwebtoken.yaml for the same
-# pattern. The taint contract on `*.request(*)` is intentionally inert so
-# legitimate tainted-URL flows route through the `ssrf` axios / stdlib
-# entries instead of double-firing here.
+# taint_disabled: true — see jsonwebtoken.yaml for the same pattern. The
+# taint contract on `*.request(*)` is intentionally inert so legitimate
+# tainted-URL flows route through the `ssrf` axios / stdlib entries instead
+# of double-firing here. The non-taint detector (`required_arguments`) still
+# fires the beforeRedirect-absence finding.
 
 framework: follow-redirects
 language: js
@@ -60,28 +61,32 @@ sinks:
   # http.request(*)` shape.
   - pattern: "*.http.request(*)"
     vuln_class: ssrf
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: follow-redirects http.request without a beforeRedirect callback (CVE-2024-28849 header-leak shape)
     required_arguments:
       - name: beforeRedirect
         match_mode: required
   - pattern: "*.https.request(*)"
     vuln_class: ssrf
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: follow-redirects https.request without a beforeRedirect callback
     required_arguments:
       - name: beforeRedirect
         match_mode: required
   - pattern: "*.http.get(*)"
     vuln_class: ssrf
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: follow-redirects http.get without a beforeRedirect callback
     required_arguments:
       - name: beforeRedirect
         match_mode: required
   - pattern: "*.https.get(*)"
     vuln_class: ssrf
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: follow-redirects https.get without a beforeRedirect callback
     required_arguments:
       - name: beforeRedirect

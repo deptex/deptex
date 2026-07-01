@@ -29,10 +29,11 @@ export function useRealtimeStatus(
 
   const fetchStatus = useCallback(async () => {
     if (!organizationId || !projectId) return;
-    // Always fetch fresh extraction status so Overview shows "still extracting" correctly (no stale cache)
-    api.invalidateProjectRepositoriesCache(organizationId, projectId);
+    // Status-only read: the connected-repo row WITHOUT the slow listRepositories()
+    // GitHub call. Always fresh (the endpoint isn't cached) so the pill shows
+    // "still extracting" correctly; the realtime subscription pushes later updates.
     try {
-      const data = await api.getProjectRepositories(organizationId, projectId);
+      const data = await api.getProjectRepositoryStatus(organizationId, projectId);
       const repo = data.connectedRepository;
       if (repo) {
         setState({

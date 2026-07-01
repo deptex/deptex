@@ -167,16 +167,6 @@ describe('billing routes — POST /:id/billing/topup', () => {
     errSpy.mockRestore();
   });
 
-  it('503s when billing enforcement is disabled (no charged-but-no-credit)', async () => {
-    setOwner();
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'off';
-    const res = await request(app)
-      .post(`/api/organizations/${ORG_ID}/billing/topup`)
-      .send({ amount_cents: 2500 });
-    expect(res.status).toBe(503);
-    expect(createPaymentIntent).not.toHaveBeenCalled();
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'on';
-  });
 });
 
 describe('billing routes — PUT /:id/billing/auto-recharge', () => {

@@ -1,7 +1,6 @@
 import express from 'express';
 import { supabase } from '../lib/supabase';
 import { sendAutoRechargeFailed, checkAndDispatchBalanceAlerts } from '../lib/billing/alerts';
-import { isBillingEnforcementEnabled } from '../lib/billing/enforcement';
 import { captureBillingError } from '../lib/observability/capture';
 
 const router = express.Router();
@@ -144,18 +143,6 @@ export async function handlePaymentIntentSucceeded(pi: any): Promise<void> {
   }
   if (purpose !== 'topup' && purpose !== 'auto_recharge_topup') {
     console.error('[billing-webhook] unknown metadata.purpose', { pi_id: pi.id, purpose });
-    return;
-  }
-
-  // Kill switch: when DEPTEX_BILLING_ENFORCEMENT is off we must not credit balances (an
-  // in-flight webhook during an ops "billing off" window would otherwise credit the org).
-  // Skip the credit — but still clear the in_progress flag for an auto-recharge PI so the
-  // org isn't wedged once enforcement is turned back on.
-  if (!isBillingEnforcementEnabled()) {
-    console.warn('[billing-webhook] enforcement off — skipping credit', { pi_id: pi.id, amount: pi.amount, org_id: orgId });
-    if (purpose === 'auto_recharge_topup') {
-      await clearAutoRechargeInProgress(orgId);
-    }
     return;
   }
 

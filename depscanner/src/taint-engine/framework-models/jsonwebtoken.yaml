@@ -38,17 +38,17 @@ sources:
 sinks:
   # CVE-2022-23539 — jwt.verify without an explicit algorithms allowlist.
   #
-  # argument_indices: [99] is a sentinel out-of-bounds index — the propagator
-  # interprets [] as "any tainted arg fires", which would spuriously emit a
-  # flow on `jwt.verify(req.headers.token, secret)` even when the call is
-  # hardened with an algorithms allowlist. The non-taint detector regime
-  # (via `required_arguments`) is the only consumer here, so the taint
-  # contract should never fire. A future engine change can recognise
-  # "non-taint-only" sinks structurally; until then the sentinel keeps the
-  # two regimes from cross-talking.
+  # taint_disabled: true removes this sink from the taint-flow regime. A
+  # taint contract here (argument_indices) would spuriously emit a flow on
+  # `jwt.verify(req.headers.token, secret)` even when the call is hardened
+  # with an algorithms allowlist — verifying an untrusted token is the
+  # library's intended use. The non-taint detector regime (via
+  # `required_arguments`) is the only consumer of this sink; it walks
+  # `spec.sinks` directly and is unaffected by `taint_disabled`.
   - pattern: jwt.verify(*)
     vuln_class: auth_bypass
-    argument_indices: [99]
+    argument_indices: []
+    taint_disabled: true
     description: jwt.verify without an explicit algorithms allowlist (CVE-2022-23539 shape)
     required_arguments:
       - name: algorithms
@@ -67,9 +67,16 @@ sinks:
     vuln_class: auth_bypass
     argument_indices: [0, 1, 2]
     description: jwt.sign with attacker-influenced payload/secret/options — forgery surface (CVE-2022-23539 family)
+  # argument_indices: [1, 2] — NOT [0]. arg0 is the *token*: a tainted token
+  # reaching jwt.verify is the library's CORRECT, intended use (verifying an
+  # untrusted token is the whole point), so flagging it produced a 100%-FP
+  # auth_bypass on every `jwt.verify(req.query.token, secret)`. The real
+  # CVE-2022-23540/23541 shapes need the SECRET (arg1) or OPTIONS/algorithms
+  # (arg2) attacker-influenced. This also matches the [1,2] design the comment
+  # above already documents.
   - pattern: jwt.verify(*)
     vuln_class: auth_bypass
-    argument_indices: [0, 1, 2]
-    description: jwt.verify with attacker-influenced token/secret/options — algorithm-confusion / weak-key / kid forgery (CVE-2022-23540 / 23541)
+    argument_indices: [1, 2]
+    description: jwt.verify with attacker-influenced secret/options — algorithm-confusion / weak-key / kid forgery (CVE-2022-23540 / 23541)
 
 sanitizers: []

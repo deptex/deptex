@@ -8,10 +8,12 @@ namespace Example.Controllers;
 public class UserController : ControllerBase
 {
     private readonly string _connectionString;
+    private readonly IReportEngine _reportEngine;
 
-    public UserController(string connectionString)
+    public UserController(string connectionString, IReportEngine reportEngine)
     {
         _connectionString = connectionString;
+        _reportEngine = reportEngine;
     }
 
     [HttpGet("search")]
@@ -30,4 +32,25 @@ public class UserController : ControllerBase
             }
         }
     }
+
+    [HttpGet("report")]
+    public IActionResult Report([FromQuery] string q)
+    {
+        // T2 FP-shape proof: `ExecuteReader` / `ExecuteNonQuery` are NOT SQL
+        // sinks — they carry no query argument (the SQL enters via the
+        // SqlCommand constructor / CommandText). The old `*.ExecuteReader(*)`
+        // / `*.ExecuteNonQuery(*)` sinks (argument_indices: []) fired on ANY
+        // receiver that received a tainted argument, so this benign call to an
+        // unrelated report engine produced a sql_injection false positive.
+        // After the sinks were removed, it must produce zero flows.
+        var rows = _reportEngine.ExecuteReader(q);
+        _reportEngine.ExecuteNonQuery(q);
+        return Ok(rows);
+    }
+}
+
+public interface IReportEngine
+{
+    object ExecuteReader(string name);
+    void ExecuteNonQuery(string name);
 }

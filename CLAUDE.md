@@ -108,15 +108,15 @@ Note: `owner` is the only role guaranteed by name. The org-identity edits in Gen
 Connect repo -> queueExtractionJob() inserts scan_jobs (type='extraction'), starts Fly.io depscanner machine
   -> Worker claims via claim_scan_job(machine_id, ['extraction']) RPC (atomic, FOR UPDATE SKIP LOCKED)
   -> Clone -> cdxgen SBOM -> parse deps -> upsert -> tree-sitter usage extraction + framework entry points -> dep-scan
-  -> atom reachable flows + reachability_rules (Semgrep taint packs, per-CVE, upgrades matching PDVs to `confirmed`)
-  -> updateReachabilityLevels classifier -> Semgrep SAST -> TruffleHog
+  -> AI rule generation -> cross-file taint engine (framework-models/*.yaml specs: sources/sinks/sanitizers per vuln_class, upgrades matching PDVs to `confirmed`)
+  -> updateReachabilityLevels classifier + EPD -> IaC/container + malicious-package + Semgrep SAST + TruffleHog
   -> Logs stream to extraction_logs (Supabase Realtime)
   -> QStash: populate-dependencies (registry + GHSA + OpenSSF + policy eval + health score)
   -> QStash: backfill-dependency-trees (transitive edges via pacote)
   -> Fault tolerance: 60s heartbeat, 5min stuck detection, recovery cron, max 3 attempts
 ```
 
-Reachability rule packs live in `depscanner/reachability-rules/` — one folder per CVE (`CVE-YYYY-NNNNN-<slug>/rule.yml` + fixtures). See that directory's README for authoring conventions. `scripts/validate-reachability-rules.ts` runs in CI and fails on malformed/missing rules.
+Reachability comes from the cross-file taint engine (`depscanner/src/taint-engine/`): per-framework specs in `framework-models/*.yaml` declare sources, sinks (tagged with `vuln_class`), and sanitizers, and the framework spec loads alongside the stdlib spec (e.g. `node-stdlib.yaml`) so taint can flow across files. `npm run taint-engine:validate` runs the spec/fixture validation harness; the per-language `test:taint-engine-*` suites cover propagation.
 
 ### Aegis AI Agent
 ```
@@ -163,10 +163,11 @@ Webhooks:  /api/stripe/webhooks — signature verified (rawBodyBuffer), atomic d
            billing_stripe_webhook_events. Handles payment_intent.succeeded,
            payment_intent.payment_failed, invoice.payment_failed,
            invoice.payment_action_required, payment_method.detached, customer.deleted.
-           Cross-tenant guard on every credit. Enforcement kill switch checked on
-           credit path.
-Kill switch: DEPTEX_BILLING_ENFORCEMENT=on enables charges; anything else returns
-           enforcement_off and stops all deductions and credits.
+           Cross-tenant guard on every credit.
+Enforcement: always on. The `DEPTEX_BILLING_ENFORCEMENT` kill switch was hard-removed
+           in the monetize-AI PR — deduction + Stripe credit always run; there is no
+           off-switch. (Was an env flag gating both `canCharge`/`recordMeterEvent` and
+           the webhook credit path during the prepaid soak.)
 Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emails
            BILLING_OPS_ALERT_EMAIL if assert_balance_matches_ledger() returns any rows.
 ```
@@ -189,7 +190,6 @@ Drift cron: POST /api/internal/billing/check-ledger-drift — daily QStash; emai
 | `INTERNAL_API_KEY` | Protects internal/worker API endpoints. Compared in constant time via `middleware/internal-key.ts`; never log fragments. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe SDK + webhook signature verification. SDK pinned to API version 2026-04-22.dahlia (the account's current version — must be one the account accepts or every call 400s). |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Resend transactional email (sender defaults to `Deptex <noreply@deptex.dev>`). When unset, falls back to Gmail SMTP via `EMAIL_USER`/`EMAIL_PASSWORD`. |
-| `DEPTEX_BILLING_ENFORCEMENT` | Must equal `on` for charges to actually deduct + Stripe webhooks to credit. Any other value → silent no-op + log line (`enforcement_off`). |
 | `BILLING_OPS_ALERT_EMAIL` | Recipient for the daily ledger-drift cron's alert (when set). |
 | `SENTRY_DSN` | Sentry error-tracking DSN for backend + both workers. When set, errors are captured + alerted; when unset, the SDK no-ops (local dev / CI / pre-launch). `SENTRY_ENVIRONMENT` + `SENTRY_RELEASE` (git SHA) tag events. |
 | `VITE_SENTRY_DSN` | Public Sentry DSN for the frontend (build-time). `VITE_SENTRY_RELEASE` optional. |

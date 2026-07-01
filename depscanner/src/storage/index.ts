@@ -33,6 +33,12 @@ export interface FilterBuilder<T = any> extends Thenable<StorageResult<T[]>> {
   eq(column: string, value: unknown): FilterBuilder<T>;
   in(column: string, values: readonly unknown[]): FilterBuilder<T>;
   gte(column: string, value: unknown): FilterBuilder<T>;
+  /**
+   * SQL `LIKE` (case-sensitive) against `pattern`. `%`/`_` are wildcards and
+   * `\` is the escape char. The real SupabaseClient already implements this;
+   * the PGLite backend translates it to a `column LIKE $n` predicate.
+   */
+  like(column: string, pattern: string): FilterBuilder<T>;
   limit(n: number): FilterBuilder<T>;
   select(columns?: string): FilterBuilder<T>;
   single(): Thenable<StorageResult<T>>;

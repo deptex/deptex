@@ -55,13 +55,6 @@ describe('maybeAutoRecharge', () => {
     process.env.DEPTEX_BILLING_ENFORCEMENT = origEnv;
   });
 
-  it('returns enforcement_off when DEPTEX_BILLING_ENFORCEMENT != on', async () => {
-    process.env.DEPTEX_BILLING_ENFORCEMENT = 'off';
-    const result = await maybeAutoRecharge(ORG_ID);
-    expect(result).toEqual({ attempted: false, reason: 'enforcement_off' });
-    expect(createTopUpInvoice).not.toHaveBeenCalled();
-  });
-
   it('returns disabled when auto_recharge_enabled = false', async () => {
     setTableResponse('organization_billing', 'single', {
       data: billingRow({ auto_recharge_enabled: false }),

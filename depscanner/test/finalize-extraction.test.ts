@@ -216,61 +216,12 @@ async function testCarryForwardSuppression(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
-// Test 4: Re-review trigger — severity escalation fires re_review_triggered_at
+// Test 4 (REMOVED): severity-escalation re-review. The re_review path
+// (re_review_triggered_at / re_review_reasons / vulns_re_review_fired /
+// rereview_triggered events) was intentionally retired in
+// phase62_finalize_container_carryforward_perf.sql — finalize_extraction no
+// longer re-flags findings on severity escalation, and that schema is gone.
 // -----------------------------------------------------------------------------
-async function testSeverityEscalationTrigger(): Promise<void> {
-  console.log('\nTest 4: severity escalation fires re_review_triggered_at + reasons');
-  const db = await bootDb();
-  const PREV_RUN = 'run_prev';
-  const NEW_RUN = 'run_new';
-  await seedOrgAndProject(db, PREV_RUN);
-
-  const OLD_PD_ID = '11111111-1111-1111-1111-111111111111';
-  const NEW_PD_ID = '22222222-2222-2222-2222-222222222222';
-
-  await db.exec(`
-    INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, last_seen_extraction_run_id, created_at)
-    VALUES
-      ('${OLD_PD_ID}', '${PROJECT_ID}', 'axios', '0.21.0', true, 'dependencies', '${PREV_RUN}', NOW()),
-      ('${NEW_PD_ID}', '${PROJECT_ID}', 'axios', '0.21.1', true, 'dependencies', '${NEW_RUN}',  NOW());
-  `);
-
-  // Prev-run PDV: severity=low. New-run PDV: severity=critical. Should trigger.
-  await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
-      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
-    VALUES
-      ('${PROJECT_ID}', '${OLD_PD_ID}', 'CVE-2021-3749', 'low',      '${PREV_RUN}', 'open', NOW(), NOW()),
-      ('${PROJECT_ID}', '${NEW_PD_ID}', 'CVE-2021-3749', 'critical', '${NEW_RUN}',  'open', NOW(), NOW());
-  `);
-
-  const summary = await callFinalize(db, NEW_RUN);
-  assert((summary.vulns_re_review_fired as number) >= 1, 'summary reports >=1 re-review fired');
-
-  const { rows } = await db.query<{ re_review_triggered_at: string | null; re_review_reasons: any }>(
-    `SELECT re_review_triggered_at, re_review_reasons
-     FROM project_dependency_vulnerabilities
-     WHERE project_id = $1 AND extraction_run_id = $2`,
-    [PROJECT_ID, NEW_RUN],
-  );
-  assert(rows.length === 1, 'one new-run PDV');
-  assert(rows[0].re_review_triggered_at !== null, 're_review_triggered_at is set');
-  const reasons = rows[0].re_review_reasons;
-  const flat = Array.isArray(reasons) ? reasons : [];
-  const triggers = flat.map((r: any) => r?.trigger).filter(Boolean);
-  assert(triggers.includes('severity_escalation'), `reasons contain severity_escalation (got: ${JSON.stringify(triggers)})`);
-
-  // Event row written
-  const events = await db.query<{ event_type: string; osv_id: string }>(
-    `SELECT event_type, osv_id FROM project_vulnerability_events WHERE project_id = $1`,
-    [PROJECT_ID],
-  );
-  const triggerEvents = events.rows.filter((e) => e.event_type === 'rereview_triggered');
-  assert(triggerEvents.length >= 1, 'rereview_triggered event written');
-  assert(triggerEvents.some((e) => e.osv_id === 'CVE-2021-3749'), 'event is for the escalated CVE');
-
-  await db.close();
-}
 
 // -----------------------------------------------------------------------------
 // Test 5: First-run semantics — NULL prev_active writes 'detected' events
@@ -416,62 +367,11 @@ async function testMonorepoMultiVersionNoCrossSwap(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
-// Test 8: Unchanged version — severity escalation fires for same PD across runs
-//
-// Regression for Bug-001: prior code filtered opd via
-// "last_seen_extraction_run_id IS DISTINCT FROM current_run", which for
-// unchanged-version deps (upsert updates row in place, advancing last_seen
-// to current run) silently excluded every candidate — so triggers never fired
-// for the most common re-review case: stable installed version, drifted CVE
-// severity.
+// Test 8 (REMOVED): unchanged-version severity-escalation re-review. Same
+// retirement as Test 4 — the re_review path was dropped in
+// phase62_finalize_container_carryforward_perf.sql, so finalize_extraction no
+// longer re-flags stable-version deps on CVE severity drift.
 // -----------------------------------------------------------------------------
-async function testUnchangedVersionSeverityEscalationFires(): Promise<void> {
-  console.log('\nTest 8: unchanged-version severity escalation fires (same PD UUID across runs)');
-  const db = await bootDb();
-  const PREV_RUN = 'run_prev';
-  const NEW_RUN = 'run_new';
-  await seedOrgAndProject(db, PREV_RUN);
-
-  const PD_ID = '11111111-1111-1111-1111-111111111111';
-
-  // Single PD row — same UUID across runs, last_seen advances to current run
-  // (simulating the upsert's in-place update for unchanged-version deps).
-  await db.exec(`
-    INSERT INTO project_dependencies (id, project_id, name, version, is_direct, source, last_seen_extraction_run_id, created_at)
-    VALUES ('${PD_ID}', '${PROJECT_ID}', 'lodash', '4.17.21', true, 'dependencies', '${NEW_RUN}', NOW());
-  `);
-
-  // Prev run: CVE at severity=low. New run: OSV reclassified to critical.
-  await db.exec(`
-    INSERT INTO project_dependency_vulnerabilities
-      (project_id, project_dependency_id, osv_id, severity, extraction_run_id, status, detected_at, created_at)
-    VALUES
-      ('${PROJECT_ID}', '${PD_ID}', 'CVE-2021-23337', 'low',      '${PREV_RUN}', 'open', NOW(), NOW()),
-      ('${PROJECT_ID}', '${PD_ID}', 'CVE-2021-23337', 'critical', '${NEW_RUN}',  'open', NOW(), NOW());
-  `);
-
-  const summary = await callFinalize(db, NEW_RUN);
-  assert((summary.vulns_re_review_fired as number) >= 1, 'summary reports >=1 re-review fired for unchanged dep');
-
-  const { rows } = await db.query<{ re_review_triggered_at: string | null; re_review_reasons: any }>(
-    `SELECT re_review_triggered_at, re_review_reasons
-     FROM project_dependency_vulnerabilities
-     WHERE project_id = $1 AND extraction_run_id = $2`,
-    [PROJECT_ID, NEW_RUN],
-  );
-  assert(rows[0]?.re_review_triggered_at !== null, 're_review_triggered_at set for unchanged dep');
-  const reasons = Array.isArray(rows[0]?.re_review_reasons) ? rows[0].re_review_reasons : [];
-  const triggers = reasons.map((r: any) => r?.trigger).filter(Boolean);
-  assert(triggers.includes('severity_escalation'), `severity_escalation fires (got: ${JSON.stringify(triggers)})`);
-
-  const events = await db.query<{ event_type: string }>(
-    `SELECT event_type FROM project_vulnerability_events WHERE project_id = $1 AND event_type = 'rereview_triggered'`,
-    [PROJECT_ID],
-  );
-  assert(events.rows.length >= 1, 'rereview_triggered event written');
-
-  await db.close();
-}
 
 // -----------------------------------------------------------------------------
 // Test 9: Monorepo same CVE on two PDs — first-run emits one event per PD
@@ -540,11 +440,11 @@ async function main() {
     testMarkRemoved,
     testPointerFlip,
     testCarryForwardSuppression,
-    testSeverityEscalationTrigger,
+    // Test 4 (severity-escalation re-review) removed — re_review retired in phase62.
     testFirstRunDetectedEvents,
     testReapOldRuns,
     testMonorepoMultiVersionNoCrossSwap,
-    testUnchangedVersionSeverityEscalationFires,
+    // Test 8 (unchanged-version re-review) removed — re_review retired in phase62.
     testMonorepoSameCveTwoPDsEmitTwoEvents,
   ];
 

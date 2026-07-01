@@ -2,8 +2,10 @@ import 'dotenv/config';
 import './instrument';
 import * as Sentry from '@sentry/node';
 import { captureInfraError } from './observability/capture';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Storage } from './storage';
+// Direct adapter import (not the ./storage barrel) so the worker doesn't load
+// the local PGLite backend at startup.
+import { createSupabaseStorage } from './storage/supabase';
 import { runPipeline } from './pipeline';
 import { ScanFailedError } from './scan-errors';
 import { runDastPipeline } from './dast/pipeline';
@@ -34,18 +36,13 @@ const MACHINE_ID = process.env.FLY_MACHINE_ID || `local-${process.pid}`;
 // worker loop.
 let watchdog: WorkerWatchdog | null = null;
 
-function getSupabase(): Storage {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
-  return createClient(url, key) as unknown as Storage;
-}
-
 async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): Promise<void> {
   const payload = job.payload as {
     repo_full_name: string;
     installation_id: string;
     default_branch: string;
+    branch?: string;
+    commit_sha?: string;
     package_json_path?: string;
     ecosystem?: string;
     provider?: string;
@@ -71,6 +68,8 @@ async function processExtractionJob(supabase: Storage, job: ExtractionJobRow): P
       repo_full_name: payload.repo_full_name,
       installation_id: payload.installation_id,
       default_branch: payload.default_branch,
+      branch: payload.branch,
+      commit_sha: payload.commit_sha,
       package_json_path: payload.package_json_path,
       ecosystem: payload.ecosystem,
       provider: payload.provider,
@@ -241,7 +240,7 @@ async function processJob(supabase: Storage, job: ExtractionJobRow): Promise<voi
 }
 
 async function runWorker(): Promise<void> {
-  const supabase = getSupabase();
+  const supabase = createSupabaseStorage();
   // Startup probe: derive supported types ONCE so DAST is gated off cleanly
   // when DAST_CREDENTIAL_KEY is absent. Per plan §Task 7 — silent-anonymous-
   // fallback is the non-negotiable invariant; if the key is missing we want

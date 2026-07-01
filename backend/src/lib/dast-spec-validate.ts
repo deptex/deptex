@@ -151,9 +151,16 @@ export async function validateOpenApiYaml(
   // ourselves (js-yaml is already a transitive dep) so the parser doesn't
   // need disk access.
   const yaml = await import('js-yaml');
+  // Force a safe schema so attacker-supplied YAML can't construct `!!js/function`
+  // / `!!js/regexp` etc. js-yaml v4's `load` is already safe-by-default, but v3's
+  // default is the FULL schema. Prefer v3's DEFAULT_SAFE_SCHEMA when present and
+  // fall back to v4's DEFAULT_SCHEMA (== old safe) — version-agnostic, and still
+  // supports anchors / merge-keys / timestamps that real OpenAPI specs use.
+  const safeSchema =
+    (yaml as any).DEFAULT_SAFE_SCHEMA ?? (yaml as any).DEFAULT_SCHEMA;
   let doc: unknown;
   try {
-    doc = yaml.load(rawText);
+    doc = yaml.load(rawText, { schema: safeSchema });
   } catch (e) {
     return {
       ok: false,

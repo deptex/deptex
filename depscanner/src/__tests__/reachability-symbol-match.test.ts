@@ -57,6 +57,13 @@ class FakeStorage {
         });
       },
       insert: () => Promise.resolve({ data: null, error: null }),
+      // R3: classifier flushes verdicts via a batched upsert — record each row
+      // in the same `updates` shape (keyed on id) so verdictOf() is unchanged.
+      upsert: (rows: any) => {
+        const arr = Array.isArray(rows) ? rows : [rows];
+        for (const r of arr) this.updates.push({ table, filter: { id: r.id }, values: r });
+        return Promise.resolve({ data: null, error: null });
+      },
       update: (values: any) => {
         const currentFilters: Record<string, unknown> = {};
         for (const f of filters) currentFilters[f.col] = f.val;

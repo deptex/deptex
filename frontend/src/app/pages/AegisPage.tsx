@@ -225,6 +225,8 @@ export default function AegisPage() {
                 liveReload={isTaskThread}
                 task={activeTask}
                 onOpenTaskDetails={() => setTaskPanelOpen(true)}
+                canManageBilling={userPermissions?.manage_billing === true}
+                userEmail={user?.email ?? null}
               />
             </>
           )}

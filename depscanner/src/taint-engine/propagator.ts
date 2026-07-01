@@ -57,6 +57,15 @@ export interface PropagateStats {
   loweringMs: number;
   propagationMs: number;
   totalMs: number;
+  /**
+   * True when the worklist stopped at the iteration cap (maxIterations) before
+   * reaching the fixpoint. The emitted flows are then a PARTIAL set — the
+   * pipeline stamps the run + warns so the classifier doesn't read absent
+   * flows as a clean unreachable verdict (silence false-negative). Distinct
+   * from `aborted`, which is the signal/timeout path. Optional so a driver
+   * that predates the field still type-checks.
+   */
+  stoppedEarly?: boolean;
 }
 
 export interface PropagateResult {
@@ -141,6 +150,7 @@ export async function propagate(options: PropagateOptions): Promise<PropagateRes
       loweringMs,
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
+      stoppedEarly: result.stoppedEarly,
     },
     irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };

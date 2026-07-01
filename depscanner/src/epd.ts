@@ -796,6 +796,18 @@ export async function applyEpdScoringFallback(
    * accounting.
    */
   jobId?: string,
+  /**
+   * R2 — the owning extraction_run_id. The reachability classifier is
+   * run-scoped, so EPD must be too: without it, this pass reads PDVs / flows /
+   * deps from EVERY prior run of the project (rows are not deleted between
+   * runs), contaminating the aggregation with stale-run data. When set, the
+   * PDV + flow fetches filter on `extraction_run_id` and the dependency map
+   * filters on `last_seen_extraction_run_id`. Undefined (CLI / legacy tests)
+   * preserves the prior project-only behaviour. Flow SUPPRESSIONS stay
+   * project-scoped on purpose: they are hash-keyed and intentionally re-match
+   * across re-extractions (Option B / OD-4), and the table has no run column.
+   */
+  runId?: string,
 ): Promise<void> {
   const { data: projectRow } = await supabase
     .from('projects')
@@ -871,10 +883,14 @@ export async function applyEpdScoringFallback(
     if (process.env.ANTHROPIC_MODEL) anthropicModel = process.env.ANTHROPIC_MODEL;
   }
 
-  const { data: pdvRows, error: pdvErr } = await supabase
+  let pdvQuery = supabase
     .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, is_reachable, reachability_level, depscore, base_depscore_no_reachability, severity, summary')
+    .select('id, project_dependency_id, osv_id, is_reachable, reachability_level, depscore, base_depscore_no_reachability, severity, summary')
     .eq('project_id', projectId);
+  // R2: scope to this extraction run so stale prior-run PDVs don't contaminate
+  // the aggregation (and the candidates sort / cost budget).
+  if (runId) pdvQuery = pdvQuery.eq('extraction_run_id', runId);
+  const { data: pdvRows, error: pdvErr } = await pdvQuery;
 
   if (pdvErr) {
     await logger.warn('epd', `Skipping EPD scoring: failed to fetch vulnerabilities: ${pdvErr.message}`, {
@@ -894,10 +910,13 @@ export async function applyEpdScoringFallback(
     return;
   }
 
-  const { data: deps, error: depErr } = await supabase
+  let depQuery = supabase
     .from('project_dependencies')
     .select('id, dependency_id')
     .eq('project_id', projectId);
+  // R2: project_dependencies' run column is last_seen_extraction_run_id.
+  if (runId) depQuery = depQuery.eq('last_seen_extraction_run_id', runId);
+  const { data: deps, error: depErr } = await depQuery;
 
   if (depErr) {
     await logger.warn('epd', `Skipping EPD scoring: failed to fetch dependency map: ${depErr.message}`, {
@@ -913,10 +932,13 @@ export async function applyEpdScoringFallback(
     if (d.id && d.dependency_id) depIdByProjectDependencyId.set(d.id, d.dependency_id);
   }
 
-  const { data: flows, error: flowErr } = await supabase
+  let flowQuery = supabase
     .from('project_reachable_flows')
     .select('id, dependency_id, flow_length, entry_point_tag, reachability_source, flow_signature_hash, flow_nodes, sink_method, sink_file, entry_point_file, entry_point_line, sink_line, llm_prompt')
     .eq('project_id', projectId);
+  // R2: scope flows to this run (project_reachable_flows.extraction_run_id).
+  if (runId) flowQuery = flowQuery.eq('extraction_run_id', runId);
+  const { data: flows, error: flowErr } = await flowQuery;
 
   if (flowErr) {
     await logger.warn('epd', `Reachable flows unavailable for depth enrichment: ${flowErr.message}`, {
@@ -1450,18 +1472,38 @@ ${sourceContext || 'none'}`;
     });
   }
 
+  // R3 — flush the EPD updates with a single batched upsert (onConflict id)
+  // instead of one UPDATE round-trip per PDV. `id` is the PK and every row
+  // already exists, so each upsert is ON CONFLICT DO UPDATE touching only the
+  // EPD columns — exact prior semantics. project_id / project_dependency_id /
+  // osv_id are the NOT-NULL columns the (never-taken) INSERT arm needs; they
+  // carry each row's existing values.
+  const pdvKeyById = new Map<string, { project_dependency_id: string; osv_id: string }>();
+  for (const r of pdvRows) {
+    pdvKeyById.set(r.id as string, {
+      project_dependency_id: r.project_dependency_id as string,
+      osv_id: (r as { osv_id?: string }).osv_id as string,
+    });
+  }
+  const upsertRows = updates.map((u) => {
+    const key = pdvKeyById.get(u.id);
+    return {
+      ...u,
+      project_id: projectId,
+      project_dependency_id: key?.project_dependency_id,
+      osv_id: key?.osv_id,
+    };
+  });
   let updateFailures = 0;
-  for (const update of updates) {
-    const { id, ...fields } = update;
+  for (let i = 0; i < upsertRows.length; i += 100) {
+    const chunk = upsertRows.slice(i, i + 100);
     const { error: upErr } = await supabase
       .from('project_dependency_vulnerabilities')
-      .update(fields)
-      .eq('id', id);
-
+      .upsert(chunk, { onConflict: 'id' });
     if (upErr) {
-      updateFailures++;
-      if (updateFailures === 1) {
-        await logger.warn('epd', `Failed to update EPD row ${id}: ${upErr.message}`, {
+      updateFailures += chunk.length;
+      if (i === 0) {
+        await logger.warn('epd', `Failed to upsert EPD chunk (${chunk.length} rows): ${upErr.message}`, {
           epd_phase: 'update',
           project_id: projectId,
           error_message: upErr.message,
@@ -1469,7 +1511,7 @@ ${sourceContext || 'none'}`;
       }
     }
   }
-  if (updateFailures > 1) {
+  if (updateFailures > 0) {
     await logger.warn('epd', `${updateFailures} EPD updates failed total`, {
       epd_phase: 'update',
       project_id: projectId,

@@ -1,6 +1,6 @@
 import request from 'supertest';
 import app from '../../index';
-import { supabase, queryBuilder, setTableResponse, pushTableResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
+import { supabase, queryBuilder, setTableResponse, pushTableResponse, setRpcResponse, clearTableRegistry } from '../../test/mocks/supabaseSingleton';
 
 jest.mock('../../lib/supabase', () => ({ ...require('../../test/mocks/supabaseSingleton'), createUserClient: jest.fn() }));
 jest.mock('../../lib/activities', () => ({
@@ -865,6 +865,184 @@ describe('Project Routes', () => {
         .set('Authorization', `Bearer ${mockToken}`);
 
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('GET /api/organizations/:id/projects/:projectId/stats (truncation guard)', () => {
+    it('drives counts from the project_stats_counts RPC, never an unbounded row fetch', async () => {
+      const projectId = 'proj-stats-1';
+      setTableResponse('projects', 'maybeSingle', { data: { organization_id: orgId }, error: null });
+      // projects.single is consumed twice in order: getActiveExtractionId, then the projectRow lookup.
+      pushTableResponse('projects', { data: { active_extraction_run_id: 'run-1' }, error: null });
+      pushTableResponse('projects', { data: { health_score: 90, status_id: null, importance: 1.0 }, error: null });
+      // No direct deps → the bounded graph-severity fetch is skipped.
+      setTableResponse('project_dependencies', 'then', { data: [], error: null });
+      // bigint columns arrive as strings over JSON — assert the handler coerces them.
+      setRpcResponse('project_stats_counts', { data: [{
+        vuln_total: '1500', vuln_critical: '40', vuln_high: '60', vuln_medium: '900', vuln_low: '500', reachable_count: '120',
+        sla_on_track: '0', sla_warning: '0', sla_breached: '0', sla_exempt: '0', sla_met: '0', sla_resolved_late: '0',
+        deps_total: '1200', deps_direct: '10', deps_transitive: '1190', deps_outdated: '4',
+        deps_compliant: '8', deps_failing: '2', deps_vulnerable: '37',
+      }], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/projects/${projectId}/stats`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(supabase.rpc).toHaveBeenCalledWith('project_stats_counts', { p_project_id: projectId, p_active_run_id: 'run-1' });
+      expect(res.body.vulnerabilities.total).toBe(1500);
+      expect(res.body.vulnerabilities.critical).toBe(40);
+      expect(res.body.dependencies.total).toBe(1200);
+      expect(res.body.dependencies.transitive).toBe(1190);
+      // Regression guard: the old code fetched every pdv/dep row and counted in JS, truncating at
+      // PostgREST's 1000-row cap. Neither old unbounded-select signature may reappear.
+      const selectArgs = queryBuilder.select.mock.calls.map((c: any[]) => String(c[0] ?? ''));
+      expect(selectArgs.some((s: string) => s.includes('sla_status'))).toBe(false);
+      expect(selectArgs.some((s: string) => s.includes('policy_result'))).toBe(false);
+    });
+  });
+
+  describe('PDV mutations recompute the denormalized summary', () => {
+    it('suppressing a vulnerability fires recompute_project_summary', async () => {
+      const projectId = 'proj-recompute-1';
+      // getActiveExtractionId reads projects.single.
+      pushTableResponse('projects', { data: { active_extraction_run_id: 'run-1' }, error: null });
+
+      const res = await request(app)
+        .patch(`/api/organizations/${orgId}/projects/${projectId}/vulnerabilities/CVE-2024-1/suppress`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      // This is the #1 drift guard: the mutation MUST refresh the stored summary so the overview
+      // reflects the change on the next load.
+      expect(supabase.rpc).toHaveBeenCalledWith('recompute_project_summary', { p_project_id: projectId });
+    });
+  });
+
+  describe('GET /api/organizations/:id/security-summary reads the denormalized table', () => {
+    it('serves counts from project_security_summaries, not the live aggregation RPC', async () => {
+      const summaryRow = {
+        project_id: 'proj-a', organization_id: orgId, vuln_count: 10, critical_count: 2, reachable_count: 5,
+        worst_depscore: 88, band_critical: 2, band_high: 3, band_medium: 1, band_low: 0, ignored_count: 4,
+        semgrep_count: 1, secret_count: 0, verified_secret_count: 0, has_container: true, has_dast: false,
+        last_scan_at: '2026-06-01T00:00:00.000Z',
+      };
+      setTableResponse('projects', 'then', { data: [{ id: 'proj-a', name: 'Proj A', active_extraction_run_id: 'r1', infra_types: [] }], error: null });
+      setTableResponse('project_teams', 'then', { data: [{ project_id: 'proj-a', team_id: 'team-1', is_owner: true }], error: null });
+      setTableResponse('project_security_summaries', 'then', { data: [summaryRow], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/security-summary`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      const proj = res.body.projects.find((p: any) => p.project_id === 'proj-a');
+      expect(proj).toBeDefined();
+      expect(proj.vuln_count).toBe(10);
+      expect(proj.band_critical).toBe(2);
+      expect(proj.has_container).toBe(true);
+      expect(proj.last_scan_at).toBe('2026-06-01T00:00:00.000Z');
+      // The whole point of PR-B: the live 10-LATERAL aggregation RPC is no longer on the read path.
+      expect(supabase.rpc).not.toHaveBeenCalledWith('security_summary_counts', expect.anything());
+    });
+
+    it('lazily recomputes a project that has no stored summary row yet', async () => {
+      setTableResponse('projects', 'then', { data: [{ id: 'proj-new', name: 'New', active_extraction_run_id: 'r1', infra_types: [] }], error: null });
+      setTableResponse('project_teams', 'then', { data: [], error: null });
+      // No stored row → the lazy fallback must compute it on the spot.
+      setTableResponse('project_security_summaries', 'then', { data: [], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/security-summary`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(200);
+      expect(supabase.rpc).toHaveBeenCalledWith('recompute_project_summary', { p_project_id: 'proj-new' });
+    });
+  });
+
+  describe('GET /api/organizations/:id/overview bundles the 4 mount calls', () => {
+    // Mocks sufficient for ALL four builders (teams, projects, statuses, security-summary)
+    // so the bundle and the individual endpoints run against identical data.
+    const seedBundleMocks = () => {
+      const projectRow = {
+        id: 'proj-1', name: 'Proj One', organization_id: orgId, health_score: 90, status_id: null,
+        importance: 1.0, framework: 'react', active_extraction_run_id: 'r1', infra_types: [],
+        is_compliant: true, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      const teamRow = {
+        id: 'team-1', name: 'Team A', organization_id: orgId,
+        created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      // One row that satisfies all three project_teams consumers (projects embed teams:{id,name};
+      // security-summary reads team_id+is_owner; teams counts by team_id).
+      const projectTeamRow = { project_id: 'proj-1', team_id: 'team-1', is_owner: true, teams: { id: 'team-1', name: 'Team A' } };
+      const statusRow = {
+        id: 's1', organization_id: orgId, name: 'Open', color: null, rank: 1, is_passing: false,
+        is_system: false, description: null, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      };
+      const summaryRow = {
+        project_id: 'proj-1', organization_id: orgId, vuln_count: 7, critical_count: 1, reachable_count: 2,
+        worst_depscore: 80, band_critical: 1, band_high: 2, band_medium: 0, band_low: 0, ignored_count: 0,
+        semgrep_count: 0, secret_count: 0, verified_secret_count: 0, has_container: false, has_dast: false,
+        last_scan_at: '2026-06-01T00:00:00.000Z',
+      };
+      setTableResponse('teams', 'then', { data: [teamRow], error: null });
+      setTableResponse('projects', 'then', { data: [projectRow], error: null });
+      setTableResponse('project_teams', 'then', { data: [projectTeamRow], error: null });
+      setTableResponse('project_security_summaries', 'then', { data: [summaryRow], error: null });
+      setTableResponse('project_repositories', 'then', { data: [], error: null });
+      setTableResponse('team_members', 'then', { data: [], error: null });
+      setTableResponse('team_roles', 'then', { data: [], error: null });
+      setTableResponse('scan_jobs', 'then', { data: [], error: null });
+      setTableResponse('organization_statuses', 'then', { data: [statusRow], error: null });
+      setTableResponse('project_dependencies', 'then', { data: [], error: null });
+    };
+
+    it('returns teams/projects/statuses/securitySummary identical to the 4 individual endpoints', async () => {
+      seedBundleMocks();
+      const auth = (r: request.Test) => r.set('Authorization', `Bearer ${mockToken}`) as request.Test;
+
+      const [bundle, projects, teams, statuses, security] = await Promise.all([
+        auth(request(app).get(`/api/organizations/${orgId}/overview`)),
+        auth(request(app).get(`/api/organizations/${orgId}/projects`)),
+        auth(request(app).get(`/api/organizations/${orgId}/teams`)),
+        auth(request(app).get(`/api/organizations/${orgId}/statuses`)),
+        auth(request(app).get(`/api/organizations/${orgId}/security-summary`)),
+      ]);
+
+      expect(bundle.status).toBe(200);
+      expect(projects.status).toBe(200);
+      expect(teams.status).toBe(200);
+      expect(statuses.status).toBe(200);
+      expect(security.status).toBe(200);
+
+      // The core guarantee: the bundle is exactly the union of the 4 endpoints, with no drift.
+      expect(bundle.body.projects).toEqual(projects.body);
+      expect(bundle.body.teams).toEqual(teams.body);
+      expect(bundle.body.statuses).toEqual(statuses.body);
+      expect(bundle.body.securitySummary).toEqual(security.body);
+
+      // Sanity that the seeded data actually flowed through (not 4 empty arrays).
+      expect(bundle.body.projects[0].name).toBe('Proj One');
+      expect(bundle.body.teams[0].id).toBe('team-1');
+      expect(bundle.body.securitySummary.projects[0].vuln_count).toBe(7);
+    });
+
+    it('propagates a 404 when the caller is not a member of the org', async () => {
+      seedBundleMocks();
+      // statuses builder is the membership gate — a missing membership row 404s it,
+      // and the bundle surfaces that.
+      setTableResponse('organization_members', 'single', { data: null, error: { message: 'no rows' } });
+
+      const res = await request(app)
+        .get(`/api/organizations/${orgId}/overview`)
+        .set('Authorization', `Bearer ${mockToken}`);
+
+      expect(res.status).toBe(404);
     });
   });
 });

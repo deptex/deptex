@@ -121,6 +121,21 @@ export interface IrFunction {
    * the existing arg-text interpretation" so existing callers stay correct.
    */
   localOrigins?: Map<string, string>;
+  /**
+   * Map of single-assignment local/const names → the verbatim source text of
+   * their STRING-shaped initializer (string literal, template literal, or `+`
+   * string concat). Distinct from `localOrigins` (which captures object/array
+   * literals for the F4 option-bag resolver): this map feeds the propagator's
+   * constant-host SSRF/open-redirect guard (`url-host.ts`), which resolves
+   * `fetch(url)` / `` fetch(`${BASE}/...`) `` back to the literal `scheme://host`
+   * so a path/query-only taint isn't mis-flagged as SSRF.
+   *
+   * Poison semantics: a name reassigned anywhere in the function (or declared
+   * twice) is REMOVED so a stale init never over-resolves a later value. The
+   * propagator merges these across functions (module-level consts live in the
+   * synthetic module-initializer's map) and poisons cross-function collisions.
+   */
+  constStrings?: Map<string, string>;
 }
 
 export interface LowerOptions {
@@ -150,6 +165,15 @@ export interface LowerOptions {
    * though the literal-init itself emits zero step writes.
    */
   literalInitsWrites?: Map<string, number>;
+  /**
+   * Accumulator for `IrFunction.constStrings` (the constant-host SSRF guard's
+   * resolver map). First-writer-wins; a name captured here and then reassigned
+   * — or declared a second time — is moved to `constStringsPoisoned` so the
+   * post-walk assembly drops it.
+   */
+  constStringsAccumulator?: Map<string, string>;
+  /** Names disqualified from `constStringsAccumulator` by reassignment / re-declaration. */
+  constStringsPoisoned?: Set<string>;
 }
 
 /**
@@ -189,11 +213,15 @@ export function lowerFunction(
   const steps: Step[] = [];
   const literalInits = new Map<string, string>();
   const literalInitsWrites = new Map<string, number>();
+  const constStrings = new Map<string, string>();
+  const constStringsPoisoned = new Set<string>();
   if (body) {
     walkBody(body, steps, {
       ...opts,
       literalInitsAccumulator: literalInits,
       literalInitsWrites,
+      constStringsAccumulator: constStrings,
+      constStringsPoisoned,
     });
   }
 
@@ -205,9 +233,46 @@ export function lowerFunction(
   // map so re-declarations / reassignments correctly disqualify it.
   const localOrigins = filterLocalOrigins(literalInits, literalInitsWrites, steps);
 
+  // Drop poisoned (reassigned / re-declared) names from the const-string map.
+  for (const name of constStringsPoisoned) constStrings.delete(name);
+
   const ir: IrFunction = { id: funcId, params, steps };
   if (localOrigins.size > 0) ir.localOrigins = localOrigins;
+  if (constStrings.size > 0) ir.constStrings = constStrings;
   return ir;
+}
+
+/**
+ * Capture `const x = <string-shaped init>` into the constStrings accumulator
+ * (first-writer-wins; a second declaration of the same name poisons it). String
+ * shapes: string literal, no-substitution template, template expression, and
+ * binary `+` concatenation (which is string concat when a string operand is
+ * present — we over-include, the constant-host matcher rejects non-URL text).
+ */
+function captureConstString(
+  target: string,
+  initializer: ts.Expression,
+  opts: LowerOptions,
+): void {
+  const acc = opts.constStringsAccumulator;
+  const poisoned = opts.constStringsPoisoned;
+  if (!acc || !poisoned) return;
+  if (poisoned.has(target)) return;
+  const isStringShaped =
+    ts.isStringLiteral(initializer) ||
+    ts.isNoSubstitutionTemplateLiteral(initializer) ||
+    ts.isTemplateExpression(initializer) ||
+    (ts.isBinaryExpression(initializer) &&
+      initializer.operatorToken.kind === ts.SyntaxKind.PlusToken);
+  if (!isStringShaped) return;
+  if (acc.has(target)) {
+    // Declared twice with a string init — ambiguous; poison so we never
+    // resolve a stale value.
+    acc.delete(target);
+    poisoned.add(target);
+    return;
+  }
+  acc.set(target, initializer.getText(opts.sourceFile));
 }
 
 function filterLocalOrigins(
@@ -293,6 +358,10 @@ function walkStatement(stmt: ts.Node, steps: Step[], opts: LowerOptions): void {
     for (const decl of stmt.declarationList.declarations) {
       if (!decl.initializer) continue;
       const target = ts.isIdentifier(decl.name) ? decl.name.text : null;
+      // Constant-host SSRF guard: record string-shaped const initializers so
+      // the propagator can resolve `fetch(url)` / `` fetch(`${BASE}/...`) `` back
+      // to a literal scheme://host.
+      if (target) captureConstString(target, decl.initializer, opts);
       // Phase 2a: capture inline-literal initializers (`const x = { ... }`,
       // `const x = [ ... ]`) so F4 sanitizer-absence can resolve a hoisted
       // identifier back to the option-bag literal at the call site. First-
@@ -383,6 +452,12 @@ function walkExpressionAsAssign(
       return;
     }
     const lhsName = ts.isIdentifier(lhs) ? lhs.text : null;
+    // Reassignment poisons any constant-string capture for this name — a later
+    // `url = req.query.next` must not resolve to an earlier `url = 'https://...'`.
+    if (lhsName && opts.constStringsPoisoned) {
+      opts.constStringsAccumulator?.delete(lhsName);
+      opts.constStringsPoisoned.add(lhsName);
+    }
     walkExpressionAsAssign(expr.right, lhsName, steps, opts);
     return;
   }

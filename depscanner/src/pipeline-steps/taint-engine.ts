@@ -453,6 +453,21 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         await log.warn('taint_engine', `flow write: ${e}`);
       }
       fpFilterCostUsd = aiFilter?.costUsd ?? 0;
+      if (propagation.stats.stoppedEarly) {
+        // Cap-hit truncation = a PARTIAL flow set. Surface it LOUDLY: the
+        // downstream reachability classifier reads emitted flows as ground
+        // truth, so an un-walked reachable vuln can be demoted to
+        // module/unreachable and auto-ignored (a silence false-negative). The
+        // run is also stamped (errorCode below) so this is queryable, not just
+        // a log line.
+        await log.warn(
+          'taint_engine',
+          `Iteration budget exhausted — flow set is PARTIAL (silence-FN risk): worklist hit the ` +
+            `iteration cap after ${propagation.stats.functionsAnalyzed} functions / ` +
+            `${propagation.stats.worklistIterations} iterations. Reachable vulns may be ` +
+            `under-reported as module/unreachable.`,
+        );
+      }
       await writeTaintEngineRun(supabase, {
         projectId,
         organizationId,
@@ -472,7 +487,19 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         // the framework-generic pass only — every CVE-targeted verdict is
         // missing. Stamp the run so the classifier can tell this apart from
         // a genuine 0-CVE project rather than silently demoting CVEs.
-        errorCode: cveSpecResult.dbError ? 'cve_specs_db_error' : undefined,
+        // Truncation takes precedence over the cve-specs DB-error code: a
+        // partial flow set is the more consequential signal for the classifier
+        // (it must not read absent flows as a clean verdict). errorMessage
+        // carries the dimensions for triage. No new column — reuses error_code.
+        errorCode: propagation.stats.stoppedEarly
+          ? 'iteration_cap_truncated'
+          : cveSpecResult.dbError
+            ? 'cve_specs_db_error'
+            : undefined,
+        errorMessage: propagation.stats.stoppedEarly
+          ? `propagator hit iteration cap (functions=${propagation.stats.functionsAnalyzed}, ` +
+            `iterations=${propagation.stats.worklistIterations}); emitted flows truncated`
+          : undefined,
       });
       const detectorSuffix =
         detectorFlows.length > 0 ? ` + ${detectorFlows.length} detector finding(s)` : '';

@@ -1,5 +1,18 @@
 # Non-Taint Detector Regime — Phase F4 Design
 
+> **Historical path note (2026-06):** this design doc predates the move to the
+> framework-models taint engine. The per-CVE **rule-pack generator** it
+> references — `reachability-rules/CVE-YYYY-NNNNN-slug/rule.yml` + `fixtures/`
+> — has been **retired** and that directory no longer exists. Framework specs
+> now live in `src/taint-engine/framework-models/*.yaml` (one spec per
+> framework, not per CVE), and per-CVE regression fixtures live in
+> `test/cve-targeted-flow-fixtures/<lang>-*/` (run by the `cve-targeted` stage
+> of `npm run test:taint-engine-all`). The `reachability-rules/CVE-*/...`
+> snippets below are kept only to illustrate the original generator shape; read
+> them as historical, not as on-disk paths. The prototype detector
+> (`src/taint-engine/non-taint-detector.ts`) and `framework-models/` do still
+> exist.
+
 Companion to `docs/path-to-90-percent-recall.md`. Phase F4 in that writeup
 identifies ~8 CVEs in the 88-CVE corpus that the cross-file taint engine
 cannot validate even with perfect spec coverage and engine polish, because

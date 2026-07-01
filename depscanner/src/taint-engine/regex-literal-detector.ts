@@ -1,5 +1,10 @@
 /**
- * Phase 3.2 — regex-literal detector (NOT WIRED INTO PIPELINE).
+ * Phase 3.2 — regex-literal detector.
+ *
+ * WIRED INTO PIPELINE: `runner.ts#runDetectors` reads the workspace source
+ * files (`collectSourceFilesForRegex`) and calls `detectUnsafeRegexLiterals`,
+ * coercing each finding to a single-hop `redos` `Flow` via
+ * `detector-flows.ts#regexLiteralToFlow`.
  *
  * Walks source file text looking for regex literals declared in a
  * FrameworkSpec's `unsafe_regex_patterns` array. Emits one finding per
@@ -29,11 +34,11 @@
  * heavier; v1 keeps the surface small and lets the FP corpus precision
  * gate (deferred to Phase 5) tell us whether substring is enough.
  *
- * IMPORTANT: this module ships as a standalone building block. It is not
- * imported by `runner.ts` or `propagator.ts`. Pipeline wiring (per-CVE
- * spec dispatch, finding-shape mapping into `project_reachable_flows`,
- * confidence scoring) is a follow-up tracked alongside the Phase 3
- * detector regime in `.cursor/plans/reachability-90-percent.plan.md`.
+ * Pipeline wiring: `runner.ts#runDetectors` runs this BEFORE the call-site
+ * early-outs (a module that only declares `const RE = /unsafe/` has zero
+ * callsites but is exactly what this detector targets), then maps each
+ * finding into `project_reachable_flows` via `regexLiteralToFlow` with the
+ * CVE attribution carried from the spec's first osv-bearing sink.
  */
 
 import type { FrameworkSpec, UnsafeRegexPattern } from './spec';

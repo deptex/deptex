@@ -1,5 +1,10 @@
 /**
- * Non-taint detector regime — Phase F4 prototype (NOT WIRED INTO PIPELINE).
+ * Non-taint detector regime — Phase F4.
+ *
+ * WIRED INTO PIPELINE: `runner.ts` imports `detectSanitizerAbsence` +
+ * `extractCallSitesFromIr` and coerces the findings to `Flow` via
+ * `detector-flows.ts#sanitizerAbsenceToFlow`. The validate harness +
+ * rule-generator/validate.ts exercise the same path.
  *
  * The cross-file taint engine answers one question: "does attacker-controlled
  * data reach a dangerous sink along a feasible call chain?". A subset of the
@@ -29,12 +34,12 @@
  * with the SBOM-side data the propagator does not currently see. That work
  * is deferred.
  *
- * IMPORTANT: this file ships as a stand-alone building block. It is not
- * imported by `runner.ts`, `propagator.ts`, or any per-language driver. The
- * unit test in `__tests__/non-taint-detector.test.ts` exercises the public
- * surface with synthetic inputs. Wiring into the actual pipeline (call-site
- * discovery, finding emission, classifier integration, schema-mirror story)
- * is a follow-up tracked in `docs/non-taint-detector-regime.md`.
+ * Pipeline wiring: `runner.ts#runDetectors` calls `extractCallSitesFromIr`
+ * then `detectSanitizerAbsence` per spec and merges the coerced `Flow`
+ * records into the engine's detector-flow output. The unit test in
+ * `__tests__/non-taint-detector.test.ts` + `test/taint-engine-const-resolver.test.ts`
+ * exercise the public surface with synthetic inputs. The version-comparison
+ * detector sketched in `docs/non-taint-detector-regime.md` remains deferred.
  */
 
 import type { FrameworkSpec, FrameworkSink, RequiredArgument, VulnClass } from './spec';
@@ -110,23 +115,26 @@ export interface NonTaintFinding {
  * Detect sanitizer-absence findings by walking the spec's sinks and matching
  * each callsite against the sink's pattern + required_arguments contract.
  *
- * The matching is intentionally simple — string-equality on calleeText with
- * trailing-`(*)` stripped. This matches the existing taint engine's
- * `matchesCallPattern` style well enough for a prototype; production wiring
- * would replace this with a call into `pattern-syntax.ts`'s
- * `matchesCallPattern` so wildcard receivers, method chains, and the
- * cross-language quirks all behave identically to taint matching.
+ * Matching delegates to the taint engine's own `matchesCallPattern`
+ * (propagate-core.ts) so wildcard receivers, method chains, and the
+ * trailing-`(*)` stripping behave identically to taint sink matching.
  */
 export function detectSanitizerAbsence(
   spec: FrameworkSpec,
   callsites: CallSite[],
+  // Accepted for caller API stability (runner.ts / validate.ts / per-language
+  // tests pass the project language positionally). Currently unused: pattern
+  // matching is language-agnostic (`matchesCallPattern` keys off the YAML's
+  // declared separator, not the project language). Kept as a hook for a
+  // future receiver-aware matcher.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   language?: 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp',
 ): NonTaintFinding[] {
   const findings: NonTaintFinding[] = [];
   for (const sink of spec.sinks) {
     if (!sink.required_arguments || sink.required_arguments.length === 0) continue;
     for (const cs of callsites) {
-      if (!matchesCallPattern(sink.pattern, cs.calleeText, language)) continue;
+      if (!matchesCallPattern(sink.pattern, cs.calleeText)) continue;
       for (const req of sink.required_arguments) {
         const mode: 'required' | 'forbidden' | 'must_equal' = req.match_mode ?? 'required';
         const trigger = evaluateRequirement(req, cs, mode);

@@ -30,6 +30,17 @@ export class SpecValidationError extends Error {
 }
 
 const TAINT_KINDS: readonly TaintKind[] = ['http_input', 'env', 'file', 'cli', 'rpc'];
+
+/**
+ * Upper bound on a sink's positional `argument_indices`. No real call
+ * signature carries a security-relevant argument anywhere near this index
+ * (the largest in the bundled corpus is 4), so an index at or above this cap
+ * is always the legacy out-of-range `[99]` sentinel — a hack used to keep a
+ * sink silent in the taint regime while its detector regime fired. That
+ * intent now has a first-class home (`taint_disabled: true`), so the loader
+ * rejects the sentinel outright to stop it creeping back in.
+ */
+const MAX_ARGUMENT_INDEX = 32;
 const VULN_CLASS_SET = new Set<string>(ALL_VULN_CLASSES);
 const TAINT_KIND_SET = new Set<string>(TAINT_KINDS);
 
@@ -198,6 +209,14 @@ function validateSink(input: unknown, fieldPath: string, source?: string): Frame
           source,
         );
       }
+      if (v > MAX_ARGUMENT_INDEX) {
+        throw new SpecValidationError(
+          `argument_indices[${i}] = ${v} exceeds the max (${MAX_ARGUMENT_INDEX}); ` +
+            `to keep a sink out of the taint regime use \`taint_disabled: true\` instead of an out-of-range sentinel`,
+          `${fieldPath}.argument_indices[${i}]`,
+          source,
+        );
+      }
       return v;
     });
   }
@@ -231,7 +250,30 @@ function validateSink(input: unknown, fieldPath: string, source?: string): Frame
       validateRequiredArgument(r, `${fieldPath}.required_arguments[${i}]`, source),
     );
   }
-  return { pattern, vuln_class: vuln_class as VulnClass, argument_indices, description, osv_id, required_arguments };
+  // T6 — `taint_disabled` removes the sink from the taint-flow regime while
+  // leaving it live for the non-taint detector regime. Replaces the legacy
+  // out-of-range `[99]` argument_indices sentinel.
+  const taintDisabledRaw = (input as Record<string, unknown>).taint_disabled;
+  let taint_disabled: boolean | undefined;
+  if (taintDisabledRaw !== undefined) {
+    if (typeof taintDisabledRaw !== 'boolean') {
+      throw new SpecValidationError(
+        `taint_disabled must be a boolean when present, got ${JSON.stringify(taintDisabledRaw)}`,
+        `${fieldPath}.taint_disabled`,
+        source,
+      );
+    }
+    taint_disabled = taintDisabledRaw;
+  }
+  return {
+    pattern,
+    vuln_class: vuln_class as VulnClass,
+    argument_indices,
+    description,
+    osv_id,
+    required_arguments,
+    taint_disabled,
+  };
 }
 
 function validateRequiredArgument(input: unknown, fieldPath: string, source?: string): RequiredArgument {

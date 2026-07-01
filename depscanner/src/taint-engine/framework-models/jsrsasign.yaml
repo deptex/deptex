@@ -32,6 +32,13 @@
 # Sources NOT redeclared — Express/Fastify/NestJS request sources are
 # pre-tainted by the per-framework specs; the AI fixture relies on
 # express.yaml's `req.body.*`.
+#
+# argument_indices: [0] on every sink (was `[]` = "any tainted arg fires").
+# The attacker-controlled signature / ciphertext is always the FIRST argument
+# of these verify/decrypt primitives (e.g. `key.decryptOAEP(ciphertext)`,
+# `sig.verifyHexSignatureForMessage(hSig)`). Pinning to arg 0 keeps recall on
+# the real CVE shape while no longer firing on a benign call that merely
+# passes a tainted value as a SECONDARY argument (a label / encoding / option).
 
 framework: jsrsasign
 version: "*"
@@ -42,52 +49,50 @@ sources: []
 sinks:
   # ---------- Weak crypto — signature verification family ----------
   # CVE-2024-21484 et al. — KJUR.crypto.Signature verify accepts crafted
-  # signatures from attacker input. Wildcard receiver covers both the
-  # canonical `sig.verifySignature(...)` and the destructured shape.
-  - pattern: "*.verify(*)"
-    vuln_class: weak_crypto
-    argument_indices: []
-    description: jsrsasign KJUR.crypto.Signature.verify — tainted signature accepted (CVE-2024-21484 family)
+  # signatures from attacker input. We target the jsrsasign-SPECIFIC verify
+  # method names below rather than a bare `*.verify(*)` wildcard: that wildcard
+  # matched ANY `.verify` callee — QStash `receiver.verify`, nodemailer
+  # `transporter.verify`, node `crypto.verify`, passport strategy `verify`, etc.
+  # — none of which are jsrsasign and all of which are signature-VERIFICATION
+  # controls (the opposite of a sink). The named patterns keep recall on the
+  # real jsrsasign surface without that cross-library false-positive blast.
   - pattern: "*.verifyHexSignatureForMessage(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign verifyHexSignatureForMessage — tainted signature material
   - pattern: "*.verifySignature(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign verifySignature — tainted signature material
   - pattern: "*.verifyJWT(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWT — tainted JWT
   - pattern: "*.verifyJWS(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWS — tainted JWS
   - pattern: "KJUR.jws.JWS.verify(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verify — namespaced
   - pattern: "KJUR.jws.JWS.verifyJWT(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign KJUR.jws.JWS.verifyJWT — namespaced
 
   # ---------- Weak crypto — decrypt family ----------
-  # The AI fixture for CVE-2024-21484 uses `key.decrypt(ciphertext)`.
-  # Wildcard receiver matches the `RSAKey.decrypt` / `KEYUTIL.getKey(...).
-  # decrypt` instance call.
-  - pattern: "*.decrypt(*)"
-    vuln_class: weak_crypto
-    argument_indices: []
-    description: jsrsasign RSAKey.decrypt / instance decrypt — tainted ciphertext routed into RSA decryption (CVE-2024-21484 canonical AI shape)
+  # jsrsasign RSAKey decrypt surface for CVE-2024-21484. A bare `*.decrypt(*)`
+  # wildcard matched every `.decrypt` callee in any codebase (node `crypto`
+  # decipher, libsodium, app-level helpers) — too broad. The OAEP/PKCS1 named
+  # variants below are jsrsasign-specific; the generic decrypt entry is dropped.
   - pattern: "*.decryptOAEP(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign RSAKey.decryptOAEP — tainted ciphertext through OAEP
   - pattern: "*.decryptPKCS1(*)"
     vuln_class: weak_crypto
-    argument_indices: []
+    argument_indices: [0]
     description: jsrsasign RSAKey.decryptPKCS1 — tainted ciphertext through PKCS1
 
 sanitizers: []

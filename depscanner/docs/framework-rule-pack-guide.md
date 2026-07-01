@@ -174,41 +174,46 @@ Do NOT heuristically classify as `AUTH_INTERNAL` just because a route has `/admi
 
 ## Testing a detector
 
-Tests live in `src/framework-rules/__tests__/<language>.test.ts`. They use the `extractInline` helper to run the real language module + detector over inline source, without staging a workspace.
+There are **no direct unit tests for the detectors yet** — the
+`src/framework-rules/__tests__/<language>.test.ts` path referenced by earlier
+drafts of this guide was never created. Today the detectors are covered
+**end-to-end**:
+
+- **Snapshot fixture suite** — `npm run test:fixtures` runs the full pipeline,
+  including the `usage-extraction` step that invokes each language module's
+  framework detectors, over `fixtures/test-*`. A detector regression shifts the
+  emitted JSON and fails the snapshot diff (the `depscanner-fixtures` CI job).
+- **Per-language taint suites** — `npm run test:taint-engine-<lang>` (run by
+  `npm run test:taint-engine-all`) exercise the real language extractor +
+  framework entry-point detection over the taint fixtures.
+
+To add a **direct** detector test, the `extractInline` helper in
+`src/framework-rules/test-helpers.ts` runs the real language module + detector
+over inline source without staging a workspace:
 
 ```ts
-// src/framework-rules/__tests__/javascript.test.ts
-import { javascriptModule } from '../../tree-sitter-extractor/languages/javascript';
-import { dep, entryPointsFor, extractInline } from '../test-helpers';
+import { javascriptModule } from '../src/tree-sitter-extractor/languages/javascript';
+import { dep, entryPointsFor, extractInline } from '../src/framework-rules/test-helpers';
 
-describe('myframework', () => {
-  it('detects a basic route', async () => {
-    const file = await extractInline(
-      javascriptModule,
-      `
-        const mf = require('my-framework');
-        const app = mf();
-        app.get('/hello', handler);
-      `,
-      '/tmp/app.js',
-      [dep('my-framework')],
-    );
-    const eps = entryPointsFor(file, 'myframework');
-    expect(eps).toHaveLength(1);
-    expect(eps[0].httpMethod).toBe('GET');
-    expect(eps[0].routePattern).toBe('/hello');
-  });
-});
+const file = await extractInline(
+  javascriptModule,
+  `const mf = require('my-framework');
+   const app = mf();
+   app.get('/hello', handler);`,
+  '/tmp/app.js',
+  [dep('my-framework')],
+);
+const eps = entryPointsFor(file, 'myframework');
+// assert: eps.length === 1, eps[0].httpMethod === 'GET', eps[0].routePattern === '/hello'
 ```
 
-Run them:
-
-```bash
-cd depscanner
-NODE_OPTIONS=--experimental-vm-modules npx jest src/framework-rules/__tests__/javascript.test.ts
-```
-
-The `NODE_OPTIONS=--experimental-vm-modules` flag is required — the extractor dynamically imports `web-tree-sitter` WASM grammars.
+Write such suites as **standalone tsx** scripts under `test/` — the pattern the
+existing `test/taint-engine-*.test.ts` suites use — and run them with
+`npx tsx test/<your-suite>.test.ts`. Do **not** use jest: the extractor
+dynamically imports `web-tree-sitter` WASM grammars, which don't survive jest's
+vm-isolate sandbox without `--experimental-vm-modules` (this is why the whole
+taint-engine regression matrix is tsx-driven, not jest — see the preflight job
+in `.github/workflows/test.yml`).
 
 One test per framework is the baseline. Add a second test when you've handled a non-obvious shape (decorator nesting, CJS IIFE, macro form) — that's where regressions sneak in.
 

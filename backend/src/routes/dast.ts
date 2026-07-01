@@ -8,6 +8,7 @@ import {
   checkOrgManageIntegrationsPermission,
 } from '../lib/project-access';
 import { loadTargetOrDeny, isLoadTargetDeny } from '../lib/dast-tenant-guard';
+import { DAST_SCAN_TYPES, loadDastFindings } from '../lib/dast-findings';
 import { validateScopeConfig } from '../lib/dast-scope-validate';
 import { detectRuntime, nextRuntimeTtlIso } from '../lib/dast-spa-detect';
 import { validateAndPrepareCredential, summarizePayload, validateDastJobPayload } from '../lib/dast-credential-validate';
@@ -29,7 +30,6 @@ import {
 import type {
   DastConfigDTO,
   DastCredentialSummaryDTO,
-  DastFindingDTO,
   DastJobDTO,
   DastScanProfile,
   DastTargetDTO,
@@ -41,7 +41,6 @@ router.use(authenticateUser);
 const VALID_SCAN_PROFILES: ReadonlySet<DastScanProfile> = new Set(['auto', 'quick', 'full', 'api']);
 const TIMEOUT_MIN = 5;
 const TIMEOUT_MAX = 60;
-const DAST_SCAN_TYPES = ['dast', 'dast_zap', 'dast_nuclei', 'dast_zap_dry_run'];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1652,167 +1651,35 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
 // GET /:projectId/dast/findings?limit=N&target_id=...
 // ---------------------------------------------------------------------------
 
-/**
- * Coarse impact class for a DAST finding, keyed off ZAP/Nuclei's alert name.
- * Server-side injection (SQLi, SSTI, command/code injection, traversal, SSRF,
- * deserialization, XXE) is the high-impact tier; XSS/CSRF/open-redirect the
- * middle; passive header/cache/cookie/info-disclosure hygiene the low tier
- * (best-practice nudges that fire on nearly every site).
- */
-function dastImpactClass(vulnType: string | null | undefined): 'injection' | 'xss' | 'passive' | 'other' {
-  const t = (vulnType ?? '').toLowerCase();
-  if (
-    /sql injection|command injection|code injection|template injection|ldap injection|xpath|path traversal|remote os command|remote code|server side request|ssrf|xxe|xml external|deserial/.test(t)
-  ) {
-    return 'injection';
-  }
-  if (/cross site scripting|cross-site scripting|\bxss\b|cross site request|cross-site request|\bcsrf\b|open redirect/.test(t)) {
-    return 'xss';
-  }
-  if (
-    /header|\bcache|cookie|\bcsp\b|content security policy|clickjack|x-powered-by|information disclosure|source code disclosure|strict-transport|spectre|site isolation|storable|cacheable|permissions policy|sec-fetch|mime|x-content-type|charset|timestamp|comment/.test(t)
-  ) {
-    return 'passive';
-  }
-  return 'other';
-}
-
-/**
- * DAST findings carry no stored depscore (unlike container/IaC findings, which
- * are scored at scan time). We derive a priority score on read so the unified
- * findings table can sort DAST alongside every other scanner category — and so
- * the score actually differentiates findings instead of pinning every "high"
- * alert at one number. The score combines:
- *   - severity (ZAP/Nuclei risk band),
- *   - confidence (how sure the scanner is it's real — confirmed/high/med/low),
- *   - impact class (server-side injection > XSS > passive hygiene).
- * It's then floored into the critical band when the hit is cross-linked to a
- * known-vulnerable dependency (confirmed exploitable) or is CISA-KEV tagged.
- */
-function dastDepscore(
-  severity: string | null | undefined,
-  opts: { confidence?: string | null; vulnType?: string | null; confirmedExploitable: boolean; kev: boolean },
-): number | null {
-  let score: number;
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical': score = 90; break;
-    case 'high': score = 72; break;
-    case 'medium': score = 48; break;
-    case 'low': score = 26; break;
-    case 'info': score = 10; break;
-    default: return null;
-  }
-  switch ((opts.confidence ?? '').toLowerCase()) {
-    case 'confirmed': score += 10; break;
-    case 'high': score += 6; break;
-    case 'low': score -= 12; break;
-    // medium / unknown: no adjustment
-  }
-  switch (dastImpactClass(opts.vulnType)) {
-    case 'injection': score += 10; break;
-    case 'xss': score += 4; break;
-    case 'passive': score -= 8; break;
-    // other: no adjustment
-  }
-  if (opts.confirmedExploitable) score = Math.max(score, 90);
-  if (opts.kev) score = Math.max(score, 96);
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
 router.get('/:projectId/dast/findings', async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const { projectId } = req.params;
     const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
     const filterTargetId = typeof req.query.target_id === 'string' ? req.query.target_id : null;
+    // Opt-in: resolve the target server-side instead of forcing the caller to
+    // do a jobs→findings waterfall. The Findings tab used to fetch /dast/jobs,
+    // pick `jobs.find(j => j.target_id)`, then fetch /dast/findings — two
+    // serial round-trips on the project-open critical path. With this flag the
+    // server runs the same selection and returns findings in one request.
+    const resolveLatestTarget = req.query.resolve_target === 'latest';
 
     const access = await resolveProjectAccess(userId, projectId);
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
 
-    if (!filterTargetId) {
-      // v2.1b: target_id is required. The legacy projects.active_dast_run_id
-      // fallback was retired with phase24b — every finding belongs to a
-      // project_dast_targets row, so callers must specify which target's
-      // findings to load.
-      return res.json([]);
-    }
-
-    const guard = await loadTargetOrDeny(
-      supabase,
-      filterTargetId,
+    // Target resolution + tenant guard + findings shaping live in
+    // lib/dast-findings.ts so the project findings-bundle reuses them verbatim.
+    const result = await loadDastFindings(supabase, {
       projectId,
-      access.organizationId,
-    );
-    if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
-
-    const { data: targetRow } = await supabase
-      .from('project_dast_targets')
-      .select('active_dast_run_id')
-      .eq('id', filterTargetId)
-      .maybeSingle();
-    if (!targetRow?.active_dast_run_id) return res.json([]);
-    const activeRunId = targetRow.active_dast_run_id;
-
-    const query = supabase
-      .from('project_dast_findings')
-      .select(
-        'id, target_id, auth_state, engine, kev, endpoint_url, http_method, vulnerability_type, severity, cwe_id, owasp_top10_ref, rule_id, message, payload_redacted, response_evidence_redacted, confidence, handler_file_path, handler_function_name, handler_line, handler_code_snippet, linked_sca_osv_id, linked_sca_project_dependency_id, linked_sast_finding_id, cross_link_methods, status, risk_accepted_reason, created_at, finding_key, auto_ignored, auto_ignore_reason',
-      )
-      .eq('project_id', projectId)
-      .eq('target_id', filterTargetId)
-      .eq('dast_run_id', activeRunId)
-      .order('severity', { ascending: true })
-      .limit(limit);
-
-    const { data, error } = await query;
-    if (error) {
-      console.error('[dast] GET findings error:', error.message);
-      return res.status(500).json({ error: 'Failed to load DAST findings' });
-    }
-
-    const findings: DastFindingDTO[] = (data ?? []).map((row: any) => {
-      const confirmedExploitable = row.linked_sca_osv_id != null;
-      const kev = row.kev ?? false;
-      return {
-        id: row.id,
-        target_id: row.target_id ?? null,
-        auth_state: row.auth_state ?? null,
-        engine: row.engine ?? 'zap',
-        kev,
-        endpoint_url: row.endpoint_url,
-        http_method: row.http_method,
-        vulnerability_type: row.vulnerability_type,
-        severity: row.severity,
-        cwe_id: row.cwe_id,
-        owasp_top10_ref: row.owasp_top10_ref,
-        rule_id: row.rule_id,
-        message: row.message,
-        payload_redacted: row.payload_redacted,
-        response_evidence_redacted: row.response_evidence_redacted,
-        confidence: row.confidence,
-        handler_file_path: row.handler_file_path,
-        handler_function_name: row.handler_function_name,
-        handler_line: row.handler_line,
-        handler_code_snippet: row.handler_code_snippet ?? null,
-        linked_sca_osv_id: row.linked_sca_osv_id,
-        linked_sca_project_dependency_id: row.linked_sca_project_dependency_id,
-        linked_sast_finding_id: row.linked_sast_finding_id ?? null,
-        cross_link_methods: row.cross_link_methods ?? null,
-        confirmed_exploitable: confirmedExploitable,
-        depscore: dastDepscore(row.severity, {
-          confidence: row.confidence,
-          vulnType: row.vulnerability_type,
-          confirmedExploitable,
-          kev,
-        }),
-        status: row.status,
-        risk_accepted_reason: row.risk_accepted_reason,
-        created_at: row.created_at,
-      } as DastFindingDTO;
+      organizationId: access.organizationId,
+      limit,
+      filterTargetId,
+      resolveLatestTarget,
     });
-    return res.json(findings);
+    if (result.deny) return res.status(result.deny.status).json({ error: result.deny.error });
+    return res.json(result.findings);
   } catch (e: any) {
     console.error('[dast] GET findings exception:', e);
     return res.status(500).json({ error: 'Failed to load DAST findings' });

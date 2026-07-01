@@ -182,6 +182,27 @@ function collectImports(root: Node, source: string): { imports: ImportBinding[];
           }
         }
       }
+    } else if (node.type === 'call_expression') {
+      // Dynamic import: `import('mod')` / `await import('mod')` /
+      // `const x = await import('mod')`. Tree-sitter represents the callee as
+      // an `import` node, so neither the `import_statement` branch (static ESM)
+      // nor the `require(...)` branch above sees it. Without this, a dep pulled
+      // in only via dynamic import (e.g. `const simpleGit = await import('simple-git')`
+      // in backend/src/lib/github.ts) had files_importing_count=0 and was
+      // mis-classified `unreachable` → its CVEs auto-ignored. Record the module
+      // as a side-effect import so the dep counts as reached (module tier).
+      const fn = node.childForFieldName('function');
+      const isDynamicImport =
+        fn != null && (fn.type === 'import' || (fn.type === 'identifier' && textOf(fn, source) === 'import'));
+      if (isDynamicImport) {
+        const args = node.childForFieldName('arguments');
+        const firstArg = args?.namedChild(0);
+        const modSource = extractStringLiteral(firstArg ?? null, source);
+        if (modSource) {
+          const line = node.startPosition.row;
+          imports.push({ localName: '', importedName: null, source: modSource, line, kind: 'side-effect' });
+        }
+      }
     }
 
     for (let i = 0; i < node.namedChildCount; i++) walk(node.namedChild(i)!);

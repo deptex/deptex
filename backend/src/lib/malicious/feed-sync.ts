@@ -25,7 +25,9 @@ import { supabase } from '../supabase';
 import { canonicalizeEcosystem, canonicalizePackageName, type CanonicalEcosystem } from './ecosystem';
 import type { MaliciousFeedSource, MaliciousFeedSyncState, MaliciousSeverity } from './types';
 import { getGitHubToken } from '../ghsa';
-import { resolveVulnerableRange, makePackumentCache, type PackumentCache } from './version-range';
+import semver from 'semver';
+import { resolveVulnerableRange, parseGhsaRange, makePackumentCache, type PackumentCache } from './version-range';
+import { parsedToSemver } from './version-range/npm';
 
 export interface FeedSyncResult {
   source: MaliciousFeedSource;
@@ -39,6 +41,13 @@ export interface FeedSyncResult {
 interface UpsertEntry {
   package_name: string;
   version: string | null;
+  /**
+   * A worker-evaluable semver range (npm only — N4). Populated when an
+   * advisory carries a version RANGE rather than a concrete version, so the
+   * depscanner side flags only installed versions that SATISFY the range.
+   * Null for every exact-version row and every non-npm row.
+   */
+  vulnerable_range: string | null;
   ecosystem: string;
   source: MaliciousFeedSource;
   source_id: string;
@@ -399,14 +408,46 @@ async function advisoryToEntries(
     // 1. Explicit version list (OSV publishes these for most MAL-* entries).
     let versions: Array<string | null> | null = pickVersions(a);
 
-    // 2. GHSA's `vulnerableVersionRange` — expand to concrete versions via
-    //    per-ecosystem registry lookup. Falls through to `[null]` (= "all
-    //    versions") when the resolver can't enumerate.
-    if (!versions && typeof a?.vulnerableVersionRange === 'string' && a.vulnerableVersionRange.trim()) {
+    // The advisory's range expression. Only GHSA carries this field
+    // (`vulnerableVersionRange`); OSV 'affected' entries publish explicit
+    // versions, handled by pickVersions above.
+    const rawRange =
+      typeof a?.vulnerableVersionRange === 'string' && a.vulnerableVersionRange.trim()
+        ? a.vulnerableVersionRange.trim()
+        : null;
+
+    // 2a. npm RANGE (N4) — store the range as a worker-evaluable `semver`
+    //     string instead of enumerating concrete versions. Scoped to npm:
+    //     semver is the only range grammar the depscanner side evaluates
+    //     correctly, so we never guess foreign ecosystems' range semantics.
+    //     A single exact `= X` stays a concrete-version row (exact-match path).
+    //     A real range becomes a `version=null, vulnerable_range=<semver>` row
+    //     so the worker flags only versions that SATISFY the range — never a
+    //     name-only flag-all (FP) nor a skipped advisory (FN).
+    let vulnerableRange: string | null = null;
+    if (!versions && rawRange && eco === 'npm') {
+      const parsed = parseGhsaRange(rawRange);
+      if (parsed && parsed.length === 1 && parsed[0].op === '=') {
+        versions = [parsed[0].version];
+      } else if (parsed) {
+        const semverRange = parsedToSemver(parsed);
+        // Only store a range semver can actually evaluate. An unparseable one
+        // falls through to the version=null fallback below (skipped at scan
+        // time — a safe false negative, never flag-all).
+        if (semverRange && semver.validRange(semverRange)) {
+          vulnerableRange = semverRange;
+        }
+      }
+    }
+
+    // 2b. Non-npm GHSA range — expand to concrete versions via per-ecosystem
+    //     registry lookup (unchanged). Falls through to `[null]` (= name-only,
+    //     skipped at scan time) when the resolver can't enumerate.
+    if (!versions && !vulnerableRange && rawRange && eco !== 'npm') {
       const resolved = await resolveVulnerableRange(
         eco as CanonicalEcosystem,
         name,
-        a.vulnerableVersionRange,
+        rawRange,
         cache,
       );
       if (resolved && resolved.length > 0) {
@@ -418,13 +459,14 @@ async function advisoryToEntries(
       }
     }
 
-    // 3. Fallback: one row with version=null = matches every installed version.
-    versions = versions ?? [null];
-
-    for (const v of versions) {
+    // 3. Emit. A range row supersedes version rows for the same advisory;
+    //    otherwise fall back to a single version=null row (name-only — kept so
+    //    withdrawals propagate, but skipped at scan time under precision-first).
+    if (vulnerableRange) {
       entries.push({
         package_name: name,
-        version: v ?? null,
+        version: null,
+        vulnerable_range: vulnerableRange,
         ecosystem: eco,
         source,
         source_id: sourceId,
@@ -432,6 +474,20 @@ async function advisoryToEntries(
         description,
         withdrawn,
       });
+    } else {
+      for (const v of versions ?? [null]) {
+        entries.push({
+          package_name: name,
+          version: v ?? null,
+          vulnerable_range: null,
+          ecosystem: eco,
+          source,
+          source_id: sourceId,
+          severity,
+          description,
+          withdrawn,
+        });
+      }
     }
   }
   return entries;
@@ -492,6 +548,7 @@ async function upsertEntries(
   const rows = deduped.map((e) => ({
     package_name: e.package_name,
     version: e.version,
+    vulnerable_range: e.vulnerable_range,
     ecosystem: e.ecosystem,
     source: e.source,
     source_id: e.source_id,

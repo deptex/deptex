@@ -531,22 +531,10 @@ interface NpmV1LockEntry {
 }
 
 function collectPypiDevDeps(repoRoot: string, devNames: Set<string>): void {
-  // pyproject.toml: [tool.poetry.dev-dependencies] or [project.optional-dependencies]
   const pyprojectPath = path.join(repoRoot, 'pyproject.toml');
   try {
-    const content = fs.readFileSync(pyprojectPath, 'utf8');
-    // Simple heuristic: lines under [tool.poetry.dev-dependencies] until next section
-    const devSection = content.match(
-      /\[tool\.poetry\.dev-dependencies\]([\s\S]*?)(?=\n\[|\n$)/
-    );
-    if (devSection) {
-      const lines = devSection[1].split('\n');
-      for (const line of lines) {
-        const match = line.match(/^(\S+)\s*=/);
-        if (match && match[1] !== 'python') devNames.add(match[1]);
-      }
-    }
-  } catch { /* ignore */ }
+    collectPyprojectDevNames(fs.readFileSync(pyprojectPath, 'utf8'), devNames);
+  } catch { /* no pyproject.toml or read error */ }
 
   // requirements-dev.txt
   const reqDevPath = path.join(repoRoot, 'requirements-dev.txt');
@@ -559,6 +547,109 @@ function collectPypiDevDeps(repoRoot: string, devNames: Set<string>): void {
       if (name) devNames.add(name.toLowerCase());
     }
   } catch { /* ignore */ }
+}
+
+/**
+ * Collect dev/test/build-tool dependency names from a `pyproject.toml`, covering
+ * the modern Python tool matrix (not just Poetry-classic). cdxgen can't tell
+ * dev scope from these sections, so the manifest is the source of truth.
+ *
+ * Two value shapes exist and both are handled:
+ *   - TOML table keyed BY package name (Poetry):
+ *       [tool.poetry.dev-dependencies] / [tool.poetry.group.<g>.dependencies]
+ *       → `pytest = "^7"` — the KEY is the package name.
+ *   - Array of PEP 508 requirement strings:
+ *       [dependency-groups]            (PEP 735 — `dev = ["pytest>=7", ...]`)
+ *       [tool.pdm.dev-dependencies]    (PDM — `test = ["pytest"]`)
+ *       [tool.uv] dev-dependencies     (uv legacy — `dev-dependencies = [...]`)
+ *       [tool.hatch.envs.<env>]        (Hatch — `dependencies = [...]` /
+ *                                        `extra-dependencies = [...]`)
+ *       → the package name is the leading token of each quoted requirement.
+ *
+ * `[project.optional-dependencies]` is intentionally NOT treated as dev: its
+ * groups are user-facing extras that may be production features, and flooring
+ * one to `unreachable` would be a false negative.
+ */
+export function collectPyprojectDevNames(content: string, devNames: Set<string>): void {
+  type Mode = 'none' | 'keyTable' | 'reqArrayMap' | 'reqArrayKeys';
+  let mode: Mode = 'none';
+  let allowedKeys = new Set<string>();
+  // Multi-line array tracking — an array value can span many lines.
+  let inArray = false;
+  let arrayIsDev = false;
+
+  const addReqNames = (chunk: string) => {
+    // Strip inline tables (PEP 735 `{ include-group = "x" }`) so their keys/
+    // values aren't mistaken for package names; PEP 508 entries are plain strings.
+    const cleaned = chunk.replace(/\{[^}]*\}/g, '');
+    const re = /["']([^"']+)["']/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(cleaned)) !== null) {
+      const name = m[1].match(/^([A-Za-z0-9._-]+)/)?.[1];
+      if (name) devNames.add(name.toLowerCase());
+    }
+  };
+
+  // Does `text` contain the array's closing `]`? Strip quoted strings + inline
+  // tables first so a `]` inside a PEP 508 extras spec (`"coverage[toml]"`) is
+  // not mistaken for the array terminator — that bug dropped the next entry.
+  const closesArray = (text: string): boolean =>
+    text.replace(/["'][^"']*["']/g, '').replace(/\{[^}]*\}/g, '').includes(']');
+
+  const classify = (header: string): { mode: Mode; allowedKeys?: Set<string> } => {
+    // Normalise quoted path segments: [tool.poetry.group."dev".dependencies].
+    const h = header.trim().replace(/"/g, '');
+    if (h === 'tool.poetry.dev-dependencies') return { mode: 'keyTable' };
+    if (/^tool\.poetry\.group\.[^.]+\.dependencies$/.test(h)) return { mode: 'keyTable' };
+    if (h === 'dependency-groups') return { mode: 'reqArrayMap' };
+    if (h === 'tool.pdm.dev-dependencies') return { mode: 'reqArrayMap' };
+    if (h === 'tool.uv') return { mode: 'reqArrayKeys', allowedKeys: new Set(['dev-dependencies']) };
+    if (/^tool\.hatch\.envs\.[^.]+$/.test(h)) {
+      return { mode: 'reqArrayKeys', allowedKeys: new Set(['dependencies', 'extra-dependencies']) };
+    }
+    return { mode: 'none' };
+  };
+
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.replace(/\s+#.*$/, '').trim(); // strip trailing comments
+    if (!line) continue;
+
+    if (inArray) {
+      if (arrayIsDev) addReqNames(line);
+      if (closesArray(line)) inArray = false;
+      continue;
+    }
+
+    const header = line.match(/^\[([^\]]+)\]$/);
+    if (header) {
+      const c = classify(header[1]);
+      mode = c.mode;
+      allowedKeys = c.allowedKeys ?? new Set();
+      continue;
+    }
+
+    if (mode === 'none') continue;
+    if (line.startsWith('#')) continue;
+
+    if (mode === 'keyTable') {
+      const m = line.match(/^["']?([A-Za-z0-9._-]+)["']?\s*[.=]/);
+      if (m && m[1] !== 'python') devNames.add(m[1].toLowerCase());
+      continue;
+    }
+
+    // Array shapes: `key = [ ... ]` (possibly multi-line).
+    const kv = line.match(/^["']?([A-Za-z0-9._-]+)["']?\s*=\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const rest = kv[2];
+    if (!rest.startsWith('[')) continue; // not an array value (e.g. uv `package = true`)
+    const isDevArray = mode === 'reqArrayMap' || allowedKeys.has(key);
+    if (isDevArray) addReqNames(rest);
+    if (!closesArray(rest)) {
+      inArray = true;
+      arrayIsDev = isDevArray;
+    }
+  }
 }
 
 function collectMavenDevDeps(repoRoot: string, devNames: Set<string>): void {

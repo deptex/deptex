@@ -58,6 +58,11 @@ async function bootDb(): Promise<PGlite> {
       expires_at timestamptz
     );
   `);
+  // The schema dump emits functions in name order, so a few forward-reference
+  // each other (e.g. compute_auto_ignore_reason → compute_iac_is_critical,
+  // defined later). Disable parse-time body validation so the dump loads on
+  // PGLite — mirrors src/storage/pglite.ts and the finalize-extraction suite.
+  await db.exec(`SET check_function_bodies = off;`);
   const schemaSql = fs.readFileSync(SCHEMA_FILE, 'utf8');
   await db.exec(stripPgliteIncompatible(schemaSql));
   return db;

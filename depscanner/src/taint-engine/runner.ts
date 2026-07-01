@@ -38,7 +38,8 @@ import type { FrameworkSpec, FrameworkLanguage } from './spec';
 import type { Flow } from './flow';
 import { detectSanitizerAbsence, extractCallSitesFromIr } from './non-taint-detector';
 import { detectInsecureDefaults } from './insecure-default-detector';
-import { sanitizerAbsenceToFlow, insecureDefaultToFlow } from './detector-flows';
+import { detectUnsafeRegexLiterals } from './regex-literal-detector';
+import { sanitizerAbsenceToFlow, insecureDefaultToFlow, regexLiteralToFlow } from './detector-flows';
 import {
   filterFlow,
   estimatePerFlowCostUsd,
@@ -288,11 +289,13 @@ export interface RunEngineResult {
    * Non-taint detector findings coerced to `Flow` shape:
    *   - Phase F4 sanitizer-absence (`required_arguments` on sinks).
    *   - Phase 3.3 insecure-default (`insecure_defaults` on the spec).
+   *   - Phase 3.2 regex-literal (`unsafe_regex_patterns` on the spec).
    *
-   * Engine_confidence is 0.95 so these bypass the FP filter — they are
-   * deterministic AST matches and don't need an LLM re-check. The
-   * pipeline caller merges these into the write set alongside
-   * `flowsAfterFilter`.
+   * Engine_confidence sits just below the FP-filter threshold (0.65, see
+   * detector-flows.ts) so these deterministic AST/text matches still get an
+   * LLM re-check alongside sub-threshold taint flows — an over-broad detector
+   * match can still false-positive. The pipeline caller merges these into the
+   * write set alongside `flowsAfterFilter`.
    */
   detectorFlows: Flow[];
   /**
@@ -549,7 +552,7 @@ export async function runEngineCore(options: RunEngineCoreOptions): Promise<Engi
   // a single-hop Flow whose engine_confidence sits just below the FP-filter
   // threshold so it is LLM-checked alongside taint flows (an over-broad
   // detector sink can still false-positive).
-  let detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, onWarn);
+  let detectorFlowsRaw: Flow[] = runDetectors(specs, propagation, language, workspaceRoot, onWarn);
 
   // Client-SPA scoping (class filter): a browser bundle can only be exploited
   // through client-reachable classes (DOM XSS, open redirect, prototype
@@ -680,21 +683,59 @@ function runDetectors(
   specs: FrameworkSpec[],
   propagation: PropagateResult,
   language: FrameworkLanguage,
+  workspaceRoot: string,
   onWarn?: (msg: string) => void,
 ): Flow[] {
+  const out: Flow[] = [];
+
+  // Phase 3.2 — regex-literal detector. Fires on the PRESENCE of a known-bad
+  // regex literal declared in a spec's `unsafe_regex_patterns`, independent of
+  // any source→sink data flow (so it must run BEFORE the call-site early-outs
+  // below — a module that only declares `const RE = /unsafe/` has zero
+  // callsites but is exactly what this detector targets). Only specs that
+  // declare patterns participate, so we skip the file read entirely when none
+  // are loaded — the common case, where this stays free.
+  const hasRegexSpecs = specs.some(
+    (s) => !!(s.unsafe_regex_patterns && s.unsafe_regex_patterns.length > 0),
+  );
+  if (hasRegexSpecs) {
+    try {
+      const files = collectSourceFilesForRegex(propagation, workspaceRoot, onWarn);
+      if (files.length > 0) {
+        // Map framework → first sink osv_id so a CVE-targeted regex spec's
+        // finding inherits its CVE attribution (bundled framework specs leave
+        // osv_id undefined). Mirrors the per-spec osv attribution the call-site
+        // detectors do below.
+        const osvByFramework = new Map<string, string>();
+        for (const spec of specs) {
+          const osv = spec.sinks.find((s) => s.osv_id !== undefined)?.osv_id;
+          if (osv && !osvByFramework.has(spec.framework)) osvByFramework.set(spec.framework, osv);
+        }
+        // detectUnsafeRegexLiterals dedups per (file, regex) across ALL specs
+        // in one pass, so call it once with the full spec set rather than
+        // per-spec (per-spec would lose the cross-spec dedup).
+        const regexFindings = detectUnsafeRegexLiterals({ specs, files });
+        for (const f of regexFindings) {
+          out.push(regexLiteralToFlow(f, osvByFramework.get(f.framework)));
+        }
+      }
+    } catch (err) {
+      onWarn?.(`detector regime: detectUnsafeRegexLiterals failed: ${(err as Error).message}`);
+    }
+  }
+
   const irFunctions = propagation.irFunctions;
-  if (!irFunctions || irFunctions.length === 0) return [];
+  if (!irFunctions || irFunctions.length === 0) return out;
 
   let callsites;
   try {
     callsites = extractCallSitesFromIr(irFunctions, language);
   } catch (err) {
     onWarn?.(`detector regime: extractCallSitesFromIr failed: ${(err as Error).message}`);
-    return [];
+    return out;
   }
-  if (callsites.length === 0) return [];
+  if (callsites.length === 0) return out;
 
-  const out: Flow[] = [];
   for (const spec of specs) {
     // Use the first osv_id we find across the spec's sinks as the CVE
     // attribution for non-taint findings from THIS spec. CVE-targeted specs
@@ -723,6 +764,45 @@ function runDetectors(
   return out;
 }
 
+/**
+ * Build the `{ filePath, content }[]` the regex-literal detector consumes from
+ * the workspace source files the engine already analysed. We source the file
+ * set from the callgraph nodes (one `<module>` node per workspace source file,
+ * so files that only DECLARE a regex const with no calls are still included)
+ * unioned with IR step locations for cross-language robustness. node_modules is
+ * excluded by the callgraph walk, so this scans user code only — matching the
+ * detector's "is the unsafe literal present in the code that imports the
+ * package?" question. Paths are workspace-relative POSIX (so the resulting
+ * flow's file matches the rest of the engine's locations); content is read from
+ * the resolved absolute path. Unreadable files are skipped, not fatal.
+ */
+function collectSourceFilesForRegex(
+  propagation: PropagateResult,
+  workspaceRoot: string,
+  onWarn?: (msg: string) => void,
+): Array<{ filePath: string; content: string }> {
+  const relPaths = new Set<string>();
+  for (const node of propagation.callgraph?.nodes ?? []) {
+    if (node.filePath) relPaths.add(node.filePath);
+  }
+  for (const fn of propagation.irFunctions ?? []) {
+    for (const step of fn.steps) {
+      if (step.loc?.filePath) relPaths.add(step.loc.filePath);
+    }
+  }
+
+  const files: Array<{ filePath: string; content: string }> = [];
+  for (const rel of relPaths) {
+    const abs = path.isAbsolute(rel) ? rel : path.join(workspaceRoot, rel);
+    try {
+      files.push({ filePath: rel, content: fs.readFileSync(abs, 'utf8') });
+    } catch (err) {
+      onWarn?.(`regex-literal detector: could not read ${rel}: ${(err as Error).message}`);
+    }
+  }
+  return files;
+}
+
 interface FpFilterStageOutput {
   stats: AiFilterStats;
   flowsAfterFilter: Flow[];
@@ -730,8 +810,9 @@ interface FpFilterStageOutput {
 
 /**
  * Resolve the org's filter settings, pre-check the cost cap, batch the
- * sub-threshold flows through Gemini Flash, and return the surviving
- * flows + telemetry.
+ * sub-threshold flows through DeepInfra Qwen (the model defaults to
+ * `Qwen/Qwen3-235B-A22B-Instruct-2507`; see `runFpFilterStage` below), and
+ * return the surviving flows + telemetry.
  */
 async function runFpFilterStage(
   flows: Flow[],

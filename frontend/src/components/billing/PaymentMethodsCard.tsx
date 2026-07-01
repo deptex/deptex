@@ -44,19 +44,26 @@ async function authedFetch(input: string, init?: RequestInit) {
 export function PaymentMethodsCard({ organizationId }: PaymentMethodsCardProps) {
   const { user } = useAuth();
   const [methods, setMethods] = useState<PaymentMethod[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
+    setLoadFailed(false);
     try {
       const res = await authedFetch(
         `${API_BASE_URL}/api/organizations/${organizationId}/billing/payment-methods`,
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Don't sit on the skeleton forever — surface an error + retry instead.
+        setLoadFailed(true);
+        return;
+      }
       const data = (await res.json()) as { payment_methods: PaymentMethod[] };
       setMethods(data.payment_methods);
     } catch (err) {
       console.warn('[billing] payment-methods fetch failed', err);
+      setLoadFailed(true);
     }
   }, [organizationId]);
 
@@ -99,7 +106,23 @@ export function PaymentMethodsCard({ organizationId }: PaymentMethodsCardProps) 
         </p>
       </div>
       <div className="border-t border-border">
-        {methods == null ? (
+        {loadFailed ? (
+          <div className="flex flex-col items-center px-5 py-12 text-center">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full border border-border">
+              <CreditCard className="h-4 w-4 text-foreground-secondary" />
+            </span>
+            <p className="mt-3 text-sm font-semibold text-foreground">Couldn't load payment methods</p>
+            <p className="mt-1 text-xs text-foreground-secondary">Something went wrong fetching your cards.</p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void refetch()}
+              className="mt-3 !h-8 !px-3 !rounded-lg"
+            >
+              Try again
+            </Button>
+          </div>
+        ) : methods == null ? (
           <div className="divide-y divide-border">
             {[0, 1].map((i) => (
               <div key={i} className="flex items-center gap-3 px-5 py-4">

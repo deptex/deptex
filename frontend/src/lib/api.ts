@@ -421,6 +421,57 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   return response.json();
 }
 
+// Single response shape for the bundled org-overview mount call.
+export interface OverviewBundle {
+  teams: TeamWithRole[];
+  projects: Project[];
+  statuses: OrganizationStatus[];
+  securitySummary: { projects: ProjectSecuritySummary[] };
+}
+
+// One response that backs the entire project-sidebar Findings tab. Replaces the
+// ~12 separate per-type requests the tab used to fan out on open; each slice
+// keeps the exact shape its standalone endpoint returns so the same setters
+// consume it. `degradedSlices` names any slice that fell back to empty on a
+// server-side error (so the UI can show "couldn't load X" rather than a
+// misleading empty).
+export interface ProjectFindingsBundle {
+  vulnerabilities: ProjectVulnerability[];
+  secrets: PaginatedResponse<SecretFinding>;
+  semgrep: PaginatedResponse<SemgrepFinding>;
+  iac: PaginatedResponse<IaCFinding>;
+  container: PaginatedResponse<ContainerFinding>;
+  malicious: PaginatedResponse<MaliciousFinding>;
+  codeFlows: { data: DataFlowFinding[]; total: number };
+  baseImageRecs: { recommendations: BaseImageRecommendation[] };
+  dast: DastFindingDTO[];
+  trackerLinks: FindingTrackerLink[];
+  groupSuppressions: FindingGroupSuppression[];
+  acknowledgements: FindingAcknowledgement[];
+  degradedSlices: string[];
+}
+
+// Team Findings tab in one request — every finding type for every project in the
+// team, as FLAT arrays (each row stamped with project_id + project_name), plus the
+// org-wide chip maps once and the authoritative resolved projectIds (drives the
+// empty-state without a separate project-list fetch). See the team /findings route.
+export interface TeamFindingsBundle {
+  vulnerabilities: ProjectVulnerability[];
+  secrets: SecretFinding[];
+  semgrep: SemgrepFinding[];
+  iac: IaCFinding[];
+  container: ContainerFinding[];
+  malicious: MaliciousFinding[];
+  codeFlows: DataFlowFinding[];
+  dast: DastFindingDTO[];
+  baseImageRecs: BaseImageRecommendation[];
+  trackerLinks: FindingTrackerLink[];
+  groupSuppressions: FindingGroupSuppression[];
+  acknowledgements: FindingAcknowledgement[];
+  projectIds: string[];
+  degradedSlices: string[];
+}
+
 export const api = {
   _orgDataCache: new Map<string, Organization>(),
   _orgPrefetchCache: new Map<string, Promise<Organization>>(),
@@ -1830,6 +1881,21 @@ export const api = {
     return data;
   },
 
+  // Status-only read for the project-sidebar status pill (useRealtimeStatus).
+  // Hits the repositories endpoint with status_only=1 so the server returns the
+  // connected-repo row WITHOUT the slow listRepositories() GitHub call — that full
+  // repo list is only needed by the Settings repo-picker. Never cached: the pill
+  // wants the freshest extraction status, and the realtime subscription pushes
+  // updates after this initial read.
+  async getProjectRepositoryStatus(
+    organizationId: string,
+    projectId: string
+  ): Promise<{ connectedRepository: (ProjectRepository & { provider?: string }) | null }> {
+    return fetchWithAuth(
+      `/api/organizations/${organizationId}/projects/${projectId}/repositories?status_only=1`
+    );
+  },
+
   async getRepositoryScan(
     organizationId: string,
     projectId: string,
@@ -2376,11 +2442,14 @@ export const api = {
 
   async getDastFindings(
     projectId: string,
-    opts: { limit?: number; targetId?: string } = {},
+    opts: { limit?: number; targetId?: string; resolveLatestTarget?: boolean } = {},
   ): Promise<DastFindingDTO[]> {
     const params = new URLSearchParams();
     params.set('limit', String(opts.limit ?? 100));
     if (opts.targetId) params.set('target_id', opts.targetId);
+    // Let the server pick the latest scan's target instead of a client-side
+    // jobs→findings waterfall (used by the project Findings tab open path).
+    if (opts.resolveLatestTarget) params.set('resolve_target', 'latest');
     return fetchWithAuth(`/api/projects/${projectId}/dast/findings?${params.toString()}`);
   },
 
@@ -2389,6 +2458,32 @@ export const api = {
     projectId: string
   ): Promise<ProjectVulnerability[]> {
     return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/vulnerabilities`);
+  },
+
+  // The whole Findings tab in one request — see ProjectFindingsBundle.
+  async getProjectFindings(
+    organizationId: string,
+    projectId: string
+  ): Promise<ProjectFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/projects/${projectId}/findings`);
+  },
+
+  // The whole team Findings tab in one request — see TeamFindingsBundle. Replaces
+  // the old 1 + N×~10 per-project browser fan-out with one server-side aggregation.
+  async getTeamFindings(
+    organizationId: string,
+    teamId: string
+  ): Promise<TeamFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/teams/${teamId}/findings`);
+  },
+
+  // The whole ORG Findings page in one request — same bundle shape as the team
+  // findings (rows additionally carry project_framework). Replaces the page's old
+  // 1 + N×~8 per-project browser fan-out with one server-side aggregation.
+  async getOrgFindings(
+    organizationId: string
+  ): Promise<TeamFindingsBundle> {
+    return fetchWithAuth(`/api/organizations/${organizationId}/findings`);
   },
 
   async getOrganizationVulnerabilities(
@@ -3032,6 +3127,21 @@ export const api = {
     organizationId: string
   ): Promise<{ projects: ProjectSecuritySummary[] }> {
     return fetchWithAuth(`/api/organizations/${organizationId}/security-summary`);
+  },
+
+  // Single bundled mount call for the org overview — replaces the 4 separate
+  // bare-mount fetches (teams, projects, statuses, security-summary) with one
+  // round-trip. Warms the per-id caches the same way the individual getters do,
+  // so deferred getTeam/getProject lookups can still reuse them.
+  async getOrgOverview(organizationId: string): Promise<OverviewBundle> {
+    const data: OverviewBundle = await fetchWithAuth(`/api/organizations/${organizationId}/overview`);
+    (data.teams ?? []).forEach((team) => {
+      this._teamDataCache.set(`${organizationId}:${team.id}`, team);
+    });
+    (data.projects ?? []).forEach((project) => {
+      this._projectDataCache.set(`${organizationId}:${project.id}`, project as ProjectWithRole);
+    });
+    return data;
   },
 
   async getTeamSecuritySummary(

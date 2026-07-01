@@ -79,7 +79,15 @@ async function resolveDependencies(
     },
     pypi: {
       check: 'requirements.txt',
-      cmd: 'pip3 install --no-cache-dir --break-system-packages -r requirements.txt 2>&1 || true',
+      // No `|| true`: the trailing `|| true` used to force a 0 exit on every
+      // pip failure, so a totally-failed install still logged "Dependencies
+      // installed successfully" and the real error (ETARGET, unresolvable
+      // package, network) never reached the logs. Let pip's non-zero exit
+      // propagate — the catch below captures its 2>&1 output and the step is
+      // already non-fatal (doResolve runs at severity 'warn'), so a partial or
+      // failed resolve is surfaced as a warning instead of a false success,
+      // and the SBOM step still runs against whatever landed on disk.
+      cmd: 'pip3 install --no-cache-dir --break-system-packages -r requirements.txt 2>&1',
       timeout: 300_000,
     },
     cargo: {

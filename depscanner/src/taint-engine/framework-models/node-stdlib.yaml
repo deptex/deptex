@@ -413,7 +413,19 @@ sanitizers:
     vuln_classes: [command_injection]
     description: shell-escape
 
-  # ---------- SSRF ----------
+  # ---------- SSRF / open-redirect ----------
+  # Percent-encoding a value before it lands in a URL neutralises it for both
+  # SSRF and open-redirect: encodeURIComponent escapes `:`, `/`, `?`, `#`, `@`,
+  # so an attacker-controlled segment can no longer break out of the path/query
+  # to swap the scheme+host (SSRF) or inject `//evil.com` (open redirect). The
+  # dominant real-world shape is `fetch(`${BASE}/${encodeURIComponent(x)}`)` and
+  # `res.redirect(`${FRONTEND}/p?m=${encodeURIComponent(x)}`)` — both safe.
+  - pattern: encodeURIComponent(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: encodeURIComponent — percent-encodes URL-structural chars, neutralising SSRF/open-redirect payloads
+  - pattern: encodeURI(*)
+    vuln_classes: [ssrf, open_redirect]
+    description: encodeURI — encodes a full URI; the encoded value can't re-point scheme/host
   - pattern: ssrf-req-filter(*)
     vuln_classes: [ssrf]
     description: ssrf-req-filter

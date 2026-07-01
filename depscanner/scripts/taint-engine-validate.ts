@@ -28,6 +28,7 @@ import {
   detectSanitizerAbsence,
   extractCallSitesFromIr,
 } from '../src/taint-engine/non-taint-detector';
+import { detectUnsafeRegexLiterals } from '../src/taint-engine/regex-literal-detector';
 
 interface ParsedArgs {
   frameworks: string[];
@@ -91,6 +92,41 @@ interface RunResult {
   totalMs: number;
 }
 
+/** Source extensions the regex-literal substring scan reads from a fixture. */
+const REGEX_SCAN_EXTENSIONS = new Set([
+  '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
+  '.py', '.java', '.go', '.rb', '.php', '.rs', '.cs',
+]);
+
+/** Recursively read fixture source files as `{ filePath, content }` for the
+ *  regex-literal detector (the detector consumes raw bytes, not IR). */
+function collectFixtureSourceFiles(dir: string): Array<{ filePath: string; content: string }> {
+  const out: Array<{ filePath: string; content: string }> = [];
+  const stack = [dir];
+  while (stack.length > 0) {
+    const d = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== 'node_modules' && !e.name.startsWith('.')) stack.push(full);
+      } else if (e.isFile() && REGEX_SCAN_EXTENSIONS.has(path.extname(e.name).toLowerCase())) {
+        try {
+          out.push({ filePath: full, content: fs.readFileSync(full, 'utf8') });
+        } catch {
+          /* skip unreadable file */
+        }
+      }
+    }
+  }
+  return out;
+}
+
 async function runFixture(specs: FrameworkSpec[], expectation: Expectation): Promise<RunResult> {
   const result = await propagate({
     rootDir: expectation.fixtureDir,
@@ -107,6 +143,19 @@ async function runFixture(specs: FrameworkSpec[], expectation: Expectation): Pro
       if (!hasReqArgs) continue;
       const findings = detectSanitizerAbsence(spec, callsites);
       flowsOfClass += findings.filter((f) => f.vuln_class === expectation.vulnClass).length;
+    }
+  }
+  // Phase 3.2 — also count regex-literal detector findings. Every
+  // `unsafe_regex_patterns` finding is ReDoS by definition, so they only
+  // contribute to redos expectations. Mirrors the production runner's
+  // `runDetectors` wiring so the validate stage proves that wired path.
+  if (expectation.vulnClass === 'redos') {
+    const regexSpecs = specs.filter(
+      (s) => s.unsafe_regex_patterns && s.unsafe_regex_patterns.length > 0,
+    );
+    if (regexSpecs.length > 0) {
+      const files = collectFixtureSourceFiles(expectation.fixtureDir);
+      flowsOfClass += detectUnsafeRegexLiterals({ specs: regexSpecs, files }).length;
     }
   }
   const pass = expectation.expectFlow ? flowsOfClass >= 1 : flowsOfClass === 0;

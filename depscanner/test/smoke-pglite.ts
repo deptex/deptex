@@ -57,6 +57,11 @@ async function main() {
   console.log(`Loading schema dump (${(schemaSql.length / 1024).toFixed(1)} KB)...`);
   const t1 = Date.now();
   try {
+    // Disable parse-time body validation: the dump emits functions in name
+    // order, so a few forward-reference each other (e.g.
+    // compute_auto_ignore_reason → compute_iac_is_critical). Mirrors
+    // src/storage/pglite.ts and the finalize-extraction suite.
+    await db.exec(`SET check_function_bodies = off;`);
     await db.exec(schemaSql);
     console.log(`  schema loaded in ${Date.now() - t1}ms`);
   } catch (e) {

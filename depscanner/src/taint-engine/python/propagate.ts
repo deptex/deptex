@@ -44,6 +44,9 @@ export interface PropagatePythonResult {
     loweringMs: number;
     propagationMs: number;
     totalMs: number;
+    /** True when the worklist stopped at the iteration cap before the fixpoint
+     *  — flows are PARTIAL. See PropagateResult.stats.stoppedEarly. */
+    stoppedEarly?: boolean;
   };
   /** See PropagateResult.irFunctions. */
   irFunctions?: IrFunction[];
@@ -112,6 +115,7 @@ export async function propagatePython(
       loweringMs,
       propagationMs: result.propagationMs,
       totalMs: Date.now() - t0,
+      stoppedEarly: result.stoppedEarly,
     },
     irFunctions: Array.from(stateById.values()).map((s) => s.ir),
   };

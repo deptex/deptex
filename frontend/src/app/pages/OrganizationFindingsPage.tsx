@@ -3,11 +3,11 @@ import { useOutletContext, useParams } from 'react-router-dom';
 import {
   api,
   type Organization,
-  type ProjectVulnerability,
   type FindingTrackerLink,
   type FindingGroupSuppression,
   type FindingAcknowledgement,
 } from '../../lib/api';
+import { teamBundleToRows } from '../../lib/team-findings';
 import VulnerabilityExpandableTable, {
   type SecurityTableRow,
 } from '../../components/security/VulnerabilityExpandableTable';
@@ -19,8 +19,6 @@ interface OrganizationContextType {
    *  then cache, then org payload). `organization.permissions` is often null. */
   userPermissions?: Record<string, boolean> | null;
 }
-
-const PER_PAGE_PER_TYPE = 100;
 
 export default function OrganizationFindingsPage() {
   const { id: orgId } = useParams<{ id: string }>();
@@ -44,16 +42,12 @@ export default function OrganizationFindingsPage() {
     api.getOrgAcknowledgements(organizationId).then(({ acknowledgements }) => setAcknowledgements(acknowledgements)).catch(() => {});
   }, [organizationId]);
 
-  // Load every finding type across the org into the unified table: one org-wide
-  // CVE request + a per-project fan-out for the other types (secrets, semgrep,
-  // IaC, container, malicious, DAST, data-flow).
-  //
-  // The whole set is swapped in once, at the end. Appending per-project as each
-  // landed made the list visibly grow and grow ("it keeps loading more and more");
-  // with the table paginated, settling first and rendering a stable, complete list
-  // is the right call — the animated skeleton covers the wait. A status-change
-  // refresh keeps the current rows on screen until the swap (no blank flash). v2
-  // backlog collapses the per-project fan-out into one bundle endpoint.
+  // Load all findings across the org in ONE request. The server fans every finding
+  // type across all accessible projects (SCA as one bounded cross-project query, the
+  // other types per-project), tags each row with project_id/name/framework, and
+  // returns the org-wide chip maps alongside — replacing the old getProjects + bulk
+  // CVE + per-project fan-out of 7. The whole set is swapped in once (a status-change
+  // refresh keeps the current rows on screen until the swap; no blank flash).
   const load = useCallback(async (isRefresh = false) => {
     if (!organizationId) return;
     if (!isRefresh) {
@@ -62,76 +56,13 @@ export default function OrganizationFindingsPage() {
     }
     setError(null);
     try {
-      const projectList = await api.getProjects(organizationId);
-      const nameById = new Map(projectList.map((p) => [p.id, p.name]));
-      const frameworkById = new Map(projectList.map((p) => [p.id, p.framework ?? null]));
-
-      const collected: SecurityTableRow[] = [];
-      const flush = (rows: SecurityTableRow[]) => {
-        if (!rows.length) return;
-        collected.push(...rows);
-      };
-
-      const tasks: Promise<void>[] = [];
-
-      // Org-wide CVEs in a single request.
-      tasks.push(
-        api
-          .getOrganizationVulnerabilities(organizationId, { page: 1, per_page: PER_PAGE_PER_TYPE * 2 })
-          .then((res) => {
-            flush(
-              (res.data as ProjectVulnerability[]).map((v) => ({
-                type: 'vulnerability' as const,
-                data: {
-                  ...v,
-                  project_framework:
-                    (v as any).project_framework ?? frameworkById.get((v as any).project_id) ?? null,
-                } as ProjectVulnerability,
-              })),
-            );
-          })
-          .catch((e) => console.error('Failed to load org vulnerabilities', e)),
-      );
-
-      // Per-project: the non-CVE finding types. Each project appends independently.
-      for (const p of projectList) {
-        tasks.push(
-          (async () => {
-            const projectName = nameById.get(p.id);
-            const framework = frameworkById.get(p.id) ?? null;
-            const stamp = (item: any) => ({ ...item, project_name: projectName, project_framework: framework });
-            const [secret, semgrep, iac, container, malicious, dast, codeFlow] = await Promise.allSettled([
-              api.getProjectSecretFindings(organizationId, p.id, 1, PER_PAGE_PER_TYPE),
-              api.getProjectSemgrepFindings(organizationId, p.id, 1, PER_PAGE_PER_TYPE),
-              api.getProjectIaCFindings(organizationId, p.id, { perPage: PER_PAGE_PER_TYPE, status: 'open' }),
-              api.getProjectContainerFindings(organizationId, p.id, { perPage: PER_PAGE_PER_TYPE, status: 'open' }),
-              api.maliciousFindings.list(organizationId, p.id, 1, PER_PAGE_PER_TYPE),
-              // DAST is per-target: resolve the latest scan's target, then load its
-              // findings. Most projects have no DAST target, so this short-circuits to
-              // an empty list after one cheap jobs request.
-              (async () => {
-                const jobs = await api.getDastJobs(p.id, { limit: 5 });
-                const targetId = jobs.find((j) => j.target_id)?.target_id ?? undefined;
-                return targetId ? await api.getDastFindings(p.id, { limit: PER_PAGE_PER_TYPE, targetId }) : [];
-              })(),
-              api.getCodeFlowFindings(organizationId, p.id),
-            ]);
-            const rows: SecurityTableRow[] = [];
-            if (secret.status === 'fulfilled') for (const it of secret.value.data ?? []) rows.push({ type: 'secret', data: stamp(it) });
-            if (semgrep.status === 'fulfilled') for (const it of semgrep.value.data ?? []) rows.push({ type: 'semgrep', data: stamp(it) });
-            if (iac.status === 'fulfilled') for (const it of iac.value.data ?? []) rows.push({ type: 'iac', data: stamp(it) });
-            if (container.status === 'fulfilled') for (const it of container.value.data ?? []) rows.push({ type: 'container', data: stamp(it) });
-            if (malicious.status === 'fulfilled') for (const it of malicious.value.data ?? []) rows.push({ type: 'malicious', data: stamp(it) });
-            if (dast.status === 'fulfilled') for (const it of dast.value ?? []) rows.push({ type: 'dast', data: stamp(it) });
-            if (codeFlow.status === 'fulfilled') for (const it of codeFlow.value.data ?? []) rows.push({ type: 'taint_flow', data: stamp(it) });
-            flush(rows);
-          })(),
-        );
-      }
-
-      await Promise.all(tasks);
-      // Swap the complete set in once — on first load and on refresh alike.
-      setAllRows(collected);
+      const bundle = await api.getOrgFindings(organizationId);
+      // Chip maps ride along in the bundle (org-wide, fetched once server-side).
+      setTrackerLinks(bundle.trackerLinks ?? []);
+      setGroupSuppressions(bundle.groupSuppressions ?? []);
+      setAcknowledgements(bundle.acknowledgements ?? []);
+      const { rows } = teamBundleToRows(bundle);
+      setAllRows(rows);
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load security findings');
       if (!isRefresh) setAllRows([]);
@@ -143,10 +74,6 @@ export default function OrganizationFindingsPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    void loadTrackerLinks();
-  }, [loadTrackerLinks]);
 
   // App globally hides body/html scrollbars in Main.css. Restore them on this
   // route via a scoped class — same trick as Compliance.

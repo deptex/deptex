@@ -26,6 +26,7 @@ import type { DiagSink, DropRecord, Flow, FlowNode, SinkHit, TaintTrace } from '
 import { serializeTrace } from './flow';
 import type { IrFunction, Step } from './ir';
 import type { FunctionId, FunctionNode } from './types';
+import { urlHeadIsConstant } from './url-host';
 
 /** Per-function analysis state. Monotonically grown by the worklist. */
 export interface FunctionState {
@@ -89,6 +90,13 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
   const onWarn = opts.onWarn;
   const propStart = Date.now();
 
+  // Project-wide map of const string identifiers → their literal init text,
+  // merged from every function's `constStrings` (module-level consts live in
+  // the synthetic module-initializer's map). Feeds the constant-host SSRF /
+  // open-redirect guard so `fetch(GITHUB_API_BASE + path)` resolves the host.
+  const constStrings = buildGlobalConstStrings(opts.stateById);
+  const validatorParams = buildValidatorParams(opts.stateById);
+
   const worklist = new Set<FunctionId>(opts.stateById.keys());
   let iterations = 0;
   let sourcesFound = 0;
@@ -103,7 +111,17 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       break;
     }
     if (iterations >= maxIterations) {
-      onWarn?.(`taint propagator hit maxIterations=${maxIterations}; stopping early`);
+      // LOUD: hitting the iteration budget means the fixpoint was NOT reached,
+      // so the emitted flows are a PARTIAL set — a reachable vuln can be left
+      // looking module/unreachable and get auto-ignored (a silence
+      // false-negative, the worst failure mode). Keep the `maxIterations=<n>`
+      // token (asserted by the invariants suite) and add the diagnostic
+      // dimensions so the truncation is debuggable from logs/telemetry.
+      onWarn?.(
+        `taint propagator budget exhausted — FLOWS MAY BE TRUNCATED (silence-FN risk): ` +
+          `hit maxIterations=${maxIterations} (iterations=${iterations}, ` +
+          `functions=${opts.stateById.size}, worklistRemaining=${worklist.size})`,
+      );
       stoppedEarly = true;
       break;
     }
@@ -120,7 +138,8 @@ export function runWorklistAndAggregate(opts: RunWorklistOptions): RunWorklistRe
       worklist,
       maxPathLength,
       diagSink: opts.diagSink,
-      language: (opts.specs[0]?.language as MatcherLanguage | undefined),
+      constStrings,
+      validatorParams,
     });
     sourcesFound += sourcesAddedThisPass;
     state.analyzed = true;
@@ -154,12 +173,196 @@ interface AnalyzeArgs {
   maxPathLength: number;
   diagSink?: DiagSink;
   /**
-   * Project language. Threaded into `matchesCallPattern` so dynamic-receiver
-   * languages (Python/Ruby/PHP) accept `Class.method` patterns matching
-   * `var.method` callee text. Derived from `specs[0].language` at the
-   * runWorklistAndAggregate entry point; null when specs are empty.
+   * Project-wide const-string resolver (identifier → literal init text) for the
+   * constant-host SSRF / open-redirect guard. Empty map when no consts captured.
    */
-  language?: MatcherLanguage;
+  constStrings: Map<string, string>;
+  /**
+   * Functions that validate (via a safe-regex-family check) specific parameter
+   * indices, keyed by FunctionId. When a caller passes a tainted value into one
+   * of those parameters, the value is treated as sanitized downstream — the
+   * engine otherwise can't see the in-callee `safeRegex(param)` guard +
+   * early-return (the validate-then-use ReDoS pattern). Built once by
+   * buildValidatorParams().
+   */
+  validatorParams: Map<FunctionId, Set<number>>;
+}
+
+/**
+ * Merge every function's `constStrings` into one project-wide resolver map.
+ * Module-level consts (e.g. `const GITHUB_API_BASE = '...'`) live in the
+ * synthetic module-initializer function's map, so this is how a sink in one
+ * function resolves a base-URL const declared at module scope in the same file.
+ *
+ * Cross-function name collisions with DIFFERING init text are poisoned
+ * (dropped) so we never resolve `url` to the wrong function's value — a missing
+ * resolution is the safe default (the guard then keeps the flow).
+ */
+function buildGlobalConstStrings(
+  stateById: Map<FunctionId, FunctionState>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const poisoned = new Set<string>();
+  for (const state of stateById.values()) {
+    const cs = state.ir.constStrings;
+    if (!cs) continue;
+    for (const [name, init] of cs) {
+      if (poisoned.has(name)) continue;
+      const existing = out.get(name);
+      if (existing === undefined) {
+        out.set(name, init);
+      } else if (existing !== init) {
+        out.delete(name);
+        poisoned.add(name);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Substrings that prove a response is NOT HTML — set via res.writeHead /
+ * setHeader / res.type with a non-`text/html` Content-Type, or a file-download
+ * `Content-Disposition: attachment`. XSS requires the reflected value to render
+ * as markup in a browser; an SSE stream (`text/event-stream`), a JSON/API body,
+ * or an attachment download cannot execute injected script — so xss sinks in
+ * such a function are false positives. Matched as substrings of call-argument
+ * source text (writeHead/setHeader pass the MIME as a string/object literal).
+ */
+const NON_HTML_RESPONSE_MARKERS: readonly string[] = [
+  'text/event-stream',
+  'application/json',
+  'application/octet-stream',
+  'application/pdf',
+  'application/zip',
+  'application/xml',
+  'text/xml',
+  'text/plain',
+  'text/csv',
+  'image/',
+  'attachment', // Content-Disposition: attachment — a file download, not a page
+];
+
+/**
+ * Whether a function commits its response to a non-HTML content type (so any
+ * tainted value reaching res.write/res.send/res.end can't execute as markup).
+ * Conservative: only trips on an explicit non-HTML MIME / attachment marker in
+ * a call argument, so it never suppresses a real `res.send(userHtml)` (which
+ * sets text/html or no Content-Type at all).
+ */
+function responseFunctionIsNonHtml(steps: Step[]): boolean {
+  for (const step of steps) {
+    if (step.kind !== 'call') continue;
+    const texts = step.argTexts;
+    if (!texts) continue;
+    for (const t of texts) {
+      if (!t) continue;
+      for (const marker of NON_HTML_RESPONSE_MARKERS) {
+        if (t.includes(marker)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** RegExp instance methods that EXECUTE the compiled pattern against input. */
+const REGEX_EXEC_METHODS: ReadonlySet<string> = new Set([
+  'test',
+  'exec',
+  'match',
+  'matchAll',
+  'replace',
+  'replaceAll',
+  'split',
+  'search',
+]);
+
+/**
+ * Whether the RegExp object bound to `targetVar` is ever executed in `steps`
+ * (`.test`/`.exec`/`.match`/...). A `new RegExp(x)` whose result is never run
+ * is a validity probe (`try { new RegExp(x) } catch {}`), not a ReDoS execution
+ * sink — the attacker-controlled pattern can't backtrack against any input.
+ */
+function regexResultIsExecuted(steps: Step[], targetVar: string): boolean {
+  for (const step of steps) {
+    if (step.kind !== 'call') continue;
+    const callee = step.callee.calleeText;
+    if (receiverRoot(callee) !== targetVar) continue;
+    const method = callee.split('.').pop() ?? '';
+    if (REGEX_EXEC_METHODS.has(method)) return true;
+  }
+  return false;
+}
+
+/**
+ * js-yaml `load(text, { schema: ... })` with an explicit non-FULL schema is the
+ * documented mitigation against `!!js/function`/`!!js/regexp` construction — the
+ * caller has opted out of the dangerous default schema. Treat it as sanitized.
+ * (js-yaml v4's `load` is already safe-by-default; this also covers v3 with an
+ * explicit safe schema.) Python PyYAML uses `Loader=`, not `schema:`, so this
+ * never matches the genuinely-dangerous pyyaml.load default.
+ */
+function jsYamlLoadHasSafeSchema(argTexts: readonly (string | undefined)[] | undefined): boolean {
+  if (!argTexts) return false;
+  for (const t of argTexts) {
+    if (!t) continue;
+    if (/\bschema\s*:/.test(t) && !/FULL/i.test(t)) return true;
+  }
+  return false;
+}
+
+/**
+ * safe-regex-family validators: `safe-regex`, `safe-regex2` (default export
+ * commonly imported as `safeRegex`/`safe`), `safe-regex-test`. A call to one of
+ * these on a value asserts the pattern is backtracking-safe; callers gate on
+ * the boolean and reject unsafe patterns.
+ */
+const REGEX_VALIDATOR_CALLEES: ReadonlySet<string> = new Set([
+  'safeRegex',
+  'safe',
+  'isSafeRegExp',
+  'isSafeRegex',
+]);
+
+function isRegexValidatorCallee(calleeText: string): boolean {
+  const last = calleeText.split('.').pop() ?? calleeText;
+  return REGEX_VALIDATOR_CALLEES.has(last);
+}
+
+/**
+ * Pre-pass: which parameter indices each function validates via a
+ * safe-regex-family check, keyed by FunctionId. When a function `f(x)` passes
+ * its k-th parameter into `safeRegex(param)` (and conventionally early-returns
+ * on failure), a caller that hands a tainted value into parameter k can treat
+ * it as sanitized downstream — the engine can't otherwise see the in-callee
+ * validate-then-use guard (the dast-credential `checkIndicatorRegex` pattern).
+ * Over-clears in the rare case where code calls `safeRegex(x)` but then ignores
+ * the result and uses `x` anyway; that is a separate bug and far less common
+ * than the validate-then-use shape this models.
+ */
+function buildValidatorParams(
+  stateById: Map<FunctionId, FunctionState>,
+): Map<FunctionId, Set<number>> {
+  const out = new Map<FunctionId, Set<number>>();
+  for (const state of stateById.values()) {
+    const params = state.ir.params;
+    if (!params || params.length === 0) continue;
+    let validated: Set<number> | undefined;
+    for (const step of state.ir.steps) {
+      if (step.kind !== 'call') continue;
+      if (!isRegexValidatorCallee(step.callee.calleeText)) continue;
+      for (const argName of step.args) {
+        if (!argName) continue;
+        const idx = params.indexOf(argName);
+        if (idx >= 0) {
+          if (!validated) validated = new Set<number>();
+          validated.add(idx);
+        }
+      }
+    }
+    if (validated) out.set(state.funcNode.id, validated);
+  }
+  return out;
 }
 
 function emitDrop(
@@ -205,22 +408,28 @@ interface AnalyzeOutcome {
 }
 
 function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
-  const { state, stateById, specs, worklist, maxPathLength, diagSink, language } = args;
+  const { state, stateById, specs, worklist, maxPathLength, diagSink, constStrings, validatorParams } = args;
   const local = new Map<string, TaintTrace>();
   for (const [idx, trace] of state.paramTaints.entries()) {
     const name = state.ir.params[idx];
     if (name) local.set(name, trace);
   }
+  // Computed once per function: does it commit its response to a non-HTML
+  // content type? Drives the xss-sink suppression below (SSE / JSON / download).
+  const responseNonHtml = responseFunctionIsNonHtml(state.ir.steps);
 
   let sourcesAddedThisPass = 0;
-  // Track whether `return`-step taint grew this pass, but DO NOT bail out
-  // mid-IR. The IR flattens branches into a straight-line list per design
-  // (see ir.ts `walkStatement` — if/else/try/switch all flatten), so a
-  // mid-body `return` step is regularly followed by post-return sinks,
-  // sources, and calls from other branches. Bailing on the first growth
-  // would silently drop those (bad FN). Convergence is still bounded by
-  // worklist iterations + monotonic state growth.
-  let changedReturn = false;
+  // The IR flattens branches into a straight-line list per design (see ir.ts
+  // `walkStatement` — if/else/try/switch all flatten), so a mid-body `return`
+  // step is regularly followed by post-return sinks, sources, and calls from
+  // other branches — we must analyse the WHOLE list, never bail on the first
+  // return. `changedReturn` (did this function's PUBLISHED returnTaint advance
+  // this pass, so callers must be re-analysed?) is therefore computed ONCE
+  // after the loop from the net returnTaint vs its value at pass start — NOT
+  // from in-pass writes, which oscillate between distinct-source returns and
+  // re-enqueued callers forever inside any call cycle (see the `return` case +
+  // TSCALE1 in runWorklistAndAggregate).
+  const returnBefore = state.returnTaint;
 
   for (const step of state.ir.steps) {
     switch (step.kind) {
@@ -264,28 +473,47 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         break;
       }
       case 'call': {
-        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs, language);
+        const callSourceMatch = matchCallSourcePattern(step.callee.calleeText, specs);
         if (callSourceMatch && step.target) {
           local.set(step.target, makeTraceFromCall(callSourceMatch, step));
           sourcesAddedThisPass++;
           break;
         }
 
-        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs, language);
+        const sanMatch = matchSanitizerPattern(step.callee.calleeText, specs);
         if (sanMatch) {
           if (step.target) local.delete(step.target);
           break;
         }
 
-        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs, language);
+        const sinkMatch = matchSinkPattern(step.callee.calleeText, specs);
         if (sinkMatch) {
+          // Context guards (computed before fan-out so no variant emits a hit):
+          //  - xss sink in a non-HTML response (SSE / JSON / attachment download)
+          //    can't execute as markup — suppress.
+          //  - redos sink on a RegExp constructor whose compiled value is never
+          //    executed (`.test`/`.exec`/...) is a validity probe, not a ReDoS
+          //    execution sink — suppress.
+          const sinkSuppressed =
+            (sinkMatch.vuln_class === 'xss' && responseNonHtml) ||
+            (sinkMatch.vuln_class === 'redos' &&
+              (sinkMatch.pattern === 'RegExp(*)' || sinkMatch.pattern === 'new RegExp(*)') &&
+              (!step.target || !regexResultIsExecuted(state.ir.steps, step.target))) ||
+            // js-yaml load with an explicit safe schema = documented mitigation
+            // (Python pyyaml uses `Loader=`, so its unsafe default is unaffected).
+            (sinkMatch.vuln_class === 'deserialization' &&
+              sinkMatch.pattern === 'yaml.load(*)' &&
+              jsYamlLoadHasSafeSchema(step.argTexts)) ||
+            // log4j logger-level sink on a non-logger receiver (Math.log,
+            // System.out.printf, metrics.info, ...) — see loggerSinkSuppressed.
+            loggerSinkSuppressed(sinkMatch, step.callee.calleeText);
           // When several CVEs share one vulnerable surface (e.g. lodash
           // `_.template` is the sink for BOTH CVE-2021-23337 and CVE-2026-4800),
           // emit one flow per CVE so the reachability classifier can promote
           // every affected PDV to `confirmed` — not just the first-listed CVE.
           // Single-CVE and framework-generic sinks return `[sinkMatch]`, so the
           // common path is unchanged.
-          const sinkVariants = matchSinkVariants(step.callee.calleeText, specs, language, sinkMatch);
+          const sinkVariants = matchSinkVariants(step.callee.calleeText, specs, sinkMatch);
           // Indices to check for taint at this call site.
           // - empty spec argument_indices → check every position (existing behaviour)
           // - non-empty + no kwargs → check the spec-declared positions only
@@ -296,7 +524,9 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
           //   caught by Gate 3 fixture round-trip in rule-generator validation;
           //   the engine prefers extra recall over missed flows.
           let idxs: number[];
-          if (sinkMatch.argument_indices.length === 0) {
+          if (sinkSuppressed) {
+            idxs = [];
+          } else if (sinkMatch.argument_indices.length === 0) {
             idxs = step.args.map((_, i) => i);
           } else if (step.kwargIndices && step.kwargIndices.length > 0) {
             const widened = new Set<number>(sinkMatch.argument_indices);
@@ -315,6 +545,17 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
             if (seenArgs.has(argName)) continue;
             const trace = local.get(argName);
             if (!trace) continue;
+            // Constant-host guard: a tainted value reaching a URL sink whose
+            // scheme+host are a compile-time constant (literal or resolved via
+            // a const) can only influence the path/query — not SSRF / open
+            // redirect. Suppress those; a tainted HOST (`fetch(userUrl)`,
+            // `'https://' + host`) is not constant and still fires.
+            if (
+              (sinkMatch.vuln_class === 'ssrf' || sinkMatch.vuln_class === 'open_redirect') &&
+              urlHeadIsConstant(step.argTexts?.[i] ?? '', (name) => constStrings.get(name))
+            ) {
+              continue;
+            }
             seenArgs.add(argName);
             anyHit = true;
             // The source→sink trace + hit node are identical across CVE
@@ -326,7 +567,7 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               state.sinkHits.push({ sink: variant, trace: sinkTrace, hit_node: sinkHopNode });
             }
           }
-          if (!anyHit) {
+          if (!anyHit && !sinkSuppressed) {
             // Spec sink matched the callee but none of the checked arg
             // positions held tainted locals. This is the dominant "engine
             // saw the sink but taint didn't reach it" diagnostic — emit one
@@ -373,6 +614,20 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
               const augmented = extendPath(argTrace, hopFromStep(step, 'call'), maxPathLength);
               const grew = mergeParamTaint(callee, i, augmented);
               if (grew) worklist.add(callee.funcNode.id);
+            }
+            // Interprocedural validate-then-use guard: if the callee validates
+            // certain parameters via a safe-regex-family check (buildValidatorParams),
+            // a tainted value the caller passed into one of those parameters is
+            // sanitized downstream — model the wrapper as a sanitizer on those
+            // args so a later `new RegExp(arg).test(...)` in the caller doesn't
+            // fire a false ReDoS. (The taint still propagates INTO the callee
+            // above so flows that end at a sink INSIDE the callee are unaffected.)
+            const validatedParams = validatorParams.get(step.callee.functionId);
+            if (validatedParams && validatedParams.size > 0) {
+              for (const idx of validatedParams) {
+                const argName = step.args[idx];
+                if (argName && local.has(argName)) local.delete(argName);
+              }
             }
             if (step.target && callee.returnTaint) {
               local.set(
@@ -452,11 +707,18 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
         const trace = step.from ? local.get(step.from) : null;
         if (trace) {
           const augmented = extendPath(trace, hopFromStep(step, 'return'), maxPathLength);
-          if (subsumes(state.returnTaint, augmented) === SUBSUMED) {
-            // already subsumed
-          } else {
+          // Adopt the new value when it isn't subsumed by the current in-pass
+          // value (last-write-wins across multiple distinct-source returns —
+          // the pre-existing single-slot model; the net value is byte-identical
+          // to before this change). Deliberately NOT flagging changedReturn
+          // here: a function with two distinct-source returns flips this slot
+          // back and forth WITHIN one pass, so deciding re-enqueue from an
+          // in-pass write re-enqueued callers every pass forever inside any
+          // call cycle and spun the worklist to maxIterations (TSCALE1 —
+          // express@4.18.2 ran to 168,600 iterations and silently truncated
+          // flows). changedReturn is computed once after the loop instead.
+          if (subsumes(state.returnTaint, augmented) !== SUBSUMED) {
             state.returnTaint = augmented;
-            changedReturn = true;
           }
         }
         break;
@@ -464,6 +726,15 @@ function analyzeFunction(args: AnalyzeArgs): AnalyzeOutcome {
     }
   }
 
+  // Re-enqueue callers only when the function's published returnTaint genuinely
+  // advanced vs the start of this pass — using the same subsumption check the
+  // param side (mergeParamTaint) already applies. This keeps the fixpoint VALUE
+  // identical (so no fixture flow changes) while making convergence real: a
+  // stable returnTaint — including the within-pass flip between two
+  // distinct-source returns — no longer re-enqueues callers, so call cycles
+  // converge instead of spinning to the iteration cap and truncating flows.
+  const changedReturn =
+    state.returnTaint !== null && subsumes(returnBefore, state.returnTaint) !== SUBSUMED;
   return { changedReturn, sourcesAddedThisPass };
 }
 
@@ -577,12 +848,11 @@ function matchSourcePattern(text: string, specs: FrameworkSpec[]): FrameworkSour
 function matchCallSourcePattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSource | null {
   for (const spec of specs) {
     for (const src of spec.sources) {
       if (!src.pattern.endsWith('(*)')) continue;
-      if (matchesCallPattern(src.pattern, calleeText, language)) return src;
+      if (matchesCallPattern(src.pattern, calleeText)) return src;
     }
   }
   return null;
@@ -591,11 +861,13 @@ function matchCallSourcePattern(
 function matchSinkPattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSink | null {
   for (const spec of specs) {
     for (const sink of spec.sinks) {
-      if (matchesCallPattern(sink.pattern, calleeText, language)) return sink;
+      // T6 — `taint_disabled` sinks exist only for the non-taint detector
+      // regime; they never participate in taint-flow matching.
+      if (sink.taint_disabled) continue;
+      if (matchesCallPattern(sink.pattern, calleeText)) return sink;
     }
   }
   return null;
@@ -620,7 +892,6 @@ function matchSinkPattern(
 function matchSinkVariants(
   calleeText: string,
   specs: FrameworkSpec[],
-  language: MatcherLanguage | undefined,
   firstMatch: FrameworkSink,
 ): FrameworkSink[] {
   if (!firstMatch.osv_id) return [firstMatch];
@@ -628,9 +899,10 @@ function matchSinkVariants(
   const seenOsv = new Set<string>();
   for (const spec of specs) {
     for (const sink of spec.sinks) {
+      if (sink.taint_disabled) continue; // T6 — never a taint-flow variant
       if (!sink.osv_id) continue;
       if (sink.vuln_class !== firstMatch.vuln_class) continue;
-      if (!matchesCallPattern(sink.pattern, calleeText, language)) continue;
+      if (!matchesCallPattern(sink.pattern, calleeText)) continue;
       if (seenOsv.has(sink.osv_id)) continue;
       seenOsv.add(sink.osv_id);
       variants.push(sink);
@@ -644,17 +916,14 @@ function matchSinkVariants(
 function matchSanitizerPattern(
   calleeText: string,
   specs: FrameworkSpec[],
-  language?: MatcherLanguage,
 ): FrameworkSanitizer | null {
   for (const spec of specs) {
     for (const san of spec.sanitizers) {
-      if (matchesCallPattern(san.pattern, calleeText, language)) return san;
+      if (matchesCallPattern(san.pattern, calleeText)) return san;
     }
   }
   return null;
 }
-
-type MatcherLanguage = 'js' | 'python' | 'java' | 'go' | 'ruby' | 'php' | 'rust' | 'csharp';
 
 /**
  * Allowlist of method names where `Class.method` patterns may also match
@@ -730,11 +999,61 @@ function isContainerWriteCallee(calleeText: string): boolean {
   return CONTAINER_WRITE_METHODS.has(m[1]);
 }
 
+/**
+ * Bare wildcard-receiver logger-level sink patterns from log4j.yaml. These
+ * model the Log4Shell JNDI-substitution surface (`logger.info("${jndi:...}")`)
+ * as `code_injection` with `argument_indices: []` (any tainted arg fires).
+ * The method names are generic enough that a wildcard receiver matches every
+ * `.info()` / `.log()` / `.printf()` in the codebase — including non-loggers
+ * (`Math.log(x)`, `System.out.printf(...)`, `metrics.info(...)`). The
+ * `loggerSinkSuppressed` guard below restricts these specific sinks to
+ * receivers that look like a logger. See log4j.yaml's Wave 10 note.
+ */
+const LOGGER_LEVEL_SINK_PATTERNS: ReadonlySet<string> = new Set([
+  '*.info(*)',
+  '*.warn(*)',
+  '*.error(*)',
+  '*.debug(*)',
+  '*.trace(*)',
+  '*.fatal(*)',
+  '*.log(*)',
+  '*.printf(*)',
+]);
+
+/**
+ * Deterministic enabler gate for the log4j logger-level `code_injection`
+ * sinks (`LOGGER_LEVEL_SINK_PATTERNS`). Returns true when the sink should be
+ * SUPPRESSED because the receiver is not logger-shaped — killing the
+ * `Math.log(userValue)` / `System.out.printf(fmt, tainted)` /
+ * `metrics.info(tainted)` false positives the bare wildcard receiver
+ * otherwise produces.
+ *
+ * Heuristic: the receiver text (everything before the final call separator)
+ * must contain "log" (case-insensitive). This admits the conventional logger
+ * names (`logger`, `log`, `LOG`, `LOGGER`, `auditLogger`, `this.logger`) and
+ * the factory-chain forms (`LogManager.getLogger(...)`,
+ * `LoggerFactory.getLogger(...)`), and rejects non-logger receivers whose name
+ * has no "log" substring (`Math`, `out`, `metrics`, `stats`). Residual FP for
+ * a receiver that coincidentally contains "log" (`catalog`, `dialog`) is
+ * narrow and still backstopped by the FP-filter; the alternative (firing on
+ * EVERY receiver) is the larger evil. Scoped strictly to the bare logger-level
+ * patterns + `code_injection` so no other sink is affected.
+ */
+function loggerSinkSuppressed(sink: FrameworkSink, calleeText: string): boolean {
+  if (sink.vuln_class !== 'code_injection') return false;
+  if (!LOGGER_LEVEL_SINK_PATTERNS.has(sink.pattern)) return false;
+  const sepIdx = Math.max(
+    calleeText.lastIndexOf('.'),
+    calleeText.lastIndexOf('->'),
+    calleeText.lastIndexOf('::'),
+  );
+  const receiver = sepIdx > 0 ? calleeText.slice(0, sepIdx) : '';
+  return !/log/i.test(receiver);
+}
+
 export function matchesCallPattern(
   pattern: string,
   calleeText: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _language?: MatcherLanguage,
 ): boolean {
   const p = pattern.endsWith('(*)') ? pattern.slice(0, -3) : pattern;
   // Wildcard receiver: `*.method`, `*->method`, `*::method` — match any receiver
@@ -769,6 +1088,11 @@ function aggregateFlows(stateById: Map<FunctionId, FunctionState>, maxPathLength
   for (const state of stateById.values()) {
     for (const hit of state.sinkHits) {
       const flow = sinkHitToFlow(hit, state.funcNode, maxPathLength);
+      // Drop degenerate self-sinks: a single-node flow carries no propagation
+      // evidence (the source point and sink point collapsed to one program
+      // location — e.g. a sink pattern that also matched as the source). A
+      // real flow always has at least a distinct source node + sink node.
+      if (flow.flow_length <= 1) continue;
       if (seen.has(flow.id)) continue;
       // Drop degenerate self-referential "flows": a single node that is both
       // entry and sink at the same coordinates (flow_length ≤ 1 with the entry

@@ -76,6 +76,82 @@ const SEMGREP_INFO_SEVERITY = 'INFO';
 const matchesNoiseRule = (checkId: string, patterns: string[]): boolean =>
   patterns.some((p) => checkId.includes(p));
 
+/**
+ * IaC rule namespaces that Checkov already owns + reports (with rule docs +
+ * compliance refs). The `p/default` pack we run also ships a handful of these,
+ * so a Semgrep hit here would be a literal duplicate of a Checkov row on the
+ * same file. Dropping the whole namespace keeps each IaC misconfig single-sourced
+ * from Checkov.
+ *
+ * - `yaml.kubernetes.` — k8s manifest checks (Checkov CKV_K8S_*).
+ * - `dockerfile.`      — Dockerfile checks (e.g. dockerfile.security.last-user-is-root
+ *                        == CKV_DOCKER_8). Checkov runs k8s/TF-only here, so the
+ *                        orchestrator's Trivy-config path owns Dockerfile rows;
+ *                        either way Semgrep's are duplicates.
+ * - `terraform.`       — Terraform checks (Checkov CKV_AWS_/CKV_GCP_ rules). The
+ *                        orchestrator runs Checkov on every detected non-Dockerfile
+ *                        IaC framework, terraform included, so a Semgrep
+ *                        terraform-namespace finding double-reports the same
+ *                        misconfig. (N7: `--config auto` was already replaced
+ *                        with the cacheable `p/default` pack; this closes the
+ *                        remaining Checkov-owned overlap that pack can surface.)
+ */
+const SEMGREP_IAC_DEDUP_PREFIXES = ['yaml.kubernetes.', 'dockerfile.', 'terraform.'];
+
+/**
+ * True when a Semgrep result should be discarded entirely based on its rule id
+ * (`check_id`). Centralizes every rule-id drop the step applies so the chain
+ * can't silently drift and re-admit Checkov / TruffleHog double-reports:
+ *   - `generic.secrets.*`         — TruffleHog owns secrets (better precision).
+ *   - SEMGREP_IAC_DEDUP_PREFIXES  — Checkov owns IaC (k8s / Dockerfile / TF).
+ *   - `*express-check-*`          — context-blind "missing middleware" nudges.
+ *   - SEMGREP_NOISE_RULES.drop    — audit rules with no real JS/TS signal.
+ *   - SEMGREP_CLIENT_SPA_DROP_RULES — server-runtime / self-DoS rules, dropped
+ *                                     ONLY on a pure browser SPA.
+ *
+ * Exported for unit testing — the filter chain in doSemgrep calls this directly.
+ */
+export function shouldDropSemgrepRule(
+  checkId: string | undefined,
+  opts: { isClientSpaProject: boolean } = { isClientSpaProject: false },
+): boolean {
+  const id = checkId ?? '';
+  if (id.startsWith('generic.secrets.')) return true;
+  if (SEMGREP_IAC_DEDUP_PREFIXES.some((p) => id.startsWith(p))) return true;
+  if (id.includes('express-check-')) return true;
+  if (matchesNoiseRule(id, SEMGREP_NOISE_RULES.drop)) return true;
+  if (opts.isClientSpaProject && matchesNoiseRule(id, SEMGREP_CLIENT_SPA_DROP_RULES)) return true;
+  return false;
+}
+
+/**
+ * True when a Semgrep result's file path is a generated / vendored artifact we
+ * never want findings from (our own dep-scan report dir, or installed deps).
+ * Exported for unit testing.
+ */
+export function isGeneratedSemgrepPath(filePath: string | undefined): boolean {
+  const p = filePath ?? '';
+  return p.includes('depscan-reports/') || p.includes('node_modules/');
+}
+
+/**
+ * Resolve the stored severity for a Semgrep result, applying the downrank tier
+ * of the noise filter: a notoriously-noisy-but-occasionally-real audit rule
+ * (detect-non-literal-regexp / ReDoS, which fires on any `new RegExp(variable)`
+ * including fixed literals) is pinned to the lowest severity so it drops out of
+ * the default WARNING view. Everything else keeps its reported severity (falling
+ * back to INFO). Exported for unit testing.
+ */
+export function downrankSemgrepSeverity(
+  checkId: string | undefined,
+  rawSeverity: string | undefined,
+): string {
+  if (matchesNoiseRule(checkId ?? '', SEMGREP_NOISE_RULES.downrank)) {
+    return SEMGREP_INFO_SEVERITY;
+  }
+  return rawSeverity ?? 'INFO';
+}
+
 export async function doSemgrep(ctx: PipelineContext): Promise<void> {
   const { supabase, job, projectId, log, workspaceRoot, runId, importance } = ctx;
 
@@ -231,49 +307,19 @@ export async function doSemgrep(ctx: PipelineContext): Promise<void> {
               return safe;
             };
             const findings = semgrepParsed.results
-              // Filter out secret-detection rules (TruffleHog handles these better)
-              .filter((r: any) => !(r.check_id ?? '').startsWith('generic.secrets.'))
-              // Filter out Kubernetes manifest rules — Checkov owns IaC/k8s and
-              // reports the same misconfigs (privileged container, allowPrivilege
-              // Escalation, …) with rule docs + compliance refs. Semgrep's
-              // yaml.kubernetes.* pack just double-reports them on the same file.
-              .filter((r: any) => !(r.check_id ?? '').startsWith('yaml.kubernetes.'))
-              // Filter out Dockerfile rules for the same reason — Checkov owns
-              // Dockerfile IaC (CKV_DOCKER_*) and reports the same misconfigs with
-              // rule docs + compliance refs. e.g. dockerfile.security.last-user-is-root
-              // is a literal duplicate of CKV_DOCKER_8. Drop the namespace so the
-              // user sees each Dockerfile misconfig once, from Checkov.
-              .filter((r: any) => !(r.check_id ?? '').startsWith('dockerfile.'))
-              // Filter out "missing middleware" best-practice nudges
-              // (express-check-*-usage: csurf, helmet, directory-listing, …).
-              // These are context-blind ABSENCE checks: they fire on every express
-              // app that doesn't import the middleware — including token-auth JSON
-              // APIs that legitimately don't need it — and anchor confusingly on the
-              // `const app = express()` line (the absence has no real line to flag).
-              // INFO severity, high false-positive rate, zero reachability signal.
-              .filter((r: any) => !(r.check_id ?? '').includes('express-check-'))
-              // Drop tier of the noise filter (SEMGREP_NOISE_RULES.drop): audit
-              // rules with no real signal on JS/TS. unsafe-formatstring (CWE-134)
-              // fires on plain template literals — JS has no printf semantics.
-              .filter((r: any) => !matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.drop))
-              // Client-SPA scope: drop server-runtime / self-DoS rules that
-              // cannot be a real exploit in a browser bundle (ReDoS self-DoS,
-              // Node fs/child_process/require, Express CSRF). Server/SSR
-              // projects keep them all.
-              .filter((r: any) => !(isClientSpaProject && matchesNoiseRule(r.check_id ?? '', SEMGREP_CLIENT_SPA_DROP_RULES)))
-              // Filter out generated/report files
-              .filter((r: any) => {
-                const p = r.path ?? '';
-                return !p.includes('depscan-reports/') && !p.includes('node_modules/');
-              })
+              // Rule-id drops (secrets → TruffleHog; IaC k8s/Dockerfile/TF →
+              // Checkov; express-check absence nudges; no-signal audit rules;
+              // client-SPA-irrelevant server rules). Centralized in
+              // shouldDropSemgrepRule so the chain can't silently drift.
+              .filter((r: any) => !shouldDropSemgrepRule(r.check_id, { isClientSpaProject }))
+              // Filter out generated/report files (our dep-scan dir, installed deps)
+              .filter((r: any) => !isGeneratedSemgrepPath(r.path))
               .map((r: any) => {
                 // Downrank tier of the noise filter (SEMGREP_NOISE_RULES.downrank):
                 // keep the finding but pin it to the lowest severity so it drops out
                 // of the default WARNING view. detect-non-literal-regexp (ReDoS) fires
                 // on any new RegExp(variable), including fixed literals/enums.
-                const severity = matchesNoiseRule(r.check_id ?? '', SEMGREP_NOISE_RULES.downrank)
-                  ? SEMGREP_INFO_SEVERITY
-                  : r.extra?.severity ?? 'INFO';
+                const severity = downrankSemgrepSeverity(r.check_id, r.extra?.severity);
                 // Semgrep rule authors emit metadata.cwe / metadata.owasp as
                 // either a string (e.g. "CWE-79") or an array depending on the
                 // rule. The DB column is text[] and depscore calls .some() on

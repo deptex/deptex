@@ -40,6 +40,7 @@ import ReachabilitySection from '../../components/settings/ReachabilitySection';
 import MaliciousAllowlistSection from '../../components/settings/MaliciousAllowlistSection';
 import { VALID_SETTINGS_SECTIONS } from '../../lib/orgSettingsSections';
 import { PlanBillingSectionContent } from '../../components/billing/PlanBillingSectionContent';
+import { BillingProvider } from '../../contexts/PlanContext';
 import { UsageSectionContent } from '../../components/billing/UsageSectionContent';
 
 interface OrganizationContextType {
@@ -207,6 +208,12 @@ const webhookEventLabel = (eventType: string) =>
 /** Renders a tab-specific content skeleton for the org settings loading state. */
 function OrgSettingsTabSkeleton({ section }: { section: string }) {
   const pulse = 'bg-muted animate-pulse rounded';
+  // Vercel-style downward fade — matches the app's other loading tables so the
+  // skeleton reads as "loading", not as a stalled table with a fixed row count.
+  const fadeMask = {
+    maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+    WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+  } as const;
   switch (section) {
     case 'general':
       return (
@@ -255,7 +262,10 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             <div className={`h-9 w-28 ${pulse}`} />
             <div className={`h-9 w-28 ${pulse}`} />
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <div
+            className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
+            style={fadeMask}
+          >
             <table className="w-full">
               <thead className="bg-background-card-header border-b border-border">
                 <tr>
@@ -269,11 +279,11 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <tr key={i} className="animate-pulse">
+                {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+                  <tr key={i}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
+                        <div className="h-10 w-10 rounded-full bg-muted animate-pulse flex-shrink-0" />
                         <div className="space-y-1">
                           <div className={`h-4 w-32 ${pulse}`} />
                           <div className={`h-3 w-48 ${pulse}`} />
@@ -302,7 +312,10 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             </div>
             <div className={`h-8 w-24 ${pulse}`} />
           </div>
-          <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+          <div
+            className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
+            style={fadeMask}
+          >
             <table className="w-full table-fixed">
               <thead className="bg-background-card-header border-b border-border">
                 <tr>
@@ -313,7 +326,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {[1, 2, 3, 4].map((i) => (
+                {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                   <tr key={i}>
                     <td className="px-4 py-3">
                       <div className="space-y-1">
@@ -346,8 +359,11 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
             </div>
           </div>
 
-          {/* Unified integrations table — Provider | Type | Connection | Actions */}
-          <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+          {/* Unified integrations table — Provider | Type | Connection | Actions — fades downward like the app's other loading tables */}
+          <div
+            className="overflow-hidden rounded-lg border border-border bg-background-card pointer-events-none select-none"
+            style={fadeMask}
+          >
             <table className="w-full table-fixed">
               <colgroup>
                 <col className="w-[220px]" />
@@ -364,7 +380,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {[1, 2, 3, 4].map((i) => (
+                {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                   <tr key={i}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
@@ -566,13 +582,16 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
               </div>
             </div>
 
-            {/* Deposits table */}
-            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+            {/* Deposits table — fades downward like the app's other loading tables */}
+            <div
+              className="overflow-hidden rounded-lg border border-border bg-background-card pointer-events-none select-none"
+              style={fadeMask}
+            >
               <div className="border-b border-border bg-background-card-header px-5 py-3">
                 <div className={`h-4 w-20 ${pulse}`} />
               </div>
               <div className="divide-y divide-border">
-                {[0, 1, 2].map((i) => (
+                {[0, 1, 2, 3, 4].map((i) => (
                   <div
                     key={i}
                     className="grid grid-cols-[2fr_1fr_1fr_auto] items-center gap-4 px-5 py-4"
@@ -604,8 +623,11 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
               <div className={`h-5 w-24 ${pulse}`} />
               <div className={`h-3 w-64 ${pulse}`} />
             </div>
-            {/* Models table */}
-            <div className="overflow-hidden rounded-lg border border-border bg-background-card">
+            {/* Models table — fades downward like the app's other loading tables */}
+            <div
+              className="overflow-hidden rounded-lg border border-border bg-background-card pointer-events-none select-none"
+              style={fadeMask}
+            >
               <div className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 border-b border-border bg-background-card-header px-4 py-3">
                 <div className={`h-3 w-12 ${pulse}`} />
                 <div className={`h-3 w-20 ${pulse} ml-auto`} />
@@ -613,7 +635,7 @@ function OrgSettingsTabSkeleton({ section }: { section: string }) {
                 <div className={`h-3 w-14 ${pulse} mx-auto`} />
               </div>
               <div className="divide-y divide-border">
-                {[0, 1, 2, 3, 4].map((i) => (
+                {[0, 1, 2, 3, 4, 5, 6].map((i) => (
                   <div
                     key={i}
                     className="grid grid-cols-[1fr_9rem_6rem_8rem] items-center gap-4 px-4 py-3"
@@ -3168,7 +3190,12 @@ export default function OrganizationSettingsPage() {
               )}
 
               {activeSection === 'billing' && (
-                <PlanBillingSectionContent organizationId={id || ''} />
+                // Billing (prepaid AI credit) is fetched ONLY here — the provider is
+                // scoped to this subpage instead of the org layout, so /billing no
+                // longer runs on every org page.
+                <BillingProvider organizationId={id || ''}>
+                  <PlanBillingSectionContent organizationId={id || ''} />
+                </BillingProvider>
               )}
 
               {activeSection === 'sso' && id && (
@@ -3205,7 +3232,13 @@ export default function OrganizationSettingsPage() {
 
                   {/* Roles List */}
                   {loadingRoles ? (
-                    <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                    <div
+                      className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
+                      style={{
+                        maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                      }}
+                    >
                       <table className="w-full table-fixed">
                         <colgroup>
                           <col style={{ width: 'auto' }} />
@@ -3220,16 +3253,16 @@ export default function OrganizationSettingsPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {[1, 2, 3].map((i) => (
-                            <tr key={i} className="animate-pulse">
+                          {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+                            <tr key={i}>
                               <td className="px-4 py-3">
                                 <div className="space-y-1">
-                                  <div className="h-5 w-32 bg-muted rounded" />
-                                  <div className="h-4 w-24 bg-muted rounded" />
+                                  <div className="h-5 w-32 bg-muted animate-pulse rounded" />
+                                  <div className="h-4 w-24 bg-muted animate-pulse rounded" />
                                 </div>
                               </td>
                               <td className="px-4 py-3">
-                                <div className="h-5 w-5 bg-muted rounded ml-auto" />
+                                <div className="h-5 w-5 bg-muted animate-pulse rounded ml-auto" />
                               </td>
                             </tr>
                           ))}
@@ -3479,7 +3512,13 @@ export default function OrganizationSettingsPage() {
                   ) : (
                     <>
                       {loadingConnections ? (
-                        <div className="bg-background-card border border-border rounded-lg overflow-hidden">
+                        <div
+                          className="bg-background-card border border-border rounded-lg overflow-hidden pointer-events-none select-none"
+                          style={{
+                            maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                            WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+                          }}
+                        >
                           <table className="w-full table-fixed">
                             <colgroup>
                               <col className="w-[220px]" />
@@ -3496,7 +3535,7 @@ export default function OrganizationSettingsPage() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-border">
-                              {[1, 2, 3, 4].map((i) => (
+                              {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                                 <tr key={i}>
                                   <td className="px-4 py-3">
                                     <div className="flex items-center gap-2.5">

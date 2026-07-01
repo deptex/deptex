@@ -40,13 +40,13 @@ export interface RecordMeterEventInput {
 export interface RecordMeterEventResult {
   deducted: boolean;
   newBalanceCents: number | null;
-  reason?: 'insufficient_credit' | 'enforcement_off' | 'duplicate_idempotency_key';
+  reason?: 'insufficient_credit' | 'duplicate_idempotency_key';
 }
 
 export interface CanChargeResponse {
   allowed: boolean;
   balanceCents: number;
-  reason?: 'insufficient_credit' | 'enforcement_off' | 'db_unavailable';
+  reason?: 'insufficient_credit' | 'db_unavailable';
 }
 
 export interface BillingPaymentMethod {
