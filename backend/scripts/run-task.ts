@@ -153,6 +153,10 @@ async function pickTopFinding(
       .eq('extraction_run_id', run)
       .not('vuln_class', 'is', null)
       .not('sink_file', 'is', null)
+      // A sink inside a test/spec file isn't a meaningful "fix" — prefer real source.
+      .not('sink_file', 'ilike', '%test%')
+      .not('sink_file', 'ilike', '%spec%')
+      .order('flow_length', { ascending: false, nullsFirst: false })
       .limit(1)
       .maybeSingle();
     if (!data) return null;

@@ -63,8 +63,19 @@ async function postNarration(threadId: string, text: string): Promise<void> {
 // stay invisible (read tools, finish_task are mechanics); only the model's prose
 // shows. The caller gates this off once a fix is in flight, so everything here
 // is a pre-fix "thinking" beat.
+// Reasoning models (DeepSeek etc.) emit <think>…</think> before their answer.
+// Keep only what follows the last </think>; if the block never closed, the beat
+// is pure chain-of-thought — drop it rather than show reasoning in the chat.
+function stripReasoning(raw: string): string {
+  let s = raw ?? '';
+  const close = s.lastIndexOf('</think>');
+  if (close !== -1) s = s.slice(close + '</think>'.length);
+  else if (/<think>/i.test(s)) return '';
+  return s.replace(/<\/?think>/gi, '').trim();
+}
+
 async function persistBeat(threadId: string, text: string, _toolCalls: any[]): Promise<void> {
-  const trimmed = (text ?? '').trim();
+  const trimmed = stripReasoning(text ?? '');
   if (!trimmed) return;
   await supabase
     .from('aegis_chat_messages')

@@ -9,6 +9,24 @@ Base your sentence ONLY on the facts you are given (what you just did, and the s
  * Generate one short first-person voice line for the live narration. Best-effort:
  * returns null on any failure so narration never blocks (or fails) the fix.
  */
+export function stripReasoning(raw: string): string | null {
+  // Reasoning models (DeepSeek etc.) emit <think>…</think> before the answer.
+  // Keep only what follows the LAST </think>; if the block never closed (the
+  // answer got truncated inside the reasoning), there's no usable line — skip it
+  // rather than post chain-of-thought into the chat.
+  let s = raw ?? '';
+  const close = s.lastIndexOf('</think>');
+  if (close !== -1) {
+    s = s.slice(close + '</think>'.length);
+  } else if (/<think>/i.test(s)) {
+    return null;
+  }
+  s = s.replace(/<\/?think>/gi, '').trim();
+  // First non-empty line only, quotes stripped.
+  s = (s.split('\n').map((l) => l.trim()).find(Boolean) ?? '').replace(/^["']+|["']+$/g, '').trim();
+  return s || null;
+}
+
 export async function generateVoiceLine(
   model: LanguageModel,
   context: string,
@@ -18,10 +36,11 @@ export async function generateVoiceLine(
       model,
       system: VOICE_SYSTEM,
       prompt: context,
-      maxOutputTokens: 80,
+      // Enough room for a reasoning model to think AND still emit the one-line
+      // answer after </think>; stripReasoning discards the think block.
+      maxOutputTokens: 400,
     });
-    const line = (text ?? '').trim().replace(/^["']+|["']+$/g, '').trim();
-    return line || null;
+    return stripReasoning(text ?? '');
   } catch {
     return null;
   }
