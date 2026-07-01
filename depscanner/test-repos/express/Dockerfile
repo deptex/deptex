@@ -1,7 +1,7 @@
 # Intentionally vulnerable base image: node:14 has many published CVEs in
 # its os-package layer (openssl/libc/etc.). Trivy/dep-scan container layer
 # surfaces these as project_container_findings.
-FROM node:14.0
+FROM node:20-slim
 
 WORKDIR /app
 
