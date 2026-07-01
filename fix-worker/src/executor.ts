@@ -403,12 +403,19 @@ function pickTypecheckCommand(workDir: string, language: string): string | null 
 export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPipelineResult> {
   const { model, plan, workDir, repoRoot, logger, extraEnv, pipelineStartMs } = opts;
 
-  const wallClockBudgetMs = plan.wallClockBudgetSec * 1000;
+  // Dataflow / DAST fixes run the agentic explore loop (many tool calls to read
+  // the repo) BEFORE the edit + repair, so they need more wall-clock than a
+  // plan-only edit. Give explore mode a floor of 600s over the plan's estimate.
+  const isExploreMode = opts.strategy === 'sanitize_dataflow' || opts.strategy === 'patch_handler';
+  const effectiveBudgetSec = isExploreMode
+    ? Math.max(plan.wallClockBudgetSec, 600)
+    : plan.wallClockBudgetSec;
+  const wallClockBudgetMs = effectiveBudgetSec * 1000;
   const checkBudget = (label: string) => {
     const elapsed = Date.now() - pipelineStartMs;
     if (elapsed > wallClockBudgetMs) {
       throw new FixPipelineError(
-        `Wall-clock budget exhausted before ${label} (elapsed ${Math.round(elapsed / 1000)}s > ${plan.wallClockBudgetSec}s)`,
+        `Wall-clock budget exhausted before ${label} (elapsed ${Math.round(elapsed / 1000)}s > ${effectiveBudgetSec}s)`,
         'budget_wall_clock',
       );
     }
@@ -438,8 +445,8 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
   // 1. Editor pass. Dataflow / DAST fixes run the agentic EXPLORE loop (which
   // reads the repo to place the sanitizer / handler patch); everything else uses
   // the plan-only editor. Both return the same ExecutorResult shape, so the
-  // apply → verify → repair machinery below is identical.
-  const isExploreMode = opts.strategy === 'sanitize_dataflow' || opts.strategy === 'patch_handler';
+  // apply → verify → repair machinery below is identical. (isExploreMode is
+  // computed above for the wall-clock budget.)
   checkBudget(isExploreMode ? 'explore' : 'editor');
   trackToolCall(isExploreMode ? 'explore' : 'editor');
   const editorResult = isExploreMode
