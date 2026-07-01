@@ -8,6 +8,7 @@
 
 import {
   evaluateReachabilityGates,
+  evaluateSilenceScore,
   checkBaselineLock,
   checkOracle,
   buildObservedMap,

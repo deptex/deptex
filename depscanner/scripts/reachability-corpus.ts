@@ -182,6 +182,161 @@ export function evaluateReachabilityGates(report: CorpusReport): GateReport {
   };
 }
 
+// ── North-star silence score ─────────────────────────────────────────────────
+// The gate math above weights `module` at half and only counts an observed
+// `unreachable` as a false negative. But the PRODUCT auto-ignores BOTH
+// `unreachable` AND `module` (phase48), so the user never sees either. This
+// scores the silence decision the way the user actually experiences it:
+//
+//   VISIBLE  = {confirmed, data_flow, function}  — shown to the user
+//   SILENCED = {unreachable, module}             — auto-ignored (depscore ~0)
+//
+// A reachable-labelled CVE observed as EITHER `unreachable` OR `module` is a
+// SILENCE FALSE NEGATIVE — the worst failure (a real vuln hidden). The legacy
+// Gate 3 misses the `module` half; this does not.
+
+const VISIBLE_TIERS = new Set(['confirmed', 'data_flow', 'function']);
+const SILENCED_TIERS = new Set(['unreachable', 'module']);
+
+export interface SilenceScore {
+  /** labelled CVEs the scan observed (carry an observed reachability). */
+  labelledObserved: number;
+  reachableShown: number; // reachable-labelled + shown (correct)
+  reachableSilenced: number; // reachable-labelled but SILENCED — the north-star FNs
+  unreachableSilenced: number; // unreachable/module-labelled + silenced (correct)
+  unreachableShown: number; // unreachable/module-labelled but SHOWN — noise leak
+  /** unreachableSilenced / all-silenced * 100. "When we silence, how often right."
+   *  100 when nothing was silenced. */
+  silencePrecisionPct: number;
+  /** reachableSilenced / all-reachable * 100. THE NORTH STAR — fraction of
+   *  truly-reachable vulns we wrongly hid. 0 when no reachable CVE was observed. */
+  silenceFalseNegativeRatePct: number;
+  /** all-silenced / labelledObserved * 100 — labelled-set noise reduction. */
+  labelledNoiseReductionPct: number;
+  /** unreachableShown / all-unreachable * 100 — should-be-silenced leaked as visible. */
+  noiseLeakRatePct: number;
+  /** product-faithful reduction over ALL observed findings:
+   *  (unreachable + module) / total * 100 — the marketing headline. */
+  allFindingsSilencedPct: number;
+  allFindingsTotal: number;
+  /** every reachable-labelled CVE that got silenced, with how (unreachable vs module). */
+  falseNegatives: Array<{ repo: string; cve: string; expected: string; observed: string }>;
+  perEcosystem: Record<
+    string,
+    { labelledObserved: number; silencedPct: number; falseNegatives: number }
+  >;
+}
+
+/**
+ * Product-faithful silence scoring over an oss-corpus report. Pure over its
+ * input so the gate unit test can exercise it without a scan. Complements
+ * evaluateReachabilityGates (which stays byte-stable for the existing gates).
+ */
+export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
+  let reachableShown = 0;
+  let reachableSilenced = 0;
+  let unreachableSilenced = 0;
+  let unreachableShown = 0;
+  let allUnreachable = 0;
+  let allModule = 0;
+  let allFindingsTotal = 0;
+  const falseNegatives: SilenceScore['falseNegatives'] = [];
+  const perEco: Record<string, { labelledObserved: number; silenced: number; falseNegatives: number }> = {};
+
+  for (const repo of report.results ?? []) {
+    if (repo.status !== 'ok') continue;
+    const eco = repo.ecosystem || 'unknown';
+    perEco[eco] ??= { labelledObserved: 0, silenced: 0, falseNegatives: 0 };
+
+    const byR = repo.by_reachability ?? {};
+    allUnreachable += byR.unreachable ?? 0;
+    allModule += byR.module ?? 0;
+    for (const n of Object.values(byR)) allFindingsTotal += n;
+
+    for (const m of repo.ground_truth_matched ?? []) {
+      if (!m.observed || !m.observed_reachability) continue;
+      const expectedVisible = VISIBLE_TIERS.has(m.expected_reachability);
+      const observedSilenced = SILENCED_TIERS.has(m.observed_reachability);
+      perEco[eco].labelledObserved++;
+      if (observedSilenced) perEco[eco].silenced++;
+      if (expectedVisible && observedSilenced) {
+        reachableSilenced++;
+        perEco[eco].falseNegatives++;
+        falseNegatives.push({
+          repo: repo.name,
+          cve: m.cve,
+          expected: m.expected_reachability,
+          observed: m.observed_reachability,
+        });
+      } else if (expectedVisible) {
+        reachableShown++;
+      } else if (observedSilenced) {
+        unreachableSilenced++;
+      } else {
+        unreachableShown++;
+      }
+    }
+  }
+
+  const labelledObserved = reachableShown + reachableSilenced + unreachableSilenced + unreachableShown;
+  const totalSilenced = reachableSilenced + unreachableSilenced;
+  const totalReachable = reachableShown + reachableSilenced;
+  const totalUnreachable = unreachableShown + unreachableSilenced;
+
+  const perEcosystem: SilenceScore['perEcosystem'] = {};
+  for (const [eco, c] of Object.entries(perEco)) {
+    perEcosystem[eco] = {
+      labelledObserved: c.labelledObserved,
+      silencedPct: c.labelledObserved === 0 ? 0 : round2((c.silenced / c.labelledObserved) * 100),
+      falseNegatives: c.falseNegatives,
+    };
+  }
+
+  return {
+    labelledObserved,
+    reachableShown,
+    reachableSilenced,
+    unreachableSilenced,
+    unreachableShown,
+    silencePrecisionPct: totalSilenced === 0 ? 100 : round2((unreachableSilenced / totalSilenced) * 100),
+    silenceFalseNegativeRatePct:
+      totalReachable === 0 ? 0 : round2((reachableSilenced / totalReachable) * 100),
+    labelledNoiseReductionPct:
+      labelledObserved === 0 ? 0 : round2((totalSilenced / labelledObserved) * 100),
+    noiseLeakRatePct: totalUnreachable === 0 ? 0 : round2((unreachableShown / totalUnreachable) * 100),
+    allFindingsSilencedPct:
+      allFindingsTotal === 0 ? 0 : round2(((allUnreachable + allModule) / allFindingsTotal) * 100),
+    allFindingsTotal,
+    falseNegatives,
+    perEcosystem,
+  };
+}
+
+function printSilenceScore(s: SilenceScore): void {
+  console.log('\n=== Silence score (product-faithful: SILENCED = unreachable + module) ===');
+  console.log(
+    `Labelled+observed CVEs: ${s.labelledObserved} ` +
+      `(reachable ${s.reachableShown} shown / ${s.reachableSilenced} SILENCED · ` +
+      `unreachable ${s.unreachableSilenced} silenced / ${s.unreachableShown} shown)`,
+  );
+  console.log(
+    `Noise reduction — all findings:  ${s.allFindingsSilencedPct}% silenced over ${s.allFindingsTotal} findings  <- headline`,
+  );
+  console.log(`Noise reduction — labelled set:  ${s.labelledNoiseReductionPct}%`);
+  console.log(`Silence precision:               ${s.silencePrecisionPct}%  (when we hide, how often correct)`);
+  console.log(
+    `Silence FALSE-NEGATIVE rate:     ${s.silenceFalseNegativeRatePct}%  <- NORTH STAR (reachable but hidden)`,
+  );
+  console.log(`Noise-leak rate:                 ${s.noiseLeakRatePct}%  (unreachable but shown)`);
+  for (const fn of s.falseNegatives) {
+    console.log(`   SILENCE FN: ${fn.cve} in ${fn.repo} — labelled ${fn.expected}, scanned ${fn.observed}`);
+  }
+  console.log('   Per-ecosystem:');
+  for (const [eco, c] of Object.entries(s.perEcosystem)) {
+    console.log(`      ${eco}: ${c.silencedPct}% silenced over ${c.labelledObserved} labelled, ${c.falseNegatives} FN`);
+  }
+}
+
 function printGateReport(g: GateReport): void {
   const mark = (ok: boolean) => (ok ? 'PASS' : 'FAIL');
   console.log('\n=== Reachability acceptance gates ===');
@@ -379,9 +534,22 @@ function main(): void {
 
   const gates = evaluateReachabilityGates(report);
   const oracle = checkOracle(oracleVerdicts, buildObservedMap(report));
+  const silence = evaluateSilenceScore(report);
   printGateReport(gates);
   printBaselineResult(baseline, Object.keys(lockedLabels).length);
   printOracleResult(oracle, oracleVerdicts.length);
+  printSilenceScore(silence);
+
+  // Persist the silence score next to the report so a baseline-vs-final compare
+  // can diff the two numbers without re-deriving them from report.json.
+  try {
+    fs.writeFileSync(
+      path.join(path.dirname(reportPath), 'silence-score.json'),
+      JSON.stringify(silence, null, 2),
+    );
+  } catch {
+    /* best-effort; the stdout print is the primary output */
+  }
 
   process.exit(gates.pass && baseline.ok && oracle.ok ? 0 : 1);
 }
