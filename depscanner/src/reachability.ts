@@ -703,6 +703,46 @@ export function tokenBoundaryIncludes(haystack: string, needle: string): boolean
 }
 
 /**
+ * Bare, extremely-common method names that — on their own — are NOT evidence a
+ * CVE's vulnerable function is reached. These identifiers hang off countless
+ * unrelated classes across every ecosystem (`logger.error`, `cache.get`,
+ * `router.handle`, `console.log`, `queue.send` …), so a usage whose only tie to
+ * a dependency is a same-named bare call is noise, not a call-path proof.
+ *
+ * The usage heuristic below (`isDepUsed`) matches a CVE's dependency by
+ * substring, so a CVE whose vulnerable surface is one of these words gets
+ * lifted to `function` the instant ANY like-named call exists anywhere in the
+ * project — the symfony/demo CVE-2020-5274 false positive (matched the
+ * unrelated Console `SymfonyStyle->error()` call) is the canonical case. When
+ * the ONLY matched call is a bare word from this set, we require a stronger,
+ * qualifying signal before promoting (see `COMMON_BARE_METHODS` usage in the
+ * classifier). Distinctive names — deserialization verbs (`readValue`, `load`,
+ * `unserialize`, `deserialize`), template/render helpers with a real name
+ * (`template`, `safeLoad`), etc. — are deliberately NOT listed here, so a CVE
+ * whose sink IS a distinctive method still promotes on its own. Keep entries
+ * lowercase and in bare (last-segment) form.
+ */
+export const COMMON_BARE_METHODS: ReadonlySet<string> = new Set([
+  'error', 'warn', 'warning', 'info', 'log', 'debug',
+  'get', 'set', 'run', 'handle', 'send', 'render',
+  'write', 'read', 'add', 'remove', 'execute', 'call',
+]);
+
+/**
+ * Last bare segment of a resolved-method / callee string, lowercased. Splits on
+ * any non-identifier separator so `org.apache.logging.log4j.Logger.error`,
+ * `SymfonyStyle::error`, `mapper->readValue`, and a bare `error` all reduce to
+ * their trailing method name (`error`, `error`, `readvalue`, `error`). Used by
+ * the bare-common-method guard to decide whether a matched usage is a
+ * distinctive call-path signal or an ambiguous same-named collision.
+ */
+export function bareMethodName(resolvedMethod: string | null | undefined): string {
+  if (!resolvedMethod) return '';
+  const segs = resolvedMethod.toLowerCase().split(/[^a-z0-9_$]+/).filter(Boolean);
+  return segs.length ? segs[segs.length - 1] : '';
+}
+
+/**
  * Ecosystems where source code MUST explicitly `use`/`import` a package to
  * exercise it, so `files_importing_count === 0` is strong negative evidence
  * even on a directly-declared dep. Hoisted to module scope (R1) so the
@@ -1359,7 +1399,6 @@ export async function updateReachabilityLevels(
 
       if (!devScoped && !symbolClassified) {
       if (depName && isDepUsed(depName)) {
-        level = 'function';
         // Populate details with matching usage data (file, line, methods called)
         const lower = depName.toLowerCase();
         const dotted = lower.replace(/-/g, '.');
@@ -1370,7 +1409,36 @@ export async function updateReachabilityLevels(
           return t.includes(lower) || t.includes(dotted) || m.includes(lower) || m.includes(dotted)
             || (firstPart.length > 3 && (t.includes(firstPart) || m.includes(firstPart)));
         });
-        if (matchingUsages.length > 0) {
+        // Bare-common-method guard (precision). The filter above matches on a
+        // substring of the dependency name, so a CVE whose vulnerable call is a
+        // bare, extremely-common word (`error`, `get`, `handle`, …) is lifted to
+        // `function` the moment ANY same-named call exists anywhere — even one
+        // on an unrelated class. (symfony/demo CVE-2020-5274 matched the Console
+        // `SymfonyStyle->error()` at CheckRequirementsSubscriber.php:67, a call
+        // that has nothing to do with the CVE's real TwigBundle sink.) Require a
+        // genuine call-path signal before promoting: at least one matched usage
+        // whose bare method is distinctive (not a common ambiguous word) OR whose
+        // receiver/class carries a distinctive segment of the dependency name
+        // (e.g. `…log4j.Logger.error` — `log4j` qualifies the bare `error`).
+        // `firstPart`/`lower`/`dotted` tokens that are themselves a common bare
+        // word (a dep literally named `send` / `error-handler`) can't self-
+        // qualify — they must appear on the *receiver*, not just collide with a
+        // bare method. Deserialization verbs (`readValue`, `load`, `unserialize`)
+        // and library-specific calls (`template`, `safeLoad`) are distinctive, so
+        // a CVE whose sink IS one of those still promotes. When ONLY bare common
+        // methods matched, keep the finding at `module` (used-but-unproven) —
+        // never invent a `function` verdict from an ambiguous name collision.
+        const depQualifierTokens = [lower, dotted, firstPart].filter(
+          (t, i, a) => t.length >= 4 && !COMMON_BARE_METHODS.has(t) && a.indexOf(t) === i,
+        );
+        const strongUsages = matchingUsages.filter((u: any) => {
+          const method = bareMethodName(u.resolved_method);
+          if (method && !COMMON_BARE_METHODS.has(method)) return true;
+          const receiver = (u.target_type ?? '').toLowerCase();
+          return depQualifierTokens.some((tok) => receiver.includes(tok));
+        });
+        if (strongUsages.length > 0) {
+          level = 'function';
           const files = [...new Set(matchingUsages.map((u: any) => u.file_path).filter(Boolean))];
           const methods = [...new Set(matchingUsages.map((u: any) => u.resolved_method).filter(Boolean))];
           const locations = matchingUsages
