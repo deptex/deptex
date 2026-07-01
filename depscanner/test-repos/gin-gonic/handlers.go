@@ -118,7 +118,7 @@ func parseConfig(c *gin.Context) {
 func pingHost(c *gin.Context) {
 	// REACHABLE: command_injection
 	host := c.PostForm("host")
-	exec.CommandContext(c, "/bin/sh", "-c", "ping -c1 "+host).Run()
+	exec.CommandContext(c, "ping", "-c1", host).Run()
 	c.String(http.StatusOK, "ok")
 }
 
