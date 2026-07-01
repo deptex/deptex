@@ -147,6 +147,148 @@ function resolve(present: boolean, s: SpringFeatureSignals): FeaturePresence {
   return 'absent';
 }
 
+// ---------------------------------------------------------------------------
+// Spring web-app / Jackson / actuator signal helpers
+// (shared by the FRAMEWORK_MEDIATED table below and the jackson-core
+// blocking-parser ALWAYS_ON_RUNTIME row further down)
+// ---------------------------------------------------------------------------
+
+/**
+ * Spring web-application artifacts. Substring match (via `depIncludes`) so the
+ * modern module-split names (`spring-boot-starter-webmvc`,
+ * `spring-boot-starter-webflux`) and the classic `spring-boot-starter-web` /
+ * `spring-webmvc` all resolve — `spring-boot-starter-web` is a prefix of the
+ * `-webmvc` / `-webflux` variants.
+ */
+const SPRING_WEB_ARTIFACTS = [
+  'spring-boot-starter-web',
+  'spring-webmvc',
+  'spring-webflux',
+  'spring-web',
+];
+
+/** The project ships a Spring MVC / WebFlux web layer. */
+function springWebAppPresent(s: SpringFeatureSignals): boolean {
+  return depIncludes(s, SPRING_WEB_ARTIFACTS);
+}
+
+/**
+ * The app declares a Jackson-backed message-converter surface — a
+ * `@RestController` / `@ResponseBody` (JSON responses) or `@RequestBody` (JSON
+ * request bodies). Substring tokens catch the `@`-prefixed annotations in the
+ * lowercased code text. Liberal by design: a false "present" only floors
+ * Jackson at `module` (still hidden, just honest), it never surfaces noise.
+ */
+function jacksonMessageConvertersPresent(s: SpringFeatureSignals): boolean {
+  return codeIncludes(s, ['restcontroller', 'responsebody', 'requestbody']);
+}
+
+/**
+ * Raw value of `management.endpoints.web.exposure.include` (properties form, or
+ * a best-effort yaml `exposure:`→`include:`), trimmed & unquoted; null when
+ * unset. `configText` is already lowercased by the detector.
+ */
+function actuatorIncludeValue(s: SpringFeatureSignals): string | null {
+  const clean = (v: string) => v.trim().replace(/^["']|["']$/g, '').trim();
+  const flat = s.configText.match(
+    /management\.endpoints\.web\.exposure\.include\s*[=:]\s*([^\r\n#]+)/,
+  );
+  if (flat) return clean(flat[1]);
+  // yaml nested form — only trust an `include:` when an `exposure:` key is also
+  // present (avoids matching an unrelated `include:` elsewhere in config).
+  if (s.configText.includes('exposure')) {
+    const y = s.configText.match(/\binclude\s*:\s*([^\r\n#]+)/);
+    if (y) return clean(y[1]);
+  }
+  return null;
+}
+
+/** Actuator web endpoints are exposed at all (`include` names something). */
+function actuatorExposed(s: SpringFeatureSignals): boolean {
+  const v = actuatorIncludeValue(s);
+  return !!v && v.length > 0 && v !== 'none';
+}
+
+/**
+ * An actuator endpoint that accepts a JSON request BODY is exposed —
+ * `POST /actuator/loggers/{name}` sets a log level via `{"configuredLevel":…}`,
+ * parsed by jackson-core's BLOCKING parser. True when `include` is `*` or names
+ * `loggers` explicitly. Gates the jackson-core blocking-parser promotion so a
+ * project with no exposed JSON-body actuator endpoint never earns it.
+ */
+export function actuatorWriteJsonEndpointExposed(s: SpringFeatureSignals): boolean {
+  const v = actuatorIncludeValue(s);
+  if (!v) return false;
+  return v.includes('*') || /\bloggers\b/.test(v);
+}
+
+// ---------------------------------------------------------------------------
+// FRAMEWORK-MEDIATED DEPENDENCY table (silence-FN recovery)
+// ---------------------------------------------------------------------------
+
+interface FrameworkMediatedDep {
+  /** Stable id, surfaced in `reachability_details`. */
+  id: string;
+  /** Match when the dependency NAME includes one of these lowercased tokens. */
+  owners: string[];
+  /** The framework-dispatch mechanism that exercises this dep is present. */
+  mediated: (s: SpringFeatureSignals) => boolean;
+}
+
+/**
+ * Dependencies a framework exercises via DISPATCH — the app never `import`s
+ * them, yet they run on the request path. The import-absence heuristic in the
+ * classifier would wrongly declare these orphan `unreachable`; this table lets
+ * the classifier floor them at `module` instead.
+ *
+ * SAFETY: this only ever moves a verdict unreachable→module (still hidden, just
+ * HONEST) — the conservative direction. Each row anchors to the owning package
+ * (jackson) AND requires the framework's dispatch mechanism to be present, so an
+ * unrelated transitive is never floored. Generalizes by adding a row (e.g. a
+ * JAX-RS `MessageBodyReader` provider, gson under a spring web app).
+ */
+const FRAMEWORK_MEDIATED: FrameworkMediatedDep[] = [
+  {
+    // Jackson is Spring's default JSON (de)serializer: MappingJackson2Http-
+    // MessageConverter is auto-configured in any spring-boot web app, and the
+    // actuator endpoints render/parse JSON through it. No app file imports
+    // com.fasterxml.jackson — it is reached purely via framework dispatch.
+    id: 'spring-jackson-message-converter',
+    owners: ['jackson'],
+    mediated: (s) =>
+      springWebAppPresent(s) &&
+      (jacksonMessageConvertersPresent(s) || actuatorExposed(s)),
+  },
+];
+
+export interface FrameworkMediatedResult {
+  mediated: boolean;
+  id?: string;
+}
+
+/**
+ * Decide whether a dependency with no first-party import is nonetheless
+ * exercised via framework dispatch. Pure — unit-tested directly.
+ *
+ * Fail-safe: unrecognized signals (non-Maven / unreadable project) or a missing
+ * dependency name → `{ mediated: false }`, so the classifier keeps its prior
+ * verdict (no false floor).
+ */
+export function evaluateFrameworkMediatedUsage(input: {
+  depName: string | null | undefined;
+  signals: SpringFeatureSignals | null | undefined;
+}): FrameworkMediatedResult {
+  const { depName, signals } = input;
+  if (!signals || !signals.recognized) return { mediated: false };
+  if (!depName) return { mediated: false };
+  const dep = depName.toLowerCase();
+  for (const row of FRAMEWORK_MEDIATED) {
+    if (!row.owners.some((o) => dep.includes(o))) continue;
+    if (row.mediated(signals)) return { mediated: true, id: row.id };
+  }
+  return { mediated: false };
+}
+
 /**
  * The table. Each row is cheap to add. Owners + summary patterns keep the gate
  * anchored to genuinely feature-specific advisories; generic request-path CVEs
@@ -519,6 +661,33 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     promoteTo: 'function',
     requires: () => true,
     threatTag: 'requires_local_cotenant',
+  },
+  // --- jackson-core BLOCKING parser reached via an exposed actuator JSON-body
+  //     write endpoint (POST /actuator/loggers/{name} takes an attacker JSON
+  //     body → JsonFactory.createParser(InputStream) → the blocking parser) ---
+  // Deliberately NARROW so it recovers exactly one silence-FN without dragging
+  // the sibling jackson CVEs along:
+  //   - owner `jackson-core` — NOT `jackson-databind` (its deserialization CVEs
+  //     need an untrusted `@RequestBody` polymorphic bind this app never does),
+  //   - summary must name the BLOCKING parser / document-length constraint —
+  //     jackson-core CVE-2026-29062 names `UTF8DataInputJsonParser` (DataInput)
+  //     and GHSA-72hv names the Async parser; neither says "blocking", so
+  //     neither matches,
+  //   - `requires` gates on an actuator JSON-body endpoint actually being
+  //     exposed (see actuatorWriteJsonEndpointExposed) — no exposed loggers
+  //     endpoint ⇒ no promotion.
+  // Capped at `function` (not data_flow): the vulnerable class is on a specific
+  // exposed endpoint rather than on *every* request, and there is no proven
+  // taint flow — but it is clearly above the hidden `module` tier.
+  {
+    sink: 'jackson-core-blocking-parser-actuator',
+    owners: ['jackson-core'],
+    summary: [
+      /document[\s-]?length[\s\S]{0,40}blocking/i,
+      /blocking[\s\S]{0,40}pars/i,
+    ],
+    promoteTo: 'function',
+    requires: (s) => actuatorWriteJsonEndpointExposed(s),
   },
 ];
 

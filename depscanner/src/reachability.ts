@@ -13,6 +13,7 @@ import {
   gatherSpringFeatureSignals,
   evaluateFeaturePreconditionDemotion,
   evaluateAlwaysOnRuntimePromotion,
+  evaluateFrameworkMediatedUsage,
 } from './reachability-feature-preconditions';
 
 interface LogLike {
@@ -1413,6 +1414,20 @@ export async function updateReachabilityLevels(
           options.usedTransitives !== undefined && options.usedTransitives.size > 0;
         const callgraphReachedThisDep =
           callgraphRan && depMatchesUsedTransitives(depName, depNamespace, options.usedTransitives!);
+        // FRAMEWORK-MEDIATED USAGE (silence-FN recovery). A transitive dep that
+        // no app file imports can still be exercised entirely through framework
+        // DISPATCH — Spring's Jackson message converters (@RestController /
+        // @ResponseBody / @RequestBody) and the actuator endpoints call jackson
+        // on the request path with no first-party `import`. Declaring such a dep
+        // an orphan `unreachable` is a false negative; floor it at `module`
+        // (honest: used-but-unproven) instead. Conservative: fires only for deps
+        // in the FRAMEWORK_MEDIATED table (jackson) when the project's dispatch
+        // mechanism is present. Requires recognized maven signals — a non-maven
+        // / unrecognized project yields mediated=false → unchanged behaviour.
+        const frameworkMediatedResult = featureSignals
+          ? evaluateFrameworkMediatedUsage({ depName, signals: featureSignals })
+          : { mediated: false as const };
+        const frameworkMediated = frameworkMediatedResult.mediated;
         // Ecosystems where source code MUST `use`/`import` a package to
         // exercise it. For these, files_importing_count === 0 is strong
         // negative evidence even on a directly-declared dep (composer.json /
@@ -1441,6 +1456,7 @@ export async function updateReachabilityLevels(
           !isFrameworkEmbeddedRuntime(depName) &&
           !isFrameworkRuntimePackage(depName) &&
           !callgraphReachedThisDep &&
+          !frameworkMediated &&
           !clientSpaBundledProdDep;
         // R1 — would-be-silenced transitive whose parent version is itself
         // >= `module` reachable (per the gated dependency_version_edges
@@ -1514,6 +1530,21 @@ export async function updateReachabilityLevels(
               };
             }
           }
+        } else if (frameworkMediated) {
+          // Reached purely via framework DISPATCH (Jackson message converters /
+          // actuator endpoints) — no first-party import, but genuinely on the
+          // request path at runtime. Honest floor at `module`; the always-on
+          // promotion post-pass below may then lift a *specific* always-on CVE
+          // (jackson-core's blocking parser on an exposed actuator JSON-body
+          // endpoint) to a visible tier, while the sibling jackson CVEs stay
+          // hidden here at `module`.
+          level = 'module';
+          details = {
+            reason: `framework-mediated usage: ${frameworkMediatedResult.id ?? 'framework dispatch'}`,
+            scope: 'framework_mediated',
+            verdict: 'framework_mediated',
+            ...(frameworkMediatedResult.id ? { framework_mediated_by: frameworkMediatedResult.id } : {}),
+          };
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a
