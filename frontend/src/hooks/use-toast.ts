@@ -4,6 +4,11 @@ import type { ToastActionElement, ToastProps } from "../components/ui/toast";
 
 const TOAST_LIMIT = 1;
 const TOAST_REMOVE_DELAY = 5000;
+// Failsafe auto-dismiss. Radix Toast's own duration timer pauses on window blur / pointer
+// hover and can stall — e.g. right after a route navigation (the "Project created" toast
+// firing immediately before navigate()), or under StrictMode's double-mount in dev —
+// leaving a toast on screen indefinitely. This closes it regardless of Radix's timer.
+const TOAST_AUTO_DISMISS = 5000;
 
 type ToasterToast = ToastProps & {
   id: string;
@@ -155,6 +160,10 @@ function toast({ ...props }: Toast) {
       },
     },
   });
+
+  // Failsafe auto-dismiss — see TOAST_AUTO_DISMISS. dismiss() is idempotent, so this is
+  // harmless if Radix (or a manual close) already dismissed the toast first.
+  setTimeout(dismiss, TOAST_AUTO_DISMISS);
 
   return {
     id: id,

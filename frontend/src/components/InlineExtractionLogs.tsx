@@ -72,7 +72,7 @@ export function InlineExtractionLogs({
                 className="h-6 w-6 rounded flex items-center justify-center text-zinc-100 hover:text-white hover:bg-zinc-800 transition-colors"
                 aria-label={copied ? 'Copied' : 'Copy logs'}
               >
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               </button>
             )
           )}

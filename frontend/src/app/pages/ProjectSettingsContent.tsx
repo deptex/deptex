@@ -244,6 +244,10 @@ export interface ProjectSettingsContentProps {
   /** Optimistic transfer: move the project node to its new owner team in the graph
    *  store in place (no refetch) so it relocates instantly. */
   onProjectTransferred?: (newOwnerTeamId: string) => void;
+  /** Optimistic delete: drop the project node from the graph store in place and close
+   *  the sidebar (no refetch / full reload). When provided (embedded in the overview
+   *  sidebar) it's used instead of navigating away to the projects list. */
+  onProjectDeleted?: () => void;
 }
 
 /** Repo name without account prefix: "owner/repo" -> "repo" */
@@ -469,7 +473,7 @@ function ProjectSettingsTabSkeleton({ section }: { section: string }) {
 }
 
 export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
-  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred } = props;
+  const { project, reloadProject, organizationId, organization, userPermissions, embedInSidebar, initialSection, onSectionChange, onProjectRenamed, onProjectTransferred, onProjectDeleted } = props;
   const params = useParams<{ projectId: string; section?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -493,6 +497,7 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [copiedDeleteName, setCopiedDeleteName] = useState(false);
 
   const canViewSettings = userPermissions?.view_settings === true;
   const canEditSettings = userPermissions?.edit_settings === true;
@@ -1169,7 +1174,13 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
         title: 'Success',
         description: 'Project deleted',
       });
-      navigate(`/organizations/${organizationId}/projects`);
+      // Embedded in the overview sidebar: drop the node from the graph in place and close
+      // the sidebar (no full reload). Standalone page: fall back to navigating to the list.
+      if (onProjectDeleted) {
+        onProjectDeleted();
+      } else {
+        navigate(`/organizations/${organizationId}/projects`);
+      }
     } catch (error: any) {
       toast({
         title: 'Error',
@@ -1561,7 +1572,22 @@ export function ProjectSettingsContent(props: ProjectSettingsContentProps) {
                     {showDeleteConfirm && project && (
                       <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
                         <p className="text-sm text-foreground">
-                          To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{project.name}</strong> below:
+                          To confirm deletion, type{' '}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(project.name);
+                              setCopiedDeleteName(true);
+                              setTimeout(() => setCopiedDeleteName(false), 2000);
+                            }}
+                            className="inline-flex items-center gap-1.5 align-middle text-destructive font-mono bg-destructive/10 hover:bg-destructive/20 px-1.5 py-0.5 rounded transition-colors"
+                            aria-label={copiedDeleteName ? 'Copied' : 'Copy project name'}
+                            title={copiedDeleteName ? 'Copied' : 'Copy project name'}
+                          >
+                            {copiedDeleteName ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                            {project.name}
+                          </button>{' '}
+                          below:
                         </p>
                         <input
                           type="text"

@@ -24,6 +24,27 @@ export function useRealtimeStatus(
     isLoading: true,
   });
 
+  // Reset state DURING render the moment projectId changes — not in the effect
+  // below, which only runs after this render commits. Without this, the hook
+  // returns the PREVIOUS project's status for the render where projectId has
+  // already switched, so a consumer attributes the old project's
+  // "extracting / no lastExtractedAt" to the newly-selected one (e.g. clicking
+  // an extracting project then another flashes "creating" on the second). This
+  // is React's sanctioned "adjust state when a prop changes" pattern; the guard
+  // makes it converge in one extra render with no loop.
+  const [trackedProjectId, setTrackedProjectId] = useState(projectId);
+  if (projectId !== trackedProjectId) {
+    setTrackedProjectId(projectId);
+    setState({
+      status: 'loading',
+      extractionStep: null,
+      lastSynced: null,
+      lastError: null,
+      lastExtractedAt: null,
+      isLoading: true,
+    });
+  }
+
   const fallbackRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const realtimeOk = useRef(true);
 
