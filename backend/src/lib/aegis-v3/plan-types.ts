@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
-export type FindingType = 'vulnerability' | 'semgrep' | 'secret';
+export type FindingType =
+  | 'vulnerability'
+  | 'semgrep'
+  | 'secret'
+  | 'iac'
+  | 'container'
+  | 'base_image'
+  | 'dataflow'
+  | 'dast';
 export type PlanLanguage = 'js' | 'ts' | 'python' | 'go' | 'java' | 'ruby' | 'php' | 'rust' | 'csharp' | 'other';
 export type PlanDiffSize = 'small' | 'medium' | 'large';
 export type FileChangeAction = 'modify' | 'create' | 'delete';
@@ -14,7 +22,16 @@ export type FixStatus =
   | 'failed'
   | 'rejected';
 
-export const FINDING_TYPES: readonly FindingType[] = ['vulnerability', 'semgrep', 'secret'] as const;
+export const FINDING_TYPES: readonly FindingType[] = [
+  'vulnerability',
+  'semgrep',
+  'secret',
+  'iac',
+  'container',
+  'base_image',
+  'dataflow',
+  'dast',
+] as const;
 export const PLAN_LANGUAGES: readonly PlanLanguage[] = [
   'js',
   'ts',
@@ -110,7 +127,16 @@ const refusalSchema = z.object({
 export const fixPlanSchema = z.object({
   summary: z.string().min(1),
   finding: z.object({
-    type: z.enum(['vulnerability', 'semgrep', 'secret']),
+    type: z.enum([
+      'vulnerability',
+      'semgrep',
+      'secret',
+      'iac',
+      'container',
+      'base_image',
+      'dataflow',
+      'dast',
+    ]),
     id: z.string().min(1),
     severity: z.string().optional(),
   }),
@@ -131,6 +157,13 @@ export const DEFAULT_WALL_CLOCK_BUDGET_SEC = 300;
 export const MAX_DIFF_LOC = 500;
 export const MAX_TOOL_CALLS = 30;
 export const REPAIR_BUDGET = 2;
+
+// The agentic explore loop (dataflow / dast fixes) gets its OWN budget so a deep
+// taint path or a hard-to-locate handler can't starve the edit + repair cycles
+// that share the MAX_TOOL_CALLS pool. Steps = model turns; tool-calls = read_file
+// / grep / list_dir invocations across the whole explore phase.
+export const MAX_EXPLORE_STEPS = 12;
+export const MAX_EXPLORE_TOOL_CALLS = 20;
 
 export function isShipGateLanguage(lang: PlanLanguage): boolean {
   return SHIP_GATE_LANGUAGES.includes(lang);

@@ -15,8 +15,19 @@ export type AegisTaskStatus =
 
 export type AegisTaskSource = 'chat' | 'finding';
 
-// The 3 finding types the fix pipeline can act on (aegis-fix.ts FINDING_TYPES).
-export type AegisTaskFindingType = 'vulnerability' | 'semgrep' | 'secret';
+// The finding types the fix pipeline can act on (kept in sync with
+// plan-types.ts FINDING_TYPES). vulnerability/semgrep/secret + the infra &
+// dataflow types added in phase69: iac misconfigs, container OS-CVEs,
+// base-image recommendations, reachable taint flows (dataflow), DAST findings.
+export type AegisTaskFindingType =
+  | 'vulnerability'
+  | 'semgrep'
+  | 'secret'
+  | 'iac'
+  | 'container'
+  | 'base_image'
+  | 'dataflow'
+  | 'dast';
 
 // A target stores STABLE identity only — the live PDV/finding row id is
 // re-resolved from (project_id, finding_key) at accept time, because those row
@@ -58,6 +69,11 @@ export const AEGIS_TASK_FINDING_TYPES: readonly AegisTaskFindingType[] = [
   'vulnerability',
   'semgrep',
   'secret',
+  'iac',
+  'container',
+  'base_image',
+  'dataflow',
+  'dast',
 ] as const;
 
 // Blast-radius cap: a single task fans out at most this many fixes (each opens

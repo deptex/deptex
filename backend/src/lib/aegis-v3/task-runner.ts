@@ -321,15 +321,26 @@ export async function runTaskAgent(
 
         // Kick-off beat — lands immediately, so the ~minute of plan generation
         // that follows doesn't read as dead air before the pipeline's own step
-        // beats start. Phrasing is type-aware (a bump "upgrades to a safe
-        // version"; a code/secret fix just "works out the fix").
+        // beats start. Phrasing is type-aware.
         const projName = projectNames.get(target.projectId) ?? 'the project';
-        await postNarration(
-          threadId,
-          target.findingType === 'vulnerability'
-            ? `Working out the exact change for the ${projName} project and a safe version to upgrade to.`
-            : `Working out the fix for ${target.label} in the ${projName} project.`,
-        );
+        const kickoff = ((): string => {
+          switch (target.findingType) {
+            case 'vulnerability':
+              return `Working out the exact change for the ${projName} project and a safe version to upgrade to.`;
+            case 'base_image':
+            case 'container':
+              return `Working out which base image to move ${projName} to.`;
+            case 'dataflow':
+              return `Tracing the data flow for ${target.label} in ${projName} to find where to sanitize it.`;
+            case 'dast':
+              return `Locating the vulnerable endpoint handler for ${target.label} in ${projName}.`;
+            case 'iac':
+              return `Working out the infrastructure fix for ${target.label} in ${projName}.`;
+            default:
+              return `Working out the fix for ${target.label} in the ${projName} project.`;
+          }
+        })();
+        await postNarration(threadId, kickoff);
 
         const ins = await insertFixRow({
           organizationId: orgId,

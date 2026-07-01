@@ -49,6 +49,20 @@ function shapeTask(row: any): AegisTask {
 // ---------------------------------------------------------------------------
 
 export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<string | null> {
+  // DAST is endpoint-centric (keyed by dast_run_id, not extraction_run_id), so
+  // it resolves independent of the active extraction run. findingHandle/Key
+  // carries the dast finding row id.
+  if (target.findingType === 'dast') {
+    const dastId = target.findingHandle || target.findingKey;
+    const { data } = await supabase
+      .from('project_dast_findings')
+      .select('id')
+      .eq('project_id', target.projectId)
+      .eq('id', dastId)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  }
+
   const activeRun = await getActiveExtractionId(supabase, target.projectId);
   if (!activeRun) return null;
 
@@ -66,11 +80,55 @@ export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<s
     return (data as any)?.osv_id ?? null;
   }
 
-  // semgrep / secret: resolve by LOCATION (findingHandle = `file:line`), because
-  // their finding_key is per-rule (shared across all occurrences). Falling back
-  // to finding_key would collapse N distinct findings to one row.
+  if (target.findingType === 'container') {
+    // Container CVEs aren't location-based; finding_key is per (image,pkg,cve).
+    const { data } = await supabase
+      .from('project_container_findings')
+      .select('id')
+      .eq('project_id', target.projectId)
+      .eq('finding_key', target.findingKey)
+      .eq('extraction_run_id', activeRun)
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  }
+
+  if (target.findingType === 'base_image') {
+    // One recommendation per Dockerfile per run; findingKey = dockerfile_path (stable).
+    const { data } = await supabase
+      .from('project_base_image_recommendations')
+      .select('id')
+      .eq('project_id', target.projectId)
+      .eq('dockerfile_path', target.findingKey)
+      .eq('extraction_run_id', activeRun)
+      .limit(1)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  }
+
+  if (target.findingType === 'dataflow') {
+    // findingKey = flow_signature_hash (stable across rescans, per taint flow).
+    const { data } = await supabase
+      .from('project_reachable_flows')
+      .select('id')
+      .eq('project_id', target.projectId)
+      .eq('flow_signature_hash', target.findingKey)
+      .eq('extraction_run_id', activeRun)
+      .limit(1)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  }
+
+  // semgrep / secret / iac: resolve by LOCATION (findingHandle = `file:line`),
+  // because their finding_key is per-rule (shared across all occurrences).
+  // Falling back to finding_key would collapse N distinct findings to one row.
   const table =
-    target.findingType === 'semgrep' ? 'project_semgrep_findings' : 'project_secret_findings';
+    target.findingType === 'semgrep'
+      ? 'project_semgrep_findings'
+      : target.findingType === 'iac'
+        ? 'project_iac_findings'
+        : 'project_secret_findings';
   if (target.findingHandle) {
     const colon = target.findingHandle.lastIndexOf(':');
     const filePath = colon > 0 ? target.findingHandle.slice(0, colon) : '';
@@ -99,6 +157,17 @@ export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<s
     .limit(1)
     .maybeSingle();
   return (data as any)?.id ?? null;
+}
+
+// finding_tracker_links.finding_type has a fixed CHECK constraint that predates
+// the phase69 fix types. It already lists iac / container / dast / taint_flow /
+// malicious, but NOT the two fix-type names we coined — so map those onto the
+// closest allowed value at the tracker boundary (write AND read):
+// dataflow -> 'taint_flow', base_image -> 'container'.
+export function trackerFindingType(findingType: string): string {
+  if (findingType === 'dataflow') return 'taint_flow';
+  if (findingType === 'base_image') return 'container';
+  return findingType;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +447,7 @@ export async function acceptTask(args: {
         {
           organization_id: organizationId,
           project_id: target.projectId,
-          finding_type: target.findingType,
+          finding_type: trackerFindingType(target.findingType),
           finding_key: target.findingKey,
           provider: 'aegis',
           external_id: taskId,
@@ -546,7 +615,7 @@ export async function findOpenTaskForFinding(args: {
     .from('finding_tracker_links')
     .select('external_id, external_state')
     .eq('project_id', projectId)
-    .eq('finding_type', findingType)
+    .eq('finding_type', trackerFindingType(findingType))
     .eq('finding_key', findingKey)
     .eq('provider', 'aegis')
     .maybeSingle();

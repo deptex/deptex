@@ -15,15 +15,36 @@ import type { FindingType, FixPlan, FixStatus, PlanRefusal } from './plan-types'
 export function strategyForFindingType(findingType: FindingType): string {
   if (findingType === 'semgrep') return 'fix_semgrep';
   if (findingType === 'secret') return 'remediate_secret';
+  if (findingType === 'iac') return 'fix_iac';
+  // container OS-CVEs are only fixable by moving the base image (you can't patch
+  // an OS package baked into an image from app code), so they share the
+  // base-image bump path.
+  if (findingType === 'base_image' || findingType === 'container') return 'bump_base_image';
+  if (findingType === 'dataflow') return 'sanitize_dataflow';
+  if (findingType === 'dast') return 'patch_handler';
   return 'code_patch';
 }
 
-export function fixTypeColumn(
-  findingType: FindingType,
-): 'osv_id' | 'semgrep_finding_id' | 'secret_finding_id' {
+export type FixFindingIdColumn =
+  | 'osv_id'
+  | 'semgrep_finding_id'
+  | 'secret_finding_id'
+  | 'iac_finding_id'
+  | 'container_finding_id'
+  | 'base_image_rec_id'
+  | 'reachable_flow_id'
+  | 'dast_finding_id';
+
+export function fixTypeColumn(findingType: FindingType): FixFindingIdColumn {
   if (findingType === 'vulnerability') return 'osv_id';
   if (findingType === 'semgrep') return 'semgrep_finding_id';
-  return 'secret_finding_id';
+  if (findingType === 'secret') return 'secret_finding_id';
+  if (findingType === 'iac') return 'iac_finding_id';
+  if (findingType === 'container') return 'container_finding_id';
+  if (findingType === 'base_image') return 'base_image_rec_id';
+  // dataflow keys on the project_reachable_flows row it neutralises.
+  if (findingType === 'dataflow') return 'reachable_flow_id';
+  return 'dast_finding_id';
 }
 
 // Some models (Qwen3, certain OpenAI configs) always populate optional schema

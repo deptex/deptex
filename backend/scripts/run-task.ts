@@ -10,8 +10,12 @@
  *
  *   Create a task and run it in one shot:
  *     npx tsx scripts/run-task.ts --create --org <orgId> --project <projectId> --auto
- *       --auto         pick the top-depscore vulnerability in the project's active run
- *       --osv <id> --key <findingKey> [--label "..."]   target a specific vuln instead
+ *       --auto                pick the top finding in the project's active run
+ *       --auto --type <type>  pick the top finding of a specific type. type is one of:
+ *                             vulnerability | semgrep | secret | iac | container |
+ *                             base_image | dataflow | dast
+ *       --osv <id> --key <findingKey> [--label "..."]              target a specific vuln
+ *       --type <type> --key <findingKey> --handle <file:line>      target a specific code finding
  *       --title "..."  override the task title
  *       --user <id>    creator (defaults to any member of the org)
  *
@@ -67,6 +71,134 @@ async function pickTopVuln(projectId: string): Promise<AegisTaskTarget | null> {
   };
 }
 
+// Pick the top finding of any type in a project's active run, and shape it into
+// the AegisTaskTarget that resolveTargetFindingId() expects for that type. Used
+// by `--auto --type <type>` to dogfood every finding type without hand-copying
+// finding keys.
+async function pickTopFinding(
+  projectId: string,
+  type: AegisTaskFindingType,
+): Promise<AegisTaskTarget | null> {
+  if (type === 'vulnerability') return pickTopVuln(projectId);
+
+  // DAST is dast_run-scoped, not extraction-run scoped → resolve by row id.
+  if (type === 'dast') {
+    const { data } = await supabase
+      .from('project_dast_findings')
+      .select('id, endpoint_url, http_method, vulnerability_type')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    const d = data as any;
+    return {
+      findingType: 'dast',
+      findingKey: d.id,
+      findingHandle: d.id,
+      projectId,
+      label: `${d.vulnerability_type} at ${d.http_method} ${d.endpoint_url}`,
+    };
+  }
+
+  const run = await getActiveExtractionId(supabase, projectId);
+  if (!run) return null;
+
+  if (type === 'base_image') {
+    const { data } = await supabase
+      .from('project_base_image_recommendations')
+      .select('dockerfile_path, current_image, recommended_image, cve_delta')
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', run)
+      .not('recommended_image', 'is', null)
+      .order('cve_delta', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    const d = data as any;
+    return {
+      findingType: 'base_image',
+      findingKey: d.dockerfile_path,
+      projectId,
+      label: `${d.current_image} → ${d.recommended_image} (${d.dockerfile_path})`,
+    };
+  }
+
+  if (type === 'container') {
+    const { data } = await supabase
+      .from('project_container_findings')
+      .select('finding_key, cve_id, osv_id, os_package_name, image_reference, image_source')
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', run)
+      .eq('status', 'open')
+      .eq('image_source', 'dockerfile_base')
+      .order('depscore', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    const d = data as any;
+    return {
+      findingType: 'container',
+      findingKey: d.finding_key,
+      projectId,
+      label: `${d.cve_id ?? d.osv_id} in ${d.os_package_name} (${d.image_reference})`,
+    };
+  }
+
+  if (type === 'dataflow') {
+    const { data } = await supabase
+      .from('project_reachable_flows')
+      .select('flow_signature_hash, osv_id, vuln_class, entry_point_file, sink_file, sink_line')
+      .eq('project_id', projectId)
+      .eq('extraction_run_id', run)
+      .not('vuln_class', 'is', null)
+      .not('sink_file', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    const d = data as any;
+    return {
+      findingType: 'dataflow',
+      findingKey: d.flow_signature_hash,
+      osvId: d.osv_id ?? undefined,
+      projectId,
+      label: `${d.vuln_class} → ${d.sink_file}:${d.sink_line}`,
+    };
+  }
+
+  // semgrep / secret / iac: location-based (file:line).
+  const table =
+    type === 'semgrep'
+      ? 'project_semgrep_findings'
+      : type === 'iac'
+        ? 'project_iac_findings'
+        : 'project_secret_findings';
+  const cols =
+    type === 'secret'
+      ? 'id, finding_key, file_path, start_line, detector_type'
+      : 'id, finding_key, file_path, start_line, rule_id';
+  let q = supabase
+    .from(table)
+    .select(cols)
+    .eq('project_id', projectId)
+    .eq('extraction_run_id', run)
+    .eq('status', 'open')
+    .order('depscore', { ascending: false, nullsFirst: false })
+    .limit(1);
+  if (type === 'secret') q = q.eq('is_current', true);
+  const { data } = await q.maybeSingle();
+  if (!data) return null;
+  const d = data as any;
+  const ruleOrDetector = type === 'secret' ? d.detector_type : d.rule_id;
+  return {
+    findingType: type,
+    findingKey: d.finding_key,
+    findingHandle: `${d.file_path}:${d.start_line}`,
+    projectId,
+    label: `${ruleOrDetector} at ${d.file_path}:${d.start_line}`,
+  };
+}
+
 async function main() {
   const create = process.argv.includes('--create');
   let taskId =
@@ -105,10 +237,13 @@ async function main() {
     const targets: AegisTaskTarget[] = [];
     if (process.argv.includes('--auto')) {
       if (!project) throw new Error('--auto requires --project <projectId>');
-      const t = await pickTopVuln(project);
-      if (!t) throw new Error('No vulnerability finding in the active run for that project');
+      // --auto [--type <type>] picks the top finding of that type (default:
+      // vulnerability) and shapes the right target for it.
+      const autoType = (arg('type') as AegisTaskFindingType) ?? 'vulnerability';
+      const t = await pickTopFinding(project, autoType);
+      if (!t) throw new Error(`No ${autoType} finding available for that project`);
       targets.push(t);
-      console.log('Auto-picked target:', t.label);
+      console.log('Auto-picked target:', t.findingType, '—', t.label);
     } else if (arg('osv') && arg('key')) {
       targets.push({
         findingType: 'vulnerability',

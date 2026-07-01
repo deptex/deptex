@@ -26,6 +26,11 @@ interface FullFixRow {
   osv_id: string | null;
   semgrep_finding_id: string | null;
   secret_finding_id: string | null;
+  iac_finding_id: string | null;
+  container_finding_id: string | null;
+  base_image_rec_id: string | null;
+  dast_finding_id: string | null;
+  reachable_flow_id: string | null;
   // Set when this fix was started by an Aegis task — the worker narrates its
   // real steps into the task's chat thread and carries the terminal status
   // onto the task. Null for a standalone fix.
@@ -57,7 +62,7 @@ export async function loadFullRow(
   const { data } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, project_id, organization_id, fix_type, strategy, status, run_id, plan, plan_base_sha, plan_base_branch, payload, attempts, osv_id, semgrep_finding_id, secret_finding_id, thread_id, task_id',
+      'id, project_id, organization_id, fix_type, strategy, status, run_id, plan, plan_base_sha, plan_base_branch, payload, attempts, osv_id, semgrep_finding_id, secret_finding_id, iac_finding_id, container_finding_id, base_image_rec_id, dast_finding_id, reachable_flow_id, thread_id, task_id',
     )
     .eq('id', fixId)
     .maybeSingle();

@@ -7,6 +7,7 @@ import type { FixPlan } from './plan-types';
 import { MAX_DIFF_LOC, MAX_TOOL_CALLS, REPAIR_BUDGET } from './plan-types';
 import { applyDiffText } from './edit-tool';
 import { runRepair } from './repair';
+import { runExplorer } from './explorer';
 import { runTests, type TestResult } from './test-runner';
 
 const EXEC_OPTS: ExecSyncOptionsWithStringEncoding = { encoding: 'utf-8', timeout: 60_000 };
@@ -295,10 +296,15 @@ export class FixPipelineError extends Error {
 export interface RunFixPipelineOpts {
   model: LanguageModel;
   plan: FixPlan;
-  // The finding type this fix targets ('vulnerability' | 'semgrep' | 'secret').
+  // The finding type this fix targets (vulnerability | semgrep | secret | iac |
+  // dataflow | dast — base_image/container are handled outside this pipeline).
   // Dependency bumps ('vulnerability') verify by re-resolving deps rather than
   // running the app's full test suite (too slow + needs CI's full setup).
   fixType?: string | null;
+  // The fix strategy. 'sanitize_dataflow' / 'patch_handler' run the agentic
+  // EXPLORE loop (the model reads the repo to place the fix) instead of the
+  // plan-only editor. Everything else uses the editor.
+  strategy?: string | null;
   // Project directory (the monorepo subdir, or the repo root when there is no
   // subdir). Used as the cwd for tests and as the base for resolving the
   // plan's file-edit paths (which are relative to the project root).
@@ -429,10 +435,16 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     }
   };
 
-  // 1. Editor pass.
-  checkBudget('editor');
-  trackToolCall('editor');
-  const editorResult = await runEditor({ model, plan, workDir, logger });
+  // 1. Editor pass. Dataflow / DAST fixes run the agentic EXPLORE loop (which
+  // reads the repo to place the sanitizer / handler patch); everything else uses
+  // the plan-only editor. Both return the same ExecutorResult shape, so the
+  // apply → verify → repair machinery below is identical.
+  const isExploreMode = opts.strategy === 'sanitize_dataflow' || opts.strategy === 'patch_handler';
+  checkBudget(isExploreMode ? 'explore' : 'editor');
+  trackToolCall(isExploreMode ? 'explore' : 'editor');
+  const editorResult = isExploreMode
+    ? await runExplorer({ model, plan, workDir, logger })
+    : await runEditor({ model, plan, workDir, logger });
   let totalTokens = editorResult.tokensUsed;
   let lastDiff = editorResult.rawDiff;
 

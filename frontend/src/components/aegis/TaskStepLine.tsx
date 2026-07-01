@@ -1,4 +1,4 @@
-import { GitBranch, FilePen, PackageCheck, GitPullRequest, Check } from 'lucide-react';
+import { GitBranch, FilePen, PackageCheck, GitPullRequest, Telescope, Check } from 'lucide-react';
 
 // A completed tool-use step in a task chat — a gray icon + label line ("Cloned
 // the repository") that reads as an action the agent performed, distinct from
@@ -6,6 +6,7 @@ import { GitBranch, FilePen, PackageCheck, GitPullRequest, Check } from 'lucide-
 
 const STEP_ICONS = {
   clone: GitBranch,
+  explore: Telescope,
   edit: FilePen,
   verify: PackageCheck,
   pr: GitPullRequest,

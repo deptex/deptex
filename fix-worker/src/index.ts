@@ -18,6 +18,7 @@ import {
 import { createInstallationToken } from './github';
 import { createSandbox, cloneAtSha, setupForLanguage } from './sandbox';
 import { runFixPipeline, FixPipelineError } from './executor';
+import { runBaseImageBump, describeBaseImageTarget } from './base-image';
 import { commitAndPushFix, openPullRequest } from './pr';
 import { FixLogger } from './logger';
 import { getLanguageModelForOrg } from './llm';
@@ -117,14 +118,32 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     // short sentence the worker speaks between its steps. Best-effort and
     // no-op for a non-task fix (no thread).
     const model = await getLanguageModelForOrg(supabase, fullRow.organization_id);
-    // A dependency bump (vulnerability) re-resolves deps; semgrep/secret are code
-    // fixes that run the tests. The narration phrasing follows from this.
+    // The fix strategy drives both the execution path and the narration:
+    //  - dependency bump (vulnerability): re-resolve deps.
+    //  - base-image bump (base_image / container): deterministic Dockerfile FROM edit.
+    //  - explore (dataflow / dast): agentic read-then-patch loop.
+    //  - everything else (semgrep / secret / iac): the plan-only code editor.
+    const strategy = fullRow.strategy;
     const isDepBump = fullRow.fix_type === 'vulnerability';
+    const isBaseImageBump = strategy === 'bump_base_image';
+    const isExplore = strategy === 'sanitize_dataflow' || strategy === 'patch_handler';
+    const isDast = fullRow.fix_type === 'dast';
     const findingLabel = fullRow.osv_id
       ? fullRow.osv_id
       : fullRow.fix_type === 'secret'
         ? 'a hardcoded secret'
-        : 'a code security finding';
+        : fullRow.fix_type === 'iac'
+          ? 'an infrastructure misconfiguration'
+          : isBaseImageBump
+            ? 'an outdated base image'
+            : fullRow.fix_type === 'dataflow'
+              ? 'a reachable data-flow vulnerability'
+              : isDast
+                ? 'a runtime security finding'
+                : 'a code security finding';
+    // For a base-image bump, resolve the concrete current→target image up front so
+    // the narration can name it. Best-effort (null if unresolvable).
+    const baseTarget = isBaseImageBump ? await describeBaseImageTarget(supabase, fullRow) : null;
     const fixContext = `You are Aegis, fixing ${findingLabel} in the ${projectName} project. The change: ${plan.summary}.`;
     const voice = async (justDid: string, next?: string): Promise<void> => {
       if (!fullRow.thread_id) return;
@@ -146,7 +165,15 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
     await voice(
       'cloned the repo into a clean sandbox',
-      isDepBump ? 'open the dependency manifest and apply the version bump' : 'open the affected file and apply the fix',
+      isDepBump
+        ? 'open the dependency manifest and apply the version bump'
+        : isBaseImageBump
+          ? 'find the Dockerfile and move it to the recommended base image'
+          : isExplore
+            ? isDast
+              ? 'explore the code to find the vulnerable endpoint handler, then patch it'
+              : 'explore the code to trace the tainted data flow, then add a sanitizer'
+            : 'open the affected file and apply the fix',
     );
 
     if (await isJobCancelled(supabase, job.id)) {
@@ -186,46 +213,84 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     const primaryFile = changedFiles[0] ?? 'the affected file';
 
     // onPhase posts the edit/verify step + voice with REAL timing: the edit lands
-    // before the slow install ("now let me reinstall…"), then the install runs,
-    // then verify lands after it passes. (verifiedLocally false = we soft-passed
-    // and deferred to the PR's CI, so we don't claim a local check.)
-    const pipeline = await runFixPipeline({
-      model,
-      plan,
-      fixType: fullRow.fix_type,
-      workDir: projectDir,
-      repoRoot: sandbox.workDir,
-      logger,
-      extraEnv: setup.extraEnv,
-      pipelineStartMs,
-      onPhase: async (phase, meta) => {
-        if (phase === 'edit') {
-          await step({ icon: 'edit', label: `Updated ${primaryFile}` });
-          await voice(
-            `applied the change to ${primaryFile}`,
-            isDepBump ? 'reinstall dependencies to update the lockfile' : 'run a quick typecheck to make sure nothing broke',
-          );
-        } else {
-          const ok = meta?.verifiedLocally !== false;
+    // before the slow verify, then verify lands after it passes. Mode-aware so a
+    // base-image bump, an explore-and-sanitize, and a plain code edit each read
+    // truthfully. (verifiedLocally false = we soft-passed to the PR's CI.)
+    const onPhase = async (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }): Promise<void> => {
+      if (phase === 'edit') {
+        if (isExplore) {
           await step({
-            icon: 'verify',
-            label: ok
-              ? isDepBump
-                ? 'Verified the new version resolves'
-                : 'Type-checked — no errors'
-              : "Applied the change (the PR's CI runs the tests)",
+            icon: 'explore',
+            label: isDast
+              ? `Explored ${projectName} to find the vulnerable handler`
+              : `Traced the tainted data flow in ${projectName}`,
           });
-          await voice(
-            ok
+        }
+        const editLabel = isBaseImageBump
+          ? baseTarget
+            ? `Bumped the base image to ${baseTarget.targetImage}`
+            : 'Updated the Dockerfile'
+          : `Updated ${primaryFile}`;
+        await step({ icon: 'edit', label: editLabel });
+        await voice(
+          isBaseImageBump
+            ? `moved the base image${baseTarget ? ` to ${baseTarget.targetImage}` : ''}`
+            : isExplore
+              ? isDast
+                ? `patched the ${primaryFile} handler to validate the input`
+                : `added a sanitizer in ${primaryFile} to neutralize the tainted input`
+              : `applied the change to ${primaryFile}`,
+          isDepBump
+            ? 'reinstall dependencies to update the lockfile'
+            : isBaseImageBump
+              ? 'open the pull request for review'
+              : 'run a quick typecheck to make sure nothing broke',
+        );
+      } else {
+        const ok = meta?.verifiedLocally !== false;
+        const verifyLabel = isBaseImageBump
+          ? "Bumped the base image (the PR's CI builds the new image)"
+          : ok
+            ? isDepBump
+              ? 'Verified the new version resolves'
+              : 'Type-checked — no errors'
+            : "Applied the change (the PR's CI runs the tests)";
+        await step({ icon: 'verify', label: verifyLabel });
+        await voice(
+          isBaseImageBump
+            ? 'swapped the base image; the CI pipeline will build and validate the new image'
+            : ok
               ? isDepBump
                 ? 'reinstalled and confirmed the new version resolves with no conflicts'
                 : "type-checked the change and it's clean"
               : "applied the change (the project's CI will run the full test suite on the pull request)",
-            'open the pull request for review',
-          );
-        }
-      },
-    });
+          'open the pull request for review',
+        );
+      }
+    };
+
+    // Base-image / container bumps are deterministic (no LLM edit): read the
+    // curated recommendation and swap the Dockerfile FROM line. Everything else
+    // runs the plan editor or the explore loop inside runFixPipeline.
+    const pipeline = isBaseImageBump
+      ? await runBaseImageBump(supabase, fullRow, {
+          workDir: projectDir,
+          repoRoot: sandbox.workDir,
+          logger,
+          onPhase,
+        })
+      : await runFixPipeline({
+          model,
+          plan,
+          fixType: fullRow.fix_type,
+          strategy,
+          workDir: projectDir,
+          repoRoot: sandbox.workDir,
+          logger,
+          extraEnv: setup.extraEnv,
+          pipelineStartMs,
+          onPhase,
+        });
     const totalTokens = pipeline.tokensUsed;
 
     const { prBranch, diffSummary } = await commitAndPushFix({

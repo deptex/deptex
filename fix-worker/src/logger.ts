@@ -24,6 +24,7 @@ export type FixLogStep =
   | 'clone'
   | 'setup'
   | 'plan'
+  | 'explore'
   | 'edit'
   | 'tests'
   | 'repair'
