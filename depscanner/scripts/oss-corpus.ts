@@ -64,7 +64,7 @@ interface GroundTruthCve {
 interface CorpusRepo {
   name: string;
   repo_url: string;
-  ecosystem: 'npm' | 'pypi' | 'maven' | 'golang' | 'cargo' | 'gem' | 'composer';
+  ecosystem: 'npm' | 'pypi' | 'maven' | 'golang' | 'cargo' | 'gem' | 'composer' | 'nuget';
   framework?: string;
   ref?: string;
   ground_truth_cves: GroundTruthCve[];
@@ -143,6 +143,19 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
 function die(msg: string, code = 2): never {
   process.stderr.write(`[oss-corpus] ${msg}\n`);
   process.exit(code);
+}
+
+/**
+ * Convert a host path to the POSIX form the bash `deptex-scan` wrapper needs.
+ * On Windows the wrapper's `cd "$WORKSPACE_PATH" && pwd` + docker `-v` bind
+ * mount only resolve for a `/c/Users/...` path; a passed-through backslash path
+ * (`C:\Users\...`) silently mounts an EMPTY `/workspace`, so cdxgen finds no
+ * manifest and every scan returns 0 dependencies. No-op off Windows (paths are
+ * already POSIX there). Mirrors the script-path conversion in execCapture.
+ */
+function toContainerPath(p: string): string {
+  if (process.platform !== 'win32') return p;
+  return p.replace(/^([A-Za-z]):[\\/]/, (_m, d) => `/${d.toLowerCase()}/`).replace(/\\/g, '/');
 }
 
 // ---------------------------------------------------------------------------
@@ -358,8 +371,10 @@ async function runDepscanner(
   const scanBin = path.resolve(repoRoot, 'bin/deptex-scan');
   const args = [
     'run',
-    workspaceDir,
-    `--output=${outputDir}`,
+    // POSIX-normalize the workspace + output paths for the bash wrapper —
+    // a Windows backslash path mounts an empty /workspace and yields 0 deps.
+    toContainerPath(workspaceDir),
+    `--output=${toContainerPath(outputDir)}`,
     `--ecosystem=${repo.ecosystem}`,
     `--label=${repo.name}`,
     '--quiet',
