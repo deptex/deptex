@@ -698,8 +698,8 @@ async function runZapWithControlPlane(
   // the tmpdir, so `fs.existsSync(reportPath)` was always false and every scan
   // silently parsed zero findings.
   const tmpDir = fs.mkdtempSync(path.join(inputs.zapWorkDir, 'deptex-dast-af-'));
-  const yamlPath = path.join(tmpDir, 'automation.yaml');
-  const reportPath = path.join(tmpDir, 'zap-report.json');
+  const yamlPath = path.resolve(tmpDir, 'automation.yaml');
+  const reportPath = path.resolve(tmpDir, 'zap-report.json');
 
   let yamlText: string;
   try {
