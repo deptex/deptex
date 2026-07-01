@@ -37,6 +37,11 @@ import {
 
 const SMUGGLING_SUMMARY =
   'Apache Tomcat mishandled HTTP/1.1 chunked transfer-encoding, enabling HTTP request smuggling.';
+// CVE-2026-24880's real advisory phrasing — "Request/Response Smuggling" (a
+// slash + "Response" between "Request" and "Smuggling"). The bare `request\s+`
+// pattern missed it, leaving this HIGH request-smuggling CVE hidden at module.
+const REQUEST_RESPONSE_SMUGGLING_SUMMARY =
+  'Apache Tomcat has an HTTP Request/Response Smuggling vulnerability';
 const OPEN_REDIRECT_SUMMARY =
   'Apache Tomcat default servlet URL normalization allowed an open redirect to an attacker-controlled host.';
 const RESOURCE_HANDLER_SUMMARY =
@@ -71,6 +76,18 @@ describe('evaluateAlwaysOnRuntimePromotion', () => {
     const r = evaluateAlwaysOnRuntimePromotion({
       depName: 'tomcat-embed-core',
       summary: SMUGGLING_SUMMARY,
+      hasHttpRouteEntryPoint: true,
+    });
+    expect(r.promote).toBe(true);
+    expect(r.promoteTo).toBe('data_flow');
+    expect(r.sink).toBe('servlet-container-request-smuggling');
+    expect(r.threatTag).toBe('requires_fronting_proxy');
+  });
+
+  it('promotes a tomcat "Request/Response Smuggling" CVE (CVE-2026-24880 phrasing) to data_flow', () => {
+    const r = evaluateAlwaysOnRuntimePromotion({
+      depName: 'tomcat-embed-core',
+      summary: REQUEST_RESPONSE_SMUGGLING_SUMMARY,
       hasHttpRouteEntryPoint: true,
     });
     expect(r.promote).toBe(true);
@@ -289,6 +306,26 @@ describe('updateReachabilityLevels — always-on framework-runtime promotion', (
     expect(details?.threat_tag).toBe('requires_fronting_proxy');
     expect(details?.promoted_from).toBe('module');
     expect(String(details?.reason)).toContain('always_on_framework_runtime: servlet-container-request-smuggling');
+  });
+
+  it('PROMOTES a tomcat "Request/Response Smuggling" module finding to data_flow (CVE-2026-24880 on petclinic)', async () => {
+    const fsk = new FakeStorage();
+    seedModuleDep(fsk, {
+      name: 'tomcat-embed-core',
+      osvId: 'CVE-2026-24880',
+      summary: REQUEST_RESPONSE_SMUGGLING_SUMMARY,
+    });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'maven',
+      usedTransitives: new Set(),
+      springFeatureSignals: absentSignals(),
+      httpEntryPointCount: 17,
+    });
+    const { level, details } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('data_flow');
+    expect(details?.verdict).toBe('always_on_framework_runtime');
+    expect(details?.sink).toBe('servlet-container-request-smuggling');
+    expect(details?.promoted_from).toBe('module');
   });
 
   it('preserves the callgraph_reached_transitive verdict in promoted_from when the callgraph credited the dep', async () => {

@@ -593,7 +593,13 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     sink: 'servlet-container-request-smuggling',
     owners: ['tomcat', 'jetty', 'undertow'],
     summary: [
-      /request\s+smuggl/i,
+      // Anchored to "request … smuggling": also matches the "Request/Response
+      // Smuggling" phrasing (CVE-2026-24880: "Apache Tomcat has an HTTP
+      // Request/Response Smuggling vulnerability"), which the bare `request\s+`
+      // form missed — a slash + optional "Response" segment may sit between
+      // "request" and "smuggling". Still owner-anchored (tomcat/jetty/undertow)
+      // and never matches a generic "HTTP".
+      /request[\s/]+(?:response[\s/]+)?smuggl/i,
       /http[\s/]?1\.1/i,
       /transfer[- ]?encoding/i,
       /\bchunked\b/i,
