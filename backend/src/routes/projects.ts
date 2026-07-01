@@ -9757,17 +9757,31 @@ router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) =>
     const out: Record<string, any> = { ...defaults };
     const sliceMs: Record<string, number> = {};
 
-    const settled = await Promise.allSettled(
-      tasks.map(async ([slice, run]) => {
-        if (!run) return undefined;
-        const started = Date.now();
-        try {
-          return await run();
-        } finally {
-          sliceMs[slice] = Date.now() - started;
-        }
-      }),
-    );
+    const [settled, maliciousScanStatus] = await Promise.all([
+      Promise.allSettled(
+        tasks.map(async ([slice, run]) => {
+          if (!run) return undefined;
+          const started = Date.now();
+          try {
+            return await run();
+          } finally {
+            sliceMs[slice] = Date.now() - started;
+          }
+        }),
+      ),
+      // The malicious-scan coverage flag that drives the partial-coverage banner.
+      // This is the ONLY field the project sidebar used getProjectStats for, so
+      // folding it into the bundle lets the sidebar drop that ~10-query stats call
+      // on open entirely. Latest scan_job wins (matches the old /stats query).
+      supabase
+        .from('scan_jobs')
+        .select('malicious_scan_status')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then((r) => (r.data as { malicious_scan_status?: string | null } | null)?.malicious_scan_status ?? null),
+    ]);
 
     settled.forEach((result, i) => {
       const [slice, run] = tasks[i];
@@ -9805,6 +9819,7 @@ router.get('/:id/projects/:projectId/findings', async (req: AuthRequest, res) =>
       trackerLinks: out.trackerLinks,
       groupSuppressions: out.groupSuppressions,
       acknowledgements: out.acknowledgements,
+      maliciousScanStatus,
       degradedSlices,
     });
   } catch (error: any) {

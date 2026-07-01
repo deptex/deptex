@@ -4447,6 +4447,7 @@ AS $function$
   FROM extraction_logs el
   WHERE el.project_id = p_project_id
   GROUP BY el.run_id
+  HAVING bool_or(el.metadata->>'job_type' = 'fix') IS NOT TRUE
   ORDER BY started_at DESC
   LIMIT 20;
 $function$
