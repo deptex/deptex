@@ -8,6 +8,11 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import type { Storage } from './storage';
 import { parsePurl, resolvePurlToDependencyId } from './purl';
+import {
+  type SpringFeatureSignals,
+  gatherSpringFeatureSignals,
+  evaluateFeaturePreconditionDemotion,
+} from './reachability-feature-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -477,6 +482,19 @@ export interface UpdateReachabilityOptions {
    * behavior.
    */
   isClientSpaProject?: boolean;
+  /**
+   * Feature-precondition gate (reachability noise reduction). Pre-gathered
+   * project-feature signals used to DEMOTE a `module` /
+   * `callgraph_reached_transitive` finding to `unreachable` when the framework
+   * feature its CVE requires is PROVABLY ABSENT (see
+   * `reachability-feature-preconditions.ts`).
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot`
+   * for the `maven` ecosystem (and skips the gate entirely otherwise). Tests
+   * inject signals directly to exercise the gate without a filesystem. An
+   * unrecognized / empty signals object refuses every demotion (fail-safe).
+   */
+  springFeatureSignals?: SpringFeatureSignals;
 }
 
 /**
@@ -689,7 +707,7 @@ export async function updateReachabilityLevels(
 ): Promise<void> {
   const { data: pdvs, error: pdvErr } = await supabase
     .from('project_dependency_vulnerabilities')
-    .select('id, project_dependency_id, osv_id, aliases')
+    .select('id, project_dependency_id, osv_id, aliases, summary')
     .eq('project_id', projectId)
     .eq('extraction_run_id', runId);
 
@@ -1101,6 +1119,16 @@ export async function updateReachabilityLevels(
   // Used by the callgraph-reach matcher to bridge maven artifactIds (e.g.
   // `jackson-core`) and Java FQN packages (e.g. `com.fasterxml.jackson.*`).
   const depNamespaceCache = new Map<string, string | null>();
+
+  // Feature-precondition gate signals (reachability noise reduction). Gathered
+  // ONCE per run. Only the Java/Spring (maven) ecosystem is modelled today; for
+  // every other ecosystem the signals stay unrecognized and the gate is a
+  // no-op. Tests inject `options.springFeatureSignals` to exercise the gate
+  // without a filesystem. Failure to read the workspace yields an unrecognized
+  // signals object, which refuses every demotion (fail-safe).
+  const featureSignals: SpringFeatureSignals | null =
+    options.springFeatureSignals ??
+    (options.ecosystem === 'maven' ? gatherSpringFeatureSignals(workspaceRoot) : null);
   let updatedCount = 0;
   let detailsSetCount = 0;
   const levelCounts: Record<string, number> = {
@@ -1437,6 +1465,36 @@ export async function updateReachabilityLevels(
             verdict: 'callgraph_reached_transitive',
             callgraph_evidence: { dep_name: depName },
           };
+
+          // FEATURE-PRECONDITION GATE (reachability noise reduction).
+          // The callgraph proves the framework runtime is reached, but a CVE in
+          // a framework FEATURE the app never enables (WebSocket, AJP, HTTP/2,
+          // WebDAV, Digest auth, a TLS cipher connector, a Spring Security
+          // filter chain, script-template views, a Realm, CloudFoundry) is
+          // provably unreachable. Demote module→unreachable ONLY when the CVE's
+          // required feature is PROVABLY ABSENT from the scanned project — the
+          // decision function is conservative and fails safe (an unrecognized
+          // project, an ambiguous signal, or a summary that names no gated
+          // feature all leave the finding at `module`). We only ever demote
+          // here, never promote.
+          if (featureSignals) {
+            const demotion = evaluateFeaturePreconditionDemotion({
+              depName,
+              summary: (pdv.summary ?? null) as string | null,
+              signals: featureSignals,
+            });
+            if (demotion.demote) {
+              level = 'unreachable';
+              details = {
+                reason: `feature_precondition_absent: ${demotion.feature}`,
+                scope: 'feature_precondition_absent',
+                verdict: 'feature_precondition_absent',
+                feature: demotion.feature,
+                matched_summary_pattern: demotion.matchedPattern ?? null,
+                demoted_from: 'callgraph_reached_transitive',
+              };
+            }
+          }
         } else {
           // Direct deps, deps with >=1 import, and framework-embedded runtime
           // components (servlet container / template engine wired in by a
