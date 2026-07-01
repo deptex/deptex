@@ -206,6 +206,54 @@ function symfonyMailerPresent(s: SymfonyFeatureSignals): boolean {
   );
 }
 
+/**
+ * The WebProfilerBundle is enabled in the PRODUCTION environment. The profiler
+ * (and its Twig HtmlDumper / CodeExtension debug filters) only render when the
+ * bundle runs in prod; `config/bundles.php` gates it. Symfony's standard layout
+ * ships it as `['dev' => true, 'test' => true]` — dev/test only. Present iff the
+ * bundle's env array names `prod` or `all`; absent when it lists only dev/test
+ * (or the bundle isn't registered at all). Read from `config/bundles.php` (which
+ * the detector folds into `configText`).
+ */
+function profilerEnabledInProd(s: SymfonyFeatureSignals): boolean {
+  const m = s.configText.match(/webprofilerbundle::class\s*=>\s*\[([^\]]*)\]/);
+  if (!m) return false; // not registered → not in prod
+  const envs = m[1];
+  return /['"]prod['"]/.test(envs) || /['"]all['"]/.test(envs);
+}
+
+/**
+ * The app renders a Twig template whose NAME is user/variable-controlled (the
+ * precondition for the template-name-injection / load-outside-dir / `{% use %}`
+ * code-injection CVEs). LIBERAL about "present" — any dynamic-render hint blocks
+ * the demotion (the safe direction; a missed dynamic name would be a silence-FN).
+ * Symfony/demo renders only string-literal names (`->render('blog/index.twig')`),
+ * so this is absent for it.
+ */
+function userControlledTemplateName(s: SymfonyFeatureSignals): boolean {
+  const c = s.codeText;
+  return (
+    // a render whose FIRST argument is a bare variable — `->render($t)`.
+    /->render(view|block)?\s*\(\s*\$/.test(c) ||
+    // a render whose template name is a string CONCATENATED with something
+    // (a variable / expression) — `->render('blog/index.'.$_format.'.twig')`.
+    // symfony/demo does exactly this with the request `_format`, which makes
+    // the template path request-influenced (correctly blocks the demotion).
+    /->render(view|block)?\s*\(\s*['"][^'"\n]*['"]\s*\.\s*[^,)\n]*\$/.test(c) ||
+    /->createtemplate\s*\(/.test(c) ||
+    // a Twig-SPECIFIC loader/render with a variable — NOT the generic `->load(`
+    // which also matches Symfony's config/routing loaders (`$loader->load(
+    // $confDir…)` in every Kernel.php) and would falsely block every Symfony app.
+    /->loadtemplate\s*\(\s*\$/.test(c) ||
+    /\$twig\s*->\s*(render|load)\s*\(\s*\$/.test(c) ||
+    // a render whose first argument is not a string literal (a constant /
+    // `self::TEMPLATE` / method call) — conservative catch-all for a computed
+    // name. Requires a letter/`\` right after `(` (a string literal starts with
+    // a quote, so `->render('x')` never trips this).
+    /->render(view|block)?\s*\(\s*[a-z_\\]/.test(c)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // FEATURE-PRECONDITION table (DEMOTE module → unreachable when provably absent)
 // ---------------------------------------------------------------------------
@@ -292,6 +340,40 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     owners: ['mime'],
     summary: [/email header/i, /header injection/i, /smtp command/i, /crlf/i, /address/i],
     detect: (s) => resolve(symfonyMailerPresent(s), s),
+  },
+  // --- Twig profiler / debug filters (owners: twig, twig-bridge). The profiler
+  //     HtmlDumper XSS + the twig-bridge CodeExtension XSS only render when the
+  //     WebProfilerBundle runs in prod; symfony ships it dev/test-only. ---
+  {
+    feature: 'twig-profiler',
+    owners: ['twig', 'twig-bridge'],
+    summary: [/profiler/i, /htmldumper/i, /codeextension/i],
+    detect: (s) => resolve(profilerEnabledInProd(s), s),
+  },
+  // --- Twig user-controlled template NAME (owner: twig). The load-outside-dir,
+  //     `_self` / `{% use %}` code-injection CVEs need an attacker-controlled
+  //     template name; an app that renders only static names is unaffected. ---
+  {
+    feature: 'twig-user-controlled-template-name',
+    owners: ['twig'],
+    summary: [
+      /template\s+(name|outside|directory|loader|path)/i,
+      /\{%\s*use/i,
+      /_self/i,
+      /code injection/i,
+      /arbitrary (code|template)/i,
+    ],
+    detect: (s) => resolve(userControlledTemplateName(s), s),
+  },
+  // --- monolog-bridge `server:log` CLI listener (owner: monolog-bridge). The
+  //     unauthenticated-deserialization sink lives in the `bin/console
+  //     server:log` command — a local dev tool never on any HTTP request path,
+  //     so it is structurally unreachable for a production scan. ---
+  {
+    feature: 'symfony-monolog-serverlog',
+    owners: ['monolog-bridge'],
+    summary: [/server:?log/i, /serverlog/i, /console.*(listen|log)/i],
+    detect: () => 'absent',
   },
 ];
 

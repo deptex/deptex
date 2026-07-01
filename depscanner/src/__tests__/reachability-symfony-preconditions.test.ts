@@ -249,6 +249,82 @@ describe('evaluateSymfonyFeaturePreconditionDemotion', () => {
     });
     expect(r.demote).toBe(false);
   });
+
+  // --- deferred levers added in the follow-up pass ---
+  it('demotes a twig profiler HtmlDumper CVE when the WebProfilerBundle is dev/test-only', () => {
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'XSS in the profiler HtmlDumper when rendering a dumped variable.',
+      signals: demoSignals({ configText: "webprofilerbundle::class => ['dev' => true, 'test' => true]," }),
+    });
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('twig-profiler');
+  });
+
+  it('does NOT demote the profiler CVE when the WebProfilerBundle runs in prod', () => {
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'XSS in the profiler HtmlDumper when rendering a dumped variable.',
+      signals: demoSignals({ configText: "webprofilerbundle::class => ['all' => true]," }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('demotes a twig template-name-injection CVE when template names are static', () => {
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'Twig loaded a template outside the configured directory via the filesystem loader.',
+      signals: demoSignals(),
+    });
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('twig-user-controlled-template-name');
+  });
+
+  it('does NOT demote the template-name CVE when a render uses a variable template name', () => {
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'Twig loaded a template outside the configured directory via the filesystem loader.',
+      signals: demoSignals({ codeText: 'class c { function f($t){ return $this->render($t); } }' }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('does NOT demote the template-name CVE when the template name is a string concatenated with a variable', () => {
+    // symfony/demo's real shape: `->render('blog/index.'.$_format.'.twig')`.
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'Twig may load a template outside a configured directory when using the filesystem loader.',
+      signals: demoSignals({ codeText: "return \\$this->render('blog/index.'.\\$_format.'.twig', []);" }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('DOES demote the template-name CVE when only static renders + a config loader exist (Kernel.php $loader->load must not block)', () => {
+    // Every Symfony Kernel.php has `$loader->load($confDir…)` — the config
+    // loader, NOT a Twig template loader. It must not falsely count as a
+    // user-controlled template name (that would make the row dead on every app).
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'twig',
+      summary: 'Twig may load a template outside a configured directory when using the filesystem loader.',
+      signals: demoSignals({
+        codeText:
+          "class kernel { function c(\\$loader){ \\$loader->load(\\$confDir.'/{packages}/*'); } }\n" +
+          "class ctrl { function i(){ return \\$this->render('blog/index.html.twig', []); } }",
+      }),
+    });
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('twig-user-controlled-template-name');
+  });
+
+  it('demotes the monolog-bridge server:log deserialization CVE (CLI-only, never on an HTTP path)', () => {
+    const r = evaluateSymfonyFeaturePreconditionDemotion({
+      depName: 'monolog-bridge',
+      summary: 'Unauthenticated deserialization in the server:log command listener.',
+      signals: demoSignals(),
+    });
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('symfony-monolog-serverlog');
+  });
 });
 
 describe('evaluateSymfonyDevOnlyDemotion', () => {
