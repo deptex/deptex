@@ -15,6 +15,13 @@ import {
   evaluateAlwaysOnRuntimePromotion,
   evaluateFrameworkMediatedUsage,
 } from './reachability-feature-preconditions';
+import {
+  type SymfonyFeatureSignals,
+  gatherSymfonyFeatureSignals,
+  evaluateSymfonyFeaturePreconditionDemotion,
+  evaluateSymfonyDevOnlyDemotion,
+  evaluateSymfonyAlwaysOnRuntimePromotion,
+} from './reachability-symfony-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -510,6 +517,21 @@ export interface UpdateReachabilityOptions {
    * re-detected); tests inject it directly.
    */
   httpEntryPointCount?: number;
+  /**
+   * PHP / Symfony feature-precondition + always-on-runtime signals — the
+   * composer-ecosystem mirror of `springFeatureSignals` (see
+   * `reachability-symfony-preconditions.ts`). Used to DEMOTE a `module` composer
+   * finding to `unreachable` when its Symfony feature is provably absent (Twig
+   * sandbox, untrusted-YAML parse, x509 firewall, `unanimous` strategy) or the
+   * package is DEV-ONLY (composer.lock `packages-dev`), and to PROMOTE always-on
+   * request-path CVEs (http-foundation Request parsing, the security firewall
+   * login path) to a visible tier on a deployed web app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `composer` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Symfony signals object refuses every move.
+   */
+  symfonyFeatureSignals?: SymfonyFeatureSignals;
 }
 
 /**
@@ -1184,6 +1206,13 @@ export async function updateReachabilityLevels(
   const featureSignals: SpringFeatureSignals | null =
     options.springFeatureSignals ??
     (options.ecosystem === 'maven' ? gatherSpringFeatureSignals(workspaceRoot) : null);
+  // PHP/Symfony feature-precondition + always-on-runtime signals — the composer
+  // mirror of `featureSignals`. Gathered ONCE per run; only the composer
+  // ecosystem is modelled today (a non-Symfony composer app yields unrecognized
+  // signals → the gate is a no-op). Tests inject `options.symfonyFeatureSignals`.
+  const symfonySignals: SymfonyFeatureSignals | null =
+    options.symfonyFeatureSignals ??
+    (options.ecosystem === 'composer' ? gatherSymfonyFeatureSignals(workspaceRoot) : null);
   // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
   // this is a deployed web app, so a CVE in an always-on framework component is
   // genuinely on the request path. Gathered once per run from the already-
@@ -1356,6 +1385,13 @@ export async function updateReachabilityLevels(
         depNameCache.set(pdv.project_dependency_id, depName as string);
         depNamespaceCache.set(pdv.project_dependency_id, depNamespace);
       }
+
+      // Composer packages are `vendor/name` (cdxgen splits them into
+      // namespace=`vendor` + name=`name`). Reconstruct the full name so the
+      // Symfony DEV-ONLY demotion can match it against composer.lock's
+      // `packages-dev` (which carries full `symfony/process`-style names).
+      const composerPackage =
+        depNamespace ? `${depNamespace.toLowerCase()}/${(depName as string).toLowerCase()}` : (depName as string).toLowerCase();
 
       // M2: CVE-targeted vulnerable-symbol verification. When a CVE-targeted
       // FrameworkSpec sink loaded for this PDV's CVE, we know the *specific*
@@ -1622,6 +1658,58 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // PHP/SYMFONY FEATURE-PRECONDITION + DEV-ONLY DEMOTION (composer mirror of
+      // the Java feature-precondition gate). Applies to ANY composer `module`
+      // finding regardless of which branch above produced it (the coarse PHP
+      // callgraph stamps nearly everything `callgraph_reached_transitive`, and
+      // it overrides the SBOM dev-scope for transitive dev deps). Demote-only,
+      // and runs BEFORE the always-on promotion post-pass so a demoted finding's
+      // `unreachable` is respected by the `level === 'module'` promotion guard.
+      // Fail-safe: unrecognized / non-Symfony signals refuse every demotion.
+      if (symfonySignals && level === 'module') {
+        // 1) Dev-only package (composer.lock `packages-dev`, not in `packages`) —
+        //    never shipped to prod, so its CVE is genuinely unreachable. The
+        //    strongest lever; needs no summary match.
+        const devOnly = evaluateSymfonyDevOnlyDemotion({
+          packageName: composerPackage,
+          signals: symfonySignals,
+        });
+        if (devOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${devOnly.package} is composer.lock packages-dev (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: devOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the Symfony feature the CVE requires (Twig
+          //    sandbox, untrusted-YAML parse, x509 firewall, `unanimous`
+          //    strategy, HttpCache, PDO cache adapter, symfony/mailer) is
+          //    provably absent from the scanned project.
+          const phpDemotion = evaluateSymfonyFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: symfonySignals,
+          });
+          if (phpDemotion.demote) {
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${phpDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: phpDemotion.feature,
+              matched_summary_pattern: phpDemotion.matchedPattern ?? null,
+              demoted_from: 'callgraph_reached_transitive',
+            };
+          }
+        }
+      }
+
       // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
       // recovery — the mirror image of the feature-precondition DEMOTION gate
       // above). A CVE in framework code that is UNCONDITIONALLY on the request
@@ -1654,13 +1742,27 @@ export async function updateReachabilityLevels(
             }).demote
           : false;
         if (!wouldDemote) {
+          // Try the Java/Spring always-on model first, then the PHP/Symfony one.
+          // (The PHP demotion post-pass already ran above, so a Symfony
+          // finding this promotion would silence is already `unreachable` and
+          // never reaches here — the `level === 'module'` guard skips it.)
           const promotion = evaluateAlwaysOnRuntimePromotion({
             depName,
             summary: summaryStr,
             hasHttpRouteEntryPoint,
             signals: featureSignals,
           });
-          if (promotion.promote && promotion.promoteTo) {
+          const phpPromotion =
+            !promotion.promote && symfonySignals
+              ? evaluateSymfonyAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: symfonySignals,
+                })
+              : { promote: false as const };
+          const chosen = promotion.promote ? promotion : phpPromotion.promote ? phpPromotion : null;
+          if (chosen && chosen.promote && chosen.promoteTo) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
             // direct floor leaves details null → 'module'.
@@ -1668,15 +1770,15 @@ export async function updateReachabilityLevels(
               details && typeof details === 'object' && typeof details.verdict === 'string'
                 ? details.verdict
                 : 'module';
-            level = promotion.promoteTo;
+            level = chosen.promoteTo;
             details = {
-              reason: `always_on_framework_runtime: ${promotion.sink}`,
+              reason: `always_on_framework_runtime: ${chosen.sink}`,
               scope: 'always_on_framework_runtime',
               verdict: 'always_on_framework_runtime',
-              sink: promotion.sink,
-              matched_summary_pattern: promotion.matchedPattern ?? null,
+              sink: chosen.sink,
+              matched_summary_pattern: chosen.matchedPattern ?? null,
               promoted_from: promotedFrom,
-              ...(promotion.threatTag ? { threat_tag: promotion.threatTag } : {}),
+              ...(chosen.threatTag ? { threat_tag: chosen.threatTag } : {}),
             };
           }
         }
