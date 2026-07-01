@@ -31,7 +31,7 @@ FROM ghcr.io/zaproxy/zaproxy@sha256:8770b23f9e8b49038f413cb2b10c58c901e5b6717be2
 # ============================================================================
 FROM node:20-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install --no-install-recommends -y \
   git \
   curl \
   unzip \
