@@ -109,22 +109,21 @@ export async function doFinalize(
     },
   });
 
-  // Status writes happen AFTER finalize_extraction succeeds. If the RPC fails,
-  // runStage rethrows above and these never run — so the project can't show
-  // 'ready' with stale findings while the active_extraction_run_id pointer is
-  // still un-flipped.
-  await supabase
-    .from('project_repositories')
-    .update({
-      status,
-      extraction_step: 'completed',
-      extraction_error: null,
-      ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('project_id', projectId);
+  // Everything below runs AFTER finalize_extraction succeeds (if the RPC fails,
+  // runStage rethrows above and none of this runs — so the project can't show
+  // 'ready' with stale findings while the active-run pointer is un-flipped).
+  //
+  // ORDER MATTERS: the project_repositories status write is LAST because it fires
+  // the Realtime the overview graph listens on (un-greys the node + triggers a
+  // summary re-read). The findings, active-run pointer, job status, AND the
+  // recomputed summary must all be committed BEFORE that write, or the frontend
+  // reads a stale/zero summary in the gap and the node shows "0 findings" until a
+  // manual refresh.
 
-  // Mark job completed in sync with repo status so Overview and Repository/Recent Activity never disagree.
+  // Mark the job completed first (only on the 'ready' path — the analyzing path is
+  // finished by the backend populate). Doing it before the recompute keeps the
+  // summary's last_scan_at current; doing it before the status write keeps Recent
+  // Activity + Overview converging together.
   const didUpdateJob = status === 'ready' && !!job.jobId;
   if (didUpdateJob) {
     await updateJobStatus(supabase, job.jobId!, undefined, undefined, 'completed');
@@ -155,19 +154,38 @@ export async function doFinalize(
     }
   }
 
-  // Refresh the denormalized per-project overview summary now that finalize has
-  // committed this scan's findings and flipped the active-run pointer (and, when
-  // status is 'ready', marked the job 'completed' so last_scan_at is current).
-  // Reuses the same security_summary_counts the overview reads. Single call —
-  // malicious_scan runs before finalize under this run, so its counts are
-  // already included. Non-fatal: the scan succeeded; the daily self-heal cron
-  // backstops any failure.
+  // Refresh the denormalized overview summary — findings + active-run pointer are
+  // committed by finalize_extraction above, so counts are correct now. This MUST
+  // precede the status write below (see ORDER MATTERS) so the overview's
+  // summary re-read on the 'ready' Realtime event sees fresh counts. Reuses the
+  // same security_summary_counts the overview reads. Non-fatal: the scan
+  // succeeded; the daily self-heal cron backstops any failure.
   const { error: recomputeErr } = await supabase.rpc('recompute_project_summary', {
     p_project_id: projectId,
   });
   if (recomputeErr) {
     await log.error('finalize', `recompute_project_summary failed: ${recomputeErr.message}`);
   }
+
+  // Status write LAST — flips the node out of "creating" and triggers the overview
+  // summary re-read, with everything above already committed. Also stamps
+  // last_extracted_at: the authoritative completion path for EVERY scan (worker-
+  // owned since the pipeline moved off the backend). Without it, a re-scan whose
+  // dependency set is unchanged takes the status='ready' branch (newDepsToPopulate=0),
+  // so no populate-dependencies batch runs and the backend's successful>0 stamp
+  // never fires — leaving last_extracted_at frozen and the daily/weekly scheduler
+  // re-queuing the project every 6-hourly cron tick forever.
+  await supabase
+    .from('project_repositories')
+    .update({
+      status,
+      extraction_step: 'completed',
+      extraction_error: null,
+      last_extracted_at: new Date().toISOString(),
+      ...(astParsedSuccessfully ? { ast_parsed_at: new Date().toISOString() } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('project_id', projectId);
 
   return finalizeSummary;
 }

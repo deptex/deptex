@@ -1253,6 +1253,7 @@ export async function runIaCAndContainerScans(
     // No IaC files; skip without warning — container path may still run.
   } else {
     const iacFindings: IaCFinding[] = [];
+    const iacStart = Date.now();
     const iacFrameworks: IaCFramework[] = infraTypes.filter(
       (t): t is Exclude<IaCFramework, 'dockerfile'> => t !== 'dockerfile'
     );
@@ -1348,10 +1349,14 @@ export async function runIaCAndContainerScans(
         iacFindings
       );
       summary.iacFindingsWritten = upsert.inserted;
-      await ctx.logger.info(
-        'iac_scan',
-        `IaC scan complete — ${upsert.inserted} findings written`
-      );
+      // Green completion line with a duration, matching the other scanner successes
+      // (Vulnerability / Static analysis / Secret scan complete). Falls back to info
+      // only if the logger wasn't given a success channel.
+      if (ctx.logger.success) {
+        await ctx.logger.success('iac_scan', 'IaC scan complete', Date.now() - iacStart);
+      } else {
+        await ctx.logger.info('iac_scan', 'IaC scan complete');
+      }
     } catch (err: any) {
       summary.warnings.push(`iac_storage_failed:${err?.message ?? 'unknown'}`);
       summary.failedScanners.push('iac_storage');
