@@ -45,6 +45,15 @@ repos:
     repo_url: https://github.com/expressjs/express.git
     ecosystem: npm
     ref: 4.18.2
+    # LIBRARY (not an app). express IS the web framework — scanned standalone it
+    # has NO HTTP entry point, so the engine cannot prove deployed reachability
+    # of its own runtime deps (qs/body-parser/path-to-regexp/cookie) and honestly
+    # floors them at `module`. In a USER's app that consumes express those same
+    # deps promote (the app has routes). So a library's own-dep `module` finding
+    # is correct-conservative, NOT a product silence-FN — the silence score
+    # reports app-shaped repos separately from `library` ones. See the oracle:
+    # it judges express AS-DEPLOYED (reachable), which is the app-context view.
+    shape: library
     ground_truth_cves:
       - id: CVE-2026-2391
         expected_reachability: function
@@ -238,6 +247,11 @@ repos:
   - name: fastify
     repo_url: https://github.com/fastify/fastify.git
     ecosystem: npm
+    # LIBRARY (not an app) — same rationale as express: fastify IS the framework,
+    # scanned standalone it has no HTTP entry point. Its dev-tree CVEs are all
+    # `unreachable` (correct), and any of its runtime deps that floor at `module`
+    # do so correct-conservatively. Segmented out of the app-shaped silence score.
+    shape: library
     # Pinned release tag. fastify declares 16 runtime deps but pulls a large
     # devDependency tree (typescript-eslint, markdownlint, the release tooling)
     # — the right application shape for measuring dev-scope noise reduction.

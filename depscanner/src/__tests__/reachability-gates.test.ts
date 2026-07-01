@@ -286,3 +286,49 @@ describe('checkOracle', () => {
     expect(m.has('CVE-3')).toBe(false); // non-ok repo excluded
   });
 });
+
+describe('evaluateSilenceScore — app-shaped segmentation', () => {
+  // A library repo's reachable-labelled dep that floors at `module` is a
+  // correct-conservative silence (no app entry point), NOT a product FN. The
+  // app-shaped metrics exclude `library` repos so the north star reflects the
+  // "user scans their app" question.
+  const report: CorpusReport = {
+    results: [
+      {
+        name: 'express', ecosystem: 'npm', status: 'ok',
+        ground_truth_matched: [
+          // reachable-labelled but silenced → counts to overall FN, NOT app FN.
+          { cve: 'CVE-lib-1', observed: true, observed_reachability: 'module', expected_reachability: 'function' },
+          { cve: 'CVE-lib-2', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' },
+        ],
+      },
+      {
+        name: 'spring-petclinic', ecosystem: 'maven', status: 'ok',
+        ground_truth_matched: [
+          { cve: 'CVE-app-1', observed: true, observed_reachability: 'data_flow', expected_reachability: 'function' }, // shown
+          { cve: 'CVE-app-2', observed: true, observed_reachability: 'module', expected_reachability: 'function' }, // FN
+          { cve: 'CVE-app-3', observed: true, observed_reachability: 'unreachable', expected_reachability: 'unreachable' }, // correct silence
+        ],
+      },
+    ],
+  };
+
+  it('overall FN includes the library repo; app-shaped FN excludes it', () => {
+    const s = evaluateSilenceScore(report, new Set(['express']));
+    // Overall: 2 reachable silenced (express + petclinic) of 3 reachable-labelled.
+    expect(s.reachableSilenced).toBe(2);
+    expect(s.silenceFalseNegativeRatePct).toBe(66.67);
+    // App-shaped: only petclinic — 1 reachable silenced of 2 reachable-labelled.
+    expect(s.appReachableSilenced).toBe(1);
+    expect(s.appReachableShown).toBe(1);
+    expect(s.appLabelledObserved).toBe(3);
+    expect(s.appSilenceFalseNegativeRatePct).toBe(50);
+    expect(s.appSilencePrecisionPct).toBe(50); // 1 correct silence / 2 silenced
+  });
+
+  it('with no library repos declared, app-shaped equals overall', () => {
+    const s = evaluateSilenceScore(report); // no library set → all repos are app
+    expect(s.appReachableSilenced).toBe(s.reachableSilenced);
+    expect(s.appSilenceFalseNegativeRatePct).toBe(s.silenceFalseNegativeRatePct);
+  });
+});

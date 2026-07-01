@@ -225,6 +225,19 @@ export interface SilenceScore {
     string,
     { labelledObserved: number; silencedPct: number; falseNegatives: number }
   >;
+  // ── App-shaped subset (excludes `shape: library` repos) ──────────────────
+  // A LIBRARY repo (express/fastify) IS the framework — scanned standalone it
+  // has no HTTP entry point, so its own runtime deps floor at `module`
+  // correct-conservatively (they promote in a consuming APP). Reporting the
+  // silence score over APP-shaped repos only is the product-faithful number:
+  // "when a user scans their app, does the engine hide a reachable vuln?"
+  appLabelledObserved: number;
+  appReachableShown: number;
+  appReachableSilenced: number;
+  /** reachableSilenced / all-reachable over APP repos only — the product-faithful north star. */
+  appSilenceFalseNegativeRatePct: number;
+  /** unreachableSilenced / all-silenced over APP repos only. */
+  appSilencePrecisionPct: number;
 }
 
 /**
@@ -232,7 +245,10 @@ export interface SilenceScore {
  * input so the gate unit test can exercise it without a scan. Complements
  * evaluateReachabilityGates (which stays byte-stable for the existing gates).
  */
-export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
+export function evaluateSilenceScore(
+  report: CorpusReport,
+  libraryRepos: Set<string> = new Set(),
+): SilenceScore {
   let reachableShown = 0;
   let reachableSilenced = 0;
   let unreachableSilenced = 0;
@@ -240,12 +256,18 @@ export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
   let allUnreachable = 0;
   let allModule = 0;
   let allFindingsTotal = 0;
+  // App-shaped subset (excludes `shape: library` repos).
+  let appReachableShown = 0;
+  let appReachableSilenced = 0;
+  let appUnreachableSilenced = 0;
+  let appUnreachableShown = 0;
   const falseNegatives: SilenceScore['falseNegatives'] = [];
   const perEco: Record<string, { labelledObserved: number; silenced: number; falseNegatives: number }> = {};
 
   for (const repo of report.results ?? []) {
     if (repo.status !== 'ok') continue;
     const eco = repo.ecosystem || 'unknown';
+    const isLibrary = libraryRepos.has(repo.name);
     perEco[eco] ??= { labelledObserved: 0, silenced: 0, falseNegatives: 0 };
 
     const byR = repo.by_reachability ?? {};
@@ -261,6 +283,7 @@ export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
       if (observedSilenced) perEco[eco].silenced++;
       if (expectedVisible && observedSilenced) {
         reachableSilenced++;
+        if (!isLibrary) appReachableSilenced++;
         perEco[eco].falseNegatives++;
         falseNegatives.push({
           repo: repo.name,
@@ -270,10 +293,13 @@ export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
         });
       } else if (expectedVisible) {
         reachableShown++;
+        if (!isLibrary) appReachableShown++;
       } else if (observedSilenced) {
         unreachableSilenced++;
+        if (!isLibrary) appUnreachableSilenced++;
       } else {
         unreachableShown++;
+        if (!isLibrary) appUnreachableShown++;
       }
     }
   }
@@ -282,6 +308,10 @@ export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
   const totalSilenced = reachableSilenced + unreachableSilenced;
   const totalReachable = reachableShown + reachableSilenced;
   const totalUnreachable = unreachableShown + unreachableSilenced;
+  const appLabelledObserved =
+    appReachableShown + appReachableSilenced + appUnreachableSilenced + appUnreachableShown;
+  const appTotalReachable = appReachableShown + appReachableSilenced;
+  const appTotalSilenced = appReachableSilenced + appUnreachableSilenced;
 
   const perEcosystem: SilenceScore['perEcosystem'] = {};
   for (const [eco, c] of Object.entries(perEco)) {
@@ -309,6 +339,13 @@ export function evaluateSilenceScore(report: CorpusReport): SilenceScore {
     allFindingsTotal,
     falseNegatives,
     perEcosystem,
+    appLabelledObserved,
+    appReachableShown,
+    appReachableSilenced,
+    appSilenceFalseNegativeRatePct:
+      appTotalReachable === 0 ? 0 : round2((appReachableSilenced / appTotalReachable) * 100),
+    appSilencePrecisionPct:
+      appTotalSilenced === 0 ? 100 : round2((appUnreachableSilenced / appTotalSilenced) * 100),
   };
 }
 
@@ -325,7 +362,11 @@ function printSilenceScore(s: SilenceScore): void {
   console.log(`Noise reduction — labelled set:  ${s.labelledNoiseReductionPct}%`);
   console.log(`Silence precision:               ${s.silencePrecisionPct}%  (when we hide, how often correct)`);
   console.log(
-    `Silence FALSE-NEGATIVE rate:     ${s.silenceFalseNegativeRatePct}%  <- NORTH STAR (reachable but hidden)`,
+    `Silence FALSE-NEGATIVE rate:     ${s.silenceFalseNegativeRatePct}%  (all repos, incl. libraries)`,
+  );
+  console.log(
+    `  App-shaped repos only:         silence-FN ${s.appSilenceFalseNegativeRatePct}% · ` +
+      `precision ${s.appSilencePrecisionPct}% · over ${s.appLabelledObserved} labelled  <- NORTH STAR (product-faithful)`,
   );
   console.log(`Noise-leak rate:                 ${s.noiseLeakRatePct}%  (unreachable but shown)`);
   for (const fn of s.falseNegatives) {
@@ -383,10 +424,28 @@ interface CorpusCveLike {
   expected_reachability?: string;
 }
 interface CorpusRepoLike {
+  name?: string;
+  shape?: string;
   ground_truth_cves?: CorpusCveLike[];
 }
 interface CorpusFileLike {
   repos?: CorpusRepoLike[];
+}
+
+/**
+ * Repo names annotated `shape: library` in the corpus YAML. A library repo IS a
+ * framework (express/fastify) — scanned standalone it has no HTTP entry point,
+ * so its own runtime deps floor at `module` correct-conservatively (they promote
+ * in a consuming app). The silence score excludes these from the product-faithful
+ * app-shaped false-negative rate.
+ */
+export function loadLibraryRepos(corpusPath: string): Set<string> {
+  const doc = yaml.load(fs.readFileSync(corpusPath, 'utf8')) as CorpusFileLike;
+  const libs = new Set<string>();
+  for (const repo of doc?.repos ?? []) {
+    if (repo?.name && repo.shape === 'library') libs.add(repo.name);
+  }
+  return libs;
 }
 
 /** CVE id → expected_reachability across every repo in the corpus YAML. */
@@ -534,7 +593,7 @@ function main(): void {
 
   const gates = evaluateReachabilityGates(report);
   const oracle = checkOracle(oracleVerdicts, buildObservedMap(report));
-  const silence = evaluateSilenceScore(report);
+  const silence = evaluateSilenceScore(report, loadLibraryRepos(corpusPath));
   printGateReport(gates);
   printBaselineResult(baseline, Object.keys(lockedLabels).length);
   printOracleResult(oracle, oracleVerdicts.length);
