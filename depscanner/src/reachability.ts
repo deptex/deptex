@@ -12,6 +12,7 @@ import {
   type SpringFeatureSignals,
   gatherSpringFeatureSignals,
   evaluateFeaturePreconditionDemotion,
+  evaluateAlwaysOnRuntimePromotion,
 } from './reachability-feature-preconditions';
 
 interface LogLike {
@@ -495,6 +496,19 @@ export interface UpdateReachabilityOptions {
    * unrecognized / empty signals object refuses every demotion (fail-safe).
    */
   springFeatureSignals?: SpringFeatureSignals;
+  /**
+   * Always-on framework-runtime PROMOTION gate (reachability silence-FN
+   * recovery). The number of HTTP-route entry points framework detection found
+   * this run. `> 0` marks the project a DEPLOYED WEB APP, which is the required
+   * precondition for promoting a `module` finding whose CVE lives in always-on
+   * framework-runtime code (servlet-container request parser, MVC resource
+   * handler) to a visible tier — see `reachability-feature-preconditions.ts`
+   * (`ALWAYS_ON_RUNTIME` + `evaluateAlwaysOnRuntimePromotion`). `0` / undefined
+   * disables every promotion (a library repo must not get promotions).
+   * Threaded from usage_extraction's already-detected entry points (never
+   * re-detected); tests inject it directly.
+   */
+  httpEntryPointCount?: number;
 }
 
 /**
@@ -1129,6 +1143,11 @@ export async function updateReachabilityLevels(
   const featureSignals: SpringFeatureSignals | null =
     options.springFeatureSignals ??
     (options.ecosystem === 'maven' ? gatherSpringFeatureSignals(workspaceRoot) : null);
+  // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
+  // this is a deployed web app, so a CVE in an always-on framework component is
+  // genuinely on the request path. Gathered once per run from the already-
+  // detected entry-point count threaded via options (never re-detected here).
+  const hasHttpRouteEntryPoint = (options.httpEntryPointCount ?? 0) > 0;
   let updatedCount = 0;
   let detailsSetCount = 0;
   const levelCounts: Record<string, number> = {
@@ -1501,6 +1520,66 @@ export async function updateReachabilityLevels(
           // framework starter) floor at `module` — we know they run, we just
           // can't pin the vulnerable function to a call path.
           level = 'module';
+        }
+      }
+
+      // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
+      // recovery — the mirror image of the feature-precondition DEMOTION gate
+      // above). A CVE in framework code that is UNCONDITIONALLY on the request
+      // path of a deployed web app (an embedded servlet-container request
+      // parser / default servlet, Spring MVC's always-registered static-
+      // resource handler) or that executes at every startup (a predictable
+      // temp dir) is genuinely reachable, yet the heuristics above can only
+      // reach `module` (the app never `import`s the servlet container). Promote
+      // such a `module` finding to a visible tier so it isn't silenced.
+      //
+      // COMPOSITION with the demotion gate (critical — the two models must
+      // never fight):
+      //   1. The demotion already ran in the callgraph branch; if it fired the
+      //      finding is at `unreachable`, so the `level === 'module'` guard
+      //      below skips it — feature-gated-absent → unreachable WINS.
+      //   2. For a `module` finding produced by a NON-callgraph branch (e.g. a
+      //      framework-embedded-runtime floor) the demotion never ran, so we
+      //      re-evaluate it here and REFUSE to promote anything it would
+      //      silence. This also handles "feature present → genuinely reachable"
+      //      correctly (demotion returns false → promotion proceeds).
+      // Gated on the deployed-web-app signal (>= 1 HTTP-route entry point); a
+      // library/CLI repo (0 routes) never gets a promotion.
+      if (level === 'module' && hasHttpRouteEntryPoint) {
+        const summaryStr = (pdv.summary ?? null) as string | null;
+        const wouldDemote = featureSignals
+          ? evaluateFeaturePreconditionDemotion({
+              depName,
+              summary: summaryStr,
+              signals: featureSignals,
+            }).demote
+          : false;
+        if (!wouldDemote) {
+          const promotion = evaluateAlwaysOnRuntimePromotion({
+            depName,
+            summary: summaryStr,
+            hasHttpRouteEntryPoint,
+            signals: featureSignals,
+          });
+          if (promotion.promote && promotion.promoteTo) {
+            // Record the pre-promotion verdict honestly: the callgraph branch
+            // stamps `callgraph_reached_transitive`; the embedded-runtime /
+            // direct floor leaves details null → 'module'.
+            const promotedFrom =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module';
+            level = promotion.promoteTo;
+            details = {
+              reason: `always_on_framework_runtime: ${promotion.sink}`,
+              scope: 'always_on_framework_runtime',
+              verdict: 'always_on_framework_runtime',
+              sink: promotion.sink,
+              matched_summary_pattern: promotion.matchedPattern ?? null,
+              promoted_from: promotedFrom,
+              ...(promotion.threatTag ? { threat_tag: promotion.threatTag } : {}),
+            };
+          }
         }
       }
       }

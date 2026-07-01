@@ -143,6 +143,19 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
       // memory before persistence, so the DAST synthesizer points ZAP at the
       // real URL. Pure mutation of result.files[*].entryPoints; no I/O.
       resolveMountPrefixes(result.files);
+      // Count HTTP-route entry points from the just-detected (not re-detected)
+      // entry points. Threaded to the reachability classifier as the "deployed
+      // web app" signal that gates the always-on framework-runtime promotion
+      // (see reachability.ts / reachability-feature-preconditions.ts). Counted
+      // from the in-memory detector output so it's independent of the DB write
+      // succeeding.
+      let httpEntryPointCount = 0;
+      for (const file of result.files) {
+        for (const ep of file.entryPoints ?? []) {
+          if (ep.entryPointType === 'http_route') httpEntryPointCount++;
+        }
+      }
+      ctx.httpEntryPointCount = httpEntryPointCount;
       const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files, workspaceRoot);
       if (!entryResult.success && entryResult.error) {
         await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);

@@ -356,6 +356,229 @@ export function evaluateFeaturePreconditionDemotion(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Always-on framework-runtime PROMOTION table (declarative)
+// ---------------------------------------------------------------------------
+
+/**
+ * The mirror image of the feature-precondition DEMOTION gate above. Some
+ * framework CVEs live in code that is *unconditionally* on the request path of
+ * any deployed web app — an embedded servlet container's request parser /
+ * default servlet, Spring MVC's always-registered static-resource handler — or
+ * that executes at every web-app *startup* (a predictable temp dir created
+ * during boot). The classifier otherwise buries such a CVE at `module`
+ * (depscore weight 0.5, effectively hidden behind the reachable findings) even
+ * though it is genuinely exploitable on ordinary traffic. That is a silence
+ * FALSE-NEGATIVE — a real, reachable vuln the engine hides.
+ *
+ * Surfaced by the M4 reachability corpus on spring-petclinic (a real Spring
+ * app, 17 HTTP entry points): tomcat-embed-core's request-parser + default-
+ * servlet CVEs land at `module` because petclinic never `import`s
+ * `org.apache.catalina`, so the "transitive + not first-party-imported"
+ * heuristic (and the embedded-runtime floor) can only reach `module` — yet the
+ * servlet container processes EVERY request.
+ *
+ * This table PROMOTES such a `module` finding to a visible tier when ALL hold:
+ *   - the finding's dependency NAME matches an `owners` token (anchors the row
+ *     to the package that actually owns the always-on surface — the servlet
+ *     container's connector, spring-web's ResourceHttpRequestHandler,
+ *     spring-boot's startup), AND
+ *   - the advisory SUMMARY matches one of `summary` (names the always-on
+ *     class: "request smuggling"/"HTTP/1.1"/request-line parsing, "open
+ *     redirect"/URL-normalization/default-servlet, "static resource"/
+ *     "ResourceHttpRequestHandler"/"cache poisoning", "temporary directory" at
+ *     startup), AND
+ *   - the per-row `requires(signals)` precondition holds (an extension point;
+ *     the current always-on rows are unconditional — the runtime truly is
+ *     always on), AND
+ *   - (checked by the CALLER, not here) the project is a DEPLOYED WEB APP —
+ *     >= 1 HTTP-route entry point was detected for this run.
+ *
+ * SAFETY (this is the RISKY direction — over-promotion manufactures NOISE, the
+ * opposite failure to a wrongful demotion):
+ *   - Only well-defined always-on classes named by owner+summary are listed. A
+ *     generic framework CVE that names no always-on surface matches no row and
+ *     stays `module`. When in doubt we LEAVE it at module.
+ *   - The owner+summary anchoring is disjoint BY CONSTRUCTION from the
+ *     DEMOTION table's feature-gated summaries (WebSocket, AJP, HTTP/2, WebDAV,
+ *     cipher, DIGEST auth, security constraint, realm, …): an always-on summary
+ *     never names a gated feature, so a feature-gated CVE can never match a
+ *     promotion row. The classifier additionally REFUSES to promote any finding
+ *     the demotion gate would silence (belt-and-suspenders — see
+ *     reachability.ts), which also covers the "feature-present ⇒ genuinely
+ *     reachable ⇒ promote" case correctly.
+ *   - `promoteTo` is capped at `data_flow` — never `confirmed` (that tier is
+ *     reserved for a proven taint flow). Servlet-container request-parser +
+ *     MVC resource-handler CVEs promote to `data_flow`; startup-only CVEs to
+ *     `function`.
+ *   - `threatTag` records an exploit precondition the bare request path does
+ *     NOT satisfy (a fronting proxy for request smuggling, a local co-tenant
+ *     for the predictable-temp-dir race) so depscore can stay honest about
+ *     findings that need more than a single ordinary HTTP request.
+ *   - Java/Spring owners first; the shape generalizes by adding rows.
+ */
+export interface AlwaysOnRuntime {
+  /** Stable sink id, surfaced in `reachability_details.reason`. */
+  sink: string;
+  /** Promote only when the dependency NAME includes one of these lowercased tokens. */
+  owners: string[];
+  /** Promote only when the advisory SUMMARY matches one of these. */
+  summary: RegExp[];
+  /** The tier to promote to. Never `confirmed` (that needs a proven flow). */
+  promoteTo: 'function' | 'data_flow';
+  /**
+   * Extra per-row precondition on the project signals. The current always-on
+   * rows are unconditional (`() => true`) — the runtime truly is always on —
+   * but the hook lets a future row require a signal without widening the table
+   * shape. Receives an empty (unrecognized) signals object when none were
+   * gathered (non-Maven), so a predicate MUST treat "no signal" as its safe
+   * default.
+   */
+  requires: (s: SpringFeatureSignals) => boolean;
+  /**
+   * An exploit precondition the bare request path does not satisfy (surfaced as
+   * `reachability_details.threat_tag`). Present ⇒ depscore should discount the
+   * finding; absent ⇒ directly exploitable on ordinary traffic.
+   */
+  threatTag?: string;
+}
+
+export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
+  // --- Embedded servlet container: HTTP/1.1 request smuggling / desync ---
+  // The connector parses every request; a smuggling/desync bug is only
+  // exploitable behind a fronting proxy / LB that disagrees with the origin on
+  // message framing, hence the threat tag.
+  {
+    sink: 'servlet-container-request-smuggling',
+    owners: ['tomcat', 'jetty', 'undertow'],
+    summary: [
+      /request\s+smuggl/i,
+      /http[\s/]?1\.1/i,
+      /transfer[- ]?encoding/i,
+      /\bchunked\b/i,
+      /\bdesync/i,
+    ],
+    promoteTo: 'data_flow',
+    requires: () => true,
+    threatTag: 'requires_fronting_proxy',
+  },
+  // --- Embedded servlet container: generic connector / request parsing ---
+  // Request-line / header / URI parsing in the connector is on every request
+  // and directly reachable (no proxy precondition).
+  {
+    sink: 'servlet-container-request-parser',
+    owners: ['tomcat', 'jetty', 'undertow'],
+    summary: [
+      /request\s+(line|header|uri|target|parsing|processing)/i,
+      /http\s+connector/i,
+      /servlet\s+container/i,
+      /\bcoyote\b/i,
+    ],
+    promoteTo: 'data_flow',
+    requires: () => true,
+  },
+  // --- Embedded servlet container: default servlet URL normalization ---
+  // The default servlet normalizes every static-path URL; a normalization bug
+  // yields open redirect / path confusion on the ordinary request path.
+  {
+    sink: 'servlet-default-servlet-url-normalization',
+    owners: ['tomcat', 'jetty', 'undertow'],
+    summary: [/open[\s-]?redirect/i, /url\s+normaliz/i, /path\s+normaliz/i, /default\s+servlet/i],
+    promoteTo: 'data_flow',
+    requires: () => true,
+  },
+  // --- Spring MVC static-resource handler (registered by default) ---
+  // ResourceHttpRequestHandler serves /static, /public and webjars on
+  // (nearly) every layout render; on by default in any Spring MVC / Boot web
+  // app. Anchored to resource-serving terms so a websocket/etc. spring-web CVE
+  // never matches.
+  {
+    sink: 'spring-mvc-resource-handler',
+    owners: ['spring-web'],
+    summary: [
+      /static\s+resource/i,
+      /resourcehttprequesthandler/i,
+      /resource\s*handler/i,
+      /cache\s*poison/i,
+      /\bwebjar/i,
+    ],
+    promoteTo: 'data_flow',
+    requires: () => true,
+  },
+  // --- Spring Boot web-app startup (predictable temp dir at boot) ---
+  // Executes once at every web-app startup. Promote only to `function` (it is
+  // not per-request) and tag the local co-tenant precondition the temp-dir race
+  // needs.
+  {
+    sink: 'spring-boot-startup-tempdir',
+    owners: ['spring-boot'],
+    summary: [
+      /temp(orary)?\s*(dir|directory|file)/i,
+      /predictable\s+(temp|directory|file|location)/i,
+      /temp[\s-]?dir/i,
+    ],
+    promoteTo: 'function',
+    requires: () => true,
+    threatTag: 'requires_local_cotenant',
+  },
+];
+
+export interface AlwaysOnPromotionResult {
+  promote: boolean;
+  sink?: string;
+  promoteTo?: 'function' | 'data_flow';
+  matchedPattern?: string;
+  threatTag?: string;
+}
+
+/**
+ * Decide whether a `module` finding should be PROMOTED to a visible tier
+ * because its CVE lives in always-on framework-runtime code AND the project is
+ * a deployed web app. Pure — unit-tested directly.
+ *
+ * Returns `{ promote: false }` unless:
+ *   - `hasHttpRouteEntryPoint` is true (the project is a deployed web app — a
+ *     library repo with no HTTP route never earns a promotion), AND
+ *   - the finding has both a dependency name and an advisory summary, AND
+ *   - some `ALWAYS_ON_RUNTIME` row's owner matches the dep AND its summary
+ *     matches AND its `requires(signals)` precondition holds.
+ *
+ * COMPOSITION NOTE: refusing to promote a finding the feature-precondition
+ * DEMOTION gate would silence is the CALLER's responsibility — the classifier
+ * evaluates the demotion FIRST and only offers still-`module` findings here.
+ * This function models the promotion itself and nothing else.
+ */
+export function evaluateAlwaysOnRuntimePromotion(input: {
+  depName: string | null | undefined;
+  summary: string | null | undefined;
+  hasHttpRouteEntryPoint: boolean;
+  signals?: SpringFeatureSignals | null;
+}): AlwaysOnPromotionResult {
+  const { depName, summary, hasHttpRouteEntryPoint } = input;
+  // Web-app gate: no HTTP-route entry point ⇒ nothing is on a request path;
+  // a library / CLI repo must never earn a promotion.
+  if (!hasHttpRouteEntryPoint) return { promote: false };
+  if (!depName || !summary) return { promote: false };
+  const dep = depName.toLowerCase();
+  // A missing signals object (non-Maven, or tests) resolves to the empty
+  // "cannot reason" sentinel; the current rows' `requires` ignore it.
+  const signals = input.signals ?? emptySpringFeatureSignals();
+  for (const row of ALWAYS_ON_RUNTIME) {
+    if (!row.owners.some((o) => dep.includes(o))) continue;
+    const matched = row.summary.find((re) => re.test(summary));
+    if (!matched) continue;
+    if (!row.requires(signals)) continue;
+    return {
+      promote: true,
+      sink: row.sink,
+      promoteTo: row.promoteTo,
+      matchedPattern: matched.source,
+      threatTag: row.threatTag,
+    };
+  }
+  return { promote: false };
+}
+
+// ---------------------------------------------------------------------------
 // Project-feature detector (reads the workspace)
 // ---------------------------------------------------------------------------
 
