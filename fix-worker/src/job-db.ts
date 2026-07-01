@@ -111,6 +111,7 @@ export async function markFailed(
   fixId: string,
   errorMessage: string,
   errorCategory?: string,
+  failureDetails?: Record<string, unknown> | null,
 ) {
   await supabase
     .from('project_security_fixes')
@@ -118,6 +119,7 @@ export async function markFailed(
       status: 'failed',
       error_message: errorMessage,
       error_category: errorCategory ?? null,
+      failure_details: failureDetails ?? null,
       completed_at: new Date().toISOString(),
     })
     .eq('id', fixId);

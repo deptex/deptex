@@ -287,11 +287,29 @@ function cumulativeDiffLoc(repoRoot: string): number {
   }
 }
 
+// Evidence attached to a failure so the task chat can SHOW its work — what the
+// model tried (the diff, even if it didn't apply) and the real blocker.
+export interface FixFailureDetails {
+  attemptedDiff?: string;
+  errorOutput?: string;
+  repairAttempts?: number;
+}
+
 export class FixPipelineError extends Error {
-  constructor(message: string, public category: string) {
+  constructor(
+    message: string,
+    public category: string,
+    public details?: FixFailureDetails,
+  ) {
     super(message);
   }
 }
+
+// A real-time "it's not going smoothly" signal so the chat narrates the struggle
+// (retrying a patch, tests failing) as it happens instead of jumping to silence.
+export type TroubleEvent =
+  | { kind: 'apply_retry'; attempt: number }
+  | { kind: 'tests_retry'; attempt: number; errorTail: string };
 
 export interface RunFixPipelineOpts {
   model: LanguageModel;
@@ -320,6 +338,9 @@ export interface RunFixPipelineOpts {
   // was checked locally vs soft-passed to CI). Lets the worker post its
   // edit/verify step + voice lines with real timing around the slow install.
   onPhase?: (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }) => Promise<void>;
+  // Fired when a patch has to be retried (didn't apply) or the checks failed —
+  // lets the worker narrate the struggle in real time.
+  onTrouble?: (event: TroubleEvent) => Promise<void>;
 }
 
 export interface RunFixPipelineResult {
@@ -563,6 +584,18 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     repairAttempts += 1;
     await logger.info('repair', `Repair cycle ${repairAttempts}/${REPAIR_BUDGET}`);
 
+    // Narrate the struggle in real time. exit -1 is our synthetic "patch didn't
+    // apply" marker; anything else is a real check that came back failing.
+    if (testResult.exitCode === -1) {
+      await opts.onTrouble?.({ kind: 'apply_retry', attempt: repairAttempts });
+    } else {
+      await opts.onTrouble?.({
+        kind: 'tests_retry',
+        attempt: repairAttempts,
+        errorTail: (testResult.stderr || testResult.stdout || '').slice(-400),
+      });
+    }
+
     checkBudget(`repair ${repairAttempts}`);
     trackToolCall(`repair ${repairAttempts}`);
     const repair = await runRepair({
@@ -596,9 +629,20 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
   }
 
   if (!testResult.passed) {
+    // exit -1 is the synthetic marker for "the patch never applied" — surface
+    // that as its own category so the chat can say so plainly (vs. a real check
+    // that ran and failed).
+    const neverApplied = testResult.exitCode === -1;
     throw new FixPipelineError(
-      `Tests still failing after ${repairAttempts} repair cycle${repairAttempts === 1 ? '' : 's'} (exit ${testResult.exitCode})`,
-      'tests_failed',
+      neverApplied
+        ? `The patch couldn't be applied to the file after ${repairAttempts} attempt${repairAttempts === 1 ? '' : 's'}.`
+        : `The checks still failed after ${repairAttempts} repair cycle${repairAttempts === 1 ? '' : 's'} (exit ${testResult.exitCode}).`,
+      neverApplied ? 'patch_unapplied' : 'tests_failed',
+      {
+        attemptedDiff: lastDiff,
+        errorOutput: (testResult.stderr || testResult.stdout || '').slice(-3000),
+        repairAttempts,
+      },
     );
   }
 

@@ -333,7 +333,20 @@ export interface FixRecord {
   prBranch: string | null;
   diffSummary: string | null;
   errorMessage: string | null;
+  errorCategory?: string | null;
+  failureDetails?: FixFailureDetails | null;
   createdAt: string;
+}
+
+// What a failed fix tried + why it stopped, for the FixFailureCard (phase70).
+export interface FixFailureDetails {
+  category?: string;
+  headline?: string;
+  explanation?: string;
+  nextStep?: string;
+  attemptedDiff?: string | null;
+  errorOutput?: string | null;
+  repairAttempts?: number | null;
 }
 
 export interface RequestFixResponse {

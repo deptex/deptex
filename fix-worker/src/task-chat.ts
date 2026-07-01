@@ -63,7 +63,7 @@ export type Narrator = (text: string) => Promise<void>;
 // A discrete tool-use step the chat renders as a gray icon + label line (past
 // tense — the action is done), distinct from the first-person prose beats. The
 // `icon` is a semantic key the frontend maps to a lucide glyph.
-export type StepIcon = 'clone' | 'explore' | 'edit' | 'verify' | 'pr';
+export type StepIcon = 'clone' | 'explore' | 'edit' | 'verify' | 'pr' | 'failed';
 export interface TaskStep {
   icon: StepIcon;
   label: string;
@@ -137,6 +137,126 @@ export async function postPrReadyCard(
     },
   });
   if (error) console.warn('[FIX] pr-ready card post failed:', error.message);
+}
+
+export interface FailureCopy {
+  headline: string; // failure-card title
+  explanation: string; // 1-2 honest sentences: what happened
+  nextStep: string; // what the user can do from here
+  leadIn: string; // first-person chat beat, posted just before the card
+  stepLabel: string; // the gray failed-step line
+}
+
+// Turn a failure category + message into honest, specific, first-person copy —
+// never a blanket "I couldn't finish this safely". The category is already set
+// at every throw site (FixPipelineError.category).
+export function describeFailure(
+  category: string | undefined,
+  message: string,
+  ctx: { primaryFile?: string },
+): FailureCopy {
+  const file =
+    ctx.primaryFile && ctx.primaryFile !== 'the affected file' ? ctx.primaryFile : null;
+  const inFile = file ? ` in \`${file}\`` : '';
+  switch (category) {
+    case 'patch_unapplied':
+      return {
+        headline: "I couldn't get the change to apply cleanly",
+        explanation: `I worked out the fix, but my edit${file ? ` to \`${file}\`` : ''} didn't line up with the file and wouldn't apply after a couple of retries.`,
+        nextStep: `The change I was trying to make is below — it likely needs a hand${inFile}.`,
+        leadIn: `I worked out the change, but my patch wouldn't apply cleanly to ${file ?? 'the file'} — here's exactly what I tried.`,
+        stepLabel: "Couldn't apply the change",
+      };
+    case 'tests_failed':
+      return {
+        headline: "The change didn't pass the checks",
+        explanation: `I applied a fix${file ? ` to \`${file}\`` : ''}, but the checks still failed. The exact output is below.`,
+        nextStep: `The diff I made and the failing output are below — the fix probably needs a small adjustment.`,
+        leadIn: `I applied the change, but the checks came back failing — let me show you what I changed and what broke.`,
+        stepLabel: 'Checks failed',
+      };
+    case 'diff_too_large':
+      return {
+        headline: 'This fix is too big to do safely',
+        explanation: `The change grew past the size cap I'm allowed to make in a single automated fix.`,
+        nextStep: `It should be split into smaller changes, or handled by hand.`,
+        leadIn: `This one grew bigger than I can safely land in a single automated fix.`,
+        stepLabel: 'Change too large',
+      };
+    case 'budget_wall_clock':
+    case 'budget_tool_calls':
+      return {
+        headline: 'I ran out of room working through this',
+        explanation: `This fix needed more exploration or retries than a single automated attempt allows.`,
+        nextStep: `Re-running it may get further, or it may need a hand — what I got to is below.`,
+        leadIn: `I ran out of budget partway through this one — here's where I got to.`,
+        stepLabel: 'Ran out of budget',
+      };
+    case 'not_fixable':
+      // message is already the specific reason (no patched version, shell-required
+      // base image, configured registry image, …).
+      return {
+        headline: "This one can't be fixed automatically",
+        explanation: message,
+        nextStep: `It needs a human decision — see the reason above.`,
+        leadIn: `I looked at this one and it can't be fixed automatically — ${message}`,
+        stepLabel: "Can't fix automatically",
+      };
+    case 'unsupported_language':
+      return {
+        headline: "I can't fix this language here yet",
+        explanation: message,
+        nextStep: `This language isn't enabled on the fix agent yet.`,
+        leadIn: message,
+        stepLabel: 'Language not supported',
+      };
+    case 'project_dir_missing':
+      return {
+        headline: "I couldn't find the project in the repo",
+        explanation: message,
+        nextStep: `Check the project's configured subdirectory.`,
+        leadIn: `I couldn't find the project directory in the repository, so I had to stop.`,
+        stepLabel: 'Project directory missing',
+      };
+    default:
+      return {
+        headline: "I couldn't complete this fix",
+        explanation: message,
+        nextStep: `Here's what I tried and where it stopped.`,
+        leadIn: `I couldn't complete this one — here's what happened.`,
+        stepLabel: "Couldn't complete the fix",
+      };
+  }
+}
+
+// Post the failure card into the task chat. Same tool-result shape as the PR-ready
+// card (so it rehydrates into a card that live-subscribes to the fix row), but
+// flagged `failed` so the frontend renders the FixFailureCard instead. The card
+// reads failure_details off the fix row: what was tried + the real error.
+export async function postFailureCard(
+  supabase: SupabaseClient,
+  threadId: string | null | undefined,
+  fixId: string,
+  caption: string,
+): Promise<void> {
+  if (!threadId) return;
+  const { error } = await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'assistant',
+    content: caption,
+    metadata: {
+      parts: [
+        {
+          type: 'tool-result',
+          toolCallId: fixId,
+          toolName: 'apply_fix',
+          result: { fixId, failed: true },
+          isError: false,
+        },
+      ],
+    },
+  });
+  if (error) console.warn('[FIX] failure card post failed:', error.message);
 }
 
 /** The project's display name, for narrating by name instead of by id. */

@@ -29,17 +29,12 @@ import {
   narrateStep,
   generateVoiceLine,
   postPrReadyCard,
+  postFailureCard,
+  describeFailure,
   getProjectName,
   markTaskFromFix,
   type TaskStep,
 } from './task-chat';
-
-// Trim a failure reason to one short clause for the chat (the full message is on
-// the fix row + Sentry).
-function shortReason(message: string): string {
-  const firstLine = (message || 'an unexpected error').split('\n')[0].trim();
-  return firstLine.length > 140 ? `${firstLine.slice(0, 137)}…` : firstLine;
-}
 
 const IDLE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -88,19 +83,12 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     // the gate stays closed by default — operator opens it explicitly.
     if (!isLanguageEnabled(plan.language)) {
       const enabled = getEnabledLanguages().join(', ');
-      await logger.error('init', `Language ${plan.language} not enabled (LANGUAGE_GATE=${enabled})`);
-      await markFailed(
-        supabase,
-        job.id,
-        `Language ${plan.language} not enabled on this fix-worker. Enabled: ${enabled}.`,
+      // Throw so it flows through the one failure path (below) that narrates +
+      // posts the failure card, rather than a bespoke dead-end here.
+      throw new FixPipelineError(
+        `${plan.language} isn't one of the languages I can fix here yet (enabled: ${enabled}).`,
         'unsupported_language',
       );
-      await narrate(`I can't fix this one yet — ${plan.language} isn't supported here.`);
-      await markTaskFromFix(supabase, fullRow.task_id, {
-        status: 'failed',
-        summary: `Language ${plan.language} not supported`,
-      });
-      return;
     }
 
     if (!fullRow.plan_base_sha || !fullRow.plan_base_branch) {
@@ -192,18 +180,10 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     if (repoInfo.packageJsonPath) {
       await logger.info('setup', `Project subdir: ${repoInfo.packageJsonPath} (running setup/tests in ${projectDir})`);
       if (!fs.existsSync(projectDir)) {
-        await markFailed(
-          supabase,
-          job.id,
-          `package_json_path '${repoInfo.packageJsonPath}' not found in repo`,
+        throw new FixPipelineError(
+          `I couldn't find the project directory ('${repoInfo.packageJsonPath}') in the repository, so I had to stop.`,
           'project_dir_missing',
         );
-        await narrate(`I couldn't find the project directory in the repository, so I had to stop.`);
-        await markTaskFromFix(supabase, fullRow.task_id, {
-          status: 'failed',
-          summary: 'Project directory not found in repo',
-        });
-        return;
       }
     }
 
@@ -290,6 +270,17 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
           extraEnv: setup.extraEnv,
           pipelineStartMs,
           onPhase,
+          // Narrate the struggle in real time so a fix that needs retries reads as
+          // work-in-progress, not silence before a failure.
+          onTrouble: async (e) => {
+            if (e.kind === 'apply_retry') {
+              await narrate(
+                `That patch didn't line up with the file — re-reading it and trying again (attempt ${e.attempt + 1}).`,
+              );
+            } else {
+              await narrate(`The checks came back failing — adjusting the fix and trying again.`);
+            }
+          },
         });
     const totalTokens = pipeline.tokensUsed;
 
@@ -331,20 +322,39 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
   } catch (err: any) {
     const message = err?.message ?? String(err);
     const category = err instanceof FixPipelineError ? err.category : undefined;
+    const details = err instanceof FixPipelineError ? err.details : undefined;
     Sentry.captureException(err, {
       tags: { component: 'fix-worker', ...(category ? { category } : {}) },
       user: { id: fullRow.organization_id },
       contexts: { fix_task: { fix_id: job.id, project_id: fullRow.project_id, run_id: fullRow.run_id } },
     });
     await logger.error('complete', `Fix failed: ${message}`, err);
-    await markFailed(supabase, job.id, message, category);
-    await narrate(
-      `I couldn't finish this safely — ${shortReason(message)}. I haven't opened a pull request.`,
-    );
-    await markTaskFromFix(supabase, fullRow.task_id, {
-      status: 'failed',
-      summary: `Fix failed: ${shortReason(message)}`,
+
+    // Turn the failure into an honest, specific account instead of a generic
+    // apology. `plan` may be undefined only on the earliest throws; the primary
+    // file comes off the plan directly (always safe in this scope).
+    const primaryFile =
+      job.plan?.fileChanges?.find((fc) => fc.action !== 'delete')?.path ??
+      job.plan?.fileChanges?.[0]?.path;
+    const copy = describeFailure(category, message, { primaryFile });
+
+    // Record what was tried + why it stopped, so the FixFailureCard can show it.
+    await markFailed(supabase, job.id, message, category, {
+      category: category ?? 'unknown',
+      headline: copy.headline,
+      explanation: copy.explanation,
+      nextStep: copy.nextStep,
+      attemptedDiff: details?.attemptedDiff ?? null,
+      errorOutput: details?.errorOutput ?? null,
+      repairAttempts: details?.repairAttempts ?? null,
     });
+
+    // Show the work: an honest lead-in beat → a failed step → the card with the
+    // evidence (what I tried + the real error + the next step).
+    await narrate(copy.leadIn);
+    await step({ icon: 'failed', label: copy.stepLabel });
+    await postFailureCard(supabase, fullRow.thread_id, job.id, copy.nextStep);
+    await markTaskFromFix(supabase, fullRow.task_id, { status: 'failed', summary: copy.headline });
   } finally {
     clearInterval(heartbeat);
     sandbox.cleanup();

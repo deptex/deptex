@@ -7,6 +7,7 @@ import { PlanCard, PlanCardSkeleton } from './PlanCard';
 import { CreateTaskCard } from './CreateTaskCard';
 import { FixStatusCard } from './FixStatusCard';
 import { ChangeCard } from './ChangeCard';
+import { FixFailureCard } from './FixFailureCard';
 import { TaskStepLine } from './TaskStepLine';
 import type { AegisChatError } from '../../lib/aegis-api';
 import { isToolPart, toolNameFor } from '../../lib/aegis-parts';
@@ -122,6 +123,7 @@ export function MessageBubble({
       // leaving the chat with a permanent "Generating plan…" skeleton.
       const isError = part.state === 'output-error' || !!output?.error;
       const resolved = part.state === 'output-available' && output?.fixId;
+      const failedFix = !!(output as { failed?: boolean } | undefined)?.failed;
 
       if ((toolName === 'request_fix' || toolName === 'revise_fix') && !isError) {
         flushTools();
@@ -141,11 +143,17 @@ export function MessageBubble({
         return;
       }
 
-      // apply_fix (task chats) renders the ChangeCard: the change Aegis applied
-      // + a link to the draft PR.
+      // apply_fix (task chats): a successful change renders the ChangeCard (the
+      // applied change + PR link); a failed one renders the FixFailureCard (what
+      // it tried + the real error + a next step). The worker flags failures with
+      // result.failed so this doesn't collide with the gray error pill.
       if (toolName === 'apply_fix' && !isError) {
         flushTools();
-        elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
+        if (failedFix) {
+          elements.push(<FixFailureCard key={`fail-${i}`} data={part.output as any} />);
+        } else {
+          elements.push(<ChangeCard key={`change-${i}`} data={part.output as any} />);
+        }
         return;
       }
 

@@ -84,6 +84,8 @@ interface FixRow {
   pr_branch: string | null;
   diff_summary: string | null;
   error_message: string | null;
+  error_category: string | null;
+  failure_details: Record<string, unknown> | null;
   created_at: string;
   triggered_by: string;
   osv_id: string | null;
@@ -117,6 +119,8 @@ function shapeFixRow(row: FixRow) {
     prBranch: row.pr_branch,
     diffSummary: row.diff_summary,
     errorMessage: row.error_message,
+    errorCategory: row.error_category,
+    failureDetails: row.failure_details ?? null,
     createdAt: row.created_at,
     threadId: row.thread_id,
   };
@@ -225,7 +229,7 @@ async function loadFixRow(fixId: string): Promise<FixRow | null> {
   const { data } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('id', fixId)
     .maybeSingle();
@@ -403,7 +407,7 @@ router.get('/pending', async (req: AuthRequest, res) => {
   const { data, error } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('organization_id', organizationId)
     .in('status', ['planning', 'awaiting_approval'])
@@ -435,7 +439,7 @@ router.get('/by-thread/:threadId', async (req: AuthRequest, res) => {
   const { data, error } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
+      'id, organization_id, project_id, fix_type, status, plan, plan_generated_at, plan_base_sha, plan_base_branch, approval_token, approved_at, rejected_at, pr_url, pr_number, pr_branch, diff_summary, error_message, error_category, failure_details, created_at, triggered_by, osv_id, semgrep_finding_id, secret_finding_id, thread_id',
     )
     .eq('thread_id', threadId)
     .order('created_at', { ascending: true });

@@ -1711,7 +1711,8 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   container_finding_id uuid,
   base_image_rec_id uuid,
   dast_finding_id uuid,
-  reachable_flow_id uuid
+  reachable_flow_id uuid,
+  failure_details jsonb
 );
 CREATE TABLE IF NOT EXISTS public.project_security_summaries (
   project_id uuid NOT NULL,
@@ -4506,6 +4507,7 @@ AS $function$
   FROM extraction_logs el
   WHERE el.project_id = p_project_id
   GROUP BY el.run_id
+  HAVING bool_or(el.metadata->>'job_type' = 'fix') IS NOT TRUE
   ORDER BY started_at DESC
   LIMIT 20;
 $function$
