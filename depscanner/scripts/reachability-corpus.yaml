@@ -371,3 +371,27 @@ repos:
     # master returned 0 vulns.
     ref: ad49d8feb914e3a618404444c934e9e7e14665e2
     ground_truth_cves: []
+
+  - name: gitea
+    repo_url: https://github.com/go-gitea/gitea.git
+    ecosystem: golang
+    # Jul 2022 — Gitea v1.17.0. A SECOND real Go web app beside caddy, chosen
+    # deliberately because it imports the OPPOSITE x/* subpackages: gitea uses
+    # golang.org/x/crypto/ssh (Git-over-SSH) + x/net/html (markdown) which caddy
+    # does not, so it validates that the Go reachability model's subpackage
+    # import-gate is genuinely import-driven (ssh/html stay `module` here, not
+    # demoted) rather than overfit to caddy. Verified 2026-07-02.
+    ref: v1.17.0
+    ground_truth_cves: []
+
+  - name: mastodon
+    repo_url: https://github.com/mastodon/mastodon.git
+    ecosystem: gem
+    # Nov 2022 — Mastodon v4.0.2. A SECOND real Rails app beside discourse.
+    # The Rails always-on model promotes the same request-path stack (rack /
+    # nokogiri / puma / oj / the sanitizer chain) and demotes the same
+    # feature-gated gems (Rack::Static, Oj streaming, aws-s3 encryption,
+    # rails-ujs — Mastodon is a React SPA) on a repo it was not developed
+    # against, confirming the Rails model generalizes. Verified 2026-07-02.
+    ref: v4.0.2
+    ground_truth_cves: []
