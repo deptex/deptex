@@ -18,11 +18,15 @@
  *      entry points (a caddy-shaped module-routed server).
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { updateReachabilityLevels } from '../reachability';
 import type { Storage } from '../storage';
 import {
   evaluateGoAlwaysOnRuntimePromotion,
   evaluateGoSubpackageDemotion,
+  gatherGoImportSignals,
   emptyGoImportSignals,
   type GoImportSignals,
 } from '../reachability-go-preconditions';
@@ -232,6 +236,75 @@ describe('evaluateGoSubpackageDemotion', () => {
     expect(evaluateGoSubpackageDemotion({ depName: CRYPTO, summary: SSH_PANIC, signals: emptyGoImportSignals() }).demote).toBe(false);
     expect(evaluateGoSubpackageDemotion({ depName: CRYPTO, summary: null, signals: goSignals() }).demote).toBe(false);
     expect(evaluateGoSubpackageDemotion({ depName: 'github.com/go-chi/chi', summary: 'chi has a bug', signals: goSignals() }).demote).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2b. gatherGoImportSignals — filesystem import extraction (regression)
+// ---------------------------------------------------------------------------
+
+describe('gatherGoImportSignals — import extraction', () => {
+  function withGoWorkspace(mainGo: string, fn: (root: string) => void): void {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-precond-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'go.mod'), 'module example.com/app\n');
+      fs.writeFileSync(path.join(dir, 'main.go'), mainGo);
+      fn(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const has = (s: GoImportSignals, p: string) =>
+    [...s.importedPackages].some((x) => x === p || x.startsWith(p + '/'));
+
+  it('captures imports after a comment containing ")" inside the import block (gitea openpgp regression)', () => {
+    // A ")" in a comment must NOT prematurely close the factored import block —
+    // gitea's GPG file has `// OpenPGP (RFC 4880)` above the openpgp import; the
+    // un-stripped non-greedy block match dropped every import after it, so the
+    // openpgp CVE looked un-imported and got wrongly demoted to unreachable.
+    const src =
+      'package main\n' +
+      'import (\n' +
+      '\t"fmt"\n' +
+      '\t// OpenPGP (RFC 4880) armored signatures support\n' +
+      '\t"golang.org/x/crypto/openpgp"\n' +
+      '\t"golang.org/x/crypto/openpgp/armor" /* block (paren) comment */\n' +
+      '\t"golang.org/x/crypto/ssh"\n' +
+      ')\n' +
+      'func main() { fmt.Println("http://x") }\n';
+    withGoWorkspace(src, (root) => {
+      const s = gatherGoImportSignals(root);
+      expect(s.recognized).toBe(true);
+      expect(s.truncated).toBe(false);
+      expect(has(s, 'golang.org/x/crypto/openpgp')).toBe(true);
+      expect(has(s, 'golang.org/x/crypto/openpgp/armor')).toBe(true);
+      expect(has(s, 'golang.org/x/crypto/ssh')).toBe(true);
+    });
+  });
+
+  it('detects a deployed HTTP server (package main + serves) and captures single-line imports', () => {
+    const src =
+      'package main\n' +
+      'import "golang.org/x/net/http2"\n' +
+      'import "net/http"\n' +
+      'func main() { http.ListenAndServe(":8080", nil) }\n';
+    withGoWorkspace(src, (root) => {
+      const s = gatherGoImportSignals(root);
+      expect(s.isDeployedHttpServer).toBe(true);
+      expect(has(s, 'golang.org/x/net/http2')).toBe(true);
+    });
+  });
+
+  it('returns unrecognized signals for a non-Go workspace (no go.mod)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nongo-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'main.go'), 'package main\nimport "golang.org/x/net/http2"\n');
+      const s = gatherGoImportSignals(dir);
+      expect(s.recognized).toBe(false);
+      expect(s.importedPackages.size).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

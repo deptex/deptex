@@ -377,6 +377,15 @@ function safeRead(file: string, limitBytes: number): string | null {
  * factored `import ( … )` block (one path per line, optionally aliased / `_` /
  * `.`) and the single `import "path"` form. Only non-stdlib paths (a dot in the
  * first segment) are returned, to bound the set.
+ *
+ * Comments are stripped FIRST: the factored-block match is non-greedy on `)`, so
+ * a `)` inside a comment WITHIN an import block (e.g. gitea's GPG file has
+ * `// OpenPGP (RFC 4880) armored signatures` above the `golang.org/x/crypto/openpgp`
+ * import) would otherwise close the block early and drop every import after it —
+ * a silence-FN (the openpgp CVE would look un-imported and get wrongly demoted).
+ * Import paths never contain line- or block-comment delimiters, so stripping
+ * comments is safe for path extraction even though it may mangle unrelated
+ * string literals elsewhere in the file.
  */
 function extractGoImports(source: string): string[] {
   const out: string[] = [];
@@ -388,15 +397,19 @@ function extractGoImports(source: string): string[] {
     out.push(p);
   };
 
+  const src = source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ') // block comments (may span lines / contain parens)
+    .replace(/\/\/[^\n]*/g, ''); // line comments
+
   // Factored import blocks: import ( … ).
   const blockRe = /\bimport\s*\(([\s\S]*?)\)/g;
   let m: RegExpExecArray | null;
-  while ((m = blockRe.exec(source)) !== null) {
+  while ((m = blockRe.exec(src)) !== null) {
     for (const q of m[1].matchAll(/"([^"]+)"/g)) addPath(q[1]);
   }
   // Single-line imports: import "path" or import alias "path".
   const singleRe = /\bimport\s+(?:[A-Za-z0-9_.]+\s+)?"([^"]+)"/g;
-  while ((m = singleRe.exec(source)) !== null) addPath(m[1]);
+  while ((m = singleRe.exec(src)) !== null) addPath(m[1]);
 
   return out;
 }
