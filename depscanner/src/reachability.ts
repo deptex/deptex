@@ -35,6 +35,13 @@ import {
   evaluateGoSubpackageDemotion,
   evaluateGoAlwaysOnRuntimePromotion,
 } from './reachability-go-preconditions';
+import {
+  type DjangoFeatureSignals,
+  gatherDjangoFeatureSignals,
+  evaluateDjangoFeaturePreconditionDemotion,
+  evaluateDjangoDevOnlyDemotion,
+  evaluateDjangoAlwaysOnRuntimePromotion,
+} from './reachability-django-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -572,6 +579,24 @@ export interface UpdateReachabilityOptions {
    * directly. An unrecognized / non-Go signals object refuses every move.
    */
   goImportSignals?: GoImportSignals;
+  /**
+   * Python/Django framework-mediated reachability signals — the pypi mirror of
+   * the dynamic-framework models plus a Go-style SUBMODULE import gate. Used to
+   * DEMOTE `module`→`unreachable` when a CVE's required feature is provably
+   * absent (a pillow/cryptography submodule the first-party import set never
+   * touches, django.contrib.humanize never referenced, a Windows-only bug, the
+   * h11 parser shadowed by httptools, setuptools' build-time PackageIndex) or
+   * the package is DEV-ONLY (poetry dev groups / Pipfile dev-packages /
+   * requirements-dev.txt), and to PROMOTE always-on request-path CVEs
+   * (django uri_to_iri / response logging / validator ReDoS, pillow WebP decode
+   * on an image-upload surface) to a visible tier on a deployed app.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot`
+   * for the `pypi` ecosystem (and skips the gate otherwise). Tests inject
+   * signals directly. An unrecognized / non-Django signals object refuses
+   * every move.
+   */
+  djangoFeatureSignals?: DjangoFeatureSignals;
 }
 
 /**
@@ -1269,6 +1294,16 @@ export async function updateReachabilityLevels(
     options.goImportSignals ??
     (options.ecosystem === 'golang' ? gatherGoImportSignals(workspaceRoot) : null);
   const goServerReachable = goSignals?.isDeployedHttpServer ?? false;
+  // Python/Django framework-mediated signals — the pypi mirror. Gathered ONCE
+  // per run; only the `pypi` ecosystem is modelled (a non-Django Python app
+  // yields unrecognized signals → the gate is a no-op). Tests inject
+  // `options.djangoFeatureSignals`. `isDeployedWebApp` is the pypi stand-in for
+  // the http-route-entry-point signal (a GraphQL-only Django app may emit 0
+  // detected HTTP routes even though it serves requests).
+  const djangoSignals: DjangoFeatureSignals | null =
+    options.djangoFeatureSignals ??
+    (options.ecosystem === 'pypi' ? gatherDjangoFeatureSignals(workspaceRoot) : null);
+  const djangoDeployed = djangoSignals?.isDeployedWebApp ?? false;
   // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
   // this is a deployed web app, so a CVE in an always-on framework component is
   // genuinely on the request path. Gathered once per run from the already-
@@ -1851,6 +1886,64 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // PYTHON/DJANGO FEATURE-PRECONDITION + DEV-ONLY DEMOTION (pypi mirror of
+      // the Rails/Symfony gates, plus a Go-style SUBMODULE import gate: pypi IS
+      // an explicit-import ecosystem, so what survives at `module` is the
+      // imported-but-unproven middle — and Python imports are per-PACKAGE while
+      // CVEs are scoped to SUBMODULES (`from PIL import Image` keeps ALL of
+      // pillow at `module`, including the ImageFont/PdfParser CVEs the app
+      // provably never loads). Demote-only, runs BEFORE the promotion post-pass
+      // so a demoted finding's `unreachable` is respected by the
+      // `level === 'module'` guard. Fail-safe: unrecognized / truncated /
+      // non-Django signals refuse every demotion.
+      if (djangoSignals && level === 'module') {
+        // 1) Dev-only package (poetry dev groups / Pipfile dev-packages /
+        //    requirements-dev.txt, prod scope wins) — never installed in
+        //    production. Needed despite the explicit-import heuristic: a dev
+        //    tool's own test files import it, so files_importing_count > 0.
+        const djangoDevOnly = evaluateDjangoDevOnlyDemotion({
+          depName,
+          signals: djangoSignals,
+        });
+        if (djangoDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${djangoDevOnly.package} is a dev-scope manifest dependency (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: djangoDevOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          // 2) Feature-precondition: the feature the CVE requires (a pillow /
+          //    cryptography submodule, django.contrib.humanize, Scrapy for the
+          //    brotli path, the h11 parser, setuptools' PackageIndex) is
+          //    provably absent from the scanned project.
+          const djangoDemotion = evaluateDjangoFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            signals: djangoSignals,
+          });
+          if (djangoDemotion.demote) {
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${djangoDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: djangoDemotion.feature,
+              matched_summary_pattern: djangoDemotion.matchedPattern ?? null,
+              demoted_from:
+                details && typeof details === 'object' && typeof details.verdict === 'string'
+                  ? details.verdict
+                  : 'module',
+            };
+          }
+        }
+      }
+
       // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
       // recovery — the mirror image of the feature-precondition DEMOTION gate
       // above). A CVE in framework code that is UNCONDITIONALLY on the request
@@ -1873,9 +1966,10 @@ export async function updateReachabilityLevels(
       //      correctly (demotion returns false → promotion proceeds).
       // Gated on the deployed-web-app signal — >= 1 HTTP-route entry point, OR the
       // Go deployed-HTTP-server signal (a caddy-shaped server routes via its own
-      // module system, so the framework detectors emit 0 routes). A library/CLI
-      // repo (no routes, no server) never gets a promotion.
-      if (level === 'module' && (hasHttpRouteEntryPoint || goServerReachable)) {
+      // module system, so the framework detectors emit 0 routes), OR the Django
+      // deployed-app signal (a GraphQL-only Django app may emit 0 detected
+      // routes). A library/CLI repo (no routes, no server) never gets a promotion.
+      if (level === 'module' && (hasHttpRouteEntryPoint || goServerReachable || djangoDeployed)) {
         const summaryStr = (pdv.summary ?? null) as string | null;
         const wouldDemote =
           (featureSignals
@@ -1903,6 +1997,16 @@ export async function updateReachabilityLevels(
                 depName,
                 summary: summaryStr,
                 signals: goSignals,
+              }).demote
+            : false) ||
+          // Django backstop: refuse to promote a pypi finding whose package is
+          // dev-only or whose required feature is provably absent.
+          (djangoSignals
+            ? evaluateDjangoDevOnlyDemotion({ depName, signals: djangoSignals }).demote ||
+              evaluateDjangoFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: djangoSignals,
               }).demote
             : false);
         if (!wouldDemote) {
@@ -1946,6 +2050,24 @@ export async function updateReachabilityLevels(
                   signals: goSignals,
                 })
               : { promote: false as const };
+          // Django always-on model (5th) — the always-on Django request path +
+          // the upload-gated pillow WebP decoder. Passes the finding's full id
+          // set (osv_id + aliases): PYSEC-2023-175's summary is the literal
+          // string "Summary", so its row matches by advisory ID.
+          const djangoPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            djangoSignals
+              ? evaluateDjangoAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  osvIds: candidateOsvIds,
+                  deployedWebApp: hasHttpRouteEntryPoint || djangoDeployed,
+                  signals: djangoSignals,
+                })
+              : { promote: false as const };
           const chosen = promotion.promote
             ? promotion
             : phpPromotion.promote
@@ -1954,7 +2076,9 @@ export async function updateReachabilityLevels(
                 ? railsPromotion
                 : goPromotion.promote
                   ? goPromotion
-                  : null;
+                  : djangoPromotion.promote
+                    ? djangoPromotion
+                    : null;
           if (chosen && chosen.promote && chosen.promoteTo) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
