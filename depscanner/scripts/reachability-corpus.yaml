@@ -395,3 +395,29 @@ repos:
     # against, confirming the Rails model generalizes. Verified 2026-07-02.
     ref: v4.0.2
     ground_truth_cves: []
+
+  - name: saleor
+    repo_url: https://github.com/saleor/saleor.git
+    ecosystem: pypi
+    # Jun 2023 — Saleor 3.14.0. Real Django (GraphQL-only) e-commerce app; the
+    # DEV TARGET for the Django/pypi framework-mediated model. Its 68 module
+    # dependency-CVEs were hand-triaged (5 promote / ~25 demote / 38 honest
+    # module): the always-on django request path (uri_to_iri, response-log
+    # injection, validator ReDoS) + pillow WebP decode were buried, and the
+    # pillow/cryptography submodule + dev-group + feature-absent CVEs were
+    # over-kept. Poetry manifests, asgi deploy, image uploads.
+    ref: 3.14.0
+    ground_truth_cves: []
+
+  - name: paperless-ngx
+    repo_url: https://github.com/paperless-ngx/paperless-ngx.git
+    ecosystem: pypi
+    # Jul 2023 — paperless-ngx v1.17.0. A SECOND real Django app beside saleor,
+    # chosen deliberately for OPPOSITE signals (the second-app validation the
+    # Go model's gitea catch mandates): Pipfile instead of poetry, a
+    # gunicorn-based deploy, a document-processing pipeline that drives pillow
+    # far more broadly than saleor's product images — so the pillow submodule
+    # demotions must flip to "present"/refuse here if they are genuinely
+    # import-driven rather than overfit to saleor.
+    ref: v1.17.0
+    ground_truth_cves: []

@@ -312,6 +312,29 @@ describe('evaluateDjangoFeaturePreconditionDemotion', () => {
     expect(demote('sqlparse', SQLPARSE_DOS, withSqlparse).demote).toBe(false);
   });
 
+  it('a DEV-ONLY consumer lib does not block a demotion (saleor: dev-scoped debug-toolbar vs sqlparse)', () => {
+    // A proven-dev-only dependency is not evidence about production
+    // reachability — django-debug-toolbar at dev scope can't feed sqlparse in
+    // prod, so the demotion must still fire.
+    const devToolbar = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'django-debug-toolbar']),
+      devDeps: new Set([...djSignals().devDeps, 'django-debug-toolbar']),
+    });
+    expect(demote('sqlparse', SQLPARSE_DOS, devToolbar).demote).toBe(true);
+    // At PROD scope the same lib blocks it.
+    const prodToolbar = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'django-debug-toolbar']),
+    });
+    expect(demote('sqlparse', SQLPARSE_DOS, prodToolbar).demote).toBe(false);
+  });
+
+  it('a DEV-ONLY httptools does not enable the h11 demotion (h11 still parses prod traffic)', () => {
+    const devHttptools = djSignals({
+      devDeps: new Set([...djSignals().devDeps, 'httptools']),
+    });
+    expect(demote('h11', H11_CHUNKED, devHttptools).demote).toBe(false);
+  });
+
   it('demotes the fontTools XXE when fontTools is never driven directly', () => {
     expect(demote('fonttools', FONTTOOLS_XXE).demote).toBe(true);
   });

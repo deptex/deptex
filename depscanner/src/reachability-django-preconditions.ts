@@ -170,8 +170,15 @@ function moduleImported(s: DjangoFeatureSignals, mod: string): boolean {
   return false;
 }
 
-function hasAnyDep(s: DjangoFeatureSignals, names: string[]): boolean {
-  return names.some((n) => s.depUniverse.has(n));
+/**
+ * Any of `names` present at PROD scope. A proven-dev-only dependency is not
+ * evidence about production reachability, in either direction: a dev-scoped
+ * django-debug-toolbar can't feed sqlparse in prod (so it must not BLOCK that
+ * demotion), and a dev-scoped httptools doesn't shadow h11 in prod (so it must
+ * not ENABLE that one).
+ */
+function hasAnyProdDep(s: DjangoFeatureSignals, names: string[]): boolean {
+  return names.some((n) => s.depUniverse.has(n) && !s.devDeps.has(n));
 }
 
 /** A pillow submodule is touched: imported, or its name appears in code. */
@@ -226,7 +233,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     detect: (s) =>
       resolve(
         pillowSubmoduleUsed(s, 'imagefont', ['truetype(']) ||
-          hasAnyDep(s, ['django-simple-captcha', 'captcha', 'pilkit', 'easy-thumbnails']),
+          hasAnyProdDep(s, ['django-simple-captcha', 'captcha', 'pilkit', 'easy-thumbnails']),
         s,
       ),
   },
@@ -256,7 +263,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     owners: ['cryptography'],
     summary: [/pkcs7/i, /pkcs\s*#?\s*7/i],
     detect: (s) =>
-      resolve(textIncludes(s.codeText, ['pkcs7']) || hasAnyDep(s, ['acme', 'josepy']), s),
+      resolve(textIncludes(s.codeText, ['pkcs7']) || hasAnyProdDep(s, ['acme', 'josepy']), s),
   },
   // --- cryptography PKCS12 parsing (owner: cryptography). ---
   {
@@ -264,7 +271,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     owners: ['cryptography'],
     summary: [/pkcs12/i, /pkcs\s*#?\s*12/i],
     detect: (s) =>
-      resolve(textIncludes(s.codeText, ['pkcs12']) || hasAnyDep(s, ['requests-pkcs12']), s),
+      resolve(textIncludes(s.codeText, ['pkcs12']) || hasAnyProdDep(s, ['requests-pkcs12']), s),
   },
   // --- cryptography SSH-certificate loaders (owner: cryptography). The
   //     load_ssh_* serialization APIs; SSH client libs are the transitive
@@ -277,7 +284,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     detect: (s) =>
       resolve(
         textIncludes(s.codeText, ['load_ssh', 'ssh_certificate', 'sshcertificate']) ||
-          hasAnyDep(s, ['paramiko', 'asyncssh', 'fabric', 'sshtunnel']),
+          hasAnyProdDep(s, ['paramiko', 'asyncssh', 'fabric', 'sshtunnel']),
         s,
       ),
   },
@@ -288,7 +295,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     feature: 'brotli-scrapy-consumer',
     owners: ['brotli', 'brotlicffi'],
     summary: [/scrapy/i],
-    detect: (s) => resolve(hasAnyDep(s, ['scrapy']), s),
+    detect: (s) => resolve(hasAnyProdDep(s, ['scrapy']), s),
   },
   // --- h11 fallback parser shadowed (owner: h11). uvicorn prefers httptools
   //     for HTTP parsing when installed; h11's malformed-chunked-encoding bug
@@ -301,8 +308,8 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     summary: [/chunked/i, /malformed/i],
     detect: (s) =>
       resolve(
-        !hasAnyDep(s, ['httptools']) ||
-          hasAnyDep(s, ['hypercorn']) ||
+        !hasAnyProdDep(s, ['httptools']) ||
+          hasAnyProdDep(s, ['hypercorn']) ||
           textIncludes(s.codeText, ['h11']),
         s,
       ),
@@ -317,7 +324,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     owners: ['sqlparse'],
     summary: [/denial of service/i, /nested list/i, /formatting/i],
     detect: (s) =>
-      resolve(moduleImported(s, 'sqlparse') || hasAnyDep(s, ['django-debug-toolbar']), s),
+      resolve(moduleImported(s, 'sqlparse') || hasAnyProdDep(s, ['django-debug-toolbar']), s),
   },
   // --- fontTools XXE (owner: fonttools). The XXE vector is fontTools' XML/TTX
   //     font handling — it requires the app to feed attacker fonts through the
