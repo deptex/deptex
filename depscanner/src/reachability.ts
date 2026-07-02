@@ -29,6 +29,12 @@ import {
   evaluateRailsDevOnlyDemotion,
   evaluateRailsAlwaysOnRuntimePromotion,
 } from './reachability-rails-preconditions';
+import {
+  type GoImportSignals,
+  gatherGoImportSignals,
+  evaluateGoSubpackageDemotion,
+  evaluateGoAlwaysOnRuntimePromotion,
+} from './reachability-go-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -553,6 +559,19 @@ export interface UpdateReachabilityOptions {
    * directly. An unrecognized / non-Rails signals object refuses every move.
    */
   railsFeatureSignals?: RailsFeatureSignals;
+  /**
+   * Go framework-mediated reachability signals — the Go-module mirror of the
+   * dynamic-framework models, but keyed on the PRECISE subpackage import graph.
+   * Used to DEMOTE `module`→`unreachable` when a CVE's affected subpackage is
+   * provably not imported (x/crypto/ssh on a non-SSH server; x/net/html on a
+   * server that parses no HTML) and to PROMOTE always-on request-path CVEs
+   * (x/net/http2 on a deployed HTTP/2 server) to a visible tier.
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `golang` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Go signals object refuses every move.
+   */
+  goImportSignals?: GoImportSignals;
 }
 
 /**
@@ -1241,6 +1260,15 @@ export async function updateReachabilityLevels(
   const railsSignals: RailsFeatureSignals | null =
     options.railsFeatureSignals ??
     (options.ecosystem === 'gem' ? gatherRailsFeatureSignals(workspaceRoot) : null);
+  // Go framework-mediated signals — the Go-module mirror, keyed on the PRECISE
+  // subpackage import graph (see reachability-go-preconditions.ts). Gathered ONCE
+  // per run; only the `golang` ecosystem is modelled. `isDeployedHttpServer` is
+  // the Go stand-in for the http-route-entry-point signal (a caddy-shaped server
+  // routes via its own module system, so the framework detectors emit 0 routes).
+  const goSignals: GoImportSignals | null =
+    options.goImportSignals ??
+    (options.ecosystem === 'golang' ? gatherGoImportSignals(workspaceRoot) : null);
+  const goServerReachable = goSignals?.isDeployedHttpServer ?? false;
   // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
   // this is a deployed web app, so a CVE in an always-on framework component is
   // genuinely on the request path. Gathered once per run from the already-
@@ -1790,6 +1818,39 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // GO SUBPACKAGE-IMPORT DEMOTION (the Go-module mirror of the Rails/Symfony
+      // feature-precondition gate, but PROVABLE via the import graph rather than a
+      // summary heuristic). Applies to ANY `golang` module finding: the classifier
+      // floors every imported Go module at `module` (golang is not an
+      // EXPLICIT_IMPORT_ECOSYSTEM — its tree-sitter resolution is per-module, so
+      // importing ANY subpackage keeps the whole module at `module`). Here we split
+      // that using the exact subpackage import set: a CVE whose affected subpackage
+      // (x/crypto/ssh, x/net/html) is provably not imported is genuinely
+      // `unreachable`. Demote-only, runs BEFORE the promotion post-pass so a demoted
+      // finding's `unreachable` is respected by the `level === 'module'` guard.
+      // Fail-safe: unrecognized / truncated / non-Go signals refuse every demotion.
+      if (goSignals && level === 'module') {
+        const goDemotion = evaluateGoSubpackageDemotion({
+          depName,
+          summary: (pdv.summary ?? null) as string | null,
+          signals: goSignals,
+        });
+        if (goDemotion.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `subpackage_not_imported: ${goDemotion.subpackage} is not imported by any first-party source file`,
+            scope: 'feature_precondition_absent',
+            verdict: 'go_subpackage_not_imported',
+            feature: goDemotion.subpackage,
+            matched_summary_pattern: goDemotion.matchedPattern ?? null,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        }
+      }
+
       // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
       // recovery — the mirror image of the feature-precondition DEMOTION gate
       // above). A CVE in framework code that is UNCONDITIONALLY on the request
@@ -1810,9 +1871,11 @@ export async function updateReachabilityLevels(
       //      re-evaluate it here and REFUSE to promote anything it would
       //      silence. This also handles "feature present → genuinely reachable"
       //      correctly (demotion returns false → promotion proceeds).
-      // Gated on the deployed-web-app signal (>= 1 HTTP-route entry point); a
-      // library/CLI repo (0 routes) never gets a promotion.
-      if (level === 'module' && hasHttpRouteEntryPoint) {
+      // Gated on the deployed-web-app signal — >= 1 HTTP-route entry point, OR the
+      // Go deployed-HTTP-server signal (a caddy-shaped server routes via its own
+      // module system, so the framework detectors emit 0 routes). A library/CLI
+      // repo (no routes, no server) never gets a promotion.
+      if (level === 'module' && (hasHttpRouteEntryPoint || goServerReachable)) {
         const summaryStr = (pdv.summary ?? null) as string | null;
         const wouldDemote =
           (featureSignals
@@ -1831,6 +1894,15 @@ export async function updateReachabilityLevels(
                 depName,
                 summary: summaryStr,
                 signals: railsSignals,
+              }).demote
+            : false) ||
+          // Go backstop: refuse to promote a finding whose affected subpackage is
+          // provably not imported (its demotion already ran above).
+          (goSignals
+            ? evaluateGoSubpackageDemotion({
+                depName,
+                summary: summaryStr,
+                signals: goSignals,
               }).demote
             : false);
         if (!wouldDemote) {
@@ -1862,13 +1934,27 @@ export async function updateReachabilityLevels(
                   signals: railsSignals,
                 })
               : { promote: false as const };
+          // Go always-on model (4th) — the x/net/http2 server stack on a deployed
+          // Go HTTP server. Gated on its OWN `isDeployedHttpServer` signal (carried
+          // inside goSignals), not `hasHttpRouteEntryPoint`, which is 0 for a
+          // module-routed server.
+          const goPromotion =
+            !promotion.promote && !phpPromotion.promote && !railsPromotion.promote && goSignals
+              ? evaluateGoAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  signals: goSignals,
+                })
+              : { promote: false as const };
           const chosen = promotion.promote
             ? promotion
             : phpPromotion.promote
               ? phpPromotion
               : railsPromotion.promote
                 ? railsPromotion
-                : null;
+                : goPromotion.promote
+                  ? goPromotion
+                  : null;
           if (chosen && chosen.promote && chosen.promoteTo) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
