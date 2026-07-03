@@ -99,7 +99,9 @@ export async function runTaskAgent(
   });
 
   const projectDir = repoInfo.packageJsonPath ? path.join(workDir, repoInfo.packageJsonPath) : workDir;
-  const repoRootListing = await safeList(workDir);
+  // Seed the brief with the PROJECT dir listing (the agent's tools + shell are
+  // rooted there), not the repo root — so its first paths land in the right place.
+  const repoRootListing = await safeList(projectDir);
 
   const state: AgentRunState = { prOpened: false, terminal: false, progressCalls: 0 };
   const toolDeps: AgentToolDeps = {

@@ -66,13 +66,26 @@ export interface AgentToolDeps {
   state: AgentRunState;
 }
 
-/** Confine a relative path to the clone — no traversal out of repoRoot. */
-function resolveWithin(root: string, relPath: string): { ok: true; full: string } | { ok: false; error: string } {
-  const full = path.resolve(root, relPath);
-  if (full !== root && !full.startsWith(root + path.sep)) {
+/**
+ * Resolve a tool path against the project directory (so a monorepo agent's
+ * `package.json` means the project's manifest, matching where run_command runs),
+ * while still confining to the clone root — no traversal out of the repository.
+ */
+function resolveWithin(
+  resolveRoot: string,
+  confineRoot: string,
+  relPath: string,
+): { ok: true; full: string } | { ok: false; error: string } {
+  const full = path.resolve(resolveRoot, relPath);
+  if (full !== confineRoot && !full.startsWith(confineRoot + path.sep)) {
     return { ok: false, error: 'path is outside the repository' };
   }
   return { ok: true, full };
+}
+
+/** Repo-root-relative POSIX path for git pathspecs. */
+function toGitPath(repoRoot: string, full: string): string {
+  return path.relative(repoRoot, full).split(path.sep).join('/');
 }
 
 /** Strip the installation token (and Bearer-shaped secrets) from any surfaced output. */
@@ -145,7 +158,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
     description: 'Read a UTF-8 text file from the repository (relative path). Returns file contents.',
     inputSchema: z.object({ path: z.string().describe('repo-relative file path') }),
     execute: async ({ path: rel }) => {
-      const r = resolveWithin(repoRoot, rel);
+      const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
       try {
         const stat = await fsp.stat(r.full);
@@ -162,7 +175,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
     description: 'List the entries of a repository directory (relative path; "." for the repo root).',
     inputSchema: z.object({ path: z.string().describe('repo-relative directory path') }),
     execute: async ({ path: rel }) => {
-      const r = resolveWithin(repoRoot, rel);
+      const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
       try {
         const entries = await fsp.readdir(r.full, { withFileTypes: true });
@@ -187,7 +200,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
       const target = glob ? glob : '.';
       const { output } = await runShell(
         `grep -rInE --exclude-dir=node_modules --exclude-dir=.git -- ${JSON.stringify(pattern)} ${JSON.stringify(target)}`,
-        repoRoot,
+        projectDir,
       );
       const lines = output.split('\n').filter(Boolean);
       if (!lines.length) return 'no matches';
@@ -204,27 +217,31 @@ export function buildAgentTools(deps: AgentToolDeps) {
       content: z.string().describe('the complete new file contents'),
     }),
     execute: async ({ path: rel, content }) => {
-      const r = resolveWithin(repoRoot, rel);
+      const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
       try {
         await fsp.mkdir(path.dirname(r.full), { recursive: true });
         await fsp.writeFile(r.full, content, 'utf-8');
         state.progressCalls++;
-        // Surface the working-tree diff for this file as a FileDiffCard. For a
-        // secret finding the removed line IS the plaintext credential, so we
-        // never render the diff — token-scrub covers command output, not diffs.
+        // Surface the working-tree diff for this file as a FileDiffCard. Use the
+        // repo-root-relative path for git, and `git add -N` (intent-to-add) so a
+        // brand-new file still shows a diff (plain `git diff` skips untracked).
+        // For a secret finding the removed line IS the plaintext credential, so
+        // we never render the diff — token-scrub covers command output, not diffs.
+        const gitRel = toGitPath(repoRoot, r.full);
         let diff: string | undefined;
         if (!redactDiffs) {
-          const { output } = await runShell(`git diff -- ${JSON.stringify(rel)}`, repoRoot);
+          await runShell(`git add -N -- ${JSON.stringify(gitRel)}`, repoRoot);
+          const { output } = await runShell(`git diff -- ${JSON.stringify(gitRel)}`, repoRoot);
           const trimmed = scrubSecrets(output, deps.installationToken).trim();
           diff = trimmed ? trimmed.slice(0, 6000) : undefined;
         }
         await step({
           icon: 'edit',
-          label: `Edited ${rel}`,
+          label: `Edited ${gitRel}`,
           diff: redactDiffs ? undefined : diff,
         });
-        return `wrote ${rel} (${content.split('\n').length} lines)`;
+        return `wrote ${gitRel} (${content.split('\n').length} lines)`;
       } catch (e: any) {
         return `write failed: ${e?.message ?? 'unknown error'}`;
       }

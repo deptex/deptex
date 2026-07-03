@@ -51,9 +51,13 @@ export function buildBrief(input: BriefInput): string {
   lines.push(`## Repository`);
   lines.push(`Project: ${input.projectName}`);
   if (input.projectSubdir) {
-    lines.push(`The project lives in the "${input.projectSubdir}" subdirectory — run installs and tests there.`);
+    lines.push(
+      `The project is the "${input.projectSubdir}" subdirectory of the repo. Your file paths and commands are all relative to it — use "package.json", not "${input.projectSubdir}/package.json" (you can still reach the rest of the repo with "../" if you need to).`,
+    );
+  } else {
+    lines.push('Your file paths and commands are relative to the repository root.');
   }
-  lines.push(`Repo root contents:`);
+  lines.push(`Project directory contents:`);
   lines.push(input.repoRootListing);
   lines.push('');
   lines.push(`Start by investigating, then apply the smallest safe fix, verify it, and open the pull request.`);
