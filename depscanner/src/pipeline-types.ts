@@ -135,4 +135,16 @@ export interface PipelineContext {
    * coverage.
    */
   astParsedSuccessfully: boolean;
+
+  /**
+   * Number of HTTP-route entry points framework detection found this run
+   * (`entryPointType === 'http_route'`). Set by usage_extraction from the
+   * already-detected entry points (NOT re-detected). Read by the reachability
+   * step as the "deployed web app" signal for the always-on framework-runtime
+   * promotion: >= 1 HTTP route ⇒ the framework's request-path runtime is live,
+   * so a CVE in an always-on component (servlet-container request parser, MVC
+   * resource handler) is genuinely reachable. 0 ⇒ a library/CLI repo, and the
+   * promotion is disabled (fail-safe). Defaults to 0.
+   */
+  httpEntryPointCount: number;
 }

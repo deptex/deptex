@@ -200,6 +200,13 @@ export async function doReachabilityAndEpd(
     // currently stay at `module`. Excluded: gem (Rails autoload),
     // maven/golang/cargo/nuget (tree-sitter import resolution is partial).
     ecosystem: jobEcosystem,
+    // Always-on framework-runtime promotion gate: the count of HTTP-route
+    // entry points framework detection found this run (set by
+    // usage_extraction; NOT re-detected). `> 0` marks a deployed web app, the
+    // precondition for promoting a `module` finding whose CVE lives in
+    // always-on framework code (servlet-container request parser, MVC resource
+    // handler) to a visible tier.
+    httpEntryPointCount: ctx.httpEntryPointCount,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);

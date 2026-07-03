@@ -82,6 +82,7 @@ export async function runPipeline(
     projectDepsCount: 0,
     newDepsToPopulate: [],
     astParsedSuccessfully: false,
+    httpEntryPointCount: 0,
   };
 
   try {

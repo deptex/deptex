@@ -68,6 +68,7 @@ const IMPORT_TO_DISTRIBUTION: Record<string, string> = {
   dateutil: 'python-dateutil',
   dotenv: 'python-dotenv',
   jose: 'python-jose',
+  jwt: 'PyJWT',
   magic: 'python-magic',
   memcache: 'python-memcached',
   mysql: 'mysql-connector-python',
