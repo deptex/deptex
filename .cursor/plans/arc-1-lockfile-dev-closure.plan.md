@@ -78,9 +78,30 @@ The `environment` expression is `source==='dependencies' ? prod : (source==='dev
 3. Ruby BFS: is the Gemfile.lock `specs:` indentation parse robust enough, or reuse the existing `parseGemDirectSet` (parsers.ts:146-181) machinery?
 4. Do the target apps actually have committed lockfiles at the scanned pins? (Validate before over-investing — check saleor/paperless/symfony-demo/discourse/mastodon run dirs.)
 
+## REVIEW findings (adversarial subagents)
+
+### Verified load-bearing fact (grounds all safety findings)
+`reachability.ts:1449-1456`: when a dep is `devScoped` AND no taint flow was found, the classifier HARD-SETS `level='unreachable'` (verdict `dev_scope_unreachable`) and SKIPS the import/module-floor ladder below it. So a wrongly-dev-marked dep is HIDDEN even if it has first-party importers — only an independent taint flow survives. **The subtraction/BFS completeness is the ONLY safety guard for transitives** (the deps-sync `source==='dependencies'` short-circuit protects only DIRECT prod deps; every transitive is `source:'transitive'`). Safety bar is therefore high.
+
+### Safety reviewer — VERDICT: REVISE. Blockers + must-fixes to fold in before implementing:
+- **F1 (BLOCKER) poetry dev-group predicate:** poetry group names carry NO dev/prod semantics — a group can be prod (`worker`/`celery`/`production`, installed via `poetry install --with`). Treating ALL `[tool.poetry.group.*]` as dev roots would BFS a prod subtree into `devOnly` → silence-FN. FIX: dev-group ALLOWLIST (`dev`,`test`,`tests`,`lint`,`docs`,`typing`,`style`,`ci`,`linting`,`dev-dependencies`); any other/ambiguous group → treat as PROD (don't demote). Fixture: a non-dev poetry group's subtree is NOT demoted.
+- **F2 (BLOCKER) composer full-name matching:** the SBOM splits composer deps into bare `name` + `namespace`; `composer.lock` names are full `vendor/name`. Match on reconstructed `${namespace}/${name}` (lowercased, as reachability.ts:1485) on BOTH closure build + caller — never bare name (cross-vendor collision silences a prod pkg). Fixture: two same-named pkgs different vendors, one dev/one prod → only dev-vendor demoted.
+- **F3 (MUST) edge-graph completeness refusal:** a SILENTLY incomplete `specs:`/`[package.dependencies]` parse that drops a PROD edge (indentation quirk) → node lands in `devReach\prodReach` → silence-FN. FIX: invariant — every package listed in the lock MUST be in `prodReach ∪ devReach`; any unreached listed package ⇒ edge map incomplete ⇒ `recognized=false` (refuse). Reuse `parseGemDirectSet` (parsers.ts:146-181) over a fresh indentation parser.
+- **F4 (MUST) correct the safety claim:** the plan's "prod wins via deps-sync short-circuit" guards only DIRECT deps; transitives have NO backstop. Reword safety #3; the subtraction's COMPLETENESS is the sole guard. Belt-and-suspenders: never `devScoped` a dep sharing a `dependency_version_edges` prod-reachable parent (mirror `transitive_of_reachable`, reachability.ts:1140+).
+- **F5 (MUST) one canonical normalizer** `canon(ecosystem,name)` applied to devNames, prodNames, AND the caller match. Python = full PEP503 (`re.sub(/[-_.]+/,'-').toLowerCase()`, strip `[extras]`) — current code only `.toLowerCase()`s; asymmetry leaves a prod name un-subtracted. composer = lowercased `vendor/name`; npm = scoped name whole.
+- **F6 (MUST) pipenv `develop` is human-authored, not a computed closure:** a runtime dep mis-put in `[dev-packages]` (not also in `default`) → silenced despite prod imports. FIX: for pipenv, only demote packages with ZERO first-party importers (`files_importing_count===0`; pypi is EXPLICIT_IMPORT so the tree-sitter signal exists). Same guard worth applying to poetry.
+- **F7 (MUST) second-app validation per ecosystem** ([[feedback_second_app_validation]]): a 2nd poetry app with a non-dev optional group, a pipenv app with a mis-declared runtime dep, a composer app with a cross-vendor same-name pair. Gate must assert on TRANSITIVE prod deps specifically, not just aggregate count.
+- **F8 (SHOULD)** exclude `FRAMEWORK_RUNTIME_PACKAGES` (reachability.ts:675) from the transitive dev closure (a framework model's non-taint heuristic could be overridden by a dev hard-hide).
+- **F9 (SHOULD)** composer `replace`/`provide`: don't demote a name that appears as a `provide`/`replace` target in `packages[]`.
+- **F10 (NIT)** name-keyed demotion assumes one version per name; assert/handle.
+- **Credit:** npm is a SAFE NO-OP (`collectNpmLockfileDevSet` trusts strict `dev:true` = dev-everywhere; drop npm from Arc 1). composer arrays are disjoint + prod-preferred = safest arm (given F2). Family-A-before-B sequencing is the right risk order.
+
+### Scope reviewer — [pending]
+### Ops/correctness reviewer — [pending]
+
 ## Progress
 - [x] PLAN (this doc)
-- [ ] REVIEW (≥3 adversarial subagents)
+- [~] REVIEW (safety done = REVISE w/ 2 blockers; scope + ops pending)
 - [ ] FIX plan per review
 - [ ] IMPLEMENT (dev-closure.ts + hook + tests)
 - [ ] VALIDATE (rescans + tripwire + rescore)
