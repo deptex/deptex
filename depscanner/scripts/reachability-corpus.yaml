@@ -335,7 +335,136 @@ repos:
     # Dec 2021 — pre-v2.5, transitive tree has known CVEs in golang.org/x/*
     # and indirect deps that have since been patched.
     ref: v2.4.6
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2022-21698
+        expected_reachability: function
+        source: "github.com/prometheus/client_golang — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-44005
+        expected_reachability: function
+        source: "github.com/smallstep/certificates — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-66406
+        expected_reachability: unreachable
+        source: "github.com/smallstep/certificates — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-30836
+        expected_reachability: unreachable
+        source: "github.com/smallstep/certificates — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2021-43565
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2022-27191
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2022-30636
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2023-48795
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2024-45337
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-22869
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-47914
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-58181
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39827
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39828
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39829
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39830
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39831
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39832
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39833
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39834
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39835
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-42508
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-46595
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-46597
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-46598
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2022-27664
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2022-41717
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2022-41723
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2023-39325
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2023-3978
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2023-44487
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2023-45288
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-22870
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-22872
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2025-58190
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-25680
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-25681
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-27136
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-33814
+        expected_reachability: function
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-39821
+        expected_reachability: module
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-42502
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2026-42506
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
+      - id: CVE-2024-24786
+        expected_reachability: module
+        source: "google.golang.org/protobuf — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/caddy-v2.4.6.yaml + ledger Iteration 25"
 
   - name: mlflow
     repo_url: https://github.com/mlflow/mlflow.git
@@ -382,7 +511,187 @@ repos:
     # import-gate is genuinely import-driven (ssh/html stay `module` here, not
     # demoted) rather than overfit to caddy. Verified 2026-07-02.
     ref: v1.17.0
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2026-32952
+        expected_reachability: unreachable
+        source: "github.com/Azure/go-ntlmssp — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-31022
+        expected_reachability: unreachable
+        source: "github.com/blevesearch/bleve/v2 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: GHSA-vrw8-fxc6-2r93
+        expected_reachability: unreachable
+        source: "github.com/go-chi/chi/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-44740
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-billy/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-44973
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-billy/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-49568
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-49569
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-21613
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-21614
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-25934
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-33762
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-34165
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-41506
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-45022
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-45570
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-45571
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: GHSA-w5pp-99ch-qj29
+        expected_reachability: unreachable
+        source: "github.com/go-git/go-git/v5 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2024-51744
+        expected_reachability: function
+        source: "github.com/golang-jwt/jwt/v4 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-30204
+        expected_reachability: data_flow
+        source: "github.com/golang-jwt/jwt/v4 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2024-6104
+        expected_reachability: module
+        source: "github.com/hashicorp/go-retryablehttp — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2024-0406
+        expected_reachability: unreachable
+        source: "github.com/mholt/archiver/v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-3445
+        expected_reachability: unreachable
+        source: "github.com/mholt/archiver/v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-11579
+        expected_reachability: unreachable
+        source: "github.com/nwaples/rardecode — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-65637
+        expected_reachability: unreachable
+        source: "github.com/sirupsen/logrus — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-58058
+        expected_reachability: unreachable
+        source: "github.com/ulikunitz/xz — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-33343
+        expected_reachability: unreachable
+        source: "go.etcd.io/etcd/v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-33413
+        expected_reachability: unreachable
+        source: "go.etcd.io/etcd/v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-44283
+        expected_reachability: unreachable
+        source: "go.etcd.io/etcd/v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-2303
+        expected_reachability: unreachable
+        source: "go.mongodb.org/mongo-driver — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-30636
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-48795
+        expected_reachability: function
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2024-45337
+        expected_reachability: function
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-22869
+        expected_reachability: function
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-47914
+        expected_reachability: unreachable
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-58181
+        expected_reachability: function
+        source: "golang.org/x/crypto — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-27664
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-41717
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-41721
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-41723
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-39325
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-3978
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-44487
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2023-45288
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-22870
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-22872
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-58190
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-25680
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-25681
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-27136
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-33814
+        expected_reachability: unreachable
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-39821
+        expected_reachability: module
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-42502
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-42506
+        expected_reachability: data_flow
+        source: "golang.org/x/net — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2025-22868
+        expected_reachability: unreachable
+        source: "golang.org/x/oauth2 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-39824
+        expected_reachability: unreachable
+        source: "golang.org/x/sys — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-32149
+        expected_reachability: data_flow
+        source: "golang.org/x/text — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2026-33186
+        expected_reachability: unreachable
+        source: "google.golang.org/grpc — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: GHSA-m425-mq94-257g
+        expected_reachability: unreachable
+        source: "google.golang.org/grpc — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2024-24786
+        expected_reachability: unreachable
+        source: "google.golang.org/protobuf — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
+      - id: CVE-2022-28948
+        expected_reachability: unreachable
+        source: "gopkg.in/yaml.v3 — agent-labelled + adversarially verified 2026-07-02; evidence in scripts/labels/gitea-v1.17.0.yaml + ledger Iteration 25"
 
   - name: mastodon
     repo_url: https://github.com/mastodon/mastodon.git
@@ -394,7 +703,418 @@ repos:
     # rails-ujs — Mastodon is a React SPA) on a repo it was not developed
     # against, confirming the Rails model generalizes. Verified 2026-07-02.
     ref: v4.0.2
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2024-47889
+        expected_reachability: unreachable
+        source: "actionmailer — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22792
+        expected_reachability: data_flow
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22795
+        expected_reachability: data_flow
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-28362
+        expected_reachability: data_flow
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-28103
+        expected_reachability: unreachable
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-41128
+        expected_reachability: data_flow
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-47887
+        expected_reachability: unreachable
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-54133
+        expected_reachability: module
+        source: "actionpack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-47888
+        expected_reachability: unreachable
+        source: "actiontext — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-23913
+        expected_reachability: unreachable
+        source: "actionview — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33168
+        expected_reachability: function
+        source: "actionview — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-44566
+        expected_reachability: data_flow
+        source: "activerecord — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22794
+        expected_reachability: unreachable
+        source: "activerecord — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-55193
+        expected_reachability: module
+        source: "activerecord — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-26144
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-24293
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33173
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33174
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33195
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33202
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33658
+        expected_reachability: unreachable
+        source: "activestorage — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22796
+        expected_reachability: module
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-28120
+        expected_reachability: unreachable
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-38037
+        expected_reachability: unreachable
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33169
+        expected_reachability: module
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33170
+        expected_reachability: module
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33176
+        expected_reachability: module
+        source: "activesupport — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-35611
+        expected_reachability: data_flow
+        source: "addressable — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-14762
+        expected_reachability: unreachable
+        source: "aws-sdk-s3 — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-33306
+        expected_reachability: unreachable
+        source: "bcrypt — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54904
+        expected_reachability: module
+        source: "concurrent-ruby — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54905
+        expected_reachability: module
+        source: "concurrent-ruby — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54906
+        expected_reachability: module
+        source: "concurrent-ruby — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-44312
+        expected_reachability: module
+        source: "css_parser — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-32700
+        expected_reachability: data_flow
+        source: "devise — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-40295
+        expected_reachability: unreachable
+        source: "devise — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-8796
+        expected_reachability: unreachable
+        source: "devise-two-factor — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-34246
+        expected_reachability: data_flow
+        source: "doorkeeper — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-25765
+        expected_reachability: module
+        source: "faraday — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54297
+        expected_reachability: module
+        source: "faraday — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-43380
+        expected_reachability: module
+        source: "fugit — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22799
+        expected_reachability: module
+        source: "globalid — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-51774
+        expected_reachability: function
+        source: "json-jwt — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-45363
+        expected_reachability: unreachable
+        source: "jwt — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23514
+        expected_reachability: data_flow
+        source: "loofah — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23515
+        expected_reachability: unreachable
+        source: "loofah — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23516
+        expected_reachability: data_flow
+        source: "loofah — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23476
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-353f-x4gh-cqq8
+        expected_reachability: data_flow
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-5prr-v3j2-97mh
+        expected_reachability: module
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-5v8h-3h3q-446p
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-5w6v-399v-w3cc
+        expected_reachability: data_flow
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-8678-w3jw-xfc2
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-9cv2-cfxc-v4v2
+        expected_reachability: module
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-c4rq-3m3g-8wgx
+        expected_reachability: module
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-mrxw-mxhj-p664
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-p67v-3w7g-wjg7
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-phwj-rprq-35pp
+        expected_reachability: module
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-pxvg-2qj5-37jq
+        expected_reachability: data_flow
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-r95h-9x8f-r3f7
+        expected_reachability: module
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-v2fc-qm4h-8hqv
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-vvfq-8hwr-qm4m
+        expected_reachability: function
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-wfpw-mmfh-qq69
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-wjv4-x9w8-wm3h
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-wx95-c6cv-8532
+        expected_reachability: function
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-xc9x-jj77-9p9j
+        expected_reachability: unreachable
+        source: "nokogiri — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54500
+        expected_reachability: data_flow
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54502
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54592
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54896
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54897
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54898
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54899
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54900
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54901
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54902
+        expected_reachability: unreachable
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-54903
+        expected_reachability: data_flow
+        source: "oj — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-cvp8-5r8g-fhvq
+        expected_reachability: function
+        source: "omniauth-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: GHSA-hw46-3hmr-x9xv
+        expected_reachability: function
+        source: "omniauth-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-22626
+        expected_reachability: function
+        source: "pghero — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-40175
+        expected_reachability: data_flow
+        source: "puma — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-21647
+        expected_reachability: data_flow
+        source: "puma — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-45614
+        expected_reachability: data_flow
+        source: "puma — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-47736
+        expected_reachability: unreachable
+        source: "puma — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-47737
+        expected_reachability: unreachable
+        source: "puma — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-44570
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-44571
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-44572
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-27530
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-27539
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-25126
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-26141
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-26146
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-25184
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-27111
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-27610
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-32441
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-46727
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-59830
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-61770
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-61771
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-61772
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-61780
+        expected_reachability: module
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-61919
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-22860
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-25500
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-26961
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34230
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34763
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34785
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34786
+        expected_reachability: unreachable
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34826
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34829
+        expected_reachability: data_flow
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34830
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2026-34831
+        expected_reachability: function
+        source: "rack — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23517
+        expected_reachability: data_flow
+        source: "rails-html-sanitizer — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23518
+        expected_reachability: unreachable
+        source: "rails-html-sanitizer — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23519
+        expected_reachability: unreachable
+        source: "rails-html-sanitizer — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2022-23520
+        expected_reachability: unreachable
+        source: "rails-html-sanitizer — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-35176
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-39908
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-41123
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-41946
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-43398
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-49761
+        expected_reachability: function
+        source: "rexml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-45409
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-25291
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-25292
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-25293
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-54572
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-66567
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2025-66568
+        expected_reachability: function
+        source: "ruby-saml — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-23627
+        expected_reachability: unreachable
+        source: "sanitize — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-36823
+        expected_reachability: data_flow
+        source: "sanitize — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-26141
+        expected_reachability: function
+        source: "sidekiq — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2023-46950
+        expected_reachability: function
+        source: "sidekiq-unique-jobs — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
+      - id: CVE-2024-25122
+        expected_reachability: function
+        source: "sidekiq-unique-jobs — agent-labelled + adversarially verified 2026-07-02 (all 12 groups upheld); evidence in scripts/labels/mastodon-v4.0.2.yaml + ledger Iteration 26"
 
   - name: saleor
     repo_url: https://github.com/saleor/saleor.git
