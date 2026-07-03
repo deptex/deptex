@@ -42,6 +42,12 @@ import {
   evaluateDjangoDevOnlyDemotion,
   evaluateDjangoAlwaysOnRuntimePromotion,
 } from './reachability-django-preconditions';
+import {
+  type LaravelFeatureSignals,
+  gatherLaravelFeatureSignals,
+  evaluateLaravelFeaturePreconditionDemotion,
+  evaluateLaravelAlwaysOnRuntimePromotion,
+} from './reachability-laravel-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -597,6 +603,23 @@ export interface UpdateReachabilityOptions {
    * every move.
    */
   djangoFeatureSignals?: DjangoFeatureSignals;
+  /**
+   * Laravel framework-mediated reachability signals — a SECOND composer-ecosystem
+   * model beside `symfonyFeatureSignals` (a Laravel app carries no
+   * symfony/framework-bundle, so the Symfony model does not recognize it). Used to
+   * DEMOTE `module`→`unreachable` when a laravel/framework CVE's required feature
+   * is provably absent (no signed-URL API anywhere) and to PROMOTE always-on
+   * request-path CVEs to a visible tier when the feature is present (signed URLs
+   * in use → signed-URL path-confusion; file-upload validation in use →
+   * file-validation bypass). Every row is feature-gated because the same
+   * laravel/framework CVE is reachable on one app and not another (monica uses
+   * signed URLs, koel does not).
+   *
+   * When omitted, the classifier gathers signals itself from `workspaceRoot` for
+   * the `composer` ecosystem (and skips the gate otherwise). Tests inject signals
+   * directly. An unrecognized / non-Laravel signals object refuses every move.
+   */
+  laravelFeatureSignals?: LaravelFeatureSignals;
 }
 
 /**
@@ -1304,6 +1327,14 @@ export async function updateReachabilityLevels(
     options.djangoFeatureSignals ??
     (options.ecosystem === 'pypi' ? gatherDjangoFeatureSignals(workspaceRoot) : null);
   const djangoDeployed = djangoSignals?.isDeployedWebApp ?? false;
+  // Laravel framework-mediated signals — a SECOND composer-ecosystem model beside
+  // `symfonySignals` (a Laravel app carries no symfony/framework-bundle, so the
+  // Symfony model's `recognized` is false there). Gathered ONCE per run for the
+  // composer ecosystem; a non-Laravel composer app yields unrecognized signals →
+  // the gate is a no-op. Tests inject `options.laravelFeatureSignals`.
+  const laravelSignals: LaravelFeatureSignals | null =
+    options.laravelFeatureSignals ??
+    (options.ecosystem === 'composer' ? gatherLaravelFeatureSignals(workspaceRoot) : null);
   // Always-on framework-runtime PROMOTION gate. `> 0` HTTP-route entry points ⇒
   // this is a deployed web app, so a CVE in an always-on framework component is
   // genuinely on the request path. Gathered once per run from the already-
@@ -1808,6 +1839,34 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // LARAVEL FEATURE-PRECONDITION DEMOTION (a SECOND composer model beside the
+      // Symfony block above — a Laravel app carries no symfony/framework-bundle, so
+      // the Symfony model's `recognized` is false there). Demotes a laravel/framework
+      // `module` finding to `unreachable` when its CVE's required feature is provably
+      // ABSENT (no signed-URL API anywhere → GHSA-crmm unreachable, as on koel). The
+      // composer-generic dev-only demotion already ran in the Symfony block. Runs
+      // BEFORE the always-on promotion post-pass so a demoted finding's `unreachable`
+      // is respected by the `level === 'module'` promotion guard. Fail-safe:
+      // unrecognized / non-Laravel signals refuse every demotion.
+      if (laravelSignals && level === 'module') {
+        const laravelDemotion = evaluateLaravelFeaturePreconditionDemotion({
+          depName,
+          summary: (pdv.summary ?? null) as string | null,
+          signals: laravelSignals,
+        });
+        if (laravelDemotion.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `feature_precondition_absent: ${laravelDemotion.feature}`,
+            scope: 'feature_precondition_absent',
+            verdict: 'feature_precondition_absent',
+            feature: laravelDemotion.feature,
+            matched_summary_pattern: laravelDemotion.matchedPattern ?? null,
+            demoted_from: 'callgraph_reached_transitive',
+          };
+        }
+      }
+
       // RUBY/RAILS FEATURE-PRECONDITION + DEV-ONLY DEMOTION (gem mirror of the
       // Java/PHP feature-precondition gates). Applies to ANY gem `module` finding
       // regardless of which branch produced it (the coarse Ruby callgraph stamps
@@ -2015,6 +2074,15 @@ export async function updateReachabilityLevels(
                 summary: summaryStr,
                 signals: djangoSignals,
               }).demote
+            : false) ||
+          // Laravel backstop: refuse to promote a laravel/framework finding whose
+          // required feature is provably absent (its demotion already ran above).
+          (laravelSignals
+            ? evaluateLaravelFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                signals: laravelSignals,
+              }).demote
             : false);
         if (!wouldDemote) {
           // Try the Java/Spring always-on model first, then PHP/Symfony, then
@@ -2077,6 +2145,23 @@ export async function updateReachabilityLevels(
                   signals: djangoSignals,
                 })
               : { promote: false as const };
+          // Laravel always-on model (6th) — feature-gated laravel/framework
+          // promotions: signed-URL path confusion (when the app USES signed URLs,
+          // as monica does), file-validation bypass (when it validates uploads).
+          const laravelPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            !djangoPromotion.promote &&
+            laravelSignals
+              ? evaluateLaravelAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  hasHttpRouteEntryPoint,
+                  signals: laravelSignals,
+                })
+              : { promote: false as const };
           const chosen = promotion.promote
             ? promotion
             : phpPromotion.promote
@@ -2087,7 +2172,9 @@ export async function updateReachabilityLevels(
                   ? goPromotion
                   : djangoPromotion.promote
                     ? djangoPromotion
-                    : null;
+                    : laravelPromotion.promote
+                      ? laravelPromotion
+                      : null;
           if (chosen && chosen.promote && chosen.promoteTo) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
