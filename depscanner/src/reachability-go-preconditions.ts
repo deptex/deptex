@@ -199,11 +199,15 @@ export const SUBPACKAGE_GATES: ModuleSubpackageGate[] = [
           /character reference/i,
         ],
       },
-      // idna — internationalized-domain-name label encoding (Punycode).
-      {
-        subpackage: 'golang.org/x/net/idna',
-        patterns: [/\bidna\b/i, /punycode/i],
-      },
+      // idna — REMOVED (2026-07-02). The idna gate demoted on first-party
+      // import absence, but ground-truth verification proved that claim
+      // unsound on BOTH validated apps: `go mod why` traces
+      // gitea → certmagic → golang.org/x/net/idna (compiled in transitively),
+      // and caddy's h2 client transport executes idna.ToASCII on every proxied
+      // request. First-party import absence does NOT prove a subpackage out of
+      // the binary when common dependency chains (certmagic, minio-go, any
+      // x/net h2 consumer) pull it in. Restore only with transitive
+      // import-graph proof (dependency-source import graphs — max-plan Arc 2).
     ],
   },
 ];
@@ -269,12 +273,15 @@ interface GoAlwaysOnRule {
 
 export const ALWAYS_ON_RUNTIME: GoAlwaysOnRule[] = [
   // --- golang.org/x/net/http2 — the HTTP/2 server protocol handler. On a
-  //     deployed Go HTTP server that serves HTTP/2 (imports http2 / h2c), the
-  //     protocol-level DoS CVEs (rapid reset, stream cancellation, CONTINUATION
-  //     flood, HPACK / header memory growth) fire on unauthenticated request
-  //     traffic before any application handler — unconditionally on the request
-  //     path. EXCLUDE the html/idna siblings (their demotions run first; belt-
-  //     and-suspenders in case the import set couldn't prove them absent). ---
+  //     deployed Go HTTP server that imports http2/h2c, the protocol-level DoS
+  //     CVEs (rapid reset, stream cancellation, CONTINUATION flood, HPACK /
+  //     header memory growth) are first-party wired. Tier is `function`, NOT
+  //     data_flow (corrected 2026-07-02 by caddy ground-truth verification):
+  //     a server's DEFAULT inbound HTTP/2 is Go's STDLIB h2 bundle — the x/net
+  //     module's server code typically runs via opt-in h2c wiring (caddy:
+  //     AllowH2C, default off) and its client code via an h2 upstream
+  //     transport, so "unconditionally on the inbound request path" overclaims
+  //     for the module's copy. EXCLUDE the html/idna siblings. ---
   {
     sink: 'go-http2-server',
     module: 'golang.org/x/net',
@@ -299,7 +306,7 @@ export const ALWAYS_ON_RUNTIME: GoAlwaysOnRule[] = [
       /\bidna\b/i,
       /punycode/i,
     ],
-    promoteTo: 'data_flow',
+    promoteTo: 'function',
     threatTag: 'requires_untrusted_request',
   },
 ];

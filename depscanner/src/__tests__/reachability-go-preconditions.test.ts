@@ -83,10 +83,14 @@ function goSignals(over: Partial<GoImportSignals> = {}): GoImportSignals {
 describe('evaluateGoAlwaysOnRuntimePromotion', () => {
   const NET = 'golang.org/x/net';
 
-  it('promotes an HTTP/2 rapid-reset DoS to data_flow on a deployed server importing http2', () => {
+  it('promotes an HTTP/2 rapid-reset DoS to function on a deployed server importing http2', () => {
+    // Tier is function, not data_flow: the default inbound h2 parser is the Go
+    // STDLIB bundle; the x/net module's copy is first-party wired (h2c opt-in /
+    // upstream transport) but not unconditionally on the inbound path —
+    // corrected by the caddy ground-truth verification (2026-07-02).
     const r = evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: HTTP2_RAPID_RESET, signals: goSignals() });
     expect(r.promote).toBe(true);
-    expect(r.promoteTo).toBe('data_flow');
+    expect(r.promoteTo).toBe('function');
     expect(r.sink).toBe('go-http2-server');
     expect(r.threatTag).toBe('requires_untrusted_request');
   });
@@ -195,10 +199,12 @@ describe('evaluateGoSubpackageDemotion', () => {
     expect(evaluateGoSubpackageDemotion({ depName: NET, summary: NET_HTML_XSS, signals: goSignals() }).demote).toBe(true);
   });
 
-  it('demotes an x/net/idna Punycode CVE when idna is not imported', () => {
+  it('does NOT demote an x/net/idna Punycode CVE (idna gate removed — compiled transitively via certmagic-class chains)', () => {
+    // Ground-truth verification proved first-party import absence is unsound
+    // for idna: go-mod-why traces gitea→certmagic→x/net/idna, and caddy's h2
+    // transport executes idna.ToASCII. Restore only with Arc-2 transitive proof.
     const r = evaluateGoSubpackageDemotion({ depName: NET, summary: NET_IDNA_PUNYCODE, signals: goSignals() });
-    expect(r.demote).toBe(true);
-    expect(r.subpackage).toBe('golang.org/x/net/idna');
+    expect(r.demote).toBe(false);
   });
 
   it('does NOT demote an x/net/http2 CVE (not in the demotion gate — it is the promotion path)', () => {
@@ -440,12 +446,12 @@ async function runGo(fsk: FakeStorage, signals: GoImportSignals) {
 beforeEach(() => jest.clearAllMocks());
 
 describe('updateReachabilityLevels — Go framework-mediated model', () => {
-  it('PROMOTES an x/net/http2 rapid-reset DoS to data_flow on a module-routed server (0 http-route entry points)', async () => {
+  it('PROMOTES an x/net/http2 rapid-reset DoS to function on a module-routed server (0 http-route entry points)', async () => {
     const fsk = new FakeStorage();
     seedGoDep(fsk, { name: 'golang.org/x/net', osvId: 'CVE-2023-39325', summary: HTTP2_RAPID_RESET });
     await runGo(fsk, caddySignals());
     const { level, details } = verdictOf(fsk, 'pdv-1');
-    expect(level).toBe('data_flow');
+    expect(level).toBe('function');
     expect(details?.verdict).toBe('always_on_framework_runtime');
     expect(details?.sink).toBe('go-http2-server');
   });
