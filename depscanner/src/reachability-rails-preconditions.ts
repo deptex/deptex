@@ -563,7 +563,15 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     // (a non-default parse option Discourse never enables); their summaries say
     // only "use-after-free" / "libxml2 and libxslt", hiding the XInclude gate, so
     // the id is the only signal (Discourse ground truth labels both unreachable).
-    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518'],
+    // CVE-2018-25032: a zlib DEFLATE (compression) out-of-bounds write, triggered
+    // when COMPRESSING crafted input under a non-default memLevel/strategy.
+    // Nokogiri only uses zlib INFLATE (decompressing gzipped content) on the parse
+    // path — it never deflates untrusted input — so this compression bug is NOT on
+    // the untrusted-HTML content path. Summary ("Nokogiri affected by zlib's
+    // Out-of-bounds Write") matches the generic /zlib/ + /out-of-bounds/ promoters
+    // but hides the deflate-vs-inflate distinction, so the id is the only signal
+    // (Discourse ground truth labels it module).
+    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518', 'CVE-2018-25032'],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_html',

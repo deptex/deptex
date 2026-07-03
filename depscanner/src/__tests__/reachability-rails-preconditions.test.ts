@@ -143,6 +143,19 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: nokoUAF, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0001'] }).promote).toBe(true);
   });
 
+  it('does NOT promote the zlib DEFLATE (compression) OOB CVE by id', () => {
+    // CVE-2018-25032: a zlib deflate/COMPRESSION out-of-bounds write. Nokogiri
+    // only uses zlib INFLATE (decompressing gzipped content) on the parse path —
+    // it never deflates untrusted input — so this compression bug is NOT on the
+    // untrusted-HTML content path. Its summary matches the generic /zlib/ +
+    // /out-of-bounds/ promoters, so the id is the only signal (discourse ground
+    // truth labels it module).
+    const zlibOob = "Nokogiri affected by zlib's Out-of-bounds Write vulnerability";
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: zlibOob, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2018-25032'] }).promote).toBe(false);
+    // A genuine inflate-path libxml2 OOB with a different id still promotes.
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: 'libxml2 out-of-bounds read while parsing HTML', hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0002'] }).promote).toBe(true);
+  });
+
   it('does NOT promote the Ruby-version-gated SafeBuffer#bytesplice XSS by id', () => {
     // CVE-2023-28120: bytesplice only exists on Ruby ≥3.2; mastodon pins <3.1
     // (mastodon ground truth: unreachable). Excluded by id → not promoted.
