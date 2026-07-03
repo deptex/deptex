@@ -309,9 +309,47 @@ export function buildAgentTools(deps: AgentToolDeps) {
     },
   });
 
+  const str_replace = tool({
+    description:
+      'Make a small, surgical edit: replace an exact snippet of a file with new text. This is the PREFERRED way to edit — you only provide the changed part, not the whole file. old_string must appear EXACTLY ONCE (include a few surrounding lines to make it unique).',
+    inputSchema: z.object({
+      path: z.string().describe('repo-relative file path'),
+      old_string: z.string().describe('the exact existing text to replace, copied verbatim (whitespace included)'),
+      new_string: z.string().describe('the replacement text'),
+    }),
+    execute: async ({ path: rel, old_string, new_string }) => {
+      const r = resolveWithin(projectDir, repoRoot, rel);
+      if (!r.ok) return r.error;
+      const gitRel = toGitPath(repoRoot, r.full);
+      let oldContent: string;
+      try {
+        oldContent = await fsp.readFile(r.full, 'utf-8');
+      } catch {
+        return `file not found: ${gitRel}. Use write_file to create a new file.`;
+      }
+      const idx = oldContent.indexOf(old_string);
+      if (idx === -1) {
+        return `couldn't find that exact text in ${gitRel}. Read the file again and copy the snippet verbatim (including indentation).`;
+      }
+      if (oldContent.indexOf(old_string, idx + old_string.length) !== -1) {
+        return `that text appears more than once in ${gitRel} — add more surrounding context so it matches exactly one place.`;
+      }
+      const newContent = oldContent.slice(0, idx) + new_string + oldContent.slice(idx + old_string.length);
+      if (newContent === oldContent) return `${gitRel} is unchanged (old and new are identical).`;
+      await fsp.writeFile(r.full, newContent, 'utf-8');
+      state.progressCalls++;
+      state.editedFiles.add(gitRel);
+      const diff = redactDiffs
+        ? undefined
+        : await computeContentDiff(gitRel, oldContent, newContent, deps.installationToken);
+      await step({ icon: 'edit', label: `Edited ${gitRel}`, diff });
+      return `edited ${gitRel}`;
+    },
+  });
+
   const run_command = tool({
     description:
-      'Run a shell command in the project directory (install, build, test, lint, git). Use this to verify your own work. Returns exit code + combined stdout/stderr.',
+      'Run a shell command (install, build, test, lint, git). It ALREADY runs in the project directory — do NOT cd into it. Use it to verify your work, NOT to edit files. Returns exit code + combined stdout/stderr.',
     inputSchema: z.object({ command: z.string().describe('the shell command to run') }),
     execute: async ({ command }) => {
       state.progressCalls++;
@@ -431,7 +469,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
     },
   });
 
-  return { read_file, list_dir, grep, write_file, run_command, open_pull_request, finish_task };
+  return { read_file, list_dir, grep, str_replace, write_file, run_command, open_pull_request, finish_task };
 }
 
 /** The single terminal-failure writer: markFailed + honest FixFailureCard + task rollup. */

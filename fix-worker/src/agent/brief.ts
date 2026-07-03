@@ -12,20 +12,21 @@ You have these tools:
 - read_file(path) — read a repo file
 - list_dir(path) — list a directory ("." is the repo root)
 - grep(pattern, glob?) — search the repo for a regex
-- write_file(path, content) — write the FULL new contents of a file (this is how you edit; always pass the complete file)
-- run_command(command) — run a shell command in the project directory (install, build, test, lint, git). Use it to VERIFY your own work.
+- str_replace(path, old_string, new_string) — replace an exact snippet with new text. THIS is the main way to edit: you only provide the small changed part, not the whole file.
+- write_file(path, content) — create a new file, or fully replace a file's contents. Use str_replace for small edits.
+- run_command(command) — run a shell command (install, build, test, lint, git). It already runs IN the project directory, so do NOT cd into it. Use it to VERIFY your own work, not to edit files.
 - open_pull_request(title, body) — commit everything and open a draft PR. Call this exactly once, after the fix is applied and verified.
 - finish_task(status, summary, category?) — end the task. Use "failed" with a category when the finding cannot be safely fixed.
 
 Rules:
 1. Investigate first. Read the finding brief, then read/grep the relevant files before editing.
-2. Make ALL file edits with write_file — pass the file's FULL new contents. Do NOT edit files with shell commands (sed, awk, echo, output redirection, patch, npm version, etc.); edits made that way can't be shown to the reviewer as a diff. run_command is for installing, building, testing, and git — not for editing files.
+2. Edit files with str_replace (replace an exact snippet) — it's the easiest and most reliable way; use write_file only to create a new file or rewrite one wholesale. Do NOT edit files with shell commands (sed, awk, echo, output redirection, patch, npm version, etc.); edits made that way can't be shown to the reviewer as a diff. And do NOT cd — every command already runs in the project directory.
 3. Make the SMALLEST safe change that fixes the finding. Do not refactor, reformat, or touch unrelated code.
 4. Preserve behavior. For a dependency bump, keep the manifest's version range style; let the lockfile regenerate (run the install with run_command).
 5. Verify your change with run_command (typecheck / build / install / the project's test command) before opening the PR.
 6. When the fix is applied and verified, call open_pull_request once, then call finish_task with status "completed".
 7. If the finding is already fixed, not present, or cannot be fixed with a safe in-repo code change, call finish_task with status "failed" and an honest category ("not_fixable"). Do NOT invent a change.
-8. Be decisive and terminate. Never loop re-reading the same files — act, verify, and finish.`;
+8. Be decisive and efficient. Investigate once — do NOT repeat the same checks (npm view/npm ls/etc.) over and over. Apply the fix, run ONE verification, then open the PR and finish.`;
 
 export interface BriefInput {
   fixType: FindingType;

@@ -101,6 +101,27 @@ describe('agent tools', () => {
     expect(narrateStep).not.toHaveBeenCalled();
   });
 
+  test('str_replace makes a surgical edit and shows the diff', async () => {
+    const deps = makeDeps({ fixType: 'vulnerability', finding: { type: 'vulnerability', id: 'CVE-1' } });
+    fs.writeFileSync(path.join(deps.repoRoot, 'f.txt'), 'line1\nold value\nline3\n');
+    const tools = buildAgentTools(deps);
+    await (tools.str_replace.execute as any)({ path: 'f.txt', old_string: 'old value', new_string: 'new value' });
+    expect(fs.readFileSync(path.join(deps.repoRoot, 'f.txt'), 'utf-8')).toContain('new value');
+    const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
+    expect(stepArg.icon).toBe('edit');
+    expect(stepArg.diff).toContain('new value');
+    expect(deps.state.editedFiles.has('f.txt')).toBe(true);
+  });
+
+  test('str_replace refuses a non-unique match', async () => {
+    const deps = makeDeps();
+    fs.writeFileSync(path.join(deps.repoRoot, 'g.txt'), 'x\nx\n');
+    const tools = buildAgentTools(deps);
+    const res = await (tools.str_replace.execute as any)({ path: 'g.txt', old_string: 'x', new_string: 'y' });
+    expect(String(res)).toMatch(/more than once/i);
+    expect(narrateStep).not.toHaveBeenCalled();
+  });
+
   test('open_pull_request no-ops (no push) when the lease is held by another machine', async () => {
     const deps = makeDeps({ supabase: fakeSupabase({ machine_id: 'other', status: 'executing' }) });
     const tools = buildAgentTools(deps);

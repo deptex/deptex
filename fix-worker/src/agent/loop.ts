@@ -12,8 +12,10 @@ import { FixLogger } from './../logger';
 import { AGENT_SYSTEM, buildBrief } from './brief';
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from './tools';
 
-/** Wall-clock ceiling — an agent run bills by the second, so this bounds cost too. */
-const WALL_CLOCK_MS = 900_000;
+/** Wall-clock ceiling — an agent run bills by the second, so this bounds cost too.
+ *  Configurable via AEGIS_TASK_WALL_CLOCK_SEC; default 30 min (a slower/cheaper
+ *  model needs more room than a frontier one). */
+const WALL_CLOCK_MS = (parseInt(process.env.AEGIS_TASK_WALL_CLOCK_SEC || '1800', 10) || 1800) * 1000;
 /** Hard step cap (mirrors the plan's ~40). */
 const MAX_STEPS = 40;
 /** Steps with no side-effecting tool call before we call it stuck. */
