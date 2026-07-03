@@ -40,9 +40,60 @@ import {
   stripAnsi,
   updateStep,
   clearVdbVolumeForRecovery,
+  getCachedKevSet,
+  getCachedEpss,
+  setCachedEpss,
 } from '../pipeline-helpers';
 import type { PipelineContext, PipelineLogger } from '../pipeline-types';
 import { runOsvFallback, osvFallbackMode } from './osv-vuln-scan';
+
+/**
+ * dep-scan can exit 0 yet have produced ZERO usable vulnerability results
+ * because its bundled VDB refresh/download broke mid-stream. The live P0 was a
+ * transient `requests.exceptions.ChunkedEncodingError: Connection broken:
+ * IncompleteRead(... bytes read, ... more expected)` while pulling the
+ * vulnerability database. In that state dep-scan logs a WARNING
+ * ("No vulnerability scan results available"), writes an empty/no VDR, and
+ * STILL returns exit code 0. Keying success on the exit code alone therefore
+ * reports a genuinely-vulnerable repo as CLEAN — a silent false-negative
+ * (vulnerable express@4.18.2 scanned, 0 vulns written, scan exited OK).
+ *
+ * This inspects dep-scan's combined stdout+stderr for the DEGRADED signature so
+ * the caller can treat an exit-0-but-broken run as a failed run (force the OSV
+ * safety-net, and loud-fail if OSV is also unavailable) instead of a clean pass
+ * — mirroring how a non-zero dep-scan exit already drives `depScanSucceeded`.
+ *
+ * It keys on the ERROR CAUSE (a broken VDB download / DB load), NOT on "0
+ * results": a genuinely vuln-free project prints NONE of these strings
+ * (dep-scan's clean path logs "No oss vulnerabilities..." / "No vulnerabilities
+ * found"), so a legitimately clean scan is NOT turned into a failure.
+ */
+export function detectDegradedDepScan(
+  combinedOutput: string | null | undefined,
+): { degraded: boolean; reason?: string } {
+  if (!combinedOutput) return { degraded: false };
+  const signatures: Array<{ re: RegExp; reason: string }> = [
+    // The exact live failure: the VDB download stream was truncated.
+    { re: /ChunkedEncodingError/i, reason: 'VDB download connection broken (ChunkedEncodingError)' },
+    { re: /IncompleteRead/i, reason: 'VDB download truncated (IncompleteRead)' },
+    { re: /Connection broken/i, reason: 'VDB download connection broken' },
+    // Any urllib3 / requests network exception bubbling out of the VDB refresh.
+    { re: /requests\.exceptions\.\w+/, reason: 'VDB download network error (requests.exceptions)' },
+    { re: /\b(?:ConnectionError|ReadTimeoutError|ConnectTimeoutError|NewConnectionError|MaxRetryError|ProtocolError|SSLError)\b/, reason: 'VDB download network error' },
+    // dep-scan / VDB tooling could not obtain or load the vulnerability DB.
+    { re: /(?:unable|failed|could not|error)\b[^\n]{0,60}\b(?:download|refresh|update|sync|fetch|load|build|create|prepare)\b[^\n]{0,60}\b(?:vuln\w*|vdb|database|db)\b/i, reason: 'VDB refresh/load failed' },
+    { re: /\b(?:vdb|vulnerability database)\b[^\n]{0,40}\b(?:corrupt|malformed|missing|incomplete|empty|not (?:found|available))\b/i, reason: 'VDB missing/incomplete' },
+    // dep-scan's explicit "the scan produced no results object" WARNING. This is
+    // its degraded/error path — distinct from the clean "No vulnerabilities
+    // found" success line — so an exit-0 run carrying it has not actually
+    // checked the dependencies.
+    { re: /No vulnerability scan results available/i, reason: 'dep-scan produced no vulnerability scan results' },
+  ];
+  for (const s of signatures) {
+    if (s.re.test(combinedOutput)) return { degraded: true, reason: s.reason };
+  }
+  return { degraded: false };
+}
 
 function runDepScanProcess(
   depScanExe: string,
@@ -185,6 +236,58 @@ export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, str
     }
   }
   return pdByNameVersion;
+}
+
+/** The slice of a project_dependencies row the vuln-depscore multiplier reads. */
+export interface PdScoringContext {
+  /** `false` ⇒ transitive (0.75× directness taper); true/null/undefined ⇒ direct. */
+  is_direct?: boolean | null;
+  /** `'dev'` ⇒ dev/test/build scope (0.4× env taper). */
+  environment?: string | null;
+}
+
+/**
+ * Compute a PDV's depscore + reachability-independent base depscore, threading
+ * the dependency-context multiplier (directness 0.75×, dev-scope 0.4×) from the
+ * matched project_dependencies row.
+ *
+ * SC1 fix: the old call site only passed `{cvss, epss, cisaKev, isReachable,
+ * importance}`, so `calculateDepscore`'s directness/env/malicious/reputation
+ * taper was dead — every vuln scored as if direct + prod. Wiring `is_direct`
+ * and `environment` restores the intended taper for non-unreachable rows
+ * (dev-scope's hard `unreachable` floor still comes later, from the
+ * reachability classifier).
+ *
+ * NOTE — malicious + reputation are intentionally NOT passed here: the malicious
+ * flag and the package reputation score are both populated AFTER extraction
+ * (malicious-package scan + the QStash populate-dependencies pass), so they are
+ * not yet known at dep-scan time. They taper correctly once the reachability
+ * step's rescore picks them up — see the boundary note at the call site.
+ */
+export function scoreVulnRow(
+  row: {
+    cvss_score: number | null;
+    epss_score: number | null;
+    cisa_kev: boolean;
+    severity: string | null;
+    is_reachable: boolean;
+  },
+  pd: PdScoringContext | undefined,
+  importance: number,
+): { depscore: number; base_depscore_no_reachability: number } {
+  const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
+  const epss = row.epss_score ?? 0;
+  const isDirect = pd?.is_direct ?? undefined;
+  const isDevDependency = pd?.environment === 'dev';
+  return {
+    base_depscore_no_reachability: calculateBaseDepscoreNoReachability({
+      cvss, epss, cisaKev: row.cisa_kev, importance, isDirect, isDevDependency,
+    }),
+    depscore: calculateDepscore({
+      cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable,
+      importance, isDirect, isDevDependency,
+    }),
+  };
 }
 
 export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
@@ -345,7 +448,28 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
             await log.warn('vuln_scan', `Vulnerability scan exited with code ${res.exitCode}: ${stderrSnippet}`);
           }
         } else {
-          depScanSucceeded = true;
+          // Exit code 0 is necessary but NOT sufficient. dep-scan returns 0 even
+          // when its VDB refresh/download broke mid-stream and it produced zero
+          // usable results (the live P0: a transient ChunkedEncodingError while
+          // pulling the vulnerability DB → "No vulnerability scan results
+          // available" → exit 0 → 0 vulns written → a vulnerable repo reported
+          // CLEAN). Inspect the run output for that degraded signature; when
+          // present, keep depScanSucceeded=false so the OSV fallback force-fires
+          // (`force: !depScanSucceeded`) and the loud-fail guard trips if OSV is
+          // also down — instead of silently shipping a false-clean. Keyed on the
+          // error CAUSE, not on "0 results", so a genuinely vuln-free scan still
+          // passes.
+          const combinedOutput = `${stripAnsi((res.stdout ?? '').trim())}\n${stripAnsi((res.stderr ?? '').trim())}`;
+          const degraded = detectDegradedDepScan(combinedOutput);
+          if (degraded.degraded) {
+            depScanFailureDetail = `dep-scan exited 0 but produced no usable results — ${degraded.reason}`;
+            await log.warn(
+              'vuln_scan',
+              `Vulnerability scan degraded (${degraded.reason}); dep-scan exited 0 with no results — treating as failed so the OSV fallback runs`,
+            );
+          } else {
+            depScanSucceeded = true;
+          }
         }
 
         // Log stderr only on failure (exit code > 0)
@@ -418,6 +542,20 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         // legitimately found zero vulns) IS the vulnerability scan — don't let
         // the "fail loudly" guard below treat a vuln-free project as a failure.
         depScanSucceeded = true;
+      } else if (result.failed) {
+        // O2: the OSV query itself FAILED (network / non-2xx batch / unreadable
+        // reportsDir) — this is NOT a clean "zero vulns". Treat it as a degraded
+        // run: keep depScanSucceeded false so the loud-fail guard below fires
+        // when OSV was the sole vulnerability source (forced fallback) or
+        // dep-scan also failed. Capture the cause so the failure message names it
+        // rather than reporting a misleading empty CVE picture.
+        if (fallbackMode === 'force' || !depScanSucceeded) {
+          depScanFailureDetail = `OSV fallback degraded — ${result.reason ?? 'query failed'}`;
+        }
+        await log.warn(
+          'vuln_scan_osv',
+          `OSV fallback degraded (${result.reason ?? 'query failed'}); pipeline purls captured: ${pipelinePurls.length}`,
+        );
       } else if (!result.wrote && result.reason) {
         // Surface the skip reason to the run log (not just worker stdout) so a
         // "0 CVEs but deps resolved" outcome is diagnosable after the fact.
@@ -548,7 +686,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
 
       const { data: pdRows } = await supabase
         .from('project_dependencies')
-        .select('id, name, version, environment')
+        .select('id, name, version, environment, is_direct')
         .eq('project_id', projectId)
         .eq('last_seen_extraction_run_id', runId);
 
@@ -557,16 +695,29 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       // to the production-scope row (see resolveDualScopePdMap).
       const pdByNameVersion = resolveDualScopePdMap((pdRows ?? []) as DualScopePdRow[]);
 
-      const kevCveSet = new Set<string>();
-      try {
-        const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', { signal: AbortSignal.timeout(15000) });
-        if (kevRes.ok) {
-          const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
-          for (const entry of kevJson.vulnerabilities ?? []) {
-            if (entry.cveID) kevCveSet.add(entry.cveID);
+      // id → directness/scope, for the SC1 dependency-context depscore taper.
+      const pdById = new Map<string, PdScoringContext>();
+      for (const r of (pdRows ?? []) as Array<{ id: string; environment: string | null; is_direct: boolean | null }>) {
+        pdById.set(r.id, { is_direct: r.is_direct, environment: r.environment });
+      }
+
+      // Cached: the full CISA KEV catalog is global + daily-refreshed, so a
+      // 6h in-process cache avoids re-downloading it on every scan (see
+      // getCachedKevSet). A transient fetch failure yields an empty set and is
+      // not cached, so the next scan retries.
+      const kevCveSet = await getCachedKevSet(async () => {
+        const set = new Set<string>();
+        try {
+          const kevRes = await fetch('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', { signal: AbortSignal.timeout(15000) });
+          if (kevRes.ok) {
+            const kevJson = (await kevRes.json()) as { vulnerabilities?: Array<{ cveID?: string }> };
+            for (const entry of kevJson.vulnerabilities ?? []) {
+              if (entry.cveID) set.add(entry.cveID);
+            }
           }
-        }
-      } catch { /* non-fatal */ }
+        } catch { /* non-fatal */ }
+        return set;
+      });
 
       const vulnRows: Array<{
         project_id: string; project_dependency_id: string; osv_id: string;
@@ -663,9 +814,18 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       const cvesToFetch = [...new Set(vulnRows.map((r) => r.osv_id).filter((id) => CVE_ID_RE.test(id)))];
       if (cvesToFetch.length > 0) {
         const epssByCve = new Map<string, number>();
+        // Seed from the in-process EPSS cache; only query FIRST for CVEs we
+        // haven't scored recently (see getCachedEpss). EPSS refreshes ~daily, so
+        // the 6h TTL keeps the saved network round-trips fresh enough.
+        const uncached: string[] = [];
+        for (const cve of cvesToFetch) {
+          const cached = getCachedEpss(cve);
+          if (cached != null) epssByCve.set(cve, cached);
+          else uncached.push(cve);
+        }
         const EPSS_BATCH = 80;
-        for (let i = 0; i < cvesToFetch.length; i += EPSS_BATCH) {
-          const batch = cvesToFetch.slice(i, i + EPSS_BATCH);
+        for (let i = 0; i < uncached.length; i += EPSS_BATCH) {
+          const batch = uncached.slice(i, i + EPSS_BATCH);
           try {
             const epssRes = await fetch(`https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`, { signal: AbortSignal.timeout(15000) });
             if (epssRes.ok) {
@@ -673,7 +833,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
               for (const row of json.data ?? []) {
                 if (row?.cve && row?.epss != null) {
                   const score = parseFloat(row.epss);
-                  if (Number.isFinite(score)) epssByCve.set(row.cve, score);
+                  if (Number.isFinite(score)) {
+                    epssByCve.set(row.cve, score);
+                    setCachedEpss(row.cve, score);
+                  }
                 }
               }
             }
@@ -689,16 +852,25 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       for (const row of vulnRows) {
         const allIds = [row.osv_id, ...(row.aliases ?? [])];
         row.cisa_kev = allIds.some((id) => CVE_ID_RE.test(id) && kevCveSet.has(id));
-        const cvss = row.cvss_score ?? (row.severity ? (SEVERITY_TO_CVSS[row.severity] ?? 0) : 0);
-        const epss = row.epss_score ?? 0;
-        row.base_depscore_no_reachability = calculateBaseDepscoreNoReachability({
-          cvss,
-          epss,
-          cisaKev: row.cisa_kev,
+        // SC1: thread directness + dev-scope from the matched project_dependencies
+        // row so the dependency-context taper (0.75× transitive, 0.4× dev) is no
+        // longer dead. See scoreVulnRow.
+        //
+        // BOUNDARY (cross-owner): this is the INITIAL score. The authoritative
+        // FINAL rescore lives in pipeline-steps/reachability.ts (after the taint
+        // classifier sets reachability_level) and is the value that actually
+        // ships. That rescore currently re-reads only PDV columns and does NOT
+        // join project_dependencies, so it still passes no directness/scope and
+        // overwrites this taper away in the full pipeline. For SC1 to be durable
+        // end-to-end, reachability.ts's rescore must join is_direct + environment
+        // and pass them through the same way — flagged for the reachability owner.
+        const { depscore, base_depscore_no_reachability } = scoreVulnRow(
+          row,
+          pdById.get(row.project_dependency_id),
           importance,
-        });
-        // Keep legacy depscore for compatibility during rollout.
-        row.depscore = calculateDepscore({ cvss, epss, cisaKev: row.cisa_kev, isReachable: row.is_reachable, importance });
+        );
+        row.base_depscore_no_reachability = base_depscore_no_reachability;
+        row.depscore = depscore;
       }
 
       if (vulnRows.length > 0) {

@@ -78,10 +78,12 @@ sources:
 
 sinks:
   # XSS via raw HTML response writers.
-  - pattern: "*.getWriter(*)"
-    vuln_class: xss
-    argument_indices: []
-    description: HttpServletResponse.getWriter (raw HTML)
+  # NOTE: `*.getWriter(*)` with `argument_indices: []` used to live here. It
+  # was removed: `getWriter()` is a zero-arg getter that returns the
+  # PrintWriter — it carries no tainted argument, so `[]` ("any tainted arg
+  # fires") could only match an unrelated `x.getWriter(tainted)` on ANY
+  # receiver. The actual XSS write happens on the writer (`.println(*)` /
+  # `.print(*)`), which `*.println(*)` below already models. No recall lost.
   - pattern: "ResponseEntity.ok(*)"
     vuln_class: xss
     argument_indices: [0]
@@ -137,13 +139,17 @@ sinks:
     vuln_class: code_injection
     argument_indices: []
     description: Spring Expression.getValue — root-object eval surface
+  # argument_indices: [0] — the Spring4Shell payload is the property PATH
+  # (`class.module.classLoader.resources…`), which is arg 0. A benign tainted
+  # VALUE at arg 1 (`setPropertyValue("fixedName", userValue)`) is ordinary
+  # data binding, not the CVE — `[]` ("any tainted arg") fired on that too.
   - pattern: "*.setPropertyValue(*)"
     vuln_class: code_injection
-    argument_indices: []
+    argument_indices: [0]
     description: BeanWrapperImpl.setPropertyValue — Spring4Shell path-binding sink (class.module.classLoader…)
   - pattern: "*.setPropertyValues(*)"
     vuln_class: code_injection
-    argument_indices: []
+    argument_indices: [0]
     description: BeanWrapperImpl.setPropertyValues — bulk binder, CVE-2022-22965 canonical sink
   - pattern: "*.bind(*)"
     vuln_class: code_injection

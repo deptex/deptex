@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { runScannerSubprocess, type ScannerSubprocessLogger } from '../with-timeout';
+import { getCachedEpss, getCachedKevSet, setCachedEpss } from '../pipeline-helpers';
 import { resolveRegistryHostname } from './registry-auth';
 import type {
   ContainerFinding,
@@ -551,8 +552,7 @@ function normalizeContainerSeverity(rawSeverity: string | undefined, cvss: numbe
 export function parseTrivyImageOutput(
   stdout: string,
   imageReference: string,
-  version: string,
-  kevCveSet?: Set<string>
+  version: string
 ): { findings: ContainerFinding[]; imageDigest: string } {
   let parsed: TrivyImageReport | null = null;
   try {
@@ -596,11 +596,13 @@ export function parseTrivyImageOutput(
         cve_id: cveId,
         severity: normalizeContainerSeverity(v.Severity, cvss),
         cvss_score: cvss,
+        // epss_score + is_kev are populated post-parse by
+        // enrichContainerFindingsWithFeeds() against the shared KEV/EPSS feed
+        // caches. Parse stays feed-free so the digest-keyed container scan cache
+        // never freezes a stale KEV/EPSS snapshot — enrichment re-runs on every
+        // scan (including cache hits), mirroring how reachability is decorated.
         epss_score: null,
-        // CISA-KEV enrichment: container CVEs were never checked against the
-        // KEV catalog (is_kev was hardcoded false), so a known-exploited base
-        // image CVE looked identical to any other. Match the canonical CVE id.
-        is_kev: cveId ? (kevCveSet?.has(cveId) ?? false) : false,
+        is_kev: false,
         fix_versions: v.FixedVersion ? v.FixedVersion.split(',').map((s) => s.trim()) : [],
         layer_digest: v.Layer?.Digest ?? null,
         description: v.Description ?? v.Title ?? null,
@@ -667,8 +669,10 @@ export async function runTrivyImage(
     warnings.push(`trivy_image_exit_${result.exitCode}`);
     return { findings: [], imageDigest: '', version: `trivy@${version}`, warnings };
   }
-  const kevCveSet = await fetchCisaKevCveSet();
-  const parsed = parseTrivyImageOutput(result.stdout, opts.imageRef, `trivy@${version}`, kevCveSet);
+  // NOTE: findings are returned feed-free (epss_score=null, is_kev=false). KEV /
+  // EPSS enrichment runs post-cache at the orchestrator via
+  // enrichContainerFindingsWithFeeds() so cache hits get fresh feed data too.
+  const parsed = parseTrivyImageOutput(result.stdout, opts.imageRef, `trivy@${version}`);
   if (!parsed.imageDigest) {
     // Trivy returned neither RepoDigests nor ImageID — the image is
     // identifiable only by its mutable tag, which we refuse to use as a
@@ -706,6 +710,101 @@ async function fetchCisaKevCveSet(): Promise<Set<string>> {
     }
   } catch { /* non-fatal: KEV enrichment is best-effort */ }
   return set;
+}
+
+const CONTAINER_CVE_RE = /^CVE-\d{4}-\d+$/i;
+const EPSS_BATCH = 80;
+
+/** Best-effort FIRST EPSS lookup for a set of CVE ids. Batched (80/request) +
+ *  15s timeout per batch; a transient failure yields no scores for that batch.
+ *  Mirrors the EPSS fetch dep-scan.ts uses on the SCA path. */
+async function fetchEpssScores(cves: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < cves.length; i += EPSS_BATCH) {
+    const batch = cves.slice(i, i + EPSS_BATCH);
+    try {
+      const res = await fetch(
+        `https://api.first.org/data/v1/epss?cve=${encodeURIComponent(batch.join(','))}`,
+        { signal: AbortSignal.timeout(15000) },
+      );
+      if (res.ok) {
+        const json = (await res.json()) as { data?: Array<{ cve?: string; epss?: string }> };
+        for (const row of json.data ?? []) {
+          if (row?.cve && row?.epss != null) {
+            const score = parseFloat(row.epss);
+            if (Number.isFinite(score)) out.set(row.cve, score);
+          }
+        }
+      }
+    } catch { /* non-fatal: EPSS enrichment is best-effort */ }
+  }
+  return out;
+}
+
+/** Injectable fetchers for enrichContainerFindingsWithFeeds — production passes
+ *  none (real network + shared cache); tests pass stubs + a fixed clock. */
+export interface ContainerFeedFetchers {
+  kevFetcher?: () => Promise<Set<string>>;
+  epssFetcher?: (cves: string[]) => Promise<Map<string, number>>;
+  now?: number;
+}
+
+/**
+ * Enrich container OS-package CVE findings IN PLACE with CISA-KEV (`is_kev`) and
+ * FIRST EPSS (`epss_score`). Before this, both columns were hardcoded
+ * (is_kev=false / epss_score=null) so a known-exploited base-image CVE looked
+ * identical to any other and never carried an exploit-probability signal.
+ *
+ * Reuses the shared 6h in-process feed caches (getCachedKevSet / getCachedEpss /
+ * setCachedEpss in pipeline-helpers) so back-to-back scans on the same worker —
+ * and the SCA dep-CVE path, which seeds the same caches — don't re-download the
+ * KEV catalog or re-query EPSS. Best-effort: a feed fetch failure leaves the
+ * columns at their parsed defaults and never throws.
+ *
+ * KEV/EPSS key only on canonical `CVE-…` ids; OSV-only container findings (no
+ * CVE id) are left untouched. Findings with no CVE id at all → no fetch.
+ */
+export async function enrichContainerFindingsWithFeeds(
+  findings: ContainerFinding[],
+  fetchers: ContainerFeedFetchers = {},
+): Promise<void> {
+  const cveIds = [
+    ...new Set(
+      findings
+        .map((f) => f.cve_id)
+        .filter((c): c is string => !!c && CONTAINER_CVE_RE.test(c)),
+    ),
+  ];
+  if (cveIds.length === 0) return; // nothing keyed on a CVE id → no feed work
+
+  const now = fetchers.now ?? Date.now();
+
+  // KEV — one cached set covers every CVE in the scan.
+  const kevSet = await getCachedKevSet(fetchers.kevFetcher ?? fetchCisaKevCveSet, now);
+
+  // EPSS — seed from the in-process cache, only fetch the CVEs we haven't
+  // scored recently, then write the fresh scores back to the cache.
+  const epssByCve = new Map<string, number>();
+  const uncached: string[] = [];
+  for (const cve of cveIds) {
+    const cached = getCachedEpss(cve, now);
+    if (cached != null) epssByCve.set(cve, cached);
+    else uncached.push(cve);
+  }
+  if (uncached.length > 0) {
+    const fetched = await (fetchers.epssFetcher ?? fetchEpssScores)(uncached);
+    for (const [cve, score] of fetched) {
+      epssByCve.set(cve, score);
+      setCachedEpss(cve, score, now);
+    }
+  }
+
+  for (const f of findings) {
+    if (!f.cve_id || !CONTAINER_CVE_RE.test(f.cve_id)) continue;
+    f.is_kev = kevSet.has(f.cve_id);
+    const score = epssByCve.get(f.cve_id);
+    if (score != null) f.epss_score = score;
+  }
 }
 
 let cachedVersion: string | null = null;

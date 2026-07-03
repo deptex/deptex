@@ -98,6 +98,7 @@ import {
   type SpecResolveStatus,
 } from './openapi-spec-source';
 import { writeSynthesizedSpec } from './spec-storage';
+import { calculateDastDepscore } from '../depscore';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -222,6 +223,12 @@ interface DastFindingInsert {
   payload_redacted: string | null;
   response_evidence_redacted: string | null;
   confidence: DastFindingRaw['confidence'];
+  /**
+   * Unified-findings ranking score (severity band × project importance, at the
+   * confirmed reachability tier since a DAST hit is runtime proof). Lets ZAP /
+   * Nuclei findings sort alongside SCA / SAST / secret / container / IaC rows.
+   */
+  depscore: number;
   handler_file_path: string | null;
   handler_function_name: string | null;
   handler_line: number | null;
@@ -2046,6 +2053,23 @@ export async function runDastPipeline(
   // 'authentication_lost' since the report carries no per-finding timestamps.
   const findingAuthState: DastAuthState = authLostThresholdHit ? 'authentication_lost' : baseAuthState;
 
+  // projects.importance feeds the depscore tierWeight — the same per-project
+  // scalar the extraction-side scanners multiply in (see loadImportance). A
+  // missing or out-of-range row degrades silently to 1.0.
+  let importance = 1.0;
+  {
+    const { data: projImp } = await supabase
+      .from('projects')
+      .select('importance')
+      .eq('id', job.project_id)
+      .maybeSingle();
+    const rawImp = (projImp as { importance?: number | string } | null)?.importance;
+    const parsedImp = rawImp == null ? NaN : typeof rawImp === 'string' ? Number(rawImp) : rawImp;
+    if (Number.isFinite(parsedImp) && parsedImp >= 0.5 && parsedImp <= 2.0) {
+      importance = parsedImp;
+    }
+  }
+
   let crossLinkedCount = 0;
   let cveSignalCount = 0;
   const inserts: DastFindingInsert[] = scanFindings.map((f) => {
@@ -2082,6 +2106,7 @@ export async function runDastPipeline(
       payload_redacted: f.payload_redacted,
       response_evidence_redacted: f.response_evidence_redacted,
       confidence: f.confidence,
+      depscore: calculateDastDepscore({ severity: f.severity, importance }),
       handler_file_path: link.handler_file_path,
       handler_function_name: link.handler_function_name,
       handler_line: link.handler_line,

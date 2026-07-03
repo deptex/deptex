@@ -591,6 +591,88 @@ function sectionD_worklistTermination() {
     assertEqual(result.flows.length, 0, 'empty worklist emits 0 flows');
     assert(!result.stoppedEarly, 'empty worklist not flagged stoppedEarly');
   }
+
+  // Test 4 (TSCALE1 regression): a 2-function call CYCLE (f↔g) where BOTH
+  // functions have two DISTINCT-source returns. `returnTaint` is a single slot,
+  // so within every analysis pass it flips between the two sources (req.body.*
+  // → req.query.*). Before the fix, `changedReturn` was set from those in-pass
+  // writes, so each function re-enqueued the other on EVERY pass — independent
+  // of any real state growth — and the worklist spun to maxIterations. On a
+  // moderate real repo this is exactly what made the engine run to
+  // iterations=168,600 on express@4.18.2 and SILENTLY TRUNCATE flows (a
+  // reachable vuln left looking module/unreachable = a silence false-negative).
+  // The fix computes changedReturn once after the loop from the function's NET
+  // returnTaint vs the pass start, so the cycle reaches its fixpoint. Asserts:
+  // converges under the DEFAULT cap (no early stop, no warning) in few
+  // iterations.
+  {
+    const f = makeFuncNode('f', 300);
+    const g = makeFuncNode('g', 310);
+    // f(p): s1=req.body.x; s2=req.query.y; g(s1); return s1; return s2
+    const irF: IrFunction = {
+      id: f.id,
+      params: ['p'],
+      steps: [
+        { kind: 'source', target: 's1', sourceText: 'req.body.x', loc: loc(301) },
+        { kind: 'source', target: 's2', sourceText: 'req.query.y', loc: loc(302) },
+        {
+          kind: 'call',
+          target: 'r',
+          callee: { kind: 'internal', functionId: g.id, calleeText: 'g' },
+          args: ['s1'],
+          argTexts: ['s1'],
+          loc: loc(303),
+        },
+        { kind: 'return', from: 's1', loc: loc(304) },
+        { kind: 'return', from: 's2', loc: loc(305) },
+      ],
+    };
+    // g(p): s1=req.body.z; s2=req.query.w; f(s1); return s1; return s2
+    const irG: IrFunction = {
+      id: g.id,
+      params: ['p'],
+      steps: [
+        { kind: 'source', target: 's1', sourceText: 'req.body.z', loc: loc(311) },
+        { kind: 'source', target: 's2', sourceText: 'req.query.w', loc: loc(312) },
+        {
+          kind: 'call',
+          target: 'r',
+          callee: { kind: 'internal', functionId: f.id, calleeText: 'f' },
+          args: ['s1'],
+          argTexts: ['s1'],
+          loc: loc(313),
+        },
+        { kind: 'return', from: 's1', loc: loc(314) },
+        { kind: 'return', from: 's2', loc: loc(315) },
+      ],
+    };
+    const stateById = new Map<FunctionId, FunctionState>([
+      [f.id, makeState(f, irF)],
+      [g.id, makeState(g, irG)],
+    ]);
+    const callers = buildCallersByCallee([
+      { callerId: f.id, calleeId: g.id },
+      { callerId: g.id, calleeId: f.id },
+    ]);
+    let warnCount = 0;
+    const result = runWorklistAndAggregate({
+      stateById,
+      callersByCallee: callers,
+      specs: [TEST_SPEC],
+      onWarn: () => {
+        warnCount++;
+      },
+    });
+    assert(
+      !result.stoppedEarly,
+      'TSCALE1: multi-return mutual-recursion cycle converges (no early stop under default cap)',
+    );
+    assertEqual(warnCount, 0, 'TSCALE1: multi-return cycle does not warn (no truncation)');
+    assert(
+      result.iterations < 100,
+      `TSCALE1: multi-return cycle converges quickly (got ${result.iterations} iterations)`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

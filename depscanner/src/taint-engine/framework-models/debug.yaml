@@ -32,3 +32,10 @@ sinks:
     description: bound debug instance — wildcard receiver
 
 sanitizers: []
+
+# Phase 3.2 — regex-literal detector. CVE-2017-16137's catastrophic-backtracking
+# coloring regex is baked into vulnerable `debug` builds; the detector fires on
+# the PRESENCE of that literal in workspace code (independent of taint flow).
+unsafe_regex_patterns:
+  - regex: "%[oOdisfc%]"
+    description: debug coloring-format regex with catastrophic backtracking (CVE-2017-16137)

@@ -24,14 +24,24 @@ dependencies, so a framework repo has nothing meaningfully unreachable.
 Applications are what customers run; they declare a handful of direct
 deps and pull a large transitive tree they don't all reach.
 
-The current corpus (v3 baseline carrying forward from v2):
+The current corpus (v3 baseline carrying forward from v2) — **8 repos, 49
+hand-labelled CVEs** across the four labelled application repos:
 
 | repo | ecosystem | ref | CVEs | role |
 |---|---|---|---|---|
-| `expressjs/express` | npm | `4.18.2` | 36 | framework with rich devDep tree |
+| `expressjs/express` | npm | `4.18.2` | 24 | framework with rich devDep tree |
 | `spring-projects/spring-petclinic` | maven | `c7ee170` (pinned) | 10 | spring boot demo app |
 | `sharkdp/bat` | cargo | `v0.24.0` | 3 | cat-replacement CLI |
 | `fastify/fastify` | npm | `v4.26.0` | 12 | dev-scope-dominant npm app |
+| `caddyserver/caddy` | golang | `v2.4.6` | 0 | go ecosystem coverage — not yet labelled |
+| `mlflow/mlflow` | pypi | `c22889f` (pinned) | 0 | pypi ecosystem coverage — not yet labelled |
+| `symfony/demo` | composer | `f73440d` (pinned) | 0 | composer ecosystem coverage — not yet labelled |
+| `discourse/discourse` | gem | `ad49d8f` (pinned) | 0 | rubygems ecosystem coverage — not yet labelled |
+
+The four `0`-CVE repos are pinned and cloned for ecosystem breadth (go /
+pypi / composer / rubygems) but their per-CVE verdicts aren't authored yet,
+so they don't contribute to Gate 1 / Gate 3 today — only to the cross-
+ecosystem plumbing the resolvers exercise.
 
 Ground-truth label set per CVE: `confirmed | data_flow | function |
 module | unreachable`. Labels live alongside the repo entry in the YAML

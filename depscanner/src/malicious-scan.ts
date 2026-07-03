@@ -24,7 +24,7 @@ import * as crypto from 'crypto';
 import type { Storage } from './storage';
 import { canonicalizeEcosystem } from './malicious/ecosystem';
 import { lookupFeed } from './malicious/feeds';
-import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, isLowPrecisionGuardDogRule, type GuardDogRule } from './malicious/guarddog';
+import { isGuardDogAvailable, runGuardDog, GUARDDOG_VERSION, isLowPrecisionGuardDogRule, isCorroboratingGuardDogRule, requiresCorroboration, type GuardDogRule } from './malicious/guarddog';
 import { TarballCache } from './malicious/tarball-cache';
 import pLimit from 'p-limit';
 
@@ -66,11 +66,6 @@ export interface MaliciousScanResult {
   feed_hits: number;
   guarddog_hits: number;
   inserted_findings: number;
-  /**
-   * Newly-inserted finding IDs, used for event emission. Empty array if
-   * the RPC returned 0 (idempotent re-run with no new rows).
-   */
-  inserted_finding_ids: string[];
 }
 
 export interface MaliciousScanContext {
@@ -125,7 +120,6 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
       feed_hits: 0,
       guarddog_hits: 0,
       inserted_findings: 0,
-      inserted_finding_ids: [],
     };
   }
 
@@ -313,12 +307,29 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
         }
 
         if (guarddogAvailable) {
+          // Corroboration gate: a broad metadata heuristic (empty-information,
+          // bundled-binary, …) only surfaces when something else on the SAME
+          // package backs it up — a high-signal behavioral/source GuardDog rule
+          // or a feed hit. Standalone, those heuristics are the headline
+          // false-positive source on vetted packages. Compute the corroboration
+          // signal once per package before emitting any GuardDog finding.
+          const packageHasFeedHit = hits.length > 0;
+          const packageHasCorroboratingRule = rules.some((r) => isCorroboratingGuardDogRule(r.rule_id));
+          const corroborated = packageHasFeedHit || packageHasCorroboratingRule;
+
           for (const rule of rules) {
             // Drop low-precision GuardDog source heuristics (e.g.
             // api-obfuscation) that flag well-vetted packages — express,
             // on-finished — as "malicious". Real malware trips higher-signal
             // rules (exfiltration / install hooks / network) which we keep.
             if (isLowPrecisionGuardDogRule(rule.rule_id)) {
+              guarddogSuppressed++;
+              continue;
+            }
+            // Broad metadata heuristic with nothing to back it up → suppress.
+            // Kept when corroborated (real malware that also trips a behavioral
+            // rule or is feed-listed still surfaces every signal).
+            if (requiresCorroboration(rule.rule_id) && !corroborated) {
               guarddogSuppressed++;
               continue;
             }
@@ -403,10 +414,6 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
     }
   }
 
-  // We don't get IDs back from the RPC currently; emit a single sha256
-  // dedup key based on (org, project, run) instead — see M1.10.
-  const insertedIds: string[] = [];
-
   await ctx.log.success(
     STEP,
     `${scanned}/${ctx.packages.length} scanned (${cacheHits} from cache), ${feedHits} feed + ${guarddogHits} GuardDog hits` +
@@ -423,7 +430,6 @@ export async function runMaliciousScan(ctx: MaliciousScanContext): Promise<Malic
     feed_hits: feedHits,
     guarddog_hits: guarddogHits,
     inserted_findings: inserted,
-    inserted_finding_ids: insertedIds,
   };
 }
 

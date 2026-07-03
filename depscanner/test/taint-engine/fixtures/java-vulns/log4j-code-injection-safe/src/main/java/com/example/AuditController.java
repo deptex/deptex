@@ -14,7 +14,10 @@ public class AuditController {
 
     @GetMapping("/audit")
     public String audit(@RequestHeader("User-Agent") String ua) {
-        // Safe: User-Agent value is dropped; we log only a constant.
-        return audit.recordFixed();
+        // Safe: the real Log4j logger only ever sees a constant. The tainted
+        // User-Agent does reach `metrics.info(...)` / `tracker.log(...)`, but
+        // those are NON-LOGGER receivers the engine's loggerSinkSuppressed
+        // guard drops — so no Log4Shell (code_injection) flow is emitted.
+        return audit.record(ua);
     }
 }

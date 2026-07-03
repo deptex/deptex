@@ -49,7 +49,14 @@ async function fetchVersions(
   return pending;
 }
 
-function parsedToSemver(parsed: ParsedRange): string | null {
+/**
+ * Convert a parsed GHSA range to a `semver`-compatible range string
+ * (space = AND, e.g. `>=1.0.0 <2.0.0`). Exported so the feed-sync write side
+ * can store the range on `known_malicious_packages.vulnerable_range` (N4)
+ * instead of enumerating concrete npm versions. Returns null when any
+ * constraint can't be coerced to a valid semver.
+ */
+export function parsedToSemver(parsed: ParsedRange): string | null {
   const parts: string[] = [];
   for (const c of parsed) {
     if (!semver.valid(semver.coerce(c.version))) {

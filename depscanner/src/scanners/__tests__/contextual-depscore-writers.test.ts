@@ -24,13 +24,14 @@
  * it does NOT touch the database. It runs in jest via the backend
  * preset (`roots: [...depscanner/src]` per backend/jest.config.js).
  *
- * NOTE on out-of-band writers: DAST v2.1c's `confirm_pdvs_from_dast_run`
- * RPC at phase25a:117-136 also touches PDVs (it updates
- * reachability_level to 'confirmed' WITHOUT recomputing
- * contextual_depscore — pre-existing tech debt, separately tracked).
- * That RPC lives in SQL, not depscanner TS, so the grep test below
+ * NOTE on out-of-band writers: DAST's `confirm_pdvs_from_dast_run` RPC also
+ * touches PDVs — it promotes a cross-linked PDV to reachability_level
+ * 'confirmed' AND (as of phase67 / SC2) recomputes contextual_depscore to the
+ * confirmed tier when it was NULL, so a DAST-proven vuln ranks at its full
+ * severity. That RPC lives in SQL, not depscanner TS, so the grep test below
  * does not see it — which is intentional: this enforces the
- * within-depscanner-pipeline scope of the sole-writer invariant.
+ * within-depscanner-pipeline scope of the sole-writer invariant. The RPC's
+ * recompute is covered by test/dast-confirm-contextual-depscore-pglite.ts.
  */
 
 import * as fs from 'fs';
@@ -65,11 +66,13 @@ function* walkTs(base: string): Generator<string> {
 const DEPSCANNER_SRC = path.resolve(__dirname, '../../..', 'src');
 
 /** Files that contain a `.from('project_dependency_vulnerabilities')` chain
- *  followed within ~600 chars by a `.update(` — i.e. files that mutate PDVs. */
+ *  followed within ~600 chars by a `.update(` or `.upsert(` — i.e. files that
+ *  mutate PDVs. (R3 batched the three known per-row UPDATE loops into batched
+ *  `.upsert(onConflict:'id')` flushes; they remain the sole PDV mutators.) */
 function filesMutatingPdv(): string[] {
   const out: string[] = [];
   // multiline-dot regex: handles chained calls on consecutive lines.
-  const re = /\.from\(\s*['"]project_dependency_vulnerabilities['"]\s*\)[\s\S]{0,600}?\.update\(/;
+  const re = /\.from\(\s*['"]project_dependency_vulnerabilities['"]\s*\)[\s\S]{0,600}?\.(?:update|upsert)\(/;
   for (const file of walkTs(DEPSCANNER_SRC)) {
     const text = fs.readFileSync(file, 'utf8');
     if (re.test(text)) {
@@ -124,9 +127,10 @@ function filesInlineUpdatingContextual(): string[] {
 }
 
 describe('PDV.contextual_depscore sole-writer invariant', () => {
-  test('only known files mutate project_dependency_vulnerabilities via .update(...)', () => {
+  test('only known files mutate project_dependency_vulnerabilities via .update(...)/.upsert(...)', () => {
     const files = new Set(filesMutatingPdv());
-    // Allowlist (every PDV-update site outside this list is a violation):
+    // Allowlist (every PDV-mutation site outside this list is a violation).
+    //  R3 batched each per-row UPDATE loop into a single .upsert(onConflict:'id'):
     //  - epd.ts                          writes contextual_depscore + epd_factor + entry_point_*
     //  - pipeline-steps/reachability.ts  writes depscore + base_depscore_no_reachability post-classification
     //  - reachability.ts                 writes reachability_level + reachability_details + is_reachable

@@ -556,14 +556,29 @@ export function isFrameworkRuntimePackage(depName: string | undefined): boolean 
 }
 
 /**
+ * Scope strings that mark a dependency as dev/test/build — by definition NOT
+ * on the production call path. Centralized (R4) so every dev-scope check shares
+ * one definition. The worker currently only ever writes `'dev'`
+ * (deps-sync.ts derives environment ∈ {'prod','dev',null}), so on real data
+ * this set is behaviourally identical to the old literal `=== 'dev'`; the extra
+ * members back the long-standing "dev/test/build" docstring contract and make
+ * the predicate robust to other ecosystems' scope vocabulary.
+ */
+export const DEV_SCOPES: ReadonlySet<string> = new Set([
+  'dev', 'development', 'test', 'build',
+]);
+
+/**
  * True when `project_dependencies.environment` marks a dependency as
  * dev/test/build scope. A dev-scoped dependency's vulnerable code is, by
  * definition, not on the production call path — the classifier floors it at
  * `unreachable`. `environment` is derived from the manifest (`deps-sync.ts`)
  * and from transitive dev-only propagation; it is the single dev-scope signal.
+ * Matching is case/whitespace-insensitive via the centralized `DEV_SCOPES` set.
  */
 export function isDevScoped(environment: string | null | undefined): boolean {
-  return environment === 'dev';
+  if (!environment) return false;
+  return DEV_SCOPES.has(environment.trim().toLowerCase());
 }
 
 /**
@@ -632,6 +647,38 @@ export function depMatchesUsedTransitives(
   return false;
 }
 
+/**
+ * True when `needle` occurs in `haystack` on package-segment boundaries — i.e.
+ * neither the character before nor the character after the match is an
+ * identifier char (`[a-z0-9]`). Both strings are expected lowercase. Used by
+ * the usage-heuristic name match (R5) to stop a short/generic dep name from
+ * fuzzy-matching the middle of an unrelated identifier.
+ */
+export function tokenBoundaryIncludes(haystack: string, needle: string): boolean {
+  if (!needle || !haystack) return false;
+  const isTok = (c: string) => c !== '' && c >= '0' && /[a-z0-9]/.test(c);
+  let from = 0;
+  for (;;) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx === -1) return false;
+    const before = idx === 0 ? '' : haystack[idx - 1];
+    const afterIdx = idx + needle.length;
+    const after = afterIdx >= haystack.length ? '' : haystack[afterIdx];
+    if (!isTok(before) && !isTok(after)) return true;
+    from = idx + 1;
+  }
+}
+
+/**
+ * Ecosystems where source code MUST explicitly `use`/`import` a package to
+ * exercise it, so `files_importing_count === 0` is strong negative evidence
+ * even on a directly-declared dep. Hoisted to module scope (R1) so the
+ * transitive-of-reachable seed computation and the per-PDV heuristic share one
+ * definition. Excluded: `gem` (Rails autoload + Bundler.require) and
+ * `maven`/`golang`/`cargo`/`nuget` (partial tree-sitter import resolution).
+ */
+const EXPLICIT_IMPORT_ECOSYSTEMS = new Set(['composer', 'pypi', 'npm']);
+
 export async function updateReachabilityLevels(
   projectId: string,
   runId: string,
@@ -653,7 +700,7 @@ export async function updateReachabilityLevels(
 
   const { data: pds, error: pdErr } = await supabase
     .from('project_dependencies')
-    .select('id, dependency_id, is_direct, files_importing_count, environment, dependency_version_id')
+    .select('id, dependency_id, is_direct, files_importing_count, environment, dependency_version_id, name, namespace')
     .eq('project_id', projectId)
     .eq('last_seen_extraction_run_id', runId);
   if (pdErr) {
@@ -663,7 +710,14 @@ export async function updateReachabilityLevels(
   const depIdMap = new Map(pds?.map((pd: any) => [pd.id, pd.dependency_id]) ?? []);
   const pdMetaMap = new Map<
     string,
-    { isDirect: boolean; filesImporting: number; scope: string | null; versionId: string | null }
+    {
+      isDirect: boolean;
+      filesImporting: number;
+      scope: string | null;
+      versionId: string | null;
+      name: string | null;
+      namespace: string | null;
+    }
   >(
     pds?.map((pd: any) => [
       pd.id,
@@ -672,6 +726,8 @@ export async function updateReachabilityLevels(
         filesImporting: Number(pd.files_importing_count ?? 0),
         scope: (pd.environment ?? null) as string | null,
         versionId: (pd.dependency_version_id ?? null) as string | null,
+        name: (pd.name ?? null) as string | null,
+        namespace: (pd.namespace ?? null) as string | null,
       },
     ]) ?? []
   );
@@ -896,6 +952,116 @@ export async function updateReachabilityLevels(
     );
   }
 
+  // -------------------------------------------------------------------------
+  // R1 — transitive-of-reachable floor.
+  //
+  // The import-absence heuristic below collapses a transitive dep with
+  // `files_importing_count === 0` to `unreachable` (depscore 0) UNLESS the
+  // workspace-rooted taint callgraph traced a CallEdge into it. But a prod
+  // transitive that executes only *via its parent* (form-data←axios,
+  // qs←express) never shows up in either signal, so it is silenced even though
+  // it runs. Consult the global `dependency_version_edges` graph: a transitive
+  // whose parent version is itself >= `module` reachable inherits a `module`
+  // floor (verdict `transitive_of_reachable`).
+  //
+  // GATING (conservative — never guess):
+  //   - Only versions present in THIS project participate (intra-project edge
+  //     slice), so we never reason about deps that aren't installed here.
+  //   - Seeds are PDs with self-standing reachability evidence (imported /
+  //     framework-runtime / callgraph-reached / direct-in-a-non-explicit-
+  //     -import ecosystem), non-dev. A genuine orphan (no reachable parent) is
+  //     never reached by the closure and stays `unreachable`.
+  //   - dev-scope deps are excluded from seeds AND the floor is applied inside
+  //     the `!devScoped` heuristic branch, so a dev dep is never promoted.
+  //   - When the edge table is absent/empty for this project (edges are
+  //     backfilled asynchronously and may not exist on a brand-new dependency
+  //     set's first scan), the closure is empty → behaviour is unchanged.
+  //   - Requires `graphTrusted` (same precondition as the verdict it overrides).
+  const transitiveOfReachableVersionIds = new Set<string>();
+  {
+    const allowDirectDemotionForSeeds =
+      !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
+    const callgraphRanForSeeds =
+      options.usedTransitives !== undefined && options.usedTransitives.size > 0;
+    const seedVersionIds = new Set<string>();
+    const projectVersionIds = new Set<string>();
+    for (const meta of pdMetaMap.values()) {
+      if (!meta.versionId) continue;
+      projectVersionIds.add(meta.versionId);
+      if (isDevScoped(meta.scope)) continue;
+      const cgReached =
+        callgraphRanForSeeds &&
+        depMatchesUsedTransitives(meta.name, meta.namespace, options.usedTransitives!);
+      const hasEvidence =
+        meta.filesImporting > 0 ||
+        isFrameworkEmbeddedRuntime(meta.name ?? undefined) ||
+        isFrameworkRuntimePackage(meta.name ?? undefined) ||
+        cgReached ||
+        (meta.isDirect && !allowDirectDemotionForSeeds);
+      if (hasEvidence) seedVersionIds.add(meta.versionId);
+    }
+
+    if (graphTrusted && projectVersionIds.size > 0 && seedVersionIds.size > 0) {
+      const parentToChildren = new Map<string, string[]>();
+      let edgesLoaded = false;
+      try {
+        const versionList = [...projectVersionIds];
+        const CHUNK = 200;
+        for (let i = 0; i < versionList.length; i += CHUNK) {
+          const slice = versionList.slice(i, i + CHUNK);
+          const { data, error } = await supabase
+            .from('dependency_version_edges')
+            .select('parent_version_id, child_version_id')
+            .in('child_version_id', slice);
+          if (error) {
+            const code = (error as { code?: string }).code ?? '';
+            const isMissing = code === '42P01' || /dependency_version_edges/.test(error.message ?? '');
+            if (isMissing) { edgesLoaded = false; break; }
+            throw error;
+          }
+          for (const e of (data ?? []) as Array<{ parent_version_id: string | null; child_version_id: string | null }>) {
+            const p = e.parent_version_id;
+            const c = e.child_version_id;
+            // Intra-project edges only: both endpoints must be installed here.
+            if (!p || !c || !projectVersionIds.has(p) || !projectVersionIds.has(c)) continue;
+            edgesLoaded = true;
+            const kids = parentToChildren.get(p);
+            if (kids) kids.push(c);
+            else parentToChildren.set(p, [c]);
+          }
+        }
+      } catch (edgeErr) {
+        // Edge graph unavailable — keep current behaviour (do NOT guess).
+        const msg = edgeErr instanceof Error ? edgeErr.message : String(edgeErr);
+        await logger.warn(
+          'reachability',
+          `dependency_version_edges fetch failed; skipping transitive-of-reachable floor: ${msg}`,
+        );
+        edgesLoaded = false;
+      }
+
+      if (edgesLoaded) {
+        // BFS down the edges from the reachable seeds. Anything reached purely
+        // by propagation (not itself a seed) is a transitive of a reachable
+        // parent and earns the `module` floor.
+        const reached = new Set<string>(seedVersionIds);
+        const queue: string[] = [...seedVersionIds];
+        while (queue.length > 0) {
+          const v = queue.shift()!;
+          for (const child of parentToChildren.get(v) ?? []) {
+            if (!reached.has(child)) {
+              reached.add(child);
+              queue.push(child);
+            }
+          }
+        }
+        for (const v of reached) {
+          if (!seedVersionIds.has(v)) transitiveOfReachableVersionIds.add(v);
+        }
+      }
+    }
+  }
+
   // Collect all type/method strings from usage slices for fuzzy matching
   const allUsageStrings: string[] = [];
   for (const u of usages ?? []) {
@@ -906,17 +1072,27 @@ export async function updateReachabilityLevels(
   // Check if a dependency name appears in any usage slice (fuzzy)
   // e.g. "jackson-databind" matches "com.fasterxml.jackson.databind.ObjectMapper"
   // e.g. "log4j-core" matches "org.apache.logging.log4j.Logger"
+  //
+  // R5: matching is TOKEN-BOUNDARY, not raw substring. A bare `s.includes(x)`
+  // over-promotes — a short or generic dep name (`ms`, `cli`, `react`) bleeds
+  // into unrelated identifiers (`params`, `client`, `react-router`) and lifts
+  // the dep to `function` on noise. We require the needle to sit on package
+  // segment boundaries (`.` `/` `#` `:` `-` `_` `@` or string ends), so
+  // `log4j-core`→`log4j` still matches `…logging.log4j.Logger` while
+  // `ms`-in-`params` no longer does.
   function isDepUsed(depName: string): boolean {
     if (!depName || allUsageStrings.length === 0) return false;
     const lower = depName.toLowerCase();
-    // Direct match
-    if (allUsageStrings.some(s => s.includes(lower))) return true;
+    // Direct (whole-name) match.
+    if (allUsageStrings.some(s => tokenBoundaryIncludes(s, lower))) return true;
     // Convert hyphens to dots for Java package matching: "jackson-databind" → "jackson.databind"
     const dotted = lower.replace(/-/g, '.');
-    if (dotted !== lower && allUsageStrings.some(s => s.includes(dotted))) return true;
-    // Also try just the last segment for short names: "log4j-core" → check for "log4j"
+    if (dotted !== lower && allUsageStrings.some(s => tokenBoundaryIncludes(s, dotted))) return true;
+    // Also try just the first segment for compound names: "log4j-core" → "log4j".
+    // Length-gated (>= 4) so a 2–3 char first segment ("py", "go", "is") can't
+    // fuzzy-match half the codebase.
     const parts = lower.split('-');
-    if (parts.length > 1 && allUsageStrings.some(s => s.includes(parts[0]))) return true;
+    if (parts.length > 1 && parts[0].length >= 4 && allUsageStrings.some(s => tokenBoundaryIncludes(s, parts[0]))) return true;
     return false;
   }
 
@@ -934,10 +1110,60 @@ export async function updateReachabilityLevels(
     module: 0,
     unreachable: 0,
   };
+  // R3 — accumulate the per-PDV verdicts and flush them with a single batched
+  // upsert (onConflict id) instead of one UPDATE round-trip per PDV. On a
+  // 30k-row project the N+1 UPDATE loop dominated this step. `id` is the PK;
+  // every row already exists, so each upsert resolves to ON CONFLICT DO UPDATE
+  // touching only the three reachability columns — exact prior semantics.
+  const pdvUpdates: Array<{
+    id: string;
+    project_id: string;
+    project_dependency_id: string;
+    osv_id: string;
+    reachability_level: string;
+    reachability_details: any;
+    is_reachable: boolean;
+  }> = [];
+
+  // M1 silence-event log (workstream M). One durable row per (run, pdv)
+  // recording the verdict + the classifier inputs that produced it. PURE
+  // OBSERVABILITY — nothing reads it on the prod silence path; M2 diffs two
+  // runs to catch silence false-negatives. Accumulated beside `pdvUpdates`
+  // and flushed in a second fail-soft batched upsert after the PDV write.
+  const silenceEvents: Array<{
+    project_id: string;
+    extraction_run_id: string;
+    pdv_id: string;
+    project_dependency_id: string;
+    dependency_id: string;
+    osv_id: string;
+    reachability_level: string;
+    is_reachable: boolean;
+    verdict: string | null;
+    graph_trusted: boolean;
+    ast_parsed: boolean;
+    ecosystem: string | null;
+    files_importing_count: number | null;
+    is_direct: boolean | null;
+    dev_scoped: boolean | null;
+    callgraph_reached: boolean | null;
+    classifier_inputs: any;
+  }> = [];
 
   for (const pdv of pdvs) {
     const dependencyId = depIdMap.get(pdv.project_dependency_id);
     if (!dependencyId) continue;
+
+    // M1: hoist the per-PDV meta + callgraph-reached signal to loop top so they
+    // are available at the silence_events push site regardless of which
+    // classification branch runs below. Pure observability — these do NOT change
+    // the level/details/is_reachable decision (the branches recompute what they
+    // need). The else-branch's former `const meta` now reuses this binding.
+    const meta = pdMetaMap.get(pdv.project_dependency_id);
+    const cgReached =
+      options.usedTransitives !== undefined &&
+      options.usedTransitives.size > 0 &&
+      depMatchesUsedTransitives(meta?.name ?? null, meta?.namespace ?? null, options.usedTransitives);
 
     // A PDV's primary osv_id may be a GHSA advisory while the taint engine
     // and CVE-targeted specs key on the CVE id. Match on the primary id plus
@@ -1129,7 +1355,7 @@ export async function updateReachabilityLevels(
         // timed-out — astParsedSuccessfully=false), the absence of slices is
         // NOT evidence of unreachability. Never emit `unreachable` in that
         // case; floor the verdict at `module` so real vulns aren't hidden.
-        const meta = pdMetaMap.get(pdv.project_dependency_id);
+        // `meta` is hoisted to loop top (M1) — reuse it here.
         // v3 precision: when the taint-engine callgraph confirms a CallEdge
         // crossed into this dep's code, demote it from `unreachable` to
         // `module`. Handles the jackson-vs-idna case where a framework's
@@ -1150,7 +1376,6 @@ export async function updateReachabilityLevels(
         // Bundler.require make files=0 unreliable), `maven`/`golang`/`cargo`/
         // `nuget` (tree-sitter import resolution is partial — we keep the
         // conservative transitive-only gate to avoid false negatives).
-        const EXPLICIT_IMPORT_ECOSYSTEMS = new Set(['composer', 'pypi', 'npm']);
         const allowDirectDemotion =
           !!options.ecosystem && EXPLICIT_IMPORT_ECOSYSTEMS.has(options.ecosystem);
         // Client-SPA bundling floor: a browser bundle ships the whole prod
@@ -1170,7 +1395,23 @@ export async function updateReachabilityLevels(
           !isFrameworkRuntimePackage(depName) &&
           !callgraphReachedThisDep &&
           !clientSpaBundledProdDep;
-        if (heuristicUnreachable) {
+        // R1 — would-be-silenced transitive whose parent version is itself
+        // >= `module` reachable (per the gated dependency_version_edges
+        // closure above). Floor at `module` instead of `unreachable`: the dep
+        // executes via its reachable parent (form-data←axios, qs←express).
+        const transitiveOfReachable =
+          heuristicUnreachable &&
+          !!meta &&
+          !!meta.versionId &&
+          transitiveOfReachableVersionIds.has(meta.versionId);
+        if (transitiveOfReachable) {
+          level = 'module';
+          details = {
+            reason: 'reached through a reachable parent dependency (dependency_version_edges)',
+            scope: 'transitive_of_reachable',
+            verdict: 'transitive_of_reachable',
+          };
+        } else if (heuristicUnreachable) {
           level = 'unreachable';
           // A directly-declared dep with zero importers reads differently from a
           // transitive orphan — keep the reason honest. The `verdict`/`scope`
@@ -1209,17 +1450,80 @@ export async function updateReachabilityLevels(
 
     const isReachable = level !== 'unreachable';
 
-    const { error: updateErr } = await supabase
-      .from('project_dependency_vulnerabilities')
-      .update({ reachability_level: level, reachability_details: details, is_reachable: isReachable })
-      .eq('id', pdv.id);
+    // project_id / project_dependency_id / osv_id are the NOT-NULL columns the
+    // upsert's (never-taken) INSERT arm needs; they carry each row's existing
+    // values so ON CONFLICT (id) DO UPDATE is a pure update.
+    pdvUpdates.push({
+      id: pdv.id,
+      project_id: projectId,
+      project_dependency_id: pdv.project_dependency_id,
+      osv_id: pdv.osv_id,
+      reachability_level: level,
+      reachability_details: details,
+      is_reachable: isReachable,
+    });
 
-    if (updateErr) {
-      console.error(`[REACHABILITY] Failed to update vuln ${pdv.id}: ${updateErr.message}`);
-    }
+    // M1: snapshot this verdict + its classifier inputs into the silence-event
+    // log. Additive — mirrors the value just pushed to `pdvUpdates`, never
+    // alters it.
+    silenceEvents.push({
+      project_id: projectId,
+      extraction_run_id: runId,
+      pdv_id: pdv.id,
+      project_dependency_id: pdv.project_dependency_id,
+      dependency_id: dependencyId,
+      osv_id: pdv.osv_id,
+      reachability_level: level,
+      is_reachable: isReachable,
+      verdict: details && typeof details === 'object' ? (details.verdict ?? null) : null,
+      graph_trusted: graphTrusted,
+      ast_parsed: astParsedSuccessfully,
+      ecosystem: options.ecosystem ?? null,
+      files_importing_count: meta ? meta.filesImporting : null,
+      is_direct: meta ? meta.isDirect : null,
+      dev_scoped: meta ? isDevScoped(meta.scope) : null,
+      callgraph_reached: cgReached,
+      classifier_inputs: {
+        used_transitives_count: options.usedTransitives?.size ?? null,
+        callgraph_ran: (options.usedTransitives?.size ?? 0) > 0,
+        is_client_spa: !!options.isClientSpaProject,
+      },
+    });
+
     if (details) detailsSetCount++;
     updatedCount++;
     if (level in levelCounts) levelCounts[level]++;
+  }
+
+  for (let i = 0; i < pdvUpdates.length; i += 100) {
+    const chunk = pdvUpdates.slice(i, i + 100);
+    const { error: updateErr } = await supabase
+      .from('project_dependency_vulnerabilities')
+      .upsert(chunk, { onConflict: 'id' });
+    if (updateErr) {
+      console.error(
+        `[REACHABILITY] Failed to upsert reachability for ${chunk.length} vuln(s) (chunk ${i}): ${updateErr.message}`,
+      );
+    }
+  }
+
+  // M1 silence-event log flush — a SECOND batched upsert, same Storage surface,
+  // chunked by 100, idempotent within a run via (extraction_run_id, pdv_id).
+  // PURE OBSERVABILITY: any failure (e.g. table missing on a not-yet-migrated DB,
+  // code 42P01) must NEVER fail the run — warn + break, never throw. Same
+  // fail-soft posture as the phase23-missing-column fallback above.
+  for (let i = 0; i < silenceEvents.length; i += 100) {
+    const chunk = silenceEvents.slice(i, i + 100);
+    const { error: seErr } = await supabase
+      .from('silence_events')
+      .upsert(chunk, { onConflict: 'extraction_run_id,pdv_id' });
+    if (seErr) {
+      await logger.warn(
+        'reachability',
+        `silence_events write skipped (${chunk.length} rows): ${seErr.message}`,
+      );
+      break; // table absent / write rejected ⇒ the rest will fail the same way
+    }
   }
 
   // Surface per-level counts so on-call can answer "did any vuln actually get

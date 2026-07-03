@@ -94,10 +94,48 @@ export async function createInstallationToken(installationId: string): Promise<s
   return data.token;
 }
 
+/**
+ * Check out a specific commit in an already-cloned (shallow) repo.
+ *
+ * The default clone is `--depth 1 --single-branch`, so only the branch tip is
+ * local. When the requested commit IS the tip (the common webhook case — the
+ * push that triggered the scan), checkout succeeds immediately. When the branch
+ * has since advanced (or a re-scan pins an older commit), the commit object is
+ * absent from the shallow clone, so we fetch it on demand:
+ *   1) targeted shallow fetch of just that SHA (works where the host allows
+ *      fetching a reachable commit by SHA, e.g. github.com), then
+ *   2) as a last resort, unshallow the cloned branch so its full history (which
+ *      the pushed commit is reachable from) is local.
+ * If the commit still can't be obtained (e.g. it was force-pushed away), the
+ * error propagates so we fail loudly rather than silently scan a different tree.
+ */
+export async function checkoutCommit(repoDir: string, commitSha: string): Promise<void> {
+  const git = simpleGit(repoDir);
+  // 1) Fast path: the SHA is the shallow tip we already cloned.
+  try {
+    await git.raw(['checkout', commitSha]);
+    return;
+  } catch {
+    // Not present in the shallow clone — fall through to fetch it.
+  }
+  // 2) Targeted shallow fetch of just this commit.
+  try {
+    await git.raw(['fetch', '--depth', '1', 'origin', commitSha]);
+    await git.raw(['checkout', commitSha]);
+    return;
+  } catch {
+    // Host may reject fetching an arbitrary SHA on a shallow fetch.
+  }
+  // 3) Last resort: unshallow the cloned branch, then check out.
+  await git.raw(['fetch', '--unshallow', 'origin']);
+  await git.raw(['checkout', commitSha]);
+}
+
 export async function cloneRepository(
   installationId: string,
   repoFullName: string,
-  branch: string
+  branch: string,
+  commitSha?: string
 ): Promise<string> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deptex-extract-'));
   try {
@@ -105,6 +143,7 @@ export async function cloneRepository(
     const repoUrl = `https://x-access-token:${token}@github.com/${repoFullName}.git`;
     const git = simpleGit(tempDir);
     await git.clone(repoUrl, tempDir, ['--branch', branch, '--depth', '1', '--single-branch']);
+    if (commitSha) await checkoutCommit(tempDir, commitSha);
     return tempDir;
   } catch (error: any) {
     if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });

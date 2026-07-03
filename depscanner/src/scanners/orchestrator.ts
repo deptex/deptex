@@ -11,6 +11,7 @@ import {
 import { detectInfraTypes, findDockerfiles, type InfraType } from './detect-infra';
 import { runCheckov } from './checkov';
 import {
+  enrichContainerFindingsWithFeeds,
   extractGhcrOwner,
   normalizeDigest,
   parseDockerfileFinalStage,
@@ -1091,6 +1092,22 @@ async function scanContainerImages(
     }
   } finally {
     await shredAndRemoveDir(envelope.dockerConfigDir);
+  }
+
+  // Enrich OS-package CVEs with CISA-KEV (is_kev) + FIRST EPSS (epss_score),
+  // reusing the shared 6h in-process feed caches. Runs here — post-cache, once
+  // over every image's findings — so cache-hit findings get fresh feed data
+  // too, mirroring how reachability is decorated on every scan rather than
+  // cached. Mutates the finding objects in place (the spread is a shallow view
+  // of the same references held in the two arrays). Best-effort: the helper
+  // never throws, but guard anyway so a feed blip can't abort the scan.
+  try {
+    await enrichContainerFindingsWithFeeds([
+      ...dockerfileFindings,
+      ...configuredFindings,
+    ]);
+  } catch (e: any) {
+    warnings.push(`container_feed_enrich_failed:${e?.message ?? 'unknown'}`);
   }
 
   return {

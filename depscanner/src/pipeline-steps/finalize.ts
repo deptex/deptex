@@ -24,7 +24,6 @@
 import { runStage } from '../pipeline-stage-runner';
 import { logStepError, classifyError } from '../with-timeout';
 import { updateStep } from '../pipeline-helpers';
-import { updateJobStatus } from '../job-db';
 import type { ScannerSummary } from '../scanners/orchestrator';
 import type { PipelineContext } from '../pipeline-types';
 
@@ -120,13 +119,33 @@ export async function doFinalize(
   // reads a stale/zero summary in the gap and the node shows "0 findings" until a
   // manual refresh.
 
-  // Mark the job completed first (only on the 'ready' path — the analyzing path is
-  // finished by the backend populate). Doing it before the recompute keeps the
-  // summary's last_scan_at current; doing it before the status write keeps Recent
-  // Activity + Overview converging together.
+  // Mark the job completed here (only on the 'ready' path — the analyzing path is
+  // finished by the backend populate). Ordering: before the recompute keeps the
+  // summary's last_scan_at current, and before the status write keeps Overview and
+  // Repository/Recent Activity converging together.
+  // Guarded: only flip a still-in-flight ('processing') job to 'completed'. The
+  // prior unguarded write would silently overwrite a user cancel landing during
+  // finalize — cancel sets status='cancelled' on this row WITHOUT rotating
+  // machine_id/run_id, so a machine/run guard can't catch it; a status guard
+  // can. A recovery requeue (status→'queued') is left intact for the same
+  // reason. The worker's post-pipeline completion write makes the equivalent
+  // isJobCancelled check, so the two stay consistent.
   const didUpdateJob = status === 'ready' && !!job.jobId;
   if (didUpdateJob) {
-    await updateJobStatus(supabase, job.jobId!, undefined, undefined, 'completed');
+    const { data: marked, error: markErr } = await supabase
+      .from('scan_jobs')
+      .update({ status: 'completed', error: null, completed_at: new Date().toISOString() })
+      .eq('id', job.jobId!)
+      .eq('status', 'processing')
+      .select('id');
+    if (markErr) {
+      await log.warn('finalize', `scan job completion write failed: ${markErr.message}`);
+    } else if (!Array.isArray(marked) || marked.length === 0) {
+      await log.warn(
+        'finalize',
+        'Scan job no longer in-flight (cancelled or requeued during finalize) — left its status untouched',
+      );
+    }
   }
 
   await supabase

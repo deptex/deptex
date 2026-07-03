@@ -20,8 +20,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { updateReachabilityLevels, isDevScoped } from '../reachability';
-import { patchDevDependencies, type ParsedSbomDep } from '../sbom';
+import { updateReachabilityLevels, isDevScoped, DEV_SCOPES } from '../reachability';
+import { patchDevDependencies, collectPyprojectDevNames, type ParsedSbomDep } from '../sbom';
 import type { Storage } from '../storage';
 
 // --- FakeStorage (self-contained, mirrors reachability-symbol-match.test.ts) -
@@ -63,6 +63,14 @@ class FakeStorage {
         });
       },
       insert: () => Promise.resolve({ data: null, error: null }),
+      // R3: the classifier now flushes verdicts via a batched upsert. Record
+      // each row in the same `updates` shape (keyed on id) the per-row update
+      // path used, so verdictOf() keeps working unchanged.
+      upsert: (rows: any) => {
+        const arr = Array.isArray(rows) ? rows : [rows];
+        for (const r of arr) this.updates.push({ table, filter: { id: r.id }, values: r });
+        return Promise.resolve({ data: null, error: null });
+      },
       update: (values: any) => {
         const currentFilters: Record<string, unknown> = {};
         for (const f of filters) currentFilters[f.col] = f.val;
@@ -164,12 +172,34 @@ function mkDep(over: Partial<ParsedSbomDep>): ParsedSbomDep {
 beforeEach(() => jest.clearAllMocks());
 
 describe('isDevScoped', () => {
-  it('is true only for environment "dev"', () => {
+  it('is true for the worker\'s "dev" value and false for prod/null/empty (unchanged on real data)', () => {
     expect(isDevScoped('dev')).toBe(true);
     expect(isDevScoped('prod')).toBe(false);
     expect(isDevScoped(null)).toBe(false);
     expect(isDevScoped(undefined)).toBe(false);
     expect(isDevScoped('')).toBe(false);
+  });
+
+  // R4 — centralized DEV_SCOPES set: case/whitespace-insensitive + the
+  // documented dev/test/build family (none of which the worker writes today,
+  // so real-data behaviour is identical).
+  it('is robust to case + whitespace variants of "dev"', () => {
+    expect(isDevScoped('DEV')).toBe(true);
+    expect(isDevScoped(' dev ')).toBe(true);
+    expect(isDevScoped('Dev')).toBe(true);
+  });
+
+  it('recognizes the documented dev/test/build scope family', () => {
+    expect(isDevScoped('development')).toBe(true);
+    expect(isDevScoped('test')).toBe(true);
+    expect(isDevScoped('build')).toBe(true);
+    expect(DEV_SCOPES.has('dev')).toBe(true);
+  });
+
+  it('still rejects production-ish scopes', () => {
+    expect(isDevScoped('production')).toBe(false);
+    expect(isDevScoped('runtime')).toBe(false);
+    expect(isDevScoped('optional')).toBe(false);
   });
 });
 
@@ -222,6 +252,85 @@ describe('patchDevDependencies — scope detection', () => {
         expect(byName.predicates.devScoped).toBe(true);
         expect(byName.rexpect.devScoped).toBe(true);
         expect(byName.cc.devScoped).toBe(true);
+      },
+    );
+  });
+
+  // O3: modern Python tooling — PEP 735 dependency-groups, PDM, uv, Hatch,
+  // Poetry 1.2+ groups. cdxgen can't tell these are dev scope, so the manifest
+  // parser must.
+  it('flags dev deps across the modern pyproject tool matrix (not just poetry-classic)', () => {
+    const pyproject = [
+      '[project]',
+      'name = "app"',
+      'dependencies = ["requests", "flask"]',
+      '',
+      '[project.optional-dependencies]',
+      '# extras are NOT dev — must stay prod-eligible',
+      'plotting = ["matplotlib"]',
+      '',
+      '[dependency-groups]',                      // PEP 735
+      'dev = ["pytest>=7.0", "ruff"]',
+      'test = [',                                 // multi-line array
+      '  "coverage[toml]",',
+      '  "pytest-cov",',
+      '  { include-group = "dev" },',             // group ref, not a package
+      ']',
+      '',
+      '[tool.pdm.dev-dependencies]',              // PDM
+      'lint = ["mypy", "black"]',
+      '',
+      '[tool.uv]',                                // uv legacy
+      'dev-dependencies = ["pre-commit"]',
+      'package = true',                           // non-array key — ignored
+      '',
+      '[tool.hatch.envs.test]',                   // Hatch
+      'dependencies = ["tox", "nox"]',
+      '',
+      '[tool.poetry.group.docs.dependencies]',    // Poetry 1.2+ group
+      'sphinx = "^7"',
+      '',
+      '[tool.poetry.dev-dependencies]',           // Poetry classic
+      'flake8 = "^6"',
+      'python = "^3.11"',                         // constraint, not a package
+    ].join('\n');
+
+    const devNames = new Set<string>();
+    collectPyprojectDevNames(pyproject, devNames);
+
+    for (const expected of [
+      'pytest', 'ruff', 'coverage', 'pytest-cov', 'mypy', 'black',
+      'pre-commit', 'tox', 'nox', 'sphinx', 'flake8',
+    ]) {
+      expect(devNames.has(expected)).toBe(true);
+    }
+    // Prod deps + extras + group-include refs must NOT be flagged dev.
+    for (const notDev of ['requests', 'flask', 'matplotlib', 'python', 'include-group', 'dev', 'test']) {
+      expect(devNames.has(notDev)).toBe(false);
+    }
+  });
+
+  it('marks PEP 735 / PDM dev groups via patchDevDependencies (end-to-end)', () => {
+    withTmpRepo(
+      {
+        'pyproject.toml': [
+          '[project]',
+          'name = "app"',
+          'dependencies = ["requests"]',
+          '[dependency-groups]',
+          'dev = ["pytest"]',
+        ].join('\n'),
+      },
+      (dir) => {
+        const deps = [
+          mkDep({ name: 'requests', is_direct: true }),
+          mkDep({ name: 'pytest', is_direct: true }),
+        ];
+        patchDevDependencies(deps, dir, 'pypi');
+        const byName = Object.fromEntries(deps.map((d) => [d.name, d]));
+        expect(byName.requests.devScoped).toBe(false);
+        expect(byName.pytest.devScoped).toBe(true);
+        expect(byName.pytest.source).toBe('devDependencies');
       },
     );
   });
