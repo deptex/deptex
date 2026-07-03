@@ -4,7 +4,6 @@ import {
   Download,
   Package,
   Info,
-  FileCode,
   GitFork,
   Github,
   Loader2,
@@ -19,8 +18,6 @@ import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 import { ProjectDependency, ProjectEffectivePolicies, api } from '../lib/api';
 import { useToast } from '../hooks/use-toast';
 
-import { CapabilitiesChips, type CapabilitiesState } from './CapabilitiesSection';
-
 interface PackageOverviewProps {
   dependency: ProjectDependency;
   organizationId: string;
@@ -29,8 +26,6 @@ interface PackageOverviewProps {
   latestVersion?: string | null;
   /** Project/org effective policies for license compliance. When provided, License card shows policy-based status. */
   policies?: ProjectEffectivePolicies | null;
-  /** Pre-fetched capability scan state — loaded by the parent alongside the overview so everything paints at once. */
-  capabilities?: CapabilitiesState | null;
   /** When true, show a "Dev dependency" badge (package is in devDependencies, not used at runtime in production). */
   isDevDependency?: boolean;
 }
@@ -247,7 +242,7 @@ function AiSummaryRenderer({ content }: { content: string }) {
   );
 }
 
-export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, capabilities, isDevDependency = false }: PackageOverviewProps) {
+export default function PackageOverview({ dependency, organizationId, projectId, latestVersion, policies, isDevDependency = false }: PackageOverviewProps) {
 
   const [aiSummary, setAiSummary] = useState<string | null>(dependency.ai_usage_summary ?? null);
   const [aiAnalyzedAt, setAiAnalyzedAt] = useState<string | null>(dependency.ai_usage_analyzed_at ?? null);
@@ -412,10 +407,7 @@ export default function PackageOverview({ dependency, organizationId, projectId,
           left, the analyze action on the right, AI summary below. */}
       <Card>
         <CardHeader className="p-4 pt-3 pb-3 rounded-t-lg bg-background-card-header border-b border-border">
-          <div className="flex items-center gap-2">
-            <FileCode className="h-5 w-5 text-foreground-secondary" />
-            <CardTitle className="text-base">Usage</CardTitle>
-          </div>
+          <CardTitle className="text-base">Usage</CardTitle>
         </CardHeader>
         <CardContent className="pt-4 space-y-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -472,7 +464,6 @@ export default function PackageOverview({ dependency, organizationId, projectId,
                 <p className="text-sm text-foreground">Transitive dependency — not directly imported</p>
               </div>
             )}
-            {capabilities && <CapabilitiesChips state={capabilities} compact />}
           </div>
 
           {dependency.is_direct && !aiSummary && (

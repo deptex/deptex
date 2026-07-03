@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertTriangle, History } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import {
@@ -52,6 +52,17 @@ const DEFAULT_STATE: TabState = {
   scope_config: {},
 };
 
+// In-memory cache (per browser session) of the last-loaded DAST state per project. The
+// DAST tab unmounts/remounts on every settings-section switch, so without this it re-fetches
+// from scratch and flashes a full skeleton each time you return. Seeding from the cache on
+// mount (then refreshing in the background) makes a return paint instantly.
+type DastCacheEntry = { config: TabState; targets: DastTargetDTO[]; jobs: DastJobDTO[] };
+const dastTabCache = new Map<string, DastCacheEntry>();
+function putDastCache(projectId: string, partial: Partial<DastCacheEntry>) {
+  const prev = dastTabCache.get(projectId) ?? { config: DEFAULT_STATE, targets: [], jobs: [] };
+  dastTabCache.set(projectId, { ...prev, ...partial });
+}
+
 function formatRelative(iso: string | null | undefined): string {
   if (!iso) return '';
   const diffSec = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -100,13 +111,15 @@ function statusLabel(status: DastJobDTO['status']): string {
 export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) {
   const { toast } = useToast();
 
-  const [loading, setLoading] = useState(true);
-  const [config, setConfig] = useState<TabState>(DEFAULT_STATE);
+  // Seed from the session cache so returning to the tab paints instantly (see dastTabCache).
+  const seeded = dastTabCache.get(projectId);
+  const [loading, setLoading] = useState(!seeded);
+  const [config, setConfig] = useState<TabState>(seeded?.config ?? DEFAULT_STATE);
   const [saving, setSaving] = useState(false);
 
-  const [targets, setTargets] = useState<DastTargetDTO[]>([]);
-  const [jobs, setJobs] = useState<DastJobDTO[]>([]);
-  const [jobsLoading, setJobsLoading] = useState(true);
+  const [targets, setTargets] = useState<DastTargetDTO[]>(seeded?.targets ?? []);
+  const [jobs, setJobs] = useState<DastJobDTO[]>(seeded?.jobs ?? []);
+  const [jobsLoading, setJobsLoading] = useState(!seeded);
 
   const [editingTargetId, setEditingTargetId] = useState<string | null>(null);
   const [authTargetId, setAuthTargetId] = useState<string | null>(null);
@@ -123,19 +136,23 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
 
   const refreshConfig = async () => {
     const cfg = await api.getDastConfig(projectId);
-    setConfig({
+    const nextConfig: TabState = {
       enabled: !!cfg.enabled,
       scan_profile: cfg.scan_profile ?? 'auto',
       scan_timeout_minutes: cfg.scan_timeout_minutes ?? 30,
       scope_config: cfg.scope_config ?? {},
-    });
-    setTargets(cfg.targets ?? []);
+    };
+    const nextTargets = cfg.targets ?? [];
+    setConfig(nextConfig);
+    setTargets(nextTargets);
+    putDastCache(projectId, { config: nextConfig, targets: nextTargets });
   };
 
   const refreshJobs = async () => {
     try {
       const next = await api.getDastJobs(projectId, { limit: 25 });
       setJobs(next);
+      putDastCache(projectId, { jobs: next });
     } catch (e: any) {
       console.error('[dast] failed to load jobs', e);
     } finally {
@@ -147,6 +164,7 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
     try {
       const next = await api.getDastTargets(projectId);
       setTargets(next);
+      putDastCache(projectId, { targets: next });
     } catch (e: any) {
       console.error('[dast] failed to load targets', e);
     }
@@ -154,8 +172,20 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setJobsLoading(true);
+    // Seed from the session cache (covers a projectId switch while mounted; the useState
+    // initializers cover a fresh remount). Only show skeletons when there's nothing cached;
+    // a cache hit refreshes silently in the background.
+    const cached = dastTabCache.get(projectId);
+    if (cached) {
+      setConfig(cached.config);
+      setTargets(cached.targets);
+      setJobs(cached.jobs);
+      setLoading(false);
+      setJobsLoading(false);
+    } else {
+      setLoading(true);
+      setJobsLoading(true);
+    }
 
     (async () => {
       try {
@@ -447,9 +477,10 @@ export function DastScanningTab({ projectId, canManage }: DastScanningTabProps) 
               {jobsLoading ? (
                 <TableSkeleton />
               ) : jobs.length === 0 ? (
-                <div className="px-6 py-10 text-center">
-                  <p className="text-sm text-foreground-secondary">No scans yet.</p>
-                  <p className="text-xs text-foreground-secondary mt-1">
+                <div className="px-4 py-10 text-center">
+                  <History className="h-6 w-6 text-foreground-muted mx-auto mb-2" />
+                  <p className="text-sm text-foreground">No scans yet</p>
+                  <p className="text-xs text-foreground-secondary mt-1 max-w-sm mx-auto">
                     Add a target and run a scan to see activity here.
                   </p>
                 </div>

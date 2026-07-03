@@ -17,6 +17,10 @@ interface ProjectTeamSelectProps {
   variant?: 'default' | 'modal';
   locked?: boolean;
   placeholder?: string;
+  /** Called when the dropdown opens — lets the caller lazy-load `teams` on first open. */
+  onOpen?: () => void;
+  /** Show a loading state inside the dropdown while `teams` is being fetched. */
+  loading?: boolean;
 }
 
 export function ProjectTeamSelect({
@@ -27,6 +31,8 @@ export function ProjectTeamSelect({
   variant = 'default',
   locked = false,
   placeholder = 'Select a team...',
+  onOpen,
+  loading = false,
 }: ProjectTeamSelectProps) {
   const [search, setSearch] = useState('');
   const selectedTeam = teams.find(team => team.id === value);
@@ -46,7 +52,7 @@ export function ProjectTeamSelect({
     : teams;
 
   return (
-    <DropdownMenu onOpenChange={(open) => { if (!open) setSearch(''); }}>
+    <DropdownMenu onOpenChange={(open) => { if (open) onOpen?.(); else setSearch(''); }}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -82,7 +88,16 @@ export function ProjectTeamSelect({
         sideOffset={6}
         className="min-w-[var(--radix-dropdown-menu-trigger-width)] rounded-lg border border-border bg-background-card p-0 shadow-xl"
       >
-        {teams.length === 0 ? (
+        {loading ? (
+          <div className="p-1" aria-busy="true" aria-label="Loading teams">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="rounded-md px-3 py-2.5 flex flex-col gap-1.5">
+                <div className={cn('h-4 rounded bg-muted animate-pulse', i === 1 ? 'w-24' : 'w-32')} />
+                <div className={cn('h-3 rounded bg-muted/60 animate-pulse', i === 1 ? 'w-36' : 'w-44')} />
+              </div>
+            ))}
+          </div>
+        ) : teams.length === 0 ? (
           <div className="px-3 py-4 text-sm text-foreground-secondary text-center">
             No teams available
           </div>

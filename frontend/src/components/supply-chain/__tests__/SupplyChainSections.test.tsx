@@ -8,7 +8,7 @@ vi.mock('../../../lib/api', () => ({
     consumePrefetchedSupplyChain: vi.fn(),
     getDependencySupplyChain: vi.fn(),
     getProjectPolicies: vi.fn(),
-    getLatestSafeVersion: vi.fn(),
+    getLatestSafeVersion: vi.fn().mockResolvedValue({ safeVersion: null, isCurrent: true }),
     createDependencyBumpPR: vi.fn(),
     getCachedProject: vi.fn().mockReturnValue(null),
     getProject: vi.fn().mockResolvedValue({ importance: 1.0 }),

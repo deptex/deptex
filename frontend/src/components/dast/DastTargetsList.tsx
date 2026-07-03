@@ -162,7 +162,7 @@ export function DastTargetsList({
                   ) : null}
                 </div>
                 {target.label ? (
-                  <div className="mt-1 text-xs text-foreground-secondary truncate font-mono">
+                  <div className="mt-1 text-xs text-foreground-secondary truncate">
                     {target.target_url}
                   </div>
                 ) : null}
