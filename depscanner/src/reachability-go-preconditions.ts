@@ -309,6 +309,45 @@ export const ALWAYS_ON_RUNTIME: GoAlwaysOnRule[] = [
     promoteTo: 'function',
     threatTag: 'requires_untrusted_request',
   },
+  // --- golang.org/x/net/html — the HTML tokenizer/parser. This package exists
+  //     to parse UNTRUSTED HTML from the web, so a deployed Go HTTP server that
+  //     imports it is (overwhelmingly) feeding attacker-influenced content
+  //     through html.Parse — gitea renders every user markdown/comment/README
+  //     through it and serves the output to other users (stored-XSS shape for
+  //     the XSS CVEs, remote DoS for the parser CVEs). The parser/tokenizer
+  //     CVEs (text-node rendering, DOCTYPE/character-reference handling,
+  //     foreign-content, duplicate-attribute XSS, non-linear/infinite parse
+  //     loops) are on that content path. PROMOTE to data_flow (ground truth:
+  //     gitea labels all 8 data_flow). Unlike http2 (where the STDLIB serves
+  //     default h2, so the x/net copy isn't the inbound path), there is no
+  //     stdlib-does-it-instead caveat for html — importing x/net/html means you
+  //     USE x/net/html. The `requiredSubpackage` import-gate is the safety: a
+  //     server that never imports x/net/html (caddy) never promotes — its html
+  //     CVEs stay demoted-unreachable via SUBPACKAGE_GATES. EXCLUDE the
+  //     http2/idna siblings belt-and-suspenders. ---
+  {
+    sink: 'go-net-html-parser',
+    module: 'golang.org/x/net',
+    requiredSubpackage: 'golang.org/x/net/html',
+    patterns: [
+      /net\/html/i,
+      /net html parser/i,
+      /html parser/i,
+      /text node/i,
+      /cross-site scripting/i,
+      /\bxss\b/i,
+      /doctype/i,
+      /character reference/i,
+      /foreign content/i,
+      /namespaced element/i,
+      /duplicate attribute/i,
+      /(?:infinite|non-linear).{0,20}pars/i,
+      /parsing loop/i,
+    ],
+    exclude: [/http2/i, /http\/2/i, /rapid reset/i, /\bhpack\b/i, /continuation/i, /\bidna\b/i, /punycode/i],
+    promoteTo: 'data_flow',
+    threatTag: 'requires_untrusted_html',
+  },
 ];
 
 export interface GoPromotionResult {

@@ -111,12 +111,50 @@ describe('evaluateGoAlwaysOnRuntimePromotion', () => {
     expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: HTTP2_MEMORY_UNBOUNDED, signals: goSignals() }).promote).toBe(true);
   });
 
-  it('does NOT promote an x/net/html XSS (excluded sibling)', () => {
+  it('does NOT promote an x/net/html XSS when the server does not import x/net/html (caddy)', () => {
+    // caddy-shape goSignals() imports http2 but NOT html → the html promotion's
+    // requiredSubpackage gate refuses (and the demotion keeps it unreachable).
     expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: NET_HTML_XSS, signals: goSignals() }).promote).toBe(false);
   });
 
-  it('does NOT promote an x/net/html text-node CVE (excluded sibling)', () => {
+  it('does NOT promote an x/net/html text-node CVE when the server does not import x/net/html (caddy)', () => {
     expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: NET_HTML_TEXTNODE, signals: goSignals() }).promote).toBe(false);
+  });
+
+  // --- x/net/html PROMOTION on a server that DOES import x/net/html (gitea) ---
+  it('PROMOTES x/net/html parser CVEs to data_flow when the server imports x/net/html (gitea markdown pipeline)', () => {
+    const gitea = goSignals({
+      importedPackages: new Set(['golang.org/x/net/html', 'golang.org/x/net/html/atom', 'golang.org/x/crypto/ssh']),
+    });
+    const htmlSummaries = [
+      'Improper rendering of text nodes in golang.org/x/net/html',
+      'golang.org/x/net vulnerable to Cross-site Scripting',
+      'Infinite parsing loop in golang.org/x/net',
+      'Go Net HTML parser is vulnerable to denial of service',
+      'Invoking incorrect handling of character references in DOCTYPE nodes in golang.org/x/net/html',
+      'Invoking duplicate attributes can cause XSS in golang.org/x/net/html',
+      'Invoking incorrect handling of HTML elements in foreign content in golang.org/x/net/html',
+      'Invoking incorrect handling of namespaced elements in foreign content in golang.org/x/net/html',
+    ];
+    for (const summary of htmlSummaries) {
+      const r = evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary, signals: gitea });
+      expect(r.promote).toBe(true);
+      expect(r.promoteTo).toBe('data_flow');
+      expect(r.sink).toBe('go-net-html-parser');
+      expect(r.threatTag).toBe('requires_untrusted_html');
+    }
+  });
+
+  it('does NOT let the html promotion catch an http2 CVE on a gitea-shape server (exclude guard)', () => {
+    const gitea = goSignals({ importedPackages: new Set(['golang.org/x/net/html']) });
+    // gitea imports html but NOT http2 → the http2 row refuses (no http2 import)
+    // and the html row's exclude vetoes the http2 summary → no promotion.
+    expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: HTTP2_RAPID_RESET, signals: gitea }).promote).toBe(false);
+  });
+
+  it('refuses the html promotion when the server does not serve HTTP (imports html but not a server)', () => {
+    const nonServer = goSignals({ isDeployedHttpServer: false, importedPackages: new Set(['golang.org/x/net/html']) });
+    expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: NET_HTML_XSS, signals: nonServer }).promote).toBe(false);
   });
 
   it('refuses to promote when the project is not a deployed HTTP server', () => {
