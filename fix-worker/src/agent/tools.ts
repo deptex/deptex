@@ -41,6 +41,13 @@ export interface AgentRunState {
   progressCalls: number;
   /** Repo-relative paths already shown live as a write_file diff (dedupe at PR time). */
   editedFiles: Set<string>;
+  /** Tool steps queued during a model step, flushed by the loop AFTER that step's
+   *  reasoning text — so the narration reads "let me do X" → X, not X → "let me do
+   *  X" (tools run before the loop's onStepFinish). */
+  pendingSteps: TaskStep[];
+  /** Deferred non-step narrations (the PR-ready card), flushed AFTER pendingSteps
+   *  so the card lands last: reasoning text → step rows → PR card. */
+  pendingAfter: Array<() => Promise<void>>;
 }
 
 export interface AgentToolDeps {
@@ -210,7 +217,14 @@ function prPlan(deps: AgentToolDeps, title: string, body: string): FixPlan {
 
 export function buildAgentTools(deps: AgentToolDeps) {
   const { supabase, threadId, repoRoot, projectDir, fixType, state } = deps;
-  const step = (s: TaskStep) => narrateStep(supabase, threadId, s);
+  // Every tool step is QUEUED and flushed by the loop right after the model's
+  // reasoning text for that step, so narration reads "let me do X" → X, not
+  // X → "let me do X" (tools run before the loop's onStepFinish). The PR-ready
+  // card is queued separately (pendingAfter) so it lands after the step rows.
+  const step = (s: TaskStep): Promise<void> => {
+    state.pendingSteps.push(s);
+    return Promise.resolve();
+  };
   const redactDiffs = fixType === 'secret';
 
   const read_file = tool({
@@ -223,6 +237,10 @@ export function buildAgentTools(deps: AgentToolDeps) {
         const stat = await fsp.stat(r.full);
         if (stat.isDirectory()) return 'path is a directory (use list_dir)';
         const raw = await fsp.readFile(r.full, 'utf-8');
+        // Narrate the read so the investigation is visible in the timeline (the
+        // agent's "let me look at X" isn't left as an unbacked claim). Read-only,
+        // so it doesn't count toward progress (stall detection stays honest).
+        await step({ icon: 'read', label: `Read ${rel}` });
         return stat.size > MAX_FILE_PEEK_BYTES ? raw.slice(0, MAX_FILE_PEEK_BYTES) + '\n... [truncated]' : raw;
       } catch (e: any) {
         return e?.code === 'ENOENT' ? 'file not found' : (e?.message ?? 'read failed');
@@ -242,6 +260,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
           .filter((e) => e.name !== 'node_modules' && e.name !== '.git')
           .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
           .sort();
+        await step({ icon: 'read', label: `Listed ${rel === '.' ? 'the project directory' : rel}` });
         return lines.length ? lines.join('\n') : '(empty directory)';
       } catch (e: any) {
         return e?.code === 'ENOENT' ? 'directory not found' : (e?.message ?? 'list failed');
@@ -262,6 +281,11 @@ export function buildAgentTools(deps: AgentToolDeps) {
         projectDir,
       );
       const lines = output.split('\n').filter(Boolean);
+      const n = lines.length;
+      await step({
+        icon: 'search',
+        label: `Searched for "${pattern}"${n ? ` — ${n} match${n === 1 ? '' : 'es'}` : ' — no matches'}`,
+      });
       if (!lines.length) return 'no matches';
       const shown = lines.slice(0, MAX_GREP_LINES).join('\n');
       return lines.length > MAX_GREP_LINES ? `${shown}\n... [${lines.length - MAX_GREP_LINES} more matches]` : shown;
@@ -270,7 +294,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
 
   const write_file = tool({
     description:
-      'Write the FULL new contents of a file (creates or overwrites). Use this for every edit — provide the complete file, not a diff.',
+      "Create a NEW file, or replace a file wholesale, by providing its FULL contents. To edit an existing file, prefer str_replace — write_file forces you to reproduce the entire file, which is slower and more error-prone.",
     inputSchema: z.object({
       path: z.string().describe('repo-relative file path'),
       content: z.string().describe('the complete new file contents'),
@@ -350,12 +374,19 @@ export function buildAgentTools(deps: AgentToolDeps) {
   const run_command = tool({
     description:
       'Run a shell command (install, build, test, lint, git). It ALREADY runs in the project directory — do NOT cd into it. Use it to verify your work, NOT to edit files. Returns exit code + combined stdout/stderr.',
-    inputSchema: z.object({ command: z.string().describe('the shell command to run') }),
-    execute: async ({ command }) => {
+    inputSchema: z.object({
+      description: z
+        .string()
+        .describe(
+          'a short, human-readable title for what this command does, written for the user to read (e.g. "Regenerate the lockfile", "Type-check the project"). NOT the command itself.',
+        ),
+      command: z.string().describe('the shell command to run'),
+    }),
+    execute: async ({ description, command }) => {
       state.progressCalls++;
       const { code, output } = await runShell(command, projectDir);
       const scrubbed = cap(scrubSecrets(output, deps.installationToken));
-      await step({ icon: 'verify', label: command, command, output: scrubbed });
+      await step({ icon: 'verify', label: description?.trim() || command, command, output: scrubbed });
       return `exit ${code}\n${scrubbed}`;
     },
   });
@@ -437,7 +468,8 @@ export function buildAgentTools(deps: AgentToolDeps) {
           command: `git push origin ${prBranch}`,
           output: scrubSecrets(pushOutput, deps.installationToken),
         });
-        await postPrReadyCard(supabase, threadId, deps.fixId);
+        // Defer the PR-ready card so it flushes after the step rows (text → steps → card).
+        state.pendingAfter.push(() => postPrReadyCard(supabase, threadId, deps.fixId));
         await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary: title });
         state.prOpened = true;
         state.terminal = true;

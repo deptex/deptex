@@ -238,26 +238,14 @@ export async function ensureTaskThread(taskId: string): Promise<string> {
 }
 
 /**
- * Seed the task-chat with Aegis's opening turn: a short narration plus one
- * inline fix card per fix. The card parts are shaped exactly like a persisted
- * `request_fix` tool result so ChatPane's buildInitialMessages rehydrates them
- * into live-updating PlanCards (each self-subscribes to its fix's realtime
- * status) — that's how "the fixes read as part of the narrative". Best-effort.
+ * Seed the task-chat with Aegis's opening turn: a short plain-text narration.
+ * The agent then narrates its real tool calls inline as it works — there's no
+ * separate clickable "plan" card (a task just runs). Best-effort.
  */
-async function postTaskOpeningMessage(
-  threadId: string,
-  text: string,
-  fixIds: string[],
-): Promise<void> {
-  const parts: any[] = [{ type: 'text', text }];
-  for (const fixId of fixIds) {
-    const toolCallId = crypto.randomUUID();
-    parts.push({ type: 'tool-call', toolCallId, toolName: 'request_fix', args: {} });
-    parts.push({ type: 'tool-result', toolCallId, toolName: 'request_fix', result: { fixId }, isError: false });
-  }
+async function postTaskOpeningMessage(threadId: string, text: string): Promise<void> {
   await supabase
     .from('aegis_chat_messages')
-    .insert({ thread_id: threadId, role: 'assistant', content: text, metadata: { parts } })
+    .insert({ thread_id: threadId, role: 'assistant', content: text })
     .then(undefined, (e: any) => console.error('[aegis-task] opening message insert failed:', e?.message));
 }
 
@@ -410,7 +398,6 @@ export async function acceptTask(args: {
     await postTaskOpeningMessage(
       threadId,
       "There's nothing to fix here — the findings I was sent are no longer present in the latest scan. Marking this task complete.",
-      [],
     );
     await logSecurityEvent({
       organizationId,
@@ -475,9 +462,8 @@ export async function acceptTask(args: {
   // otherwise wedge the task at 'working' forever — v_total < v_planned).
   await supabase.from('aegis_agent_tasks').update({ total_fixes: pending.length }).eq('id', taskId);
 
-  // 6. Seed the task-chat NOW (before any slow plan-gen): Aegis's opening turn +
-  //    a live card per fix. The cards render as 'planning' and fill in as plans
-  //    generate in the background below.
+  // 6. Seed the task-chat NOW with Aegis's opening turn. The agent narrates its
+  //    real work inline as it runs — no plan card.
   const n = pending.length;
   const skipped = resolved.length - n;
   const opening =
@@ -485,7 +471,7 @@ export async function acceptTask(args: {
     `${n === 1 ? 'a draft PR' : 'draft PRs'} for ${n === 1 ? 'it' : 'each'}. ` +
     `You can watch each one below; I'll only stop to ask if something blocks me.` +
     (skipped > 0 ? ` (${skipped} target${skipped === 1 ? '' : 's'} were no longer present and were skipped.)` : '');
-  await postTaskOpeningMessage(threadId, opening, pending.map((p) => p.fixId));
+  await postTaskOpeningMessage(threadId, opening);
 
   await logSecurityEvent({
     organizationId,

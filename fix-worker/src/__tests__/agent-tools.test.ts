@@ -28,7 +28,6 @@ jest.mock('../logger', () => ({ FixLogger: class {} }));
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from '../agent/tools';
 import { commitAndPushFix } from '../pr';
 import { markCompleted, markFailed } from '../job-db';
-import { narrateStep } from '../task-chat';
 
 function fakeSupabase(leaseRow: any) {
   return {
@@ -43,6 +42,8 @@ function makeDeps(over: Partial<AgentToolDeps> = {}): AgentToolDeps {
     terminal: false,
     progressCalls: 0,
     editedFiles: new Set<string>(),
+    pendingSteps: [],
+    pendingAfter: [],
   };
   return {
     supabase: fakeSupabase({ machine_id: 'me', status: 'executing' }),
@@ -74,11 +75,11 @@ describe('agent tools', () => {
     const deps = makeDeps({ fixType: 'secret', finding: { type: 'secret', id: 's1' } });
     const tools = buildAgentTools(deps);
     await (tools.write_file.execute as any)({ path: 'config.txt', content: 'API_KEY=super-secret-value\n' });
-    // The file is written, but the narrated step must carry NO diff.
+    // The file is written, but the queued step must carry NO diff.
     expect(fs.existsSync(path.join(deps.repoRoot, 'config.txt'))).toBe(true);
-    const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
-    expect(stepArg.icon).toBe('edit');
-    expect(stepArg.diff).toBeUndefined();
+    const stepArg = deps.state.pendingSteps.at(-1);
+    expect(stepArg?.icon).toBe('edit');
+    expect(stepArg?.diff).toBeUndefined();
   });
 
   test('write_file shows a real content diff for a genuine change and records the file', async () => {
@@ -86,9 +87,9 @@ describe('agent tools', () => {
     fs.writeFileSync(path.join(deps.repoRoot, 'pkg.json'), '{"v":"1.0.0"}\n');
     const tools = buildAgentTools(deps);
     await (tools.write_file.execute as any)({ path: 'pkg.json', content: '{"v":"2.0.0"}\n' });
-    const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
-    expect(stepArg.icon).toBe('edit');
-    expect(stepArg.diff).toContain('2.0.0');
+    const stepArg = deps.state.pendingSteps.at(-1);
+    expect(stepArg?.icon).toBe('edit');
+    expect(stepArg?.diff).toContain('2.0.0');
     expect(deps.state.editedFiles.has('pkg.json')).toBe(true);
   });
 
@@ -98,7 +99,7 @@ describe('agent tools', () => {
     const tools = buildAgentTools(deps);
     const res = await (tools.write_file.execute as any)({ path: 'same.txt', content: 'unchanged\n' });
     expect(String(res)).toMatch(/nothing to change/i);
-    expect(narrateStep).not.toHaveBeenCalled();
+    expect(deps.state.pendingSteps).toHaveLength(0);
   });
 
   test('str_replace makes a surgical edit and shows the diff', async () => {
@@ -107,9 +108,9 @@ describe('agent tools', () => {
     const tools = buildAgentTools(deps);
     await (tools.str_replace.execute as any)({ path: 'f.txt', old_string: 'old value', new_string: 'new value' });
     expect(fs.readFileSync(path.join(deps.repoRoot, 'f.txt'), 'utf-8')).toContain('new value');
-    const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
-    expect(stepArg.icon).toBe('edit');
-    expect(stepArg.diff).toContain('new value');
+    const stepArg = deps.state.pendingSteps.at(-1);
+    expect(stepArg?.icon).toBe('edit');
+    expect(stepArg?.diff).toContain('new value');
     expect(deps.state.editedFiles.has('f.txt')).toBe(true);
   });
 
@@ -119,7 +120,7 @@ describe('agent tools', () => {
     const tools = buildAgentTools(deps);
     const res = await (tools.str_replace.execute as any)({ path: 'g.txt', old_string: 'x', new_string: 'y' });
     expect(String(res)).toMatch(/more than once/i);
-    expect(narrateStep).not.toHaveBeenCalled();
+    expect(deps.state.pendingSteps).toHaveLength(0);
   });
 
   test('open_pull_request no-ops (no push) when the lease is held by another machine', async () => {

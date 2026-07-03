@@ -494,6 +494,41 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Live "task is running" signal for the thinking dot. The worker narrates via
+  // realtime inserts (not useChat's status), so the dot must key off the fix
+  // row's status — project_security_fixes is in the realtime publication. Dot on
+  // while any of the thread's fixes is queued/executing; off once they resolve.
+  const [taskWorking, setTaskWorking] = useState(false);
+  useEffect(() => {
+    if (!liveReload || !propThreadId) {
+      setTaskWorking(false);
+      return;
+    }
+    const RUNNING = new Set(['approved', 'planning', 'executing']);
+    let cancelled = false;
+    const evaluate = async () => {
+      const { data } = await supabase
+        .from('project_security_fixes')
+        .select('status')
+        .eq('thread_id', propThreadId);
+      if (!cancelled) setTaskWorking((data ?? []).some((r: { status: string }) => RUNNING.has(r.status)));
+    };
+    void evaluate();
+    const channel = supabase
+      .channel(`aegis-task-fix-${propThreadId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'project_security_fixes', filter: `thread_id=eq.${propThreadId}` },
+        () => void evaluate(),
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveReload, propThreadId]);
+
   // Live narration for task threads. The task's agent loop runs server-side and
   // persists each beat to aegis_chat_messages (already in the realtime
   // publication); subscribe and reload the thread as beats land. Gated to
@@ -608,6 +643,9 @@ export function ChatPane({
   // visible action — those gaps fall into the default-true branch so the
   // dot reappears between actions instead of going dark.
   const showThinkingDot = useMemo(() => {
+    // A task worker is actively running (it narrates via realtime, not useChat) —
+    // show the dot between its beats so a task chat "thinks" like a normal chat.
+    if (taskWorking) return true;
     if (status === 'submitted') return true;
     if (status !== 'streaming') return false;
     const last = messages[messages.length - 1] as any;
@@ -620,7 +658,7 @@ export function ChatPane({
     const lastToolName = lastPart?.toolName ?? (lastPartType.startsWith('tool-') ? lastPartType.replace(/^tool-/, '') : '');
     if ((lastToolName === 'request_fix' || lastToolName === 'revise_fix') && lastPart?.state !== 'output-error') return false;
     return true;
-  }, [status, messages]);
+  }, [status, messages, taskWorking]);
 
   // Index of the latest assistant error message — only that bubble shows the
   // Regenerate button so stacked older errors stay read-only.

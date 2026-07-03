@@ -51,15 +51,17 @@ export function TaskStepLine({
     return <FileDiffCard diff={diff} />;
   }
 
-  // A real terminal command → a Cursor-style terminal card (title + command + output).
+  // A real terminal command → a lightweight tool-call row. Every command uses the
+  // same CLI icon (from TerminalCard's default), and its label is the descriptive
+  // name the agent gave it — clone / verify / PR all read uniformly.
   if (command) {
     return <TerminalCard title={label} command={command} output={output} />;
   }
 
-  // Nothing to show (explore, soft-pass verify) — state the action plainly.
+  // Investigation / status lines (read, search, …) — no icon; only the CLI
+  // command rows carry a glyph, so these read as quiet annotations.
   return (
-    <div className="flex items-center gap-2 text-sm text-foreground-secondary">
-      <Icon className="h-3.5 w-3.5 shrink-0" />
+    <div className="text-sm text-foreground-secondary">
       <span>{label}</span>
     </div>
   );

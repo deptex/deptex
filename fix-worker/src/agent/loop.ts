@@ -7,7 +7,7 @@ import { getOrgInstallationId, isJobCancelled } from './../job-db';
 import { createInstallationToken } from './../github';
 import { cloneAtSha } from './../sandbox';
 import { getLanguageModelForOrg } from './../llm';
-import { makeTaskNarrator, narrateStep, type TaskStep } from './../task-chat';
+import { makeTaskNarrator, narrateStep } from './../task-chat';
 import { FixLogger } from './../logger';
 import { AGENT_SYSTEM, buildBrief } from './brief';
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from './tools';
@@ -78,26 +78,22 @@ export async function runTaskAgent(
 ): Promise<void> {
   const { machineId, projectName, logger, workDir } = deps;
   const narrate = makeTaskNarrator(supabase, input.threadId);
-  const step = (s: TaskStep) => narrateStep(supabase, input.threadId, s);
 
   const repoInfo = await getOrgInstallationId(supabase, input.organizationId, input.projectId);
   if (!repoInfo) throw new Error('Project no longer has a GitHub App installation');
   const installationToken = await createInstallationToken(repoInfo.installationId);
   const model = await getLanguageModelForOrg(supabase, input.organizationId, process.env.AEGIS_TASK_MODEL || undefined);
 
-  const cloneOutput = await cloneAtSha({
+  // Clone the repo up front — this is infrastructure setup, not a step the user
+  // needs to watch, so it isn't narrated. The agent's first visible beat is its
+  // own investigation.
+  await cloneAtSha({
     workDir,
     installationToken,
     repoFullName: repoInfo.repoFullName,
     branch: input.baseBranch,
     baseSha: input.baseSha,
     logger,
-  });
-  await step({
-    icon: 'clone',
-    label: `Cloned the ${projectName} repository`,
-    command: `git clone --depth 1 https://github.com/${repoInfo.repoFullName}.git`,
-    output: cloneOutput,
   });
 
   const projectDir = repoInfo.packageJsonPath ? path.join(workDir, repoInfo.packageJsonPath) : workDir;
@@ -110,6 +106,8 @@ export async function runTaskAgent(
     terminal: false,
     progressCalls: 0,
     editedFiles: new Set<string>(),
+    pendingSteps: [],
+    pendingAfter: [],
   };
   const toolDeps: AgentToolDeps = {
     supabase,
@@ -164,6 +162,15 @@ export async function runTaskAgent(
       onStepFinish: async (s: any) => {
         const text = stripReasoning(s?.text ?? '');
         if (text) await narrate(text);
+        // Flush this step's queued tool rows AFTER its reasoning text, so the
+        // narration reads "let me do X" → X (the tools ran before this callback).
+        // Then flush pendingAfter (the PR-ready card) so it lands last.
+        if (state.pendingSteps.length) {
+          for (const st of state.pendingSteps.splice(0)) await narrateStep(supabase, input.threadId, st);
+        }
+        if (state.pendingAfter.length) {
+          for (const fn of state.pendingAfter.splice(0)) await fn();
+        }
         // Stall detection: a step that made no write/command/PR call counts toward
         // the limit; a read-only spin trips it well before the 40-step cap.
         if (state.progressCalls > lastProgress) {
@@ -189,6 +196,15 @@ export async function runTaskAgent(
     if (!controller.signal.aborted) loopError = e;
   } finally {
     clearTimeout(wallTimer);
+  }
+
+  // Safety: flush any narration queued by the final step whose onStepFinish may
+  // not have run (e.g. the PR step if the loop ended right after it).
+  for (const st of state.pendingSteps.splice(0)) {
+    await narrateStep(supabase, input.threadId, st).catch(() => {});
+  }
+  for (const fn of state.pendingAfter.splice(0)) {
+    await fn().catch(() => {});
   }
 
   // Always-terminal guarantee: if a PR wasn't opened and finish_task wasn't
