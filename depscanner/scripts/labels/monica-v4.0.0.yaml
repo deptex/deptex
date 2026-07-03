@@ -1,0 +1,167 @@
+# monica v4.0.0 (monicahq/monica) — Laravel/composer, 11th labelled app.
+# Source-grounded blind triage + adversarial verifier (agent a2cd4b74dd7ea872f, 2026-07-03).
+# All draft labels UPHELD except web-auth/webauthn-lib CVE-2024-39912 (drafted function ->
+# corrected module: pkg reached but vuln class ProfileBasedRequestOptionsBuilder not on path).
+cves:
+  - id: CVE-2023-51651
+    dep: aws/aws-sdk-php
+    expected_reachability: module
+  - id: CVE-2025-14761
+    dep: aws/aws-sdk-php
+    expected_reachability: module
+  - id: GHSA-27qh-8cxx-2cr5
+    dep: aws/aws-sdk-php
+    expected_reachability: module
+  - id: CVE-2023-23924
+    dep: dompdf/dompdf
+    expected_reachability: module
+  - id: CVE-2023-50262
+    dep: dompdf/dompdf
+    expected_reachability: module
+  - id: CVE-2025-45769
+    dep: firebase/php-jwt
+    expected_reachability: module
+  - id: CVE-2026-55568
+    dep: guzzlehttp/guzzle
+    expected_reachability: module
+  - id: CVE-2026-55767
+    dep: guzzlehttp/guzzle
+    expected_reachability: module
+  - id: CVE-2023-29197
+    dep: guzzlehttp/psr7
+    expected_reachability: module
+  - id: CVE-2026-48998
+    dep: guzzlehttp/psr7
+    expected_reachability: module
+  - id: CVE-2026-49214
+    dep: guzzlehttp/psr7
+    expected_reachability: module
+  - id: CVE-2026-55766
+    dep: guzzlehttp/psr7
+    expected_reachability: module
+  - id: CVE-2024-52301
+    dep: laravel/framework
+    expected_reachability: data_flow
+  - id: CVE-2025-27515
+    dep: laravel/framework
+    expected_reachability: data_flow
+  - id: GHSA-5vg9-5847-vvmq
+    dep: laravel/framework
+    expected_reachability: data_flow
+  - id: GHSA-crmm-hgp2-wgrp
+    dep: laravel/framework
+    expected_reachability: data_flow
+  - id: CVE-2025-46734
+    dep: league/commonmark
+    expected_reachability: module
+  - id: CVE-2026-30838
+    dep: league/commonmark
+    expected_reachability: function
+  - id: CVE-2026-33347
+    dep: league/commonmark
+    expected_reachability: module
+  - id: GHSA-c2pc-g5qf-rfrf
+    dep: league/commonmark
+    expected_reachability: function
+  - id: CVE-2023-37260
+    dep: league/oauth2-server
+    expected_reachability: module
+  - id: CVE-2019-11358
+    dep: maximebf/debugbar
+    expected_reachability: unreachable
+  - id: CVE-2020-11022
+    dep: maximebf/debugbar
+    expected_reachability: unreachable
+  - id: CVE-2025-22145
+    dep: nesbot/carbon
+    expected_reachability: function
+  - id: GHSA-wjfc-pgfp-pv9c
+    dep: nyholm/psr7
+    expected_reachability: function
+  - id: CVE-2023-50251
+    dep: phenx/php-svg-lib
+    expected_reachability: module
+  - id: CVE-2024-25117
+    dep: phenx/php-svg-lib
+    expected_reachability: module
+  - id: GHSA-97m3-52wr-xvv2
+    dep: phenx/php-svg-lib
+    expected_reachability: module
+  - id: CVE-2023-27560
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2023-49316
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2023-52892
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2024-27354
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2024-27355
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2026-32935
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2026-40194
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2026-44167
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: GHSA-m557-wrgg-6rp4
+    dep: phpseclib/phpseclib
+    expected_reachability: module
+  - id: CVE-2026-24765
+    dep: phpunit/phpunit
+    expected_reachability: unreachable
+  - id: CVE-2026-25129
+    dep: psy/psysh
+    expected_reachability: unreachable
+  - id: CVE-2024-50342
+    dep: symfony/http-client
+    expected_reachability: module
+  - id: CVE-2024-50345
+    dep: symfony/http-foundation
+    expected_reachability: module
+  - id: CVE-2025-64500
+    dep: symfony/http-foundation
+    expected_reachability: data_flow
+  - id: CVE-2022-24894
+    dep: symfony/http-kernel
+    expected_reachability: module
+  - id: CVE-2026-45068
+    dep: symfony/mailer
+    expected_reachability: module
+  - id: CVE-2026-45067
+    dep: symfony/mime
+    expected_reachability: function
+  - id: CVE-2026-45070
+    dep: symfony/mime
+    expected_reachability: function
+  - id: CVE-2026-46644
+    dep: symfony/polyfill-intl-idn
+    expected_reachability: unreachable
+  - id: CVE-2024-51736
+    dep: symfony/process
+    expected_reachability: unreachable
+  - id: CVE-2026-45065
+    dep: symfony/routing
+    expected_reachability: module
+  - id: CVE-2026-48784
+    dep: symfony/routing
+    expected_reachability: module
+  - id: CVE-2026-45133
+    dep: symfony/yaml
+    expected_reachability: unreachable
+  - id: CVE-2026-45304
+    dep: symfony/yaml
+    expected_reachability: unreachable
+  - id: CVE-2026-45305
+    dep: symfony/yaml
+    expected_reachability: unreachable
+  - id: CVE-2024-39912
+    dep: web-auth/webauthn-lib
+    expected_reachability: module

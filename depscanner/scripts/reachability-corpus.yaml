@@ -843,7 +843,169 @@ repos:
     # real deployed PHP web app. If it surfaces Laravel-specific always-on
     # patterns, that motivates a Laravel model (Arc 4c).
     ref: v4.0.0
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2023-51651
+        expected_reachability: module
+        source: "aws/aws-sdk-php — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-14761
+        expected_reachability: module
+        source: "aws/aws-sdk-php — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-27qh-8cxx-2cr5
+        expected_reachability: module
+        source: "aws/aws-sdk-php — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-23924
+        expected_reachability: module
+        source: "dompdf/dompdf — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-50262
+        expected_reachability: module
+        source: "dompdf/dompdf — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-45769
+        expected_reachability: module
+        source: "firebase/php-jwt — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-55568
+        expected_reachability: module
+        source: "guzzlehttp/guzzle — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-55767
+        expected_reachability: module
+        source: "guzzlehttp/guzzle — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-29197
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-48998
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-49214
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-55766
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-52301
+        expected_reachability: data_flow
+        source: "laravel/framework — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-27515
+        expected_reachability: data_flow
+        source: "laravel/framework — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-5vg9-5847-vvmq
+        expected_reachability: data_flow
+        source: "laravel/framework — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-crmm-hgp2-wgrp
+        expected_reachability: data_flow
+        source: "laravel/framework — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-46734
+        expected_reachability: module
+        source: "league/commonmark — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-30838
+        expected_reachability: function
+        source: "league/commonmark — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-33347
+        expected_reachability: module
+        source: "league/commonmark — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-c2pc-g5qf-rfrf
+        expected_reachability: function
+        source: "league/commonmark — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-37260
+        expected_reachability: module
+        source: "league/oauth2-server — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2019-11358
+        expected_reachability: unreachable
+        source: "maximebf/debugbar — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2020-11022
+        expected_reachability: unreachable
+        source: "maximebf/debugbar — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-22145
+        expected_reachability: function
+        source: "nesbot/carbon — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-wjfc-pgfp-pv9c
+        expected_reachability: function
+        source: "nyholm/psr7 — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-50251
+        expected_reachability: module
+        source: "phenx/php-svg-lib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-25117
+        expected_reachability: module
+        source: "phenx/php-svg-lib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-97m3-52wr-xvv2
+        expected_reachability: module
+        source: "phenx/php-svg-lib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-27560
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-49316
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2023-52892
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-27354
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-27355
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-32935
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-40194
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-44167
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: GHSA-m557-wrgg-6rp4
+        expected_reachability: module
+        source: "phpseclib/phpseclib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-24765
+        expected_reachability: unreachable
+        source: "phpunit/phpunit — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-25129
+        expected_reachability: unreachable
+        source: "psy/psysh — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-50342
+        expected_reachability: module
+        source: "symfony/http-client — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-50345
+        expected_reachability: module
+        source: "symfony/http-foundation — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2025-64500
+        expected_reachability: data_flow
+        source: "symfony/http-foundation — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2022-24894
+        expected_reachability: module
+        source: "symfony/http-kernel — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45068
+        expected_reachability: module
+        source: "symfony/mailer — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45067
+        expected_reachability: function
+        source: "symfony/mime — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45070
+        expected_reachability: function
+        source: "symfony/mime — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-46644
+        expected_reachability: unreachable
+        source: "symfony/polyfill-intl-idn — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-51736
+        expected_reachability: unreachable
+        source: "symfony/process — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45065
+        expected_reachability: module
+        source: "symfony/routing — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-48784
+        expected_reachability: module
+        source: "symfony/routing — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45133
+        expected_reachability: unreachable
+        source: "symfony/yaml — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45304
+        expected_reachability: unreachable
+        source: "symfony/yaml — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2026-45305
+        expected_reachability: unreachable
+        source: "symfony/yaml — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
+      - id: CVE-2024-39912
+        expected_reachability: module
+        source: "web-auth/webauthn-lib — monica Laravel 11th-app triage + adversarial verify 2026-07-03; scripts/labels/monica-v4.0.0.yaml + ledger"
 
   - name: discourse
     repo_url: https://github.com/discourse/discourse.git
