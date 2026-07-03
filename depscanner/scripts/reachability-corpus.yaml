@@ -2129,3 +2129,109 @@ repos:
     # import-driven rather than overfit to saleor.
     ref: v1.17.0
     ground_truth_cves: []
+  - name: koel
+    repo_url: https://github.com/koel/koel.git
+    ecosystem: composer
+    # Jun 2022 — Koel v6.0.0. A SECOND real Laravel/composer app beside monica,
+    # chosen deliberately for OPPOSITE characteristics (the second-app validation
+    # the composer dev-scope + future Laravel always-on model require): monica is
+    # a server-rendered Blade MVC CRM; Koel is an API-FIRST Laravel backend with a
+    # Vue SPA client (no Blade views on the request path). Same laravel/framework 9
+    # major, so it exercises the same always-on request-path CVEs on a different
+    # app shape, and its own composer.lock packages-dev tests that the
+    # framework-independent dev-only demotion generalizes past monica.
+    ref: v6.0.0
+    ground_truth_cves:
+      - id: CVE-2026-46644
+        expected_reachability: module
+        source: "symfony/polyfill-intl-idn — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-48998
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-46734
+        expected_reachability: unreachable
+        source: "league/commonmark — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-64500
+        expected_reachability: data_flow
+        source: "symfony/http-foundation — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-25129
+        expected_reachability: unreachable
+        source: "psy/psysh — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-30838
+        expected_reachability: unreachable
+        source: "league/commonmark — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2023-51651
+        expected_reachability: module
+        source: "aws/aws-sdk-php — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-45065
+        expected_reachability: module
+        source: "symfony/routing — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-27515
+        expected_reachability: function
+        source: "laravel/framework — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-55767
+        expected_reachability: module
+        source: "guzzlehttp/guzzle — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2024-52301
+        expected_reachability: function
+        source: "laravel/framework — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-48784
+        expected_reachability: module
+        source: "symfony/routing — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2022-24894
+        expected_reachability: unreachable
+        source: "symfony/http-kernel — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-33347
+        expected_reachability: unreachable
+        source: "league/commonmark — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-49214
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-22145
+        expected_reachability: module
+        source: "nesbot/carbon — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-69277
+        expected_reachability: module
+        source: "paragonie/sodium_compat — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2024-50345
+        expected_reachability: module
+        source: "symfony/http-foundation — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-45067
+        expected_reachability: unreachable
+        source: "symfony/mime — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2024-51736
+        expected_reachability: unreachable
+        source: "symfony/process — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-55766
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-45070
+        expected_reachability: unreachable
+        source: "symfony/mime — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-24765
+        expected_reachability: unreachable
+        source: "phpunit/phpunit — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-55568
+        expected_reachability: module
+        source: "guzzlehttp/guzzle — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2023-29197
+        expected_reachability: module
+        source: "guzzlehttp/psr7 — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2025-14761
+        expected_reachability: unreachable
+        source: "aws/aws-sdk-php — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: CVE-2026-45068
+        expected_reachability: unreachable
+        source: "symfony/mailer — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: GHSA-crmm-hgp2-wgrp
+        expected_reachability: unreachable
+        source: "laravel/framework — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: GHSA-27qh-8cxx-2cr5
+        expected_reachability: unreachable
+        source: "aws/aws-sdk-php — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: GHSA-c2pc-g5qf-rfrf
+        expected_reachability: unreachable
+        source: "league/commonmark — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+      - id: GHSA-5vg9-5847-vvmq
+        expected_reachability: data_flow
+        source: "laravel/framework — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
