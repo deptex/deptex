@@ -330,6 +330,21 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     summary: [/windows/i],
     detect: () => 'absent',
   },
+  // --- Puma declared but NOT loaded (owner: puma). A Gemfile `require: false`
+  //     puma on a unicorn-served app (Discourse 2.5.0) never boots, so NONE of
+  //     puma's CVEs are on any call path — demote every puma CVE to unreachable.
+  //     The promotion above already refuses to promote in this state; this row
+  //     is what takes the remaining puma `module` findings to `unreachable`
+  //     (Discourse ground truth: 7 puma CVEs labelled unreachable under unicorn,
+  //     2026-07-02). Fail-safe: `pumaDeclaredButNotLoaded` only returns true when
+  //     it POSITIVELY finds `require: false` + no explicit `require 'puma'`;
+  //     when it can't tell, it returns false → `present` → no demotion. ---
+  {
+    feature: 'puma-not-loaded',
+    owners: ['puma'],
+    summary: [/./],
+    detect: (s) => (pumaDeclaredButNotLoaded(s) ? 'absent' : 'present'),
+  },
 ];
 
 export interface FeatureDemotionResult {
@@ -431,6 +446,11 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     sink: 'rails-puma-http-server',
     owners: ['puma'],
     summary: [/./],
+    // EXCLUDE the PROXY-protocol CVEs: puma's PROXY-protocol v1 parser only runs
+    // when the app opts in via `set_remote_address proxy_protocol: :v1` — off by
+    // default, so these are not on the always-on request path (mastodon ground
+    // truth labels CVE-2026-47736/47737 unreachable, 2026-07-02).
+    exclude: [/proxy protocol/i],
     promoteTo: 'data_flow',
     requires: (s) => !pumaDeclaredButNotLoaded(s),
     threatTag: 'requires_untrusted_request',
@@ -495,8 +515,12 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   {
     sink: 'rails-oj-json-codec',
     owners: ['oj'],
-    summary: [/oj\.dump/i, /oj\.load/i, /oj dump|oj load/i, /intern\.c|form_attr/i, /exception serialization/i, /large indent/i, /2gb string/i],
-    exclude: [/oj::parser/i, /oj::doc/i, /\bsaj\b/i, /each_child/i, /create_id/i, /array_class|hash_class/i, /reentrant close/i, /symbol key cache/i],
+    summary: [/oj\.dump/i, /oj\.load/i, /oj dump|oj load/i, /intern\.c|form_attr/i, /exception serialization/i, /2gb string/i],
+    // EXCLUDE the large-`:indent` overflow CVEs: the buffer overflows in Oj.dump
+    // via a large indent require the app to pass a big `:indent` dump option,
+    // which the Rails/compat integration never does — off by default (mastodon
+    // ground truth labels CVE-2026-54502/54896 unreachable, 2026-07-02).
+    exclude: [/oj::parser/i, /oj::doc/i, /\bsaj\b/i, /each_child/i, /create_id/i, /array_class|hash_class/i, /reentrant close/i, /symbol key cache/i, /\bindent\b/i],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_json',
@@ -530,11 +554,19 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   },
   // --- Rails HTML sanitizer stack (owners: rails-html-sanitizer, loofah, sanitize):
   //     runs on user-generated content (posts, oneboxed remote HTML). XSS / ReDoS /
-  //     uncontrolled-recursion here silences reachable stored-XSS — the worst class. ---
+  //     uncontrolled-recursion here silences reachable stored-XSS — the worst class.
+  //     EXCLUDE the CONFIG-GATED XSS CVEs whose exploit needs a specific sanitizer
+  //     ALLOWLIST the app must opt into (data-URI allowed, `certain configurations`
+  //     permitting math/svg+style or select+style, `noscript` allowed): these fire
+  //     only under a non-default allowlist, so the always-on sanitizer path does
+  //     NOT reach them (mastodon+discourse ground truth label CVE-2022-23515/23518/
+  //     23519/23520 + Sanitize CVE-2023-23627 unreachable, 2026-07-02). The genuine
+  //     always-on sanitizer ReDoS / data-URI-independent CVEs still promote. ---
   {
     sink: 'rails-html-sanitizer',
     owners: ['rails-html-sanitizer', 'loofah', 'sanitize'],
     summary: [/./],
+    exclude: [/data uri/i, /data-uri/i, /certain configurations/i, /\bnoscript\b/i],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_html',

@@ -119,6 +119,19 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(P('puma', PUMA_SMUGGLING, explicitlyRequired).promote).toBe(true);
   });
 
+  it('does NOT promote the Puma PROXY-protocol CVE (opt-in, off by default)', () => {
+    // PROXY-protocol v1 parsing runs only under `set_remote_address proxy_protocol:`
+    // — not the always-on path (mastodon ground truth: CVE-2026-47736/47737 unreachable).
+    expect(P('puma', 'Puma PROXY Protocol v1 Parser Allows Remote Memory Exhaustion').promote).toBe(false);
+  });
+
+  it('does NOT promote the Oj large-`:indent` overflow (opt-in dump option)', () => {
+    // The Rails/compat Oj integration never passes a large `:indent`; the buffer
+    // overflow needs it (mastodon ground truth: CVE-2026-54502/54896 unreachable).
+    expect(P('oj', 'Oj: Stack Buffer Overflow in Oj.dump via Large Indent').promote).toBe(false);
+    expect(P('oj', 'Oj: Heap Buffer Overflow in Oj.dump Exception Serialization via Large Indent').promote).toBe(false);
+  });
+
   it('promotes an ActionDispatch ReDoS to data_flow', () => {
     const r = P('actionpack', ACTIONDISPATCH_REDOS);
     expect(r.promote).toBe(true);
@@ -137,12 +150,27 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(r.sink).toBe('rails-nokogiri-html-parser');
   });
 
-  it('promotes a rails-html-sanitizer XSS to data_flow', () => {
-    expect(P('rails-html-sanitizer', RAILS_HTML_SANITIZER_XSS).promote).toBe(true);
+  it('does NOT promote a config-gated rails-html-sanitizer XSS ("certain configurations")', () => {
+    // These XSS need a specific non-default sanitizer allowlist (math/svg+style,
+    // select+style) — not on the always-on sanitizer path. mastodon+discourse
+    // ground truth label CVE-2022-23519/23520 unreachable; excluding drops them
+    // from data_flow to the honest module tier.
+    expect(P('rails-html-sanitizer', RAILS_HTML_SANITIZER_XSS).promote).toBe(false);
   });
 
-  it('promotes a loofah data-URI XSS to data_flow', () => {
-    expect(P('loofah', LOOFAH_DATA_URI_XSS).promote).toBe(true);
+  it('does NOT promote a loofah/sanitizer data-URI XSS (needs sanitized-HTML render, config-gated)', () => {
+    // The data-URI XSS fires only when the app RENDERS sanitizer output as HTML
+    // (not strip_tags-to-plain-text); mastodon ground truth labels CVE-2022-23515
+    // unreachable. Excluded → module (honest), not the over-claimed data_flow.
+    expect(P('loofah', LOOFAH_DATA_URI_XSS).promote).toBe(false);
+  });
+
+  it('still promotes a genuine always-on sanitizer ReDoS (not config-gated)', () => {
+    // A ReDoS in the sanitizer regex is on the always-on user-content path and
+    // must still promote — the exclude is scoped to data-URI/config/noscript.
+    const r = P('rails-html-sanitizer', 'Inefficient Regular Expression Complexity in rails-html-sanitizer');
+    expect(r.promote).toBe(true);
+    expect(r.sink).toBe('rails-html-sanitizer');
   });
 
   it('promotes an ActionView tag-helper XSS to function', () => {
@@ -226,6 +254,20 @@ describe('evaluateRailsFeaturePreconditionDemotion', () => {
     const r = D('rack', RACK_STATIC_LFI);
     expect(r.demote).toBe(true);
     expect(r.feature).toBe('rack-static-middleware');
+  });
+
+  it('demotes ALL puma CVEs to unreachable when puma is require:false and not loaded (Discourse under unicorn)', () => {
+    // 7 discourse puma CVEs are labelled unreachable (require:false + unicorn).
+    const notLoaded = {
+      configText: railsSignals().configText + "gem 'puma', require: false\nworker_processes 4 # unicorn.conf.rb\n",
+    };
+    expect(D('puma', PUMA_SMUGGLING, notLoaded).feature).toBe('puma-not-loaded');
+    expect(D('puma', "Puma's Keepalive Connections Causing Denial Of Service", notLoaded).demote).toBe(true);
+  });
+
+  it('does NOT demote puma when it is genuinely loaded (default — fail-safe present)', () => {
+    // The base railsSignals has puma in lockGems without require:false → loaded.
+    expect(D('puma', PUMA_SMUGGLING).demote).toBe(false);
   });
 
   it('does NOT demote Rack::Static when the app explicitly mounts Rack::Static', () => {
