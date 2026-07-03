@@ -213,15 +213,18 @@ export interface DualScopePdRow {
  * break on lowest `id` so the choice is identical run-to-run regardless of the
  * order Postgres returns the rows in.
  */
-export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, string> {
-  const pdByNameVersion = new Map<string, string>();
+function buildPdMap(
+  pdRows: DualScopePdRow[],
+  keyFn: (r: DualScopePdRow) => string,
+): Map<string, string> {
+  const pdByKey = new Map<string, string>();
   const pdEnvByKey = new Map<string, string | null>();
   for (const r of pdRows) {
-    const key = `${r.name}@${r.version}`;
+    const key = keyFn(r);
     const incomingEnv = (r.environment ?? null) as string | null;
-    const storedId = pdByNameVersion.get(key);
+    const storedId = pdByKey.get(key);
     if (storedId === undefined) {
-      pdByNameVersion.set(key, r.id);
+      pdByKey.set(key, r.id);
       pdEnvByKey.set(key, incomingEnv);
       continue;
     }
@@ -231,11 +234,45 @@ export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, str
       (incomingIsProd && !storedIsProd) ||
       (incomingIsProd === storedIsProd && r.id < storedId)
     ) {
-      pdByNameVersion.set(key, r.id);
+      pdByKey.set(key, r.id);
       pdEnvByKey.set(key, incomingEnv);
     }
   }
-  return pdByNameVersion;
+  return pdByKey;
+}
+
+export function resolveDualScopePdMap(pdRows: DualScopePdRow[]): Map<string, string> {
+  return buildPdMap(pdRows, (r) => `${r.name}@${r.version}`);
+}
+
+/**
+ * Registry name-normalization for the vuln→dependency join. The VDR
+ * `affects[].ref` purl carries the *registry-normalized* name (lowercase; and
+ * for PyPI, PEP 503 collapses runs of `-`, `_`, `.` to a single `-`), while a
+ * `project_dependencies` row keeps the name cdxgen read verbatim from the
+ * manifest — e.g. a `requirements.txt` line `Werkzeug` / `Flask-SQLAlchemy`.
+ * A case-sensitive `name@version` join therefore drops EVERY CVE on a
+ * capitalized- or underscore-declared PyPI package (Flask, Werkzeug, Jinja2,
+ * MarkupSafe, SQLAlchemy, Pillow, PyYAML, …) — a silent false-negative. PyPI
+ * and npm both enforce normalized-name uniqueness, so normalizing cannot merge
+ * two distinct packages.
+ */
+export function normalizeDepName(name: string, ecosystem?: string | null): string {
+  const lower = name.trim().toLowerCase();
+  return (ecosystem ?? '').toLowerCase() === 'pypi' ? lower.replace(/[-_.]+/g, '-') : lower;
+}
+
+/**
+ * Case/PEP-503-insensitive companion to {@link resolveDualScopePdMap}. Consulted
+ * ONLY as a fallback after the exact-name join misses, so existing matches are
+ * byte-for-byte unchanged (zero regression) — it purely recovers CVEs the
+ * case-sensitive join was dropping.
+ */
+export function resolveDualScopePdMapNormalized(
+  pdRows: DualScopePdRow[],
+  ecosystem: string | null,
+): Map<string, string> {
+  return buildPdMap(pdRows, (r) => `${normalizeDepName(r.name, ecosystem)}@${r.version}`);
 }
 
 /** The slice of a project_dependencies row the vuln-depscore multiplier reads. */
@@ -694,6 +731,13 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
       // devDependency and pulled as a production transitive — the PDV attaches
       // to the production-scope row (see resolveDualScopePdMap).
       const pdByNameVersion = resolveDualScopePdMap((pdRows ?? []) as DualScopePdRow[]);
+      // Fallback join keyed on the registry-normalized name — recovers CVEs the
+      // case-sensitive exact join drops (e.g. VDR purl `werkzeug` vs manifest
+      // `Werkzeug`). Consulted only after the exact + Maven-`/` variants miss.
+      const pdByNameVersionNorm = resolveDualScopePdMapNormalized(
+        (pdRows ?? []) as DualScopePdRow[],
+        jobEcosystem,
+      );
 
       // id → directness/scope, for the SC1 dependency-context depscore taper.
       const pdById = new Map<string, PdScoringContext>();
@@ -765,6 +809,11 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
               const artifactOnly = parsed.name.split('/').pop()!;
               pdId = pdByNameVersion.get(`${artifactOnly}@${parsed.version}`);
             }
+            if (!pdId) {
+              // Registry-normalized fallback: VDR purl name is lowercase/PEP-503,
+              // the manifest-declared project_dependencies name may be capitalized.
+              pdId = pdByNameVersionNorm.get(`${normalizeDepName(parsed.name, jobEcosystem)}@${parsed.version}`);
+            }
             if (!pdId) continue;
             vulnRows.push({
               project_id: projectId, project_dependency_id: pdId, osv_id: osvId,
@@ -788,7 +837,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         for (const v of vulnsLegacy) {
           const compName = (v.component ?? '').trim();
           const compVersion = (v.version ?? '').trim();
-          const pdId = pdByNameVersion.get(`${compName}@${compVersion}`);
+          let pdId = pdByNameVersion.get(`${compName}@${compVersion}`);
+          if (!pdId) {
+            pdId = pdByNameVersionNorm.get(`${normalizeDepName(compName, jobEcosystem)}@${compVersion}`);
+          }
           if (!pdId) continue;
           const severity = v.severity ?? v.ratings?.[0]?.severity ?? null;
           vulnRows.push({
