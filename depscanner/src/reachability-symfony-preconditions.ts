@@ -27,9 +27,11 @@
  *      when the feature is provably absent.
  *   2. `ALWAYS_ON_RUNTIME` — declarative always-on-request-path table that
  *      PROMOTES `module`→visible for a deployed web app (>= 1 HTTP route).
- *   3. A DEV-ONLY package demotion (`evaluateSymfonyDevOnlyDemotion`) that reads
+ *   3. A DEV-ONLY package demotion (`evaluateComposerDevOnlyDemotion`) that reads
  *      `composer.lock`'s `packages-dev` authoritatively — the strongest lever,
- *      needing no summary match. (The classifier's existing dev-scope check
+ *      needing no summary match. Framework-INDEPENDENT: keys on `lockParsed`,
+ *      not `recognized`, so it fires on any composer app (Laravel, plain PHP),
+ *      not only Symfony. (The classifier's existing dev-scope check
  *      misses these because the coarse PHP callgraph re-stamps them
  *      `callgraph_reached_transitive`, overriding the SBOM scope, and composer's
  *      TRANSITIVE dev-ness — process via php-cs-fixer — isn't always propagated
@@ -68,6 +70,16 @@ export interface SymfonyFeatureSignals {
    */
   recognized: boolean;
   /**
+   * True once `composer.lock` was successfully parsed — INDEPENDENT of Symfony
+   * recognition. The composer.lock `packages-dev` set is authoritative for ANY
+   * composer app (Laravel, Symfony, plain PHP): a dev-only package is never
+   * installed with `composer install --no-dev`, so its CVE is unreachable in a
+   * production deployment regardless of framework. This flag gates the
+   * framework-independent `evaluateComposerDevOnlyDemotion`; the Symfony
+   * feature-precondition + always-on gates still require `recognized`.
+   */
+  lockParsed: boolean;
+  /**
    * True when the `.php` / `.twig` scan hit its file/byte cap. A code signal we
    * didn't read might exist, so features whose absence relies on scanning code
    * resolve to `unknown` (never `absent`) when this is set.
@@ -91,6 +103,7 @@ export type FeaturePresence = 'present' | 'absent' | 'unknown';
 export function emptySymfonyFeatureSignals(): SymfonyFeatureSignals {
   return {
     recognized: false,
+    lockParsed: false,
     truncated: false,
     lockProd: new Set(),
     lockDev: new Set(),
@@ -433,15 +446,23 @@ export interface DevOnlyDemotionResult {
  * demotion, but read from the lockfile because the coarse PHP callgraph
  * overrides the SBOM scope for these transitive dev deps.
  *
+ * FRAMEWORK-INDEPENDENT: `composer.lock` is authoritative for ANY composer app,
+ * not just Symfony. This gate keys on `signals.lockParsed` (was the lockfile
+ * read?), NOT `signals.recognized` (is this Symfony?), so it correctly demotes
+ * dev-only deps on a Laravel / plain-PHP app too — a Laravel app's phpunit,
+ * debugbar, psysh and dev-scoped symfony/yaml are as absent from prod as a
+ * Symfony app's. The Symfony feature-precondition + always-on-promotion gates
+ * still require `recognized` — only this lockfile-fact lever is generalized.
+ *
  * `packageName` is the full `vendor/name` (e.g. `symfony/process`). Falls back
  * to a trailing-segment match so a short `depName` still resolves.
  */
-export function evaluateSymfonyDevOnlyDemotion(input: {
+export function evaluateComposerDevOnlyDemotion(input: {
   packageName: string | null | undefined;
   signals: SymfonyFeatureSignals | null | undefined;
 }): DevOnlyDemotionResult {
   const { packageName, signals } = input;
-  if (!signals || !signals.recognized) return { demote: false };
+  if (!signals || !signals.lockParsed) return { demote: false };
   if (!packageName) return { demote: false };
   const pkg = packageName.toLowerCase();
 
@@ -633,6 +654,7 @@ export function gatherSymfonyFeatureSignals(root: string | undefined): SymfonyFe
   if (lock) {
     signals.lockProd = lock.prod;
     signals.lockDev = lock.dev;
+    signals.lockParsed = true;
   }
   const hasFrameworkBundle =
     composerRequiresFrameworkBundle(root) ||

@@ -8,7 +8,8 @@
  *        parser → data_flow; firewall login → function; fail-safes),
  *      - `evaluateSymfonyFeaturePreconditionDemotion` (twig sandbox, untrusted
  *        yaml, x509, unanimous → unreachable when absent; blocked when present),
- *      - `evaluateSymfonyDevOnlyDemotion` (composer.lock packages-dev).
+ *      - `evaluateComposerDevOnlyDemotion` (composer.lock packages-dev;
+ *        framework-independent — fires on Laravel / plain-PHP, not only Symfony).
  *   2. end-to-end through `updateReachabilityLevels` with `ecosystem: 'composer'`
  *      + injected `symfonyFeatureSignals`:
  *      - PROMOTE http-foundation authz-bypass module → data_flow on a web app,
@@ -22,7 +23,7 @@ import type { Storage } from '../storage';
 import {
   evaluateSymfonyAlwaysOnRuntimePromotion,
   evaluateSymfonyFeaturePreconditionDemotion,
-  evaluateSymfonyDevOnlyDemotion,
+  evaluateComposerDevOnlyDemotion,
   emptySymfonyFeatureSignals,
   type SymfonyFeatureSignals,
 } from '../reachability-symfony-preconditions';
@@ -57,6 +58,7 @@ function demoSignals(over: Partial<SymfonyFeatureSignals> = {}): SymfonyFeatureS
   return {
     ...emptySymfonyFeatureSignals(),
     recognized: true,
+    lockParsed: true,
     lockProd: new Set([
       'symfony/framework-bundle',
       'symfony/http-foundation',
@@ -327,26 +329,59 @@ describe('evaluateSymfonyFeaturePreconditionDemotion', () => {
   });
 });
 
-describe('evaluateSymfonyDevOnlyDemotion', () => {
+describe('evaluateComposerDevOnlyDemotion', () => {
   it('demotes a package that is dev-only (packages-dev, not in packages)', () => {
-    const r = evaluateSymfonyDevOnlyDemotion({ packageName: 'symfony/process', signals: demoSignals() });
+    const r = evaluateComposerDevOnlyDemotion({ packageName: 'symfony/process', signals: demoSignals() });
     expect(r.demote).toBe(true);
     expect(r.package).toBe('symfony/process');
   });
 
   it('does NOT demote a production dependency', () => {
-    const r = evaluateSymfonyDevOnlyDemotion({ packageName: 'symfony/http-foundation', signals: demoSignals() });
+    const r = evaluateComposerDevOnlyDemotion({ packageName: 'symfony/http-foundation', signals: demoSignals() });
     expect(r.demote).toBe(false);
   });
 
   it('matches a short name against the full lock entry (trailing-segment fallback)', () => {
-    const r = evaluateSymfonyDevOnlyDemotion({ packageName: 'process', signals: demoSignals() });
+    const r = evaluateComposerDevOnlyDemotion({ packageName: 'process', signals: demoSignals() });
     expect(r.demote).toBe(true);
   });
 
-  it('refuses to demote for an unrecognized project', () => {
-    const r = evaluateSymfonyDevOnlyDemotion({ packageName: 'symfony/process', signals: emptySymfonyFeatureSignals() });
+  it('refuses to demote when the lockfile was never parsed', () => {
+    const r = evaluateComposerDevOnlyDemotion({ packageName: 'symfony/process', signals: emptySymfonyFeatureSignals() });
     expect(r.demote).toBe(false);
+  });
+
+  // Framework-independence regression (the monica/Laravel gap): a composer app
+  // that is NOT recognized as Symfony (`recognized: false`) but whose lockfile
+  // WAS parsed (`lockParsed: true`) still gets its dev-only deps demoted. This
+  // is the whole point of keying on `lockParsed` instead of `recognized`.
+  it('demotes a dev-only dep on a non-Symfony (Laravel) app when the lockfile is parsed', () => {
+    const laravelSignals: SymfonyFeatureSignals = {
+      ...emptySymfonyFeatureSignals(),
+      recognized: false, // NOT a Symfony app (no symfony/framework-bundle)
+      lockParsed: true,
+      lockProd: new Set(['laravel/framework', 'league/commonmark', 'symfony/http-foundation']),
+      lockDev: new Set(['phpunit/phpunit', 'maximebf/debugbar', 'psy/psysh', 'symfony/yaml']),
+    };
+    // dev-only transitives are demoted...
+    expect(evaluateComposerDevOnlyDemotion({ packageName: 'phpunit/phpunit', signals: laravelSignals }).demote).toBe(true);
+    expect(evaluateComposerDevOnlyDemotion({ packageName: 'maximebf/debugbar', signals: laravelSignals }).demote).toBe(true);
+    expect(evaluateComposerDevOnlyDemotion({ packageName: 'symfony/yaml', signals: laravelSignals }).demote).toBe(true);
+    // ...but a prod dep on the same app is left alone.
+    expect(evaluateComposerDevOnlyDemotion({ packageName: 'laravel/framework', signals: laravelSignals }).demote).toBe(false);
+  });
+
+  // A package present in BOTH packages and packages-dev (prod requires it) is
+  // never demoted — prod scope wins, framework-independent.
+  it('does NOT demote a dep that also appears in the production tree', () => {
+    const signals: SymfonyFeatureSignals = {
+      ...emptySymfonyFeatureSignals(),
+      recognized: false,
+      lockParsed: true,
+      lockProd: new Set(['symfony/yaml']),
+      lockDev: new Set(['symfony/yaml']),
+    };
+    expect(evaluateComposerDevOnlyDemotion({ packageName: 'symfony/yaml', signals }).demote).toBe(false);
   });
 });
 

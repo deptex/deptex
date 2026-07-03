@@ -19,7 +19,7 @@ import {
   type SymfonyFeatureSignals,
   gatherSymfonyFeatureSignals,
   evaluateSymfonyFeaturePreconditionDemotion,
-  evaluateSymfonyDevOnlyDemotion,
+  evaluateComposerDevOnlyDemotion,
   evaluateSymfonyAlwaysOnRuntimePromotion,
 } from './reachability-symfony-preconditions';
 import {
@@ -1756,12 +1756,19 @@ export async function updateReachabilityLevels(
       // it overrides the SBOM dev-scope for transitive dev deps). Demote-only,
       // and runs BEFORE the always-on promotion post-pass so a demoted finding's
       // `unreachable` is respected by the `level === 'module'` promotion guard.
-      // Fail-safe: unrecognized / non-Symfony signals refuse every demotion.
+      // Fail-safe: unrecognized / non-Symfony signals refuse every demotion —
+      // EXCEPT the dev-only lever below, which is composer-generic (keys on the
+      // parsed composer.lock, not Symfony recognition) so it also fires on
+      // Laravel / plain-PHP apps.
       if (symfonySignals && level === 'module') {
         // 1) Dev-only package (composer.lock `packages-dev`, not in `packages`) —
         //    never shipped to prod, so its CVE is genuinely unreachable. The
-        //    strongest lever; needs no summary match.
-        const devOnly = evaluateSymfonyDevOnlyDemotion({
+        //    strongest lever; needs no summary match. Framework-INDEPENDENT: the
+        //    composer.lock packages-dev set is authoritative for any composer app,
+        //    so this demotes a Laravel app's phpunit/debugbar/psysh/dev-scoped
+        //    symfony/yaml too (the Symfony feature-precondition branch below stays
+        //    recognition-gated).
+        const devOnly = evaluateComposerDevOnlyDemotion({
           packageName: composerPackage,
           signals: symfonySignals,
         });
