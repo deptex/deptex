@@ -48,6 +48,13 @@ import {
   evaluateLaravelFeaturePreconditionDemotion,
   evaluateLaravelAlwaysOnRuntimePromotion,
 } from './reachability-laravel-preconditions';
+import {
+  type FlaskFeatureSignals,
+  gatherFlaskFeatureSignals,
+  evaluateFlaskFeaturePreconditionDemotion,
+  evaluateFlaskDevOnlyDemotion,
+  evaluateFlaskAlwaysOnRuntimePromotion,
+} from './reachability-flask-preconditions';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -603,6 +610,12 @@ export interface UpdateReachabilityOptions {
    * every move.
    */
   djangoFeatureSignals?: DjangoFeatureSignals;
+  /**
+   * Flask/FastAPI framework-mediated reachability signals — the SECOND pypi model
+   * beside Django (a Flask/FastAPI app carries no django dep, so Django's
+   * `recognized` is false there, and vice-versa). Injected by unit tests.
+   */
+  flaskFeatureSignals?: FlaskFeatureSignals;
   /**
    * Laravel framework-mediated reachability signals — a SECOND composer-ecosystem
    * model beside `symfonyFeatureSignals` (a Laravel app carries no
@@ -1327,6 +1340,15 @@ export async function updateReachabilityLevels(
     options.djangoFeatureSignals ??
     (options.ecosystem === 'pypi' ? gatherDjangoFeatureSignals(workspaceRoot) : null);
   const djangoDeployed = djangoSignals?.isDeployedWebApp ?? false;
+  // Flask/FastAPI framework-mediated signals — a SECOND pypi model beside
+  // `djangoSignals`. A Flask/FastAPI app carries no django dep (so the Django
+  // model's `recognized` is false there) and vice-versa, so the two never both
+  // fire. Gathered ONCE per run for the pypi ecosystem; a non-Flask/FastAPI pypi
+  // app yields unrecognized signals → no-op. Tests inject `options.flaskFeatureSignals`.
+  const flaskSignals: FlaskFeatureSignals | null =
+    options.flaskFeatureSignals ??
+    (options.ecosystem === 'pypi' ? gatherFlaskFeatureSignals(workspaceRoot) : null);
+  const flaskDeployed = flaskSignals?.isDeployedWebApp ?? false;
   // Laravel framework-mediated signals — a SECOND composer-ecosystem model beside
   // `symfonySignals` (a Laravel app carries no symfony/framework-bundle, so the
   // Symfony model's `recognized` is false there). Gathered ONCE per run for the
@@ -2022,6 +2044,52 @@ export async function updateReachabilityLevels(
         }
       }
 
+      // Flask/FastAPI (pypi, 7th model) — same two-lever shape as the Django
+      // block: dev-only demotion (module-only) then feature-precondition demotion
+      // (module always; function only for functionSafe import-gated rows, e.g. a
+      // multipart-parser CVE on a pure-JSON FastAPI API that has no form endpoints).
+      if (flaskSignals && (level === 'module' || level === 'function')) {
+        const flaskDevOnly =
+          level === 'module'
+            ? evaluateFlaskDevOnlyDemotion({ depName, signals: flaskSignals })
+            : { demote: false as const };
+        if (flaskDevOnly.demote) {
+          level = 'unreachable';
+          details = {
+            reason: `dev_only_dependency: ${flaskDevOnly.package} is a dev-scope manifest dependency (not installed in production)`,
+            scope: 'dev',
+            verdict: 'dev_only_dependency',
+            package: flaskDevOnly.package,
+            demoted_from:
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : 'module',
+          };
+        } else {
+          const flaskDemotion = evaluateFlaskFeaturePreconditionDemotion({
+            depName,
+            summary: (pdv.summary ?? null) as string | null,
+            osvIds: candidateOsvIds,
+            signals: flaskSignals,
+          });
+          if (flaskDemotion.demote && (level === 'module' || flaskDemotion.functionSafe)) {
+            const priorVerdict =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : level;
+            level = 'unreachable';
+            details = {
+              reason: `feature_precondition_absent: ${flaskDemotion.feature}`,
+              scope: 'feature_precondition_absent',
+              verdict: 'feature_precondition_absent',
+              feature: flaskDemotion.feature,
+              matched_summary_pattern: flaskDemotion.matchedPattern ?? null,
+              demoted_from: priorVerdict,
+            };
+          }
+        }
+      }
+
       // ALWAYS-ON FRAMEWORK-RUNTIME PROMOTION (reachability silence-FN
       // recovery — the mirror image of the feature-precondition DEMOTION gate
       // above). A CVE in framework code that is UNCONDITIONALLY on the request
@@ -2047,7 +2115,23 @@ export async function updateReachabilityLevels(
       // module system, so the framework detectors emit 0 routes), OR the Django
       // deployed-app signal (a GraphQL-only Django app may emit 0 detected
       // routes). A library/CLI repo (no routes, no server) never gets a promotion.
-      if (level === 'module' && (hasHttpRouteEntryPoint || goServerReachable || djangoDeployed)) {
+      // The `orphan_transitive_unreachable` floor is a HEURISTIC ("direct dep
+      // declared in the manifest but imported by no first-party file"), NOT a
+      // taint proof — and it is wrong for a dep reached TRANSITIVELY through a
+      // used consumer (e.g. idna via requests / email-validator: idna is pinned
+      // directly yet only ever called by those libraries). A feature-gated
+      // always-on framework promotion whose `requires` precondition holds proves
+      // that transitive reach, so let such a promotion override the orphan floor.
+      // Only the orphan HEURISTIC is overridable — a taint-proven unreachable is not.
+      const isOrphanFloor =
+        level === 'unreachable' &&
+        !!details &&
+        typeof details === 'object' &&
+        details.verdict === 'orphan_transitive_unreachable';
+      if (
+        (level === 'module' || isOrphanFloor) &&
+        (hasHttpRouteEntryPoint || goServerReachable || djangoDeployed || flaskDeployed)
+      ) {
         const summaryStr = (pdv.summary ?? null) as string | null;
         const wouldDemote =
           (featureSignals
@@ -2094,6 +2178,18 @@ export async function updateReachabilityLevels(
                 depName,
                 summary: summaryStr,
                 signals: laravelSignals,
+              }).demote
+            : false) ||
+          // Flask/FastAPI backstop: refuse to promote a pypi finding whose package
+          // is dev-only or whose required feature is provably absent (its demotion
+          // already ran above; this catches non-callgraph branches).
+          (flaskSignals
+            ? evaluateFlaskDevOnlyDemotion({ depName, signals: flaskSignals }).demote ||
+              evaluateFlaskFeaturePreconditionDemotion({
+                depName,
+                summary: summaryStr,
+                osvIds: candidateOsvIds,
+                signals: flaskSignals,
               }).demote
             : false);
         if (!wouldDemote) {
@@ -2174,6 +2270,28 @@ export async function updateReachabilityLevels(
                   signals: laravelSignals,
                 })
               : { promote: false as const };
+          // Flask/FastAPI always-on model (7th) — feature-gated pypi promotions:
+          // Werkzeug cookie/form parser (always-on / when the app has forms),
+          // Starlette/python-multipart form parser (forms), h11 request parser
+          // (uvicorn without httptools), Pydantic email-validator ReDoS + idna
+          // encode (when the app validates request emails), PyJWT crit-header
+          // decode (when the app decodes attacker JWTs).
+          const flaskPromotion =
+            !promotion.promote &&
+            !phpPromotion.promote &&
+            !railsPromotion.promote &&
+            !goPromotion.promote &&
+            !djangoPromotion.promote &&
+            !laravelPromotion.promote &&
+            flaskSignals
+              ? evaluateFlaskAlwaysOnRuntimePromotion({
+                  depName,
+                  summary: summaryStr,
+                  osvIds: candidateOsvIds,
+                  deployedWebApp: hasHttpRouteEntryPoint || flaskDeployed,
+                  signals: flaskSignals,
+                })
+              : { promote: false as const };
           const chosen = promotion.promote
             ? promotion
             : phpPromotion.promote
@@ -2186,8 +2304,24 @@ export async function updateReachabilityLevels(
                     ? djangoPromotion
                     : laravelPromotion.promote
                       ? laravelPromotion
-                      : null;
-          if (chosen && chosen.promote && chosen.promoteTo) {
+                      : flaskPromotion.promote
+                        ? flaskPromotion
+                        : null;
+          // Orphan-floor scoping: a finding that entered the promotion gate via the
+          // `orphan_transitive_unreachable` HEURISTIC (isOrphanFloor) may ONLY be
+          // promoted by a rule that PROVABLY implies the orphan dep is transitively
+          // reached — i.e. one flagged `overridesOrphanFloor` (currently only the
+          // Flask idna-encode rule, where email-validator→idna.encode is a fixed
+          // transitive consumer). Any other match leaves it `unreachable`: a
+          // workspace signal satisfied by a DIFFERENT library (e.g. python-jose
+          // setting usesJwtAuth) must never surface an unused orphan pin (e.g. a
+          // leftover PyJWT) as a false positive.
+          const chosenOverridesOrphan =
+            !!chosen && (chosen as { overridesOrphanFloor?: boolean }).overridesOrphanFloor === true;
+          if (
+            chosen && chosen.promote && chosen.promoteTo &&
+            (!isOrphanFloor || chosenOverridesOrphan)
+          ) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
             // direct floor leaves details null → 'module'.
