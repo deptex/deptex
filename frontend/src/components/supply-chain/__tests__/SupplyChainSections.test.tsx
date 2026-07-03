@@ -135,7 +135,7 @@ describe('SupplyChainSections', () => {
     await vi.waitFor(() => {
       expect(api.createDependencyBumpPR).toHaveBeenCalledWith('org-1', 'proj-1', 'pd-1', '5.2.1');
     });
-    expect(await screen.findByText(/View PR #7/)).toBeInTheDocument();
+    expect(await screen.findByText(/View bump PR/)).toBeInTheDocument();
   });
 
   it('calls getDependencySupplyChain with the provided ids', async () => {
