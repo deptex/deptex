@@ -263,6 +263,14 @@ export const aegisApi = {
     });
   },
 
+  /** Stop a running task — rejects its in-flight agent fixes so the worker aborts. */
+  async cancelTask(taskId: string, organizationId: string): Promise<{ success: boolean; cancelled: number }> {
+    return fetchWithAuth(`/api/aegis/tasks/${taskId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ organizationId }),
+    });
+  },
+
   /** Send-to-Aegis: create a task from a finding. Returns the proposed task + its chat. */
   async createTaskFromFinding(body: {
     organizationId: string;

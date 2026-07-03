@@ -195,6 +195,21 @@ export function TaskDetailPanel({
   const [diffs, setDiffs] = useState<string[]>([]);
   const [prUrl, setPrUrl] = useState<string | null>(null);
   const [changesLoading, setChangesLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Stop a running task — the kill switch for an autonomous agent that writes
+  // files and opens PRs. Rejects its in-flight fix so the worker aborts.
+  const onStop = async () => {
+    if (!task || cancelling) return;
+    setCancelling(true);
+    try {
+      await aegisApi.cancelTask(task.id, task.organizationId);
+    } catch {
+      /* best-effort — the worker also aborts on its own budget/stall */
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   // Start each task on the Task tab.
   useEffect(() => {
@@ -280,13 +295,22 @@ export function TaskDetailPanel({
                 <div className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">
                   {task.title}
                 </div>
-                {prUrl && (
+                {prUrl ? (
                   <Button asChild variant="white" className="shrink-0">
                     <a href={prUrl} target="_blank" rel="noreferrer">
                       View pull request
                     </a>
                   </Button>
-                )}
+                ) : task.status === 'working' ? (
+                  <Button
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={onStop}
+                    disabled={cancelling}
+                  >
+                    {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Stop'}
+                  </Button>
+                ) : null}
               </div>
               <div className="flex gap-5">
                 <TabButton active={tab === 'task'} onClick={() => setTab('task')}>
