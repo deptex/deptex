@@ -132,6 +132,23 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(P('oj', 'Oj: Heap Buffer Overflow in Oj.dump Exception Serialization via Large Indent').promote).toBe(false);
   });
 
+  it('does NOT promote the XInclude-gated nokogiri UAF CVEs by id (coarse summary hides the gate)', () => {
+    // CVE-2021-30560 / CVE-2021-3518 read as "use-after-free"/"libxml2 and libxslt"
+    // but are XInclude-gated (non-default parse option); discourse ground truth
+    // labels both unreachable. The id is the only signal.
+    const nokoUAF = 'Nokogiri Implements libxml2 version vulnerable to use-after-free';
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: nokoUAF, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2021-3518'] }).promote).toBe(false);
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: 'Nokogiri has vulnerable dependencies on libxml2 and libxslt', hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2021-30560'] }).promote).toBe(false);
+    // A genuine always-on libxml2 parser UAF with a DIFFERENT id still promotes.
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: nokoUAF, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0001'] }).promote).toBe(true);
+  });
+
+  it('does NOT promote the Ruby-version-gated SafeBuffer#bytesplice XSS by id', () => {
+    // CVE-2023-28120: bytesplice only exists on Ruby ≥3.2; mastodon pins <3.1
+    // (mastodon ground truth: unreachable). Excluded by id → not promoted.
+    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'activesupport', summary: 'Possible XSS Security Vulnerability in SafeBuffer#bytesplice', hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2023-28120'] }).promote).toBe(false);
+  });
+
   it('promotes an ActionDispatch ReDoS to data_flow', () => {
     const r = P('actionpack', ACTIONDISPATCH_REDOS);
     expect(r.promote).toBe(true);

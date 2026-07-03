@@ -2037,6 +2037,7 @@ export async function updateReachabilityLevels(
                   summary: summaryStr,
                   hasHttpRouteEntryPoint,
                   signals: railsSignals,
+                  osvIds: candidateOsvIds,
                 })
               : { promote: false as const };
           // Go always-on model (4th) — the x/net/http2 server stack on a deployed

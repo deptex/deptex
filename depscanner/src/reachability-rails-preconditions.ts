@@ -428,6 +428,17 @@ export interface AlwaysOnRuntime {
   summary: RegExp[];
   /** Veto: a summary matching any of these is a feature-gated sibling — never promote. */
   exclude?: RegExp[];
+  /**
+   * Veto by advisory ID (osv_id or alias, uppercased) — for CVEs whose SUMMARY
+   * is too coarse to reveal the feature/version gate that makes them
+   * feature-gated (same pattern as the Spring model's CVE-2023-41080 id-veto).
+   * nokogiri CVE-2021-30560 / CVE-2021-3518 read as "use-after-free" but are
+   * XInclude-gated (a non-default libxml2 parse option); activesupport
+   * CVE-2023-28120 names `SafeBuffer#bytesplice`, a method that only exists on
+   * Ruby ≥3.2. A future Arc-5 symbol/version pass would derive these from the
+   * affected symbol / required runtime instead of a hard-coded id.
+   */
+  excludeIds?: string[];
   promoteTo: 'function' | 'data_flow';
   /** Extra per-row precondition on the project signals. */
   requires: (s: RailsFeatureSignals) => boolean;
@@ -548,6 +559,11 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
       /nokogiri/i,
     ],
     exclude: [/(?<!lib)xslt/i, /schema/i, /xinclude/i, /c14n/i, /canonical/i, /jruby/i, /xerces/i, /nonet/i, /relaxng/i],
+    // CVE-2021-30560 + CVE-2021-3518: libxml2 UAF in the XInclude processing path
+    // (a non-default parse option Discourse never enables); their summaries say
+    // only "use-after-free" / "libxml2 and libxslt", hiding the XInclude gate, so
+    // the id is the only signal (Discourse ground truth labels both unreachable).
+    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518'],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_html',
@@ -592,6 +608,11 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     owners: ['activesupport'],
     summary: [/safebuffer/i, /safe buffer/i, /bytesplice/i, /xss/i, /cross-site scripting/i],
     exclude: [/number/i, /underscore/i, /encrypted/i, /redos/i, /denial of service/i],
+    // CVE-2023-28120: the SafeBuffer#bytesplice XSS uses a String method that only
+    // EXISTS on Ruby ≥3.2; mastodon pins ruby <3.1, so the method (and the CVE) is
+    // structurally absent. The summary names bytesplice but not the version gate,
+    // so the id is the signal (mastodon ground truth labels it unreachable).
+    excludeIds: ['CVE-2023-28120'],
     promoteTo: 'function',
     requires: () => true,
     threatTag: 'requires_reflected_content',
@@ -633,14 +654,18 @@ export function evaluateRailsAlwaysOnRuntimePromotion(input: {
   summary: string | null | undefined;
   hasHttpRouteEntryPoint: boolean;
   signals?: RailsFeatureSignals | null;
+  /** osv_id + aliases of the finding, for `excludeIds`-vetoed rows. */
+  osvIds?: string[] | null;
 }): AlwaysOnPromotionResult {
-  const { depName, summary, hasHttpRouteEntryPoint } = input;
+  const { depName, summary, hasHttpRouteEntryPoint, osvIds } = input;
   if (!hasHttpRouteEntryPoint) return { promote: false };
   if (!depName || !summary) return { promote: false };
   const dep = depName.toLowerCase();
+  const idSet = new Set((osvIds ?? []).map((x) => String(x).toUpperCase()));
   const signals = input.signals ?? emptyRailsFeatureSignals();
   for (const row of ALWAYS_ON_RUNTIME) {
     if (!row.owners.some((o) => dep === o || dep.includes(o))) continue;
+    if (row.excludeIds && row.excludeIds.some((id) => idSet.has(id.toUpperCase()))) continue;
     if (row.exclude && row.exclude.some((re) => re.test(summary))) continue;
     const matched = row.summary.find((re) => re.test(summary));
     if (!matched) continue;
