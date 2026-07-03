@@ -52,12 +52,14 @@ export default function AegisPage() {
     ? tasks.find((t) => t.threadId === activeThreadId) ?? null
     : null;
   const isTaskThread = !!activeTask;
-  // The task detail slide-in (opened from the compact task row). Closed on
-  // every thread switch so it never bleeds across tasks.
+  // The task sidebar (Task / Changes tabs). It's the task's workspace, so it
+  // opens by default on a task thread and closes on non-task threads. Re-evaluated
+  // on every thread switch (and once tasks load) so it never bleeds across tasks;
+  // a manual close persists until the next switch.
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   useEffect(() => {
-    setTaskPanelOpen(false);
-  }, [activeThreadId]);
+    setTaskPanelOpen(isTaskThread);
+  }, [activeThreadId, isTaskThread]);
 
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just

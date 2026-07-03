@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import './instrument';
 import * as Sentry from '@sentry/node';
+import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { captureInfraError, captureInfraMessage } from './observability/capture';
@@ -142,7 +143,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       if (line) await narrate(line);
     };
 
-    await cloneAtSha({
+    const cloneOutput = await cloneAtSha({
       workDir: sandbox.workDir,
       installationToken,
       repoFullName: repoInfo.repoFullName,
@@ -150,7 +151,12 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       baseSha: fullRow.plan_base_sha,
       logger,
     });
-    await step({ icon: 'clone', label: `Cloned the ${projectName} repository` });
+    await step({
+      icon: 'clone',
+      label: `Cloned the ${projectName} repository`,
+      command: `git clone --depth 1 https://github.com/${repoInfo.repoFullName}.git`,
+      output: cloneOutput,
+    });
     await voice(
       'cloned the repo into a clean sandbox',
       isDepBump
@@ -196,7 +202,10 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     // before the slow verify, then verify lands after it passes. Mode-aware so a
     // base-image bump, an explore-and-sanitize, and a plain code edit each read
     // truthfully. (verifiedLocally false = we soft-passed to the PR's CI.)
-    const onPhase = async (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }): Promise<void> => {
+    const onPhase = async (
+      phase: 'edit' | 'verify',
+      meta?: { verifiedLocally?: boolean; command?: string; output?: string },
+    ): Promise<void> => {
       if (phase === 'edit') {
         if (isExplore) {
           await step({
@@ -209,9 +218,24 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
         const editLabel = isBaseImageBump
           ? baseTarget
             ? `Bumped the base image to ${baseTarget.targetImage}`
-            : 'Updated the Dockerfile'
-          : `Updated ${primaryFile}`;
-        await step({ icon: 'edit', label: editLabel });
+            : 'Edited the Dockerfile'
+          : `Edited ${primaryFile}`;
+        // Capture the change so the chat can expand "Edited X" to the real diff.
+        // onPhase('edit') fires right after the patch applies and BEFORE verify
+        // (which, for a dep bump, regenerates the lockfile) — so the working-tree
+        // diff here is exactly the edit itself. Best-effort, capped.
+        let editDiff: string | undefined;
+        try {
+          const raw = execSync(`git -C "${sandbox.workDir}" diff`, {
+            encoding: 'utf-8',
+            timeout: 15_000,
+            maxBuffer: 5 * 1024 * 1024,
+          });
+          editDiff = raw.trim() ? raw.slice(0, 6000) : undefined;
+        } catch {
+          editDiff = undefined;
+        }
+        await step({ icon: 'edit', label: editLabel, diff: editDiff });
         await voice(
           isBaseImageBump
             ? `moved the base image${baseTarget ? ` to ${baseTarget.targetImage}` : ''}`
@@ -235,7 +259,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
               ? 'Verified the new version resolves'
               : 'Type-checked — no errors'
             : "Applied the change (the PR's CI runs the tests)";
-        await step({ icon: 'verify', label: verifyLabel });
+        await step({ icon: 'verify', label: verifyLabel, command: meta?.command, output: meta?.output });
         await voice(
           isBaseImageBump
             ? 'swapped the base image; the CI pipeline will build and validate the new image'
@@ -284,7 +308,7 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
         });
     const totalTokens = pipeline.tokensUsed;
 
-    const { prBranch, diffSummary } = await commitAndPushFix({
+    const { prBranch, diffSummary, pushOutput } = await commitAndPushFix({
       workDir: sandbox.workDir,
       fixId: job.id,
       plan,
@@ -313,7 +337,12 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       tokensUsed: totalTokens,
     });
     await logger.success('complete', `Fix complete — PR #${pr.prNumber} opened`);
-    await step({ icon: 'pr', label: `Opened pull request #${pr.prNumber}` });
+    await step({
+      icon: 'pr',
+      label: `Opened pull request #${pr.prNumber}`,
+      command: `git push origin ${prBranch}`,
+      output: pushOutput,
+    });
     // No voice line here — the PR card's caption ("The pull request is up …") is
     // the closing beat, right above the card. The PR card lands LAST so the chat
     // reads top-to-bottom (reason → steps → card); then the task is marked done.

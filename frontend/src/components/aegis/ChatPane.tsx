@@ -126,8 +126,16 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
         parts.push({ type: 'text', text: p.text });
         hasText = true;
       } else if ((p as any).type === 'step') {
-        // A fix-worker tool-use step (gray icon + label line).
-        parts.push({ type: 'step', icon: (p as any).icon, label: (p as any).label });
+        // A fix-worker tool-use step (gray icon + label line; optional command
+        // renders as a terminal line when expanded).
+        parts.push({
+          type: 'step',
+          icon: (p as any).icon,
+          label: (p as any).label,
+          command: (p as any).command,
+          diff: (p as any).diff,
+          output: (p as any).output,
+        });
         hasStep = true;
       } else if (p.type === 'tool-call') {
         // emitted via paired tool-result below

@@ -104,7 +104,16 @@ export function MessageBubble({
     // Fix-worker tool-use step — a gray "did this" line.
     if (part.type === 'step') {
       flushTools();
-      elements.push(<TaskStepLine key={`step-${i}`} icon={part.icon} label={part.label ?? ''} />);
+      elements.push(
+        <TaskStepLine
+          key={`step-${i}`}
+          icon={part.icon}
+          label={part.label ?? ''}
+          command={part.command}
+          diff={part.diff}
+          output={part.output}
+        />,
+      );
       return;
     }
     if (isToolPart(part)) {

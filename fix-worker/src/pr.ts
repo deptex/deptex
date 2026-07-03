@@ -1,8 +1,13 @@
-import { execSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
+import { execSync, spawnSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
 import type { FixLogger } from './logger';
 import type { FixPlan } from './plan-types';
 
 const EXEC_OPTS: ExecSyncOptionsWithStringEncoding = { encoding: 'utf-8', timeout: 120_000 };
+
+// Never let an installation token reach a returned string / the chat.
+function stripTokens(s: string): string {
+  return s.replace(/x-access-token:[^@\s]*@/g, '');
+}
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -61,7 +66,7 @@ export async function commitAndPushFix(opts: {
   repoFullName: string;
   baseBranch: string;
   logger: FixLogger;
-}): Promise<{ prBranch: string; diffSummary: string }> {
+}): Promise<{ prBranch: string; diffSummary: string; pushOutput: string }> {
   const { workDir, fixId, plan, installationToken, repoFullName, baseBranch, logger } = opts;
 
   // Configure committer identity for this repo only.
@@ -96,11 +101,18 @@ export async function commitAndPushFix(opts: {
   await logger.info('pr', 'Pushing branch');
   const remoteUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
   execSync(`git remote set-url origin "${remoteUrl}"`, { ...EXEC_OPTS, cwd: workDir });
-  execSync(`git push --set-upstream origin "${branch}"`, {
-    ...EXEC_OPTS,
+  // spawnSync captures git push's progress (written to stderr) so the chat's
+  // terminal card can show the real transcript, including the "* [new branch]" line.
+  const push = spawnSync('git', ['push', '--set-upstream', 'origin', branch], {
     cwd: workDir,
+    encoding: 'utf-8',
     timeout: 120_000,
+    maxBuffer: 5 * 1024 * 1024,
   });
+  if (push.status !== 0) {
+    throw new Error(`git push failed: ${stripTokens((push.stderr || '').slice(-500))}`);
+  }
+  const pushOutput = stripTokens(`${push.stderr || ''}${push.stdout || ''}`).trim().slice(-1500);
 
   // Belt-and-braces: clear the token from origin so it isn't kept in .git/config.
   execSync(`git remote set-url origin "https://github.com/${repoFullName}.git"`, {
@@ -108,7 +120,7 @@ export async function commitAndPushFix(opts: {
     cwd: workDir,
   });
 
-  return { prBranch: branch, diffSummary: stat };
+  return { prBranch: branch, diffSummary: stat, pushOutput };
 }
 
 export async function openPullRequest(opts: {

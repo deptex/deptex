@@ -67,6 +67,19 @@ export type StepIcon = 'clone' | 'explore' | 'edit' | 'verify' | 'pr' | 'failed'
 export interface TaskStep {
   icon: StepIcon;
   label: string;
+  // The literal shell command this step ran, when it maps to one (git clone,
+  // npm install, git push). The chat renders it as a terminal card — the step
+  // label as the title, then `$ command` and its output. Omitted for steps that
+  // aren't a shell command (an in-process file edit, the explore loop).
+  command?: string;
+  // The captured terminal output of `command` (stdout/stderr, trimmed + capped).
+  // Shown under the command line in the terminal card. Optional — a card with no
+  // output just shows the command.
+  output?: string;
+  // The udiff this step produced, when it edited files (the `edit` step). The
+  // chat renders it as an expandable colored diff under the label ("Edited
+  // package.json" → the change). Omitted for non-edit steps.
+  diff?: string;
 }
 
 /**
@@ -83,11 +96,14 @@ export async function narrateStep(
   if (!threadId) return;
   const label = (step.label ?? '').trim();
   if (!label) return;
+  const command = step.command?.trim() || undefined;
+  const diff = step.diff?.trim() || undefined;
+  const output = step.output?.trim() || undefined;
   const { error } = await supabase.from('aegis_chat_messages').insert({
     thread_id: threadId,
     role: 'assistant',
     content: label,
-    metadata: { parts: [{ type: 'step', icon: step.icon, label, status: 'done' }] },
+    metadata: { parts: [{ type: 'step', icon: step.icon, label, command, diff, output, status: 'done' }] },
   });
   if (error) console.warn('[FIX] task step failed:', error.message);
 }

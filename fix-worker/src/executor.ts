@@ -337,7 +337,10 @@ export interface RunFixPipelineOpts {
   // the verify/install runs) and once when verification passes (with whether it
   // was checked locally vs soft-passed to CI). Lets the worker post its
   // edit/verify step + voice lines with real timing around the slow install.
-  onPhase?: (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }) => Promise<void>;
+  onPhase?: (
+    phase: 'edit' | 'verify',
+    meta?: { verifiedLocally?: boolean; command?: string; output?: string },
+  ) => Promise<void>;
   // Fired when a patch has to be retried (didn't apply) or the checks failed —
   // lets the worker narrate the struggle in real time.
   onTrouble?: (event: TroubleEvent) => Promise<void>;
@@ -506,6 +509,15 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     passed: true, exitCode: 0, stdout: '', stderr: '', durationMs: 0, timedOut: false, noTestSuite: true,
   });
   const codeFixGate = isDependencyBump ? null : pickTypecheckCommand(workDir, plan.language);
+  // The literal command we actually run to verify — surfaced to the chat's
+  // terminal-style step. undefined when there's no local check (soft-pass to CI):
+  // a dep bump only re-resolves for js/ts; a code fix only typechecks when a gate
+  // exists. Shown on the verify step ONLY when it truly ran (see the onPhase call).
+  const verifyCommand: string | undefined = isDependencyBump
+    ? plan.language === 'js' || plan.language === 'ts'
+      ? 'npm install --no-audit --no-fund'
+      : undefined
+    : (codeFixGate ?? undefined);
   if (!isDependencyBump) {
     await logger.info(
       'tests',
@@ -646,7 +658,15 @@ export async function runFixPipeline(opts: RunFixPipelineOpts): Promise<RunFixPi
     );
   }
 
-  await opts.onPhase?.('verify', { verifiedLocally: !testResult.noTestSuite });
+  await opts.onPhase?.('verify', {
+    verifiedLocally: !testResult.noTestSuite,
+    // Only name the command + show output when it actually ran locally — a
+    // soft-pass verified nothing, so it shouldn't claim a command.
+    command: testResult.noTestSuite ? undefined : verifyCommand,
+    output: testResult.noTestSuite
+      ? undefined
+      : (testResult.stdout || testResult.stderr || '').trim().slice(-1500) || undefined,
+  });
 
   return {
     rawDiff: lastDiff,

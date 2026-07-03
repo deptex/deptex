@@ -1,4 +1,4 @@
-import { execSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
+import { execSync, spawnSync, type ExecSyncOptionsWithStringEncoding } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FixLogger } from './logger';
@@ -36,6 +36,12 @@ export function createSandbox(fixId: string): SandboxHandle {
   };
 }
 
+// Never let an installation token (or any x-access-token URL) reach a log line
+// or the chat's terminal card.
+function stripTokens(s: string): string {
+  return s.replace(/x-access-token:[^@\s]*@/g, '');
+}
+
 export async function cloneAtSha(opts: {
   workDir: string;
   installationToken: string;
@@ -43,7 +49,7 @@ export async function cloneAtSha(opts: {
   branch: string;
   baseSha: string;
   logger: FixLogger;
-}): Promise<void> {
+}): Promise<string> {
   const { workDir, installationToken, repoFullName, branch, baseSha, logger } = opts;
   const cloneUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
   const startedAt = Date.now();
@@ -52,10 +58,17 @@ export async function cloneAtSha(opts: {
   // Shallow clone the branch tip then hard-reset to baseSha so the worker
   // operates against the exact SHA the user approved. If baseSha is no longer
   // reachable from the shallow tip we fall back to a full fetch of that SHA.
-  execSync(
-    `git clone --depth 1 --single-branch --branch ${branch} "${cloneUrl}" "${workDir}"`,
-    { ...EXEC_OPTS, timeout: 300_000 },
+  // spawnSync (args array, no shell) captures git's progress output — which it
+  // writes to stderr — so the chat's terminal card can show the real transcript.
+  const clone = spawnSync(
+    'git',
+    ['clone', '--depth', '1', '--single-branch', '--branch', branch, cloneUrl, workDir],
+    { encoding: 'utf-8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
   );
+  if (clone.status !== 0) {
+    throw new Error(`git clone failed: ${stripTokens((clone.stderr || '').slice(-500))}`);
+  }
+  const cloneOutput = stripTokens(`${clone.stderr || ''}${clone.stdout || ''}`).trim();
 
   try {
     execSync(`git -C "${workDir}" cat-file -e ${baseSha}`, EXEC_OPTS);
@@ -65,6 +78,8 @@ export async function cloneAtSha(opts: {
   execSync(`git -C "${workDir}" reset --hard ${baseSha}`, EXEC_OPTS);
 
   await logger.success('clone', `Cloned ${repoFullName} at ${baseSha.slice(0, 7)}`, Date.now() - startedAt);
+  // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.
+  return cloneOutput.slice(-1500);
 }
 
 function fileExists(workDir: string, relPath: string): boolean {

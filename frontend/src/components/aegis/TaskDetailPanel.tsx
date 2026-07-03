@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
-import { PanelRight } from 'lucide-react';
+import { PanelRight, Loader2 } from 'lucide-react';
 import { api, type VulnerabilityDetail } from '../../lib/api';
-import type { AegisTask, AegisTaskTarget } from '../../lib/aegis-api';
+import { aegisApi, type AegisTask, type AegisTaskTarget } from '../../lib/aegis-api';
 import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
+import { FileDiffCard } from './FileDiffCard';
+import { Button } from '../ui/button';
 
-// The task detail slide-in, opened from the compact task row. Mirrors the plan
-// sidebar (FixPanel): bg-background panel behind a border-l aside, px-6 pt-5 pb-6
-// body, text-lg semibold title, ESC + a PanelRight toggle to close. Shows the
-// task title, a description, and the actual finding card(s) for its targets —
-// the same VulnerabilityExpandedCard the fix panel renders.
+// The task sidebar: the chat's own header (task title) + tabs. `Task` shows the
+// goal + the finding card(s); `Changes` shows the file diffs Aegis made with a
+// "View pull request" action. Mirrors the fix panel chrome (bg-background aside
+// behind a border-l, PanelRight toggle, ESC to close, width up to 2/5 vw).
 
 const TYPE_LABEL: Record<string, string> = {
   vulnerability: 'Vulnerability',
@@ -100,6 +101,86 @@ function TaskFindingCard({ orgId, target }: { orgId: string; target: AegisTaskTa
   );
 }
 
+function TaskTab({ task }: { task: AegisTask }) {
+  return (
+    <div className="px-6 pb-6 pt-5">
+      <p className="text-sm leading-relaxed text-foreground/80">{describeTask(task)}</p>
+      {task.targets.length > 0 && (
+        <div className="mt-5 space-y-3">
+          {task.targets.map((t, i) => (
+            <TaskFindingCard key={i} orgId={task.organizationId} target={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The Changes tab body — just the diffs (the +/− stat and View PR button live in
+// the sidebar header). Reads like a PR's "Files changed".
+function ChangesTab({
+  diffs,
+  prUrl,
+  loading,
+}: {
+  diffs: string[];
+  prUrl: string | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 px-6 py-8 text-sm text-foreground-secondary">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading changes…
+      </div>
+    );
+  }
+
+  const hasChanges = diffs.length > 0;
+  if (!hasChanges && !prUrl) {
+    return (
+      <div className="px-6 py-8 text-sm leading-relaxed text-foreground-secondary">
+        No changes yet — Aegis is still working this task.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 px-6 pb-6 pt-5">
+      {hasChanges ? (
+        diffs.map((d, i) => <FileDiffCard key={i} diff={d} />)
+      ) : (
+        <div className="text-sm leading-relaxed text-foreground-secondary">
+          The change is in the pull request.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative pb-2.5 text-sm transition-colors ${
+        active ? 'font-medium text-foreground' : 'text-foreground-secondary hover:text-foreground'
+      }`}
+    >
+      {children}
+      {active && <span className="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-foreground" />}
+    </button>
+  );
+}
+
 export function TaskDetailPanel({
   task,
   open,
@@ -110,6 +191,61 @@ export function TaskDetailPanel({
   onClose: () => void;
 }) {
   const [width] = useState(panelWidth);
+  const [tab, setTab] = useState<'task' | 'changes'>('task');
+  const [diffs, setDiffs] = useState<string[]>([]);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [changesLoading, setChangesLoading] = useState(true);
+
+  // Start each task on the Task tab.
+  useEffect(() => {
+    setTab('task');
+  }, [task?.id]);
+
+  // Pull the change set out of the task's chat: the edit-step diffs + the fix's
+  // PR. Drives both the Changes tab and the header stat/button.
+  useEffect(() => {
+    const threadId = task?.threadId;
+    if (!threadId) {
+      setDiffs([]);
+      setPrUrl(null);
+      setChangesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setChangesLoading(true);
+    (async () => {
+      try {
+        const msgs = await aegisApi.getMessages(threadId);
+        const editDiffs: string[] = [];
+        let fixId: string | undefined;
+        for (const m of msgs) {
+          for (const p of (m.metadata?.parts ?? []) as any[]) {
+            if (p?.type === 'step' && p.icon === 'edit' && p.diff) editDiffs.push(p.diff);
+            if (p?.type === 'tool-result' && p.result?.fixId) fixId = p.result.fixId;
+          }
+        }
+        let url: string | null = null;
+        if (fixId) {
+          const { fix } = await api.getFix(fixId);
+          url = fix?.prUrl ?? null;
+        }
+        if (!cancelled) {
+          setDiffs(editDiffs);
+          setPrUrl(url);
+          setChangesLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setDiffs([]);
+          setPrUrl(null);
+          setChangesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.threadId]);
 
   useEffect(() => {
     if (!open) return;
@@ -138,24 +274,36 @@ export function TaskDetailPanel({
       )}
       <aside className="flex-1 border-l border-border overflow-hidden">
         {task && (
-          <div className="h-full flex flex-col bg-background overflow-hidden">
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              <div className="px-6 pt-5 pb-6">
-                <div className="text-lg font-semibold text-foreground leading-snug">
+          <div className="flex h-full flex-col overflow-hidden bg-background">
+            <div className="border-b border-border px-6 pt-4">
+              <div className="flex items-start justify-between gap-3 pb-3">
+                <div className="min-w-0 flex-1 text-base font-semibold leading-snug text-foreground">
                   {task.title}
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-foreground/80">
-                  {describeTask(task)}
-                </p>
-
-                {task.targets.length > 0 && (
-                  <div className="mt-6 space-y-3">
-                    {task.targets.map((t, i) => (
-                      <TaskFindingCard key={i} orgId={task.organizationId} target={t} />
-                    ))}
-                  </div>
+                {prUrl && (
+                  <Button asChild variant="white" className="shrink-0">
+                    <a href={prUrl} target="_blank" rel="noreferrer">
+                      View pull request
+                    </a>
+                  </Button>
                 )}
               </div>
+              <div className="flex gap-5">
+                <TabButton active={tab === 'task'} onClick={() => setTab('task')}>
+                  Task
+                </TabButton>
+                <TabButton active={tab === 'changes'} onClick={() => setTab('changes')}>
+                  Changes
+                </TabButton>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {tab === 'task' ? (
+                <TaskTab task={task} />
+              ) : (
+                <ChangesTab diffs={diffs} prUrl={prUrl} loading={changesLoading} />
+              )}
             </div>
           </div>
         )}

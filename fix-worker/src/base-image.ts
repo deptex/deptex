@@ -163,7 +163,10 @@ export async function runBaseImageBump(
     workDir: string;
     repoRoot: string;
     logger: FixLogger;
-    onPhase?: (phase: 'edit' | 'verify', meta?: { verifiedLocally?: boolean }) => Promise<void>;
+    onPhase?: (
+      phase: 'edit' | 'verify',
+      meta?: { verifiedLocally?: boolean; command?: string },
+    ) => Promise<void>;
   },
 ): Promise<RunFixPipelineResult> {
   const { workDir, repoRoot, logger, onPhase } = opts;
