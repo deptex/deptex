@@ -831,6 +831,20 @@ repos:
     ref: f73440d151db697c2256f46875b899356bad6b43
     ground_truth_cves: []
 
+  - name: monica
+    repo_url: https://github.com/monicahq/monica.git
+    ecosystem: composer
+    # 2021 — Monica CRM v4.0.0. A REAL Laravel application (~180 composer deps
+    # via the committed composer.lock — no `composer install` needed). Added as
+    # the FIRST labelled composer app (symfony-demo carries no ground truth) and
+    # deliberately a LARAVEL app: it tests that the Symfony feature-precondition
+    # model correctly does NOTHING here (recognition gate must not over-fire on
+    # a non-Symfony composer app), and it exercises the base classifier on a
+    # real deployed PHP web app. If it surfaces Laravel-specific always-on
+    # patterns, that motivates a Laravel model (Arc 4c).
+    ref: v4.0.0
+    ground_truth_cves: []
+
   - name: discourse
     repo_url: https://github.com/discourse/discourse.git
     ecosystem: gem
