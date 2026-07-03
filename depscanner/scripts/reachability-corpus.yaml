@@ -222,6 +222,20 @@ repos:
           defaults to H2; the driver is on the classpath but the default run
           does not exercise it — labelled module.
 
+  - name: spring-security-polls
+    repo_url: https://github.com/callicoder/spring-security-react-ant-design-polls-app.git
+    ecosystem: maven
+    # SECOND real Spring Boot app beside spring-petclinic — chosen deliberately
+    # for OPPOSITE characteristics (the two-app validation the Go/gitea catch
+    # mandates): petclinic has NO Spring Security and is server-rendered
+    # Thymeleaf; this is a JWT-authenticated REST API with the Spring Security
+    # filter chain PRESENT (jjwt), JPA/Hibernate, and a React SPA client. It
+    # exercises the "feature present → do NOT demote" branch of the Spring
+    # feature-precondition gate (spring-security-filter-chain) that petclinic
+    # cannot. Measurement-only until triaged (ground_truth_cves added after the
+    # source-grounded triage + adversarial verify).
+    ground_truth_cves: []
+
   - name: bat
     repo_url: https://github.com/sharkdp/bat.git
     ecosystem: cargo
