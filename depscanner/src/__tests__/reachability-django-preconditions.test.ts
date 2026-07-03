@@ -66,6 +66,9 @@ const FONTTOOLS_XXE = 'fonttools XML External Entity Injection (XXE) Vulnerabili
 const SETUPTOOLS_CMD = 'setuptools vulnerable to Command Injection via package URL';
 const SETUPTOOLS_TRAVERSAL =
   'setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write';
+const TQDM_CLI = 'tqdm CLI arguments injection attack';
+const FILELOCK_SOFT =
+  'filelock Time-of-Check-Time-of-Use (TOCTOU) Symlink Vulnerability in SoftFileLock';
 
 /**
  * A recognized saleor-shaped Django project: a deployed (asgi/wsgi) web app
@@ -342,6 +345,53 @@ describe('evaluateDjangoFeaturePreconditionDemotion', () => {
   it('demotes both setuptools PackageIndex CVEs (build-time tooling)', () => {
     expect(demote('setuptools', SETUPTOOLS_CMD).demote).toBe(true);
     expect(demote('setuptools', SETUPTOOLS_TRAVERSAL).demote).toBe(true);
+  });
+
+  it('demotes the tqdm CLI-injection CVE (functionSafe) when the CLI is never imported/invoked', () => {
+    const tqdmLib = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'tqdm']),
+      importedModules: new Set([...djSignals().importedModules, 'tqdm']),
+    });
+    const r = demote('tqdm', TQDM_CLI, tqdmLib);
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('tqdm-cli-injection');
+    expect(r.functionSafe).toBe(true);
+  });
+
+  it('refuses the tqdm demotion when the CLI submodule IS imported', () => {
+    const tqdmCli = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'tqdm']),
+      importedModules: new Set([...djSignals().importedModules, 'tqdm', 'tqdm.cli']),
+    });
+    expect(demote('tqdm', TQDM_CLI, tqdmCli).demote).toBe(false);
+  });
+
+  it('demotes the filelock SoftFileLock CVE (functionSafe) when only default FileLock is used', () => {
+    const fileLock = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'filelock']),
+      codeText: djSignals().codeText + '\nfrom filelock import filelock\nwith filelock(media_lock): pass',
+    });
+    const r = demote('filelock', FILELOCK_SOFT, fileLock);
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('filelock-softfilelock');
+    expect(r.functionSafe).toBe(true);
+  });
+
+  it('refuses the filelock demotion when SoftFileLock IS referenced', () => {
+    const softLock = djSignals({
+      depUniverse: new Set([...djSignals().depUniverse, 'filelock']),
+      codeText: djSignals().codeText + '\nfrom filelock import softfilelock',
+    });
+    expect(demote('filelock', FILELOCK_SOFT, softLock).demote).toBe(false);
+  });
+
+  it('marks pillow/cryptography submodule demotions functionSafe, but broad rows NOT', () => {
+    // Import-gated submodule/API rows are functionSafe (may demote a function-level finding).
+    expect(demote('pillow', PIL_IMAGEMATH).functionSafe).toBe(true);
+    expect(demote('cryptography', CRYPTO_PKCS7).functionSafe).toBe(true);
+    // Broad feature/platform rows are NOT functionSafe (stay module-only).
+    expect(demote('django', DJ_USERNAME_WINDOWS).functionSafe).toBe(false);
+    expect(demote('django', DJ_INTCOMMA).functionSafe).toBe(false);
   });
 
   it('refuses every demotion when the code scan was truncated', () => {

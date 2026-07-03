@@ -201,6 +201,18 @@ interface FeaturePrecondition {
   summary: RegExp[];
   /** Is the feature enabled in the scanned project? */
   detect: (s: DjangoFeatureSignals) => FeaturePresence;
+  /**
+   * True when this row's absence proof is IMPORT-GATED on the specific vulnerable
+   * SUBMODULE / API (not a broad config/platform feature). The vulnerable code is
+   * then provably unreachable REGARDLESS of the package's own reachability tier —
+   * so the caller may apply this demotion to a `function`-level finding too (the
+   * usage classifier stamps `function` when the package's TOP-LEVEL API is called,
+   * e.g. `tqdm(...)` / `FileLock(...)`, even though the vulnerable submodule
+   * `tqdm.cli` / `SoftFileLock` is never touched). Left `false`/undefined for the
+   * broad feature/platform rows (humanize, windows-only, brotli-via-Scrapy, the
+   * h11 shadow) which stay `module`-only out of caution.
+   */
+  functionSafe?: boolean;
 }
 
 export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
@@ -228,6 +240,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   //     text via ImageFont transitively → its presence blocks the demotion. ---
   {
     feature: 'pillow-imagefont',
+    functionSafe: true,
     owners: ['pillow'],
     summary: [/imagefont/i, /\bfont/i],
     detect: (s) =>
@@ -243,6 +256,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   //     PDFs via weasyprint never touches PIL.PdfParser. ---
   {
     feature: 'pillow-pdfparser',
+    functionSafe: true,
     owners: ['pillow'],
     summary: [/pdfparser/i, /pdf pars/i, /\bpdf\b/i],
     detect: (s) => resolve(pillowSubmoduleUsed(s, 'pdfparser', ['append_images']), s),
@@ -251,6 +265,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   //     the app to call the opt-in eval API on attacker input. ---
   {
     feature: 'pillow-imagemath',
+    functionSafe: true,
     owners: ['pillow'],
     summary: [/imagemath/i, /arbitrary code execution/i],
     detect: (s) => resolve(pillowSubmoduleUsed(s, 'imagemath'), s),
@@ -260,6 +275,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   //     josepy) is the common transitive consumer. ---
   {
     feature: 'cryptography-pkcs7',
+    functionSafe: true,
     owners: ['cryptography'],
     summary: [/pkcs7/i, /pkcs\s*#?\s*7/i],
     detect: (s) =>
@@ -268,6 +284,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   // --- cryptography PKCS12 parsing (owner: cryptography). ---
   {
     feature: 'cryptography-pkcs12',
+    functionSafe: true,
     owners: ['cryptography'],
     summary: [/pkcs12/i, /pkcs\s*#?\s*12/i],
     detect: (s) =>
@@ -279,6 +296,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
   //     over-matching unrelated summaries. ---
   {
     feature: 'cryptography-ssh-certificates',
+    functionSafe: true,
     owners: ['cryptography'],
     summary: [/ssh certificate/i, /\bssh\b/i],
     detect: (s) =>
@@ -347,12 +365,53 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     summary: [/package.?index/i, /easy_install/i, /package url/i],
     detect: (s) => resolve(textIncludes(s.codeText, ['package_index', 'easy_install']), s),
   },
+  // --- tqdm CLI argument injection (owner: tqdm). CVE-2024-34062 lives in tqdm's
+  //     COMMAND-LINE entrypoint (`tqdm.cli` / `python -m tqdm`), reached only when
+  //     untrusted data is piped through the tqdm CLI with attacker-controlled args.
+  //     A web app that imports the tqdm LIBRARY (`from tqdm import tqdm`, as
+  //     paperless does in its mgmt commands / Celery tasks) never loads `tqdm.cli`
+  //     — so the CVE is unreachable even though the usage classifier stamps tqdm
+  //     `function` for the library call. functionSafe: the CLI submodule is
+  //     import-gated. ---
+  {
+    feature: 'tqdm-cli-injection',
+    functionSafe: true,
+    owners: ['tqdm'],
+    summary: [/\bcli\b/i, /command.?line/i, /\bargument/i],
+    detect: (s) =>
+      resolve(
+        moduleImported(s, 'tqdm.cli') ||
+          textIncludes(s.codeText, ['tqdm.cli', 'python -m tqdm', 'tqdm.__main__']),
+        s,
+      ),
+  },
+  // --- filelock SoftFileLock TOCTOU (owner: filelock). CVE-2026-22701 is in the
+  //     `SoftFileLock` class — the soft-lock fallback for filesystems without
+  //     hard-link support. Apps use the DEFAULT `FileLock` (hard-link based); the
+  //     vulnerable SoftFileLock is opt-in and absent unless referenced by name
+  //     (paperless uses `from filelock import FileLock` exclusively — the usage
+  //     classifier stamps filelock `function` for that call). functionSafe: the
+  //     SoftFileLock class is import-gated. ---
+  {
+    feature: 'filelock-softfilelock',
+    functionSafe: true,
+    owners: ['filelock'],
+    summary: [/softfilelock/i, /soft.?file.?lock/i],
+    detect: (s) => resolve(textIncludes(s.codeText, ['softfilelock']), s),
+  },
 ];
 
 export interface FeatureDemotionResult {
   demote: boolean;
   feature?: string;
   matchedPattern?: string;
+  /**
+   * True only when EVERY matched row is `functionSafe` (import-gated on the
+   * specific vulnerable submodule/API). The caller may then apply this demotion
+   * to a `function`-level finding. If any matched row is a broad feature/platform
+   * rule, this is false → the demotion stays `module`-only.
+   */
+  functionSafe?: boolean;
 }
 
 /**
@@ -386,7 +445,11 @@ export function evaluateDjangoFeaturePreconditionDemotion(input: {
     if (!chosen) chosen = fp;
   }
   const matched = chosen!.summary.find((re) => re.test(summary));
-  return { demote: true, feature: chosen!.feature, matchedPattern: matched?.source };
+  // Function-safe only when EVERY matched row is import-gated on its specific
+  // vulnerable submodule/API — a single broad feature/platform row keeps the
+  // whole demotion module-only.
+  const functionSafe = applicable.every((fp) => fp.functionSafe === true);
+  return { demote: true, feature: chosen!.feature, matchedPattern: matched?.source, functionSafe };
 }
 
 // ---------------------------------------------------------------------------

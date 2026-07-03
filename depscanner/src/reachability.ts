@@ -1962,15 +1962,24 @@ export async function updateReachabilityLevels(
       // so a demoted finding's `unreachable` is respected by the
       // `level === 'module'` guard. Fail-safe: unrecognized / truncated /
       // non-Django signals refuse every demotion.
-      if (djangoSignals && level === 'module') {
+      // Runs on `module` AND `function`: a feature-precondition whose vulnerable
+      // submodule/API is IMPORT-GATED-absent is unreachable regardless of the
+      // package's own tier (the usage classifier stamps `function` when the
+      // package's TOP-LEVEL API is called — `tqdm(...)`/`FileLock(...)` — even
+      // though the vulnerable submodule `tqdm.cli`/`SoftFileLock` is never
+      // touched). The dev-only lever stays `module`-only (higher-risk on a
+      // function-reached dep); the feature-precondition applies on `function`
+      // ONLY for functionSafe rows.
+      if (djangoSignals && (level === 'module' || level === 'function')) {
         // 1) Dev-only package (poetry dev groups / Pipfile dev-packages /
         //    requirements-dev.txt, prod scope wins) — never installed in
         //    production. Needed despite the explicit-import heuristic: a dev
         //    tool's own test files import it, so files_importing_count > 0.
-        const djangoDevOnly = evaluateDjangoDevOnlyDemotion({
-          depName,
-          signals: djangoSignals,
-        });
+        //    `module`-only: demoting a `function`-stamped dev dep is rarer + riskier.
+        const djangoDevOnly =
+          level === 'module'
+            ? evaluateDjangoDevOnlyDemotion({ depName, signals: djangoSignals })
+            : { demote: false as const };
         if (djangoDevOnly.demote) {
           level = 'unreachable';
           details = {
@@ -1986,14 +1995,20 @@ export async function updateReachabilityLevels(
         } else {
           // 2) Feature-precondition: the feature the CVE requires (a pillow /
           //    cryptography submodule, django.contrib.humanize, Scrapy for the
-          //    brotli path, the h11 parser, setuptools' PackageIndex) is
-          //    provably absent from the scanned project.
+          //    brotli path, the h11 parser, setuptools' PackageIndex, the tqdm
+          //    CLI, the filelock SoftFileLock) is provably absent. Applies at
+          //    `module` always; at `function` ONLY when every matched row is
+          //    functionSafe (import-gated on the specific vulnerable submodule/API).
           const djangoDemotion = evaluateDjangoFeaturePreconditionDemotion({
             depName,
             summary: (pdv.summary ?? null) as string | null,
             signals: djangoSignals,
           });
-          if (djangoDemotion.demote) {
+          if (djangoDemotion.demote && (level === 'module' || djangoDemotion.functionSafe)) {
+            const priorVerdict =
+              details && typeof details === 'object' && typeof details.verdict === 'string'
+                ? details.verdict
+                : level;
             level = 'unreachable';
             details = {
               reason: `feature_precondition_absent: ${djangoDemotion.feature}`,
@@ -2001,10 +2016,7 @@ export async function updateReachabilityLevels(
               verdict: 'feature_precondition_absent',
               feature: djangoDemotion.feature,
               matched_summary_pattern: djangoDemotion.matchedPattern ?? null,
-              demoted_from:
-                details && typeof details === 'object' && typeof details.verdict === 'string'
-                  ? details.verdict
-                  : 'module',
+              demoted_from: priorVerdict,
             };
           }
         }
