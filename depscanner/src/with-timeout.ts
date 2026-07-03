@@ -137,6 +137,9 @@ export async function logStepError(
 export interface ScannerSubprocessLogger {
   info: (step: string, msg: string) => Promise<void>;
   warn: (step: string, msg: string) => Promise<void>;
+  /** Optional green "X complete" line with a duration, matching the other scanner
+   *  completion messages. Present when the caller wraps the full pipeline logger. */
+  success?: (step: string, msg: string, durationMs?: number) => Promise<void>;
 }
 
 export interface ScannerSubprocessOptions {

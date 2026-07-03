@@ -204,6 +204,16 @@ export interface SupplyChainSectionsProps {
   ecosystem?: string | null;
   /** Click a finding row → switch to the Findings tab and open that finding's card there. */
   onOpenFinding?: (osvId: string) => void;
+  /** When the parent has already fetched the supply-chain data + newest-safe-version (so the
+   *  whole package pane can paint in one commit), it passes them here and this component renders
+   *  from them instead of fetching — no separate skeleton, no late pop-in. Omit to keep the
+   *  self-fetching behaviour (used by tests / any other caller). */
+  preloaded?: {
+    data: SupplyChainResponse | null;
+    safeVersion: { version: string | null; isCurrent: boolean } | null;
+  };
+  /** Re-run the parent's fetch — only meaningful in `preloaded` mode's error state. */
+  onRetry?: () => void;
 }
 
 /**
@@ -213,18 +223,23 @@ export interface SupplyChainSectionsProps {
  * package's vulnerabilities. Rendered below PackageOverview — owns its own
  * data fetching (consumes the supply-chain prefetch armed on row selection).
  */
-export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem, onOpenFinding }: SupplyChainSectionsProps) {
+export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem, onOpenFinding, preloaded, onRetry }: SupplyChainSectionsProps) {
   const { toast } = useToast();
 
-  const [data, setData] = useState<SupplyChainResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  // Controlled mode: the parent supplied data + safe version (fetched in parallel with the
+  // overview) so the whole pane paints at once. `key={dependencyId}` on this component means
+  // it remounts per package, so these initialisers always reflect the current package.
+  const isPreloaded = preloaded !== undefined;
+
+  const [data, setData] = useState<SupplyChainResponse | null>(preloaded?.data ?? null);
+  const [loading, setLoading] = useState(!isPreloaded);
+  const [loadError, setLoadError] = useState(isPreloaded ? preloaded!.data === null : false);
   const [retryCounter, setRetryCounter] = useState(0);
   const [projectImportance, setProjectImportance] = useState<number>(1.0);
   const [showAllPaths, setShowAllPaths] = useState(false);
 
   // Latest safe version (recommendation): newest release with no findings >= high
-  const [safeVersion, setSafeVersion] = useState<{ version: string | null; isCurrent: boolean } | null>(null);
+  const [safeVersion, setSafeVersion] = useState<{ version: string | null; isCurrent: boolean } | null>(preloaded?.safeVersion ?? null);
   const [safeVersionLoading, setSafeVersionLoading] = useState(false);
   const safeVersionRequestRef = useRef(0);
 
@@ -233,7 +248,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
   const [createdBumpPr, setCreatedBumpPr] = useState<{ pr_url: string; pr_number: number } | null>(null);
 
   // Zombie (unused) package: remove PR state (from server or set after creating PR)
-  const [removePrUrl, setRemovePrUrl] = useState<string | null>(null);
+  const [removePrUrl, setRemovePrUrl] = useState<string | null>(preloaded?.data?.parent.remove_pr_url ?? null);
   const [removingPr, setRemovingPr] = useState(false);
 
   // Packages table: search + expanded rows
@@ -252,6 +267,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
   }, [orgId, projectId]);
 
   useEffect(() => {
+    if (isPreloaded) return; // parent supplied data — see the `preloaded` prop
     if (!orgId || !projectId || !dependencyId) {
       setLoading(false);
       return;
@@ -287,9 +303,12 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
       .finally(() => setLoading(false));
   }, [orgId, projectId, dependencyId, retryCounter]);
 
-  // Fetch the latest safe version (recommendation) once supply chain data is loaded
+  // Fetch the latest safe version (recommendation) in PARALLEL with the supply-chain data —
+  // it only needs the dependency id, so gating it on `data` (as it used to) just made the
+  // recommendation chip pop in a round trip after everything else. Skipped in preloaded mode.
   useEffect(() => {
-    if (!orgId || !projectId || !dependencyId || !data) return;
+    if (isPreloaded) return; // parent supplied the safe version
+    if (!orgId || !projectId || !dependencyId) return;
     const requestId = ++safeVersionRequestRef.current;
     setSafeVersionLoading(true);
     api
@@ -310,7 +329,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
           setSafeVersionLoading(false);
         }
       });
-  }, [orgId, projectId, dependencyId, data]);
+  }, [orgId, projectId, dependencyId, isPreloaded]);
 
   // Bump handler — opens a PR updating THIS project to the newest safe version.
   const handleBump = useCallback(async () => {
@@ -442,7 +461,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
         <Button
           variant="outline"
           className="h-8 rounded-lg px-3 mt-4"
-          onClick={() => setRetryCounter((c) => c + 1)}
+          onClick={() => (isPreloaded ? onRetry?.() : setRetryCounter((c) => c + 1))}
         >
           Try again
         </Button>
@@ -534,7 +553,7 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium text-foreground-secondary border border-border hover:bg-foreground-secondary/10 hover:text-foreground transition-colors"
               >
                 <GitPullRequest className="h-3 w-3" />
-                View PR #{bumpPr.pr_number}
+                View bump PR
               </a>
             ) : safeVersion?.version ? (
               safeVersion.isCurrent ? (
@@ -547,14 +566,17 @@ export function SupplyChainSections({ orgId, projectId, dependencyId, ecosystem,
                   <TooltipTrigger asChild>
                     <Button
                       variant="green"
-                      className="h-8 rounded-lg px-3"
+                      className="relative h-8 rounded-lg px-3"
                       onClick={handleBump}
                       disabled={bumping}
                     >
-                      {bumping ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <>Bump to {safeVersion.version}</>
+                      {/* Keep the label in the layout (just hidden) while bumping so the button
+                          doesn't shrink to the spinner's width — the spinner overlays it. */}
+                      <span className={bumping ? 'invisible' : undefined}>Bump to {safeVersion.version}</span>
+                      {bumping && (
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        </span>
                       )}
                     </Button>
                   </TooltipTrigger>

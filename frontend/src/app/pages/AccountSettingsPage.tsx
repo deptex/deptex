@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
-import { Edit2, Loader2 } from 'lucide-react';
+import { Edit2, Loader2, Copy, Check } from 'lucide-react';
 import { getAvatarUrl, getDisplayNameOrNull } from '../../lib/userIdentity';
 import { Skeleton } from '../../components/ui/skeleton';
 import { UserAvatar, OrgAvatar } from '../../components/Avatar';
@@ -65,6 +65,7 @@ export default function AccountSettingsPage() {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
+  const [copiedEmail, setCopiedEmail] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteBlockedOrgs, setDeleteBlockedOrgs] = useState<{ id: string; name: string }[] | null>(null);
 
@@ -507,7 +508,22 @@ export default function AccountSettingsPage() {
                     ) : (
                       <>
                         <p className="text-sm text-foreground">
-                          To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{user?.email}</strong> below:
+                          To confirm deletion, type{' '}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(user?.email ?? '');
+                              setCopiedEmail(true);
+                              setTimeout(() => setCopiedEmail(false), 2000);
+                            }}
+                            className="inline-flex items-center gap-1.5 align-middle text-destructive font-mono bg-destructive/10 hover:bg-destructive/20 px-1.5 py-0.5 rounded transition-colors"
+                            aria-label={copiedEmail ? 'Copied' : 'Copy email'}
+                            title={copiedEmail ? 'Copied' : 'Copy email'}
+                          >
+                            {copiedEmail ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                            {user?.email}
+                          </button>{' '}
+                          below:
                         </p>
                         <input
                           type="text"

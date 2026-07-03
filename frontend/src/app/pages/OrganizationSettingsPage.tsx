@@ -1507,6 +1507,7 @@ export default function OrganizationSettingsPage() {
   const roleDropdownRef = useRef<HTMLDivElement>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [copiedOrgName, setCopiedOrgName] = useState(false);
   const [editingRoleName, setEditingRoleName] = useState<string>('');
   const [editingRolePermissions, setEditingRolePermissions] = useState<RolePermissions | null>(null);
   const [editingRoleNameId, setEditingRoleNameId] = useState<string | null>(null);
@@ -3146,7 +3147,22 @@ export default function OrganizationSettingsPage() {
                         {showDeleteConfirm && organization && (
                           <div className="mt-4 p-4 bg-background/50 rounded-lg border border-destructive/30 space-y-4">
                             <p className="text-sm text-foreground">
-                              To confirm deletion, type <strong className="text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">{organization.name}</strong> below:
+                              To confirm deletion, type{' '}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(organization.name);
+                                  setCopiedOrgName(true);
+                                  setTimeout(() => setCopiedOrgName(false), 2000);
+                                }}
+                                className="inline-flex items-center gap-1.5 align-middle text-destructive font-mono bg-destructive/10 hover:bg-destructive/20 px-1.5 py-0.5 rounded transition-colors"
+                                aria-label={copiedOrgName ? 'Copied' : 'Copy organization name'}
+                                title={copiedOrgName ? 'Copied' : 'Copy organization name'}
+                              >
+                                {copiedOrgName ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                {organization.name}
+                              </button>{' '}
+                              below:
                             </p>
                             <input
                               type="text"

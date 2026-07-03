@@ -1874,6 +1874,18 @@ router.post('/populate-dependencies', verifyQStash, async (req: express.Request,
           }
         } catch (e) {}
 
+        // Recompute the denormalized overview summary BEFORE flipping status to
+        // 'ready'. The 'ready' write below is what fires the project_repositories
+        // Realtime event the overview graph listens on — it un-greys the node and
+        // triggers a summary re-read. If we recomputed AFTER (or not at all, which
+        // was the bug), the frontend reads the stale/zero summary in the gap and the
+        // node shows "0 findings" until a manual refresh. This backend populate path
+        // is the finalizer for any scan that added new deps (e.g. every first scan),
+        // and it never recomputed the summary — the worker's finalize.ts only
+        // recomputes on the no-new-deps path. Awaited + non-fatal.
+        const { recomputeProjectSummary } = await import('../lib/security-summary');
+        await recomputeProjectSummary(projectId);
+
         await supabase
           .from('project_repositories')
           .update({ status: 'ready', extraction_step: 'completed', last_extracted_at: new Date().toISOString(), updated_at: new Date().toISOString() })

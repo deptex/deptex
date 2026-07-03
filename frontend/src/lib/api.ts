@@ -442,6 +442,9 @@ export interface ProjectFindingsBundle {
   trackerLinks: FindingTrackerLink[];
   groupSuppressions: FindingGroupSuppression[];
   acknowledgements: FindingAcknowledgement[];
+  // Malicious-scan coverage flag for the partial-coverage banner. Folded into the
+  // bundle so the project sidebar no longer needs a separate getProjectStats call.
+  maliciousScanStatus: 'complete' | 'partial' | 'failed' | null;
   degradedSlices: string[];
 }
 
