@@ -2115,7 +2115,334 @@ repos:
     # pillow/cryptography submodule + dev-group + feature-absent CVEs were
     # over-kept. Poetry manifests, asgi deploy, image uploads.
     ref: 3.14.0
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2024-39689
+        expected_reachability: module
+        source: "certifi — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-37920
+        expected_reachability: module
+        source: "certifi — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-4340
+        expected_reachability: module
+        source: "sqlparse — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-27jp-wm6q-gp25
+        expected_reachability: module
+        source: "sqlparse — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-6176
+        expected_reachability: module
+        source: "brotli — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-66471
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-37891
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-21441
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-45803
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-66418
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-50181
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-44431
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-43804
+        expected_reachability: module
+        source: "urllib3 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-32274
+        expected_reachability: unreachable
+        source: "black — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-21503
+        expected_reachability: unreachable
+        source: "black — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-50447
+        expected_reachability: module
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-28219
+        expected_reachability: module
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-44271
+        expected_reachability: module
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-4863
+        expected_reachability: function
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: PYSEC-2023-175
+        expected_reachability: function
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-42310
+        expected_reachability: module
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-42308
+        expected_reachability: module
+        source: "pillow — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-50782
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-26130
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-0727
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-38325
+        expected_reachability: unreachable
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-49083
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-34073
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-26007
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-v8gr-m533-ghj9
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-jm77-qphf-c4w8
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-h4gh-qq45-vh27
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-537c-gmf6-5ccf
+        expected_reachability: module
+        source: "cryptography — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-49853
+        expected_reachability: module
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-47287
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-52804
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-49854
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-35536
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-49855
+        expected_reachability: module
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-31958
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-qppv-j76h-2rpx
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-753j-mpmx-qq6g
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-78cv-mqj4-43f7
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-pw6j-qg29-8w7f
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-w235-7p84-xx57
+        expected_reachability: unreachable
+        source: "tornado — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-37568
+        expected_reachability: function
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-28490
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-59420
+        expected_reachability: function
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-68158
+        expected_reachability: function
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-62706
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-28498
+        expected_reachability: function
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-41425
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-44681
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-41479
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-27962
+        expected_reachability: function
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-61920
+        expected_reachability: module
+        source: "authlib — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-22702
+        expected_reachability: unreachable
+        source: "virtualenv — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-53899
+        expected_reachability: unreachable
+        source: "virtualenv — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-47273
+        expected_reachability: unreachable
+        source: "setuptools — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-6345
+        expected_reachability: unreachable
+        source: "setuptools — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-69534
+        expected_reachability: module
+        source: "markdown — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-45409
+        expected_reachability: module
+        source: "idna — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-3651
+        expected_reachability: module
+        source: "idna — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-45139
+        expected_reachability: module
+        source: "fonttools — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-66034
+        expected_reachability: module
+        source: "fonttools — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-57833
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-41164
+        expected_reachability: data_flow
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-48432
+        expected_reachability: data_flow
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-44271
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-64459
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-36053
+        expected_reachability: data_flow
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-24680
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-43665
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-46695
+        expected_reachability: unreachable
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-64458
+        expected_reachability: unreachable
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-45231
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-27351
+        expected_reachability: module
+        source: "django — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-71176
+        expected_reachability: unreachable
+        source: "pytest — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-32597
+        expected_reachability: data_flow
+        source: "pyjwt — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-48522
+        expected_reachability: module
+        source: "pyjwt — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-48524
+        expected_reachability: module
+        source: "pyjwt — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-48526
+        expected_reachability: module
+        source: "pyjwt — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-45768
+        expected_reachability: module
+        source: "pyjwt — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-0994
+        expected_reachability: module
+        source: "protobuf — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-4565
+        expected_reachability: module
+        source: "protobuf — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-68616
+        expected_reachability: function
+        source: "weasyprint — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-47081
+        expected_reachability: module
+        source: "requests — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-35195
+        expected_reachability: module
+        source: "requests — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-25645
+        expected_reachability: module
+        source: "requests — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-40647
+        expected_reachability: module
+        source: "sentry-sdk — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-27516
+        expected_reachability: unreachable
+        source: "jinja2 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-56201
+        expected_reachability: unreachable
+        source: "jinja2 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-22195
+        expected_reachability: unreachable
+        source: "jinja2 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-34064
+        expected_reachability: unreachable
+        source: "jinja2 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-56326
+        expected_reachability: unreachable
+        source: "jinja2 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-5569
+        expected_reachability: module
+        source: "zipp — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-6827
+        expected_reachability: unreachable
+        source: "gunicorn — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2024-1135
+        expected_reachability: unreachable
+        source: "gunicorn — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-21226
+        expected_reachability: module
+        source: "azure-core — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-30922
+        expected_reachability: module
+        source: "pyasn1 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-28684
+        expected_reachability: unreachable
+        source: "python-dotenv — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-33953
+        expected_reachability: module
+        source: "grpcio — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2023-4785
+        expected_reachability: module
+        source: "grpcio — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-22701
+        expected_reachability: unreachable
+        source: "filelock — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-68146
+        expected_reachability: unreachable
+        source: "filelock — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2026-41066
+        expected_reachability: module
+        source: "lxml — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: CVE-2025-43859
+        expected_reachability: module
+        source: "h11 — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: PYSEC-2023-1
+        expected_reachability: function
+        source: "adyen — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
+      - id: GHSA-f3q4-ggfp-jv34
+        expected_reachability: function
+        source: "adyen — saleor 3.14 Django/GraphQL 2nd-pypi triage + adversarial verify 2026-07-03 (0 refuted, all upheld); scripts/labels/saleor-3.14.yaml + ledger"
 
   - name: paperless-ngx
     repo_url: https://github.com/paperless-ngx/paperless-ngx.git
