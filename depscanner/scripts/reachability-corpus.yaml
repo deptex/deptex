@@ -234,7 +234,334 @@ repos:
     # feature-precondition gate (spring-security-filter-chain) that petclinic
     # cannot. Measurement-only until triaged (ground_truth_cves added after the
     # source-grounded triage + adversarial verify).
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2026-24400
+        expected_reachability: unreachable
+        source: "assertj-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-0603
+        expected_reachability: function
+        source: "hibernate-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-49128
+        expected_reachability: module
+        source: "jackson-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-52999
+        expected_reachability: function
+        source: "jackson-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: GHSA-72hv-8253-57qq
+        expected_reachability: module
+        source: "jackson-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2020-36518
+        expected_reachability: function
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2021-46877
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-42003
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-42004
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-50193
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-54512
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-54513
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-54514
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-54515
+        expected_reachability: module
+        source: "jackson-databind — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-51074
+        expected_reachability: unreachable
+        source: "json-path — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-1370
+        expected_reachability: unreachable
+        source: "json-smart — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-6378
+        expected_reachability: module
+        source: "logback-classic — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2021-42550
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-12798
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-12801
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-11226
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-1225
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-9828
+        expected_reachability: module
+        source: "logback-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2021-2471
+        expected_reachability: module
+        source: "mysql-connector-java — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-21363
+        expected_reachability: module
+        source: "mysql-connector-java — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-22102
+        expected_reachability: module
+        source: "mysql-connector-java — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-1471
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-25857
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-38749
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-38750
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-38751
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-38752
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-41854
+        expected_reachability: module
+        source: "snakeyaml — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22965
+        expected_reachability: module
+        source: "spring-beans — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22970
+        expected_reachability: module
+        source: "spring-beans — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-22235
+        expected_reachability: unreachable
+        source: "spring-boot — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-40973
+        expected_reachability: module
+        source: "spring-boot — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-20883
+        expected_reachability: unreachable
+        source: "spring-boot-autoconfigure — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22968
+        expected_reachability: module
+        source: "spring-context — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38820
+        expected_reachability: module
+        source: "spring-context — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-22233
+        expected_reachability: module
+        source: "spring-context — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2021-22060
+        expected_reachability: module
+        source: "spring-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2021-22096
+        expected_reachability: module
+        source: "spring-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-41249
+        expected_reachability: module
+        source: "spring-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22950
+        expected_reachability: module
+        source: "spring-expression — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-20861
+        expected_reachability: module
+        source: "spring-expression — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-20863
+        expected_reachability: module
+        source: "spring-expression — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38808
+        expected_reachability: module
+        source: "spring-expression — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22976
+        expected_reachability: unreachable
+        source: "spring-security-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-22978
+        expected_reachability: unreachable
+        source: "spring-security-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-22257
+        expected_reachability: module
+        source: "spring-security-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38827
+        expected_reachability: module
+        source: "spring-security-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-22228
+        expected_reachability: function
+        source: "spring-security-crypto — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38821
+        expected_reachability: unreachable
+        source: "spring-security-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-22732
+        expected_reachability: module
+        source: "spring-security-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-47838
+        expected_reachability: unreachable
+        source: "spring-security-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2016-1000027
+        expected_reachability: unreachable
+        source: "spring-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-22243
+        expected_reachability: module
+        source: "spring-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-22259
+        expected_reachability: module
+        source: "spring-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-22262
+        expected_reachability: module
+        source: "spring-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38809
+        expected_reachability: module
+        source: "spring-web — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-20860
+        expected_reachability: module
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38816
+        expected_reachability: unreachable
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38819
+        expected_reachability: module
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38828
+        expected_reachability: function
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-41242
+        expected_reachability: module
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-22735
+        expected_reachability: unreachable
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-22737
+        expected_reachability: unreachable
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-22741
+        expected_reachability: module
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-22745
+        expected_reachability: module
+        source: "spring-webmvc — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-42252
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2022-45143
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-24998
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-41080
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-42795
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-44487
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-45648
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2023-46589
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-24549
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-34750
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-38286
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-50379
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-56337
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-24813
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-46701
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-48988
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-48989
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-49124
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-49125
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-52434
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-52520
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-53506
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-55668
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-55752
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-55754
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-61795
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2025-66614
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-24880
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-25854
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-34483
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-41284
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-41293
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-42498
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-43512
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-43513
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-43514
+        expected_reachability: unreachable
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2026-43515
+        expected_reachability: module
+        source: "tomcat-embed-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-23672
+        expected_reachability: unreachable
+        source: "tomcat-embed-websocket — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
+      - id: CVE-2024-31573
+        expected_reachability: unreachable
+        source: "xmlunit-core — spring-security-polls 2nd-app triage + adversarial verify 2026-07-02; scripts/labels/spring-security-polls.yaml + ledger Iteration 28"
 
   - name: bat
     repo_url: https://github.com/sharkdp/bat.git
