@@ -269,11 +269,20 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     detect: (s) => resolve(rackDirectoryMounted(s), s),
   },
   // --- Rack::CommonLogger / Rack::Lint log & escape injection (owner: rack).
-  //     Rails logs via Rails::Rack::Logger, not Rack::CommonLogger. ---
+  //     Rails logs via Rails::Rack::Logger, not Rack::CommonLogger. The summary
+  //     must NAME the CommonLogger/Lint component — a bare "log injection" /
+  //     "escape sequence injection" does NOT prove the CVE lives in CommonLogger
+  //     (Rack::Sendfile's X-Accel escape-injection CVE-2025-27111 says only
+  //     "Escape Sequence Injection ... Possible Log Injection" and is genuinely
+  //     reachable when Sendfile is active — demoting it via this rule was a
+  //     silence-FN caught by the mastodon ground truth, 2026-07-02). Fail-safe:
+  //     an unnamed log-injection summary falls through to `module`, not
+  //     `unreachable`. The real CommonLogger CVE (CVE-2025-25184) names
+  //     "Rack::CommonLogger" and still demotes correctly. ---
   {
     feature: 'rack-commonlogger-middleware',
     owners: ['rack'],
-    summary: [/commonlogger/i, /common logger/i, /rack::lint/i, /log injection/i, /escape sequence injection/i, /shell escape sequence/i],
+    summary: [/commonlogger/i, /common logger/i, /rack::lint/i],
     detect: (s) => resolve(rackCommonLoggerMounted(s), s),
   },
   // --- Oj::Parser (SAJ) / Oj::Doc streaming APIs (owner: oj). The Rails

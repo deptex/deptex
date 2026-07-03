@@ -249,6 +249,15 @@ describe('evaluateRailsFeaturePreconditionDemotion', () => {
     expect(D('rack', RACK_COMMONLOGGER_INJECTION).feature).toBe('rack-commonlogger-middleware');
   });
 
+  it('does NOT demote a component-less log-injection CVE as CommonLogger (Rack::Sendfile CVE-2025-27111 silence-FN)', () => {
+    // "Escape Sequence Injection ... Possible Log Injection" names no component;
+    // it is actually a Rack::Sendfile CVE, genuinely reachable when Sendfile is
+    // active. The bare /log injection/i pattern used to demote it to
+    // unreachable — a Gate-3 silence-FN caught by the mastodon ground truth.
+    const r = D('rack', 'Escape Sequence Injection vulnerability in Rack lead to Possible Log Injection');
+    expect(r.demote).toBe(false);
+  });
+
   it('demotes a Nokogiri XSLT CVE when the app calls no XSLT/Schema API', () => {
     expect(D('nokogiri', NOKOGIRI_XSLT_LEAK).feature).toBe('nokogiri-advanced-xml-api');
   });
