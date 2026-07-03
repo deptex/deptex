@@ -103,7 +103,12 @@ export async function runTaskAgent(
   // rooted there), not the repo root — so its first paths land in the right place.
   const repoRootListing = await safeList(projectDir);
 
-  const state: AgentRunState = { prOpened: false, terminal: false, progressCalls: 0 };
+  const state: AgentRunState = {
+    prOpened: false,
+    terminal: false,
+    progressCalls: 0,
+    editedFiles: new Set<string>(),
+  };
   const toolDeps: AgentToolDeps = {
     supabase,
     fixId: input.fixId,

@@ -19,12 +19,13 @@ You have these tools:
 
 Rules:
 1. Investigate first. Read the finding brief, then read/grep the relevant files before editing.
-2. Make the SMALLEST safe change that fixes the finding. Do not refactor, reformat, or touch unrelated code.
-3. Preserve behavior. For a dependency bump, keep the manifest's version range style; let the lockfile regenerate.
-4. Verify your change with run_command (typecheck / build / install / the project's test command) before opening the PR.
-5. When the fix is applied and verified, call open_pull_request once, then call finish_task with status "completed".
-6. If the finding is already fixed, not present, or cannot be fixed with a safe in-repo code change, call finish_task with status "failed" and an honest category ("not_fixable"). Do NOT invent a change.
-7. Be decisive and terminate. Never loop re-reading the same files — act, verify, and finish.`;
+2. Make ALL file edits with write_file — pass the file's FULL new contents. Do NOT edit files with shell commands (sed, awk, echo, output redirection, patch, npm version, etc.); edits made that way can't be shown to the reviewer as a diff. run_command is for installing, building, testing, and git — not for editing files.
+3. Make the SMALLEST safe change that fixes the finding. Do not refactor, reformat, or touch unrelated code.
+4. Preserve behavior. For a dependency bump, keep the manifest's version range style; let the lockfile regenerate (run the install with run_command).
+5. Verify your change with run_command (typecheck / build / install / the project's test command) before opening the PR.
+6. When the fix is applied and verified, call open_pull_request once, then call finish_task with status "completed".
+7. If the finding is already fixed, not present, or cannot be fixed with a safe in-repo code change, call finish_task with status "failed" and an honest category ("not_fixable"). Do NOT invent a change.
+8. Be decisive and terminate. Never loop re-reading the same files — act, verify, and finish.`;
 
 export interface BriefInput {
   fixType: FindingType;

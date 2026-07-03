@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -38,6 +39,8 @@ export interface AgentRunState {
   terminal: boolean;
   /** Count of side-effecting tool calls, for stall detection. */
   progressCalls: number;
+  /** Repo-relative paths already shown live as a write_file diff (dedupe at PR time). */
+  editedFiles: Set<string>;
 }
 
 export interface AgentToolDeps {
@@ -97,6 +100,62 @@ function scrubSecrets(text: string, token: string): string {
 
 function cap(text: string): string {
   return text.length > MAX_OUTPUT_CHARS ? text.slice(0, MAX_OUTPUT_CHARS) + '\n... [truncated]' : text;
+}
+
+/**
+ * A unified diff of old→new content, computed by comparing the two strings
+ * directly (git diff --no-index on temp files) — independent of the repo's
+ * index/staging/tracking state, which plain `git diff` is not.
+ */
+async function computeContentDiff(
+  gitRel: string,
+  oldStr: string,
+  newStr: string,
+  token: string,
+): Promise<string | undefined> {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aegis-diff-'));
+  try {
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    await fsp.writeFile(a, oldStr);
+    await fsp.writeFile(b, newStr);
+    // --no-index compares two files with no repo involvement; it exits 1 when they
+    // differ, so tolerate the non-zero exit.
+    const { output } = await runShell(
+      `git diff --no-index --no-color -- ${JSON.stringify(a)} ${JSON.stringify(b)} || true`,
+      dir,
+    );
+    // Rewrite the temp paths in the header to the real repo-relative path.
+    const rewritten = output
+      .split('\n')
+      .map((line) => {
+        if (line.startsWith('diff --git ')) return `diff --git a/${gitRel} b/${gitRel}`;
+        if (line.startsWith('--- ')) return line.includes('/dev/null') ? line : `--- a/${gitRel}`;
+        if (line.startsWith('+++ ')) return line.includes('/dev/null') ? line : `+++ b/${gitRel}`;
+        return line;
+      })
+      .join('\n');
+    const trimmed = scrubSecrets(rewritten, token).trim();
+    return trimmed ? trimmed.slice(0, 6000) : undefined;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Split a multi-file `git diff` into per-file { path, diff } sections. */
+function splitDiffByFile(unified: string): Array<{ path: string; diff: string }> {
+  const files: Array<{ path: string; diff: string }> = [];
+  for (const part of unified.split(/\n(?=diff --git )/)) {
+    if (!part.startsWith('diff --git ')) continue;
+    const m = part.match(/^\+\+\+ b\/(.+)$/m) ?? part.match(/^diff --git a\/(.+?) b\//);
+    files.push({ path: (m?.[1] ?? 'file').trim(), diff: part });
+  }
+  return files;
+}
+
+/** Generated lockfiles — mechanical, huge, and not worth a diff card. */
+function isNoisyFile(p: string): boolean {
+  return /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock)$/.test(p);
 }
 
 /** Run a command async (never blocks the event loop → the 60s heartbeat keeps firing). */
@@ -219,31 +278,30 @@ export function buildAgentTools(deps: AgentToolDeps) {
     execute: async ({ path: rel, content }) => {
       const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
+      const gitRel = toGitPath(repoRoot, r.full);
       try {
+        // Read the current content first so we can diff old→new directly (immune
+        // to git index/staging state) and skip a no-op write.
+        let oldContent = '';
+        try {
+          oldContent = await fsp.readFile(r.full, 'utf-8');
+        } catch {
+          /* new file */
+        }
+        if (oldContent === content) {
+          return `${gitRel} already has exactly that content — nothing to change.`;
+        }
         await fsp.mkdir(path.dirname(r.full), { recursive: true });
         await fsp.writeFile(r.full, content, 'utf-8');
         state.progressCalls++;
-        // Surface the working-tree diff for this file as a FileDiffCard. Use the
-        // repo-root-relative path for git, and `git add -N` (intent-to-add) so a
-        // brand-new file still shows a diff (plain `git diff` skips untracked).
-        // For a secret finding the removed line IS the plaintext credential, so
-        // we never render the diff — token-scrub covers command output, not diffs.
-        const gitRel = toGitPath(repoRoot, r.full);
-        let diff: string | undefined;
-        if (!redactDiffs) {
-          // `git add -N` so a brand-new file shows, and diff against HEAD (not the
-          // index) so the change is captured whether or not it's been staged —
-          // e.g. the agent ran `git add`, or the edit was refreshed by npm install.
-          await runShell(`git add -N -- ${JSON.stringify(gitRel)}`, repoRoot);
-          const { output } = await runShell(`git diff HEAD -- ${JSON.stringify(gitRel)}`, repoRoot);
-          const trimmed = scrubSecrets(output, deps.installationToken).trim();
-          diff = trimmed ? trimmed.slice(0, 6000) : undefined;
-        }
-        await step({
-          icon: 'edit',
-          label: `Edited ${gitRel}`,
-          diff: redactDiffs ? undefined : diff,
-        });
+        state.editedFiles.add(gitRel);
+        // Live FileDiffCard. For a secret finding the removed line IS the plaintext
+        // credential, so we never render the diff (token-scrub covers command
+        // output, not diffs).
+        const diff = redactDiffs
+          ? undefined
+          : await computeContentDiff(gitRel, oldContent, content, deps.installationToken);
+        await step({ icon: 'edit', label: `Edited ${gitRel}`, diff });
         return `wrote ${gitRel} (${content.split('\n').length} lines)`;
       } catch (e: any) {
         return `write failed: ${e?.message ?? 'unknown error'}`;
@@ -286,6 +344,25 @@ export function buildAgentTools(deps: AgentToolDeps) {
         if (deps.fixType === 'vulnerability' && fs.existsSync(path.join(projectDir, 'package.json'))) {
           const { output } = await runShell('npm install --package-lock-only --ignore-scripts', projectDir);
           await deps.logger.info('setup', `Regenerated lockfile before PR:\n${cap(output)}`);
+        }
+
+        // Authoritative change set: whatever actually changed (write_file, sed,
+        // npm, …), rendered as FileDiffCard(s) — the reliable "here's what I
+        // changed", independent of HOW the agent edited. Skip files already shown
+        // live and skip generated lockfiles. Best-effort; the PR still opens.
+        try {
+          await runShell('git add -A', repoRoot);
+          const { output: fullDiff } = await runShell('git diff --cached --no-color', repoRoot);
+          for (const f of splitDiffByFile(fullDiff)) {
+            if (isNoisyFile(f.path) || state.editedFiles.has(f.path)) continue;
+            const shown =
+              deps.fixType === 'secret'
+                ? undefined
+                : scrubSecrets(f.diff, deps.installationToken).slice(0, 6000);
+            await step({ icon: 'edit', label: `Changed ${f.path}`, diff: shown });
+          }
+        } catch {
+          /* change-set narration is best-effort */
         }
 
         const { prBranch, diffSummary, pushOutput } = await commitAndPushFix({

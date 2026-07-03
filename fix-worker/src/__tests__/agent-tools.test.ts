@@ -38,7 +38,12 @@ function fakeSupabase(leaseRow: any) {
 
 function makeDeps(over: Partial<AgentToolDeps> = {}): AgentToolDeps {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tools-'));
-  const state: AgentRunState = { prOpened: false, terminal: false, progressCalls: 0 };
+  const state: AgentRunState = {
+    prOpened: false,
+    terminal: false,
+    progressCalls: 0,
+    editedFiles: new Set<string>(),
+  };
   return {
     supabase: fakeSupabase({ machine_id: 'me', status: 'executing' }),
     fixId: 'fix-1',
@@ -74,6 +79,26 @@ describe('agent tools', () => {
     const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
     expect(stepArg.icon).toBe('edit');
     expect(stepArg.diff).toBeUndefined();
+  });
+
+  test('write_file shows a real content diff for a genuine change and records the file', async () => {
+    const deps = makeDeps({ fixType: 'vulnerability', finding: { type: 'vulnerability', id: 'CVE-1' } });
+    fs.writeFileSync(path.join(deps.repoRoot, 'pkg.json'), '{"v":"1.0.0"}\n');
+    const tools = buildAgentTools(deps);
+    await (tools.write_file.execute as any)({ path: 'pkg.json', content: '{"v":"2.0.0"}\n' });
+    const stepArg = (narrateStep as jest.Mock).mock.calls.at(-1)?.[2];
+    expect(stepArg.icon).toBe('edit');
+    expect(stepArg.diff).toContain('2.0.0');
+    expect(deps.state.editedFiles.has('pkg.json')).toBe(true);
+  });
+
+  test('write_file skips a no-op write (no card)', async () => {
+    const deps = makeDeps();
+    fs.writeFileSync(path.join(deps.repoRoot, 'same.txt'), 'unchanged\n');
+    const tools = buildAgentTools(deps);
+    const res = await (tools.write_file.execute as any)({ path: 'same.txt', content: 'unchanged\n' });
+    expect(String(res)).toMatch(/nothing to change/i);
+    expect(narrateStep).not.toHaveBeenCalled();
   });
 
   test('open_pull_request no-ops (no push) when the lease is held by another machine', async () => {
