@@ -231,8 +231,11 @@ export function buildAgentTools(deps: AgentToolDeps) {
         const gitRel = toGitPath(repoRoot, r.full);
         let diff: string | undefined;
         if (!redactDiffs) {
+          // `git add -N` so a brand-new file shows, and diff against HEAD (not the
+          // index) so the change is captured whether or not it's been staged —
+          // e.g. the agent ran `git add`, or the edit was refreshed by npm install.
           await runShell(`git add -N -- ${JSON.stringify(gitRel)}`, repoRoot);
-          const { output } = await runShell(`git diff -- ${JSON.stringify(gitRel)}`, repoRoot);
+          const { output } = await runShell(`git diff HEAD -- ${JSON.stringify(gitRel)}`, repoRoot);
           const trimmed = scrubSecrets(output, deps.installationToken).trim();
           diff = trimmed ? trimmed.slice(0, 6000) : undefined;
         }
