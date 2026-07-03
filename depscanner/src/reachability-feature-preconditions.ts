@@ -574,6 +574,17 @@ export interface AlwaysOnRuntime {
    * truth from spring-security-polls, 2026-07-02.)
    */
   exclude?: RegExp[];
+  /**
+   * Veto by advisory ID (osv_id or alias, uppercased). For CVEs whose SUMMARY
+   * is too coarse to reveal the feature gate — CVE-2023-41080's advisory text
+   * is only "Apache Tomcat Open Redirect vulnerability", which hides that the
+   * flaw is the FORM-authentication (j_security_check) logout redirect,
+   * reachable only under Tomcat container FORM auth. The authoritative CVE id
+   * is the only reliable signal (same pattern as the Django model's
+   * ID-matched PYSEC-2023-175). A future Arc-5 patch-diff/symbol pass would
+   * derive this from the affected class instead of a hard-coded id.
+   */
+  excludeIds?: string[];
   /** The tier to promote to. Never `confirmed` (that needs a proven flow). */
   promoteTo: 'function' | 'data_flow';
   /**
@@ -646,6 +657,9 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     owners: ['tomcat', 'jetty', 'undertow'],
     summary: [/open[\s-]?redirect/i, /url\s+normaliz/i, /path\s+normaliz/i, /default\s+servlet/i],
     exclude: [/form[\s-]?(based\s+)?auth/i, /j_security_check/i, /form\s+login/i, /formauthenticator/i],
+    // CVE-2023-41080: FORM-auth logout redirect; its summary ("Apache Tomcat
+    // Open Redirect vulnerability") names no feature, so the id is the only gate.
+    excludeIds: ['CVE-2023-41080'],
     promoteTo: 'data_flow',
     requires: () => true,
   },
@@ -742,19 +756,24 @@ export function evaluateAlwaysOnRuntimePromotion(input: {
   summary: string | null | undefined;
   hasHttpRouteEntryPoint: boolean;
   signals?: SpringFeatureSignals | null;
+  /** osv_id + aliases of the finding, for `excludeIds`-vetoed rows. */
+  osvIds?: string[] | null;
 }): AlwaysOnPromotionResult {
-  const { depName, summary, hasHttpRouteEntryPoint } = input;
+  const { depName, summary, hasHttpRouteEntryPoint, osvIds } = input;
   // Web-app gate: no HTTP-route entry point ⇒ nothing is on a request path;
   // a library / CLI repo must never earn a promotion.
   if (!hasHttpRouteEntryPoint) return { promote: false };
   if (!depName || !summary) return { promote: false };
   const dep = depName.toLowerCase();
+  const idSet = new Set((osvIds ?? []).map((x) => String(x).toUpperCase()));
   // A missing signals object (non-Maven, or tests) resolves to the empty
   // "cannot reason" sentinel; the current rows' `requires` ignore it.
   const signals = input.signals ?? emptySpringFeatureSignals();
   for (const row of ALWAYS_ON_RUNTIME) {
     if (!row.owners.some((o) => dep.includes(o))) continue;
-    // A feature-gated sibling that only LOOKS like the always-on class — skip.
+    // A feature-gated sibling that only LOOKS like the always-on class — skip
+    // (by coarse-summary advisory id, then by summary pattern).
+    if (row.excludeIds && row.excludeIds.some((id) => idSet.has(id.toUpperCase()))) continue;
     if (row.exclude && row.exclude.some((re) => re.test(summary))) continue;
     const matched = row.summary.find((re) => re.test(summary));
     if (!matched) continue;

@@ -108,7 +108,7 @@ describe('evaluateAlwaysOnRuntimePromotion', () => {
     expect(r.threatTag).toBeUndefined();
   });
 
-  it('does NOT promote the Tomcat FORM-auth (j_security_check) open-redirect — feature-gated on Tomcat container FORM auth (CVE-2023-41080 over-promotion)', () => {
+  it('does NOT promote the Tomcat FORM-auth open-redirect when the summary NAMES form auth (summary exclude)', () => {
     // A Spring Security (or unsecured) Spring Boot app never uses Tomcat's own
     // FORM authenticator (j_security_check), so this open-redirect is not on the
     // always-on path — spring-security-polls ground truth labels it unreachable.
@@ -119,6 +119,31 @@ describe('evaluateAlwaysOnRuntimePromotion', () => {
       hasHttpRouteEntryPoint: true,
     });
     expect(r.promote).toBe(false);
+  });
+
+  it('does NOT promote CVE-2023-41080 by advisory id even though its coarse summary matches (id exclude)', () => {
+    // The REAL advisory text is only "Apache Tomcat Open Redirect vulnerability"
+    // — it names no feature, so the summary matches the always-on default-servlet
+    // row. The authoritative CVE id is the only signal that it is the FORM-auth
+    // logout redirect (verified unreachable on spring-security-polls).
+    const r = evaluateAlwaysOnRuntimePromotion({
+      depName: 'tomcat-embed-core',
+      summary: 'Apache Tomcat Open Redirect vulnerability',
+      hasHttpRouteEntryPoint: true,
+      osvIds: ['CVE-2023-41080'],
+    });
+    expect(r.promote).toBe(false);
+  });
+
+  it('still promotes a generic Tomcat open-redirect with a different id (id exclude is scoped to 41080)', () => {
+    const r = evaluateAlwaysOnRuntimePromotion({
+      depName: 'tomcat-embed-core',
+      summary: 'Apache Tomcat Open Redirect vulnerability',
+      hasHttpRouteEntryPoint: true,
+      osvIds: ['CVE-2026-25854'],
+    });
+    expect(r.promote).toBe(true);
+    expect(r.sink).toBe('servlet-default-servlet-url-normalization');
   });
 
   it('promotes a spring-webmvc ResourceHttpRequestHandler CVE to data_flow', () => {

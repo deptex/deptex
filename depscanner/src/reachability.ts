@@ -2019,6 +2019,7 @@ export async function updateReachabilityLevels(
             summary: summaryStr,
             hasHttpRouteEntryPoint,
             signals: featureSignals,
+            osvIds: candidateOsvIds,
           });
           const phpPromotion =
             !promotion.promote && symfonySignals
