@@ -646,7 +646,7 @@ const DEV_GROUP_NAMES = new Set(['dev', 'test', 'tests', 'lint', 'docs', 'typing
  * dependencies]` extras are treated as PROD (an extra may ship to production —
  * treating it prod only ever BLOCKS a demotion).
  */
-function parsePyprojectToml(raw: string, prod: Set<string>, dev: Set<string>): void {
+export function parsePyprojectToml(raw: string, prod: Set<string>, dev: Set<string>): void {
   let section = '';
   let arrayDepth = 0; // > 0 while inside [project] dependencies = [ ... ]
   for (const line of raw.split(/\r?\n/)) {
@@ -695,7 +695,7 @@ function parsePyprojectToml(raw: string, prod: Set<string>, dev: Set<string>): v
 }
 
 /** Parse Pipfile: [packages] → prod, [dev-packages] → dev. */
-function parsePipfile(raw: string, prod: Set<string>, dev: Set<string>): void {
+export function parsePipfile(raw: string, prod: Set<string>, dev: Set<string>): void {
   let section = '';
   for (const line of raw.split(/\r?\n/)) {
     const sec = line.match(/^\s*\[([^\]]+)\]\s*$/);
@@ -712,7 +712,7 @@ function parsePipfile(raw: string, prod: Set<string>, dev: Set<string>): void {
 }
 
 /** Parse a requirements .txt body into the given scope set. */
-function parseRequirementsTxt(raw: string, into: Set<string>): void {
+export function parseRequirementsTxt(raw: string, into: Set<string>): void {
   for (const line of raw.split(/\r?\n/)) {
     const t = line.trim();
     if (!t || t.startsWith('#') || t.startsWith('-')) continue; // skip flags (-r/-e/--hash)
@@ -721,7 +721,7 @@ function parseRequirementsTxt(raw: string, into: Set<string>): void {
   }
 }
 
-const DEV_REQUIREMENTS_RE = /(dev|test|lint|docs|local|ci)/i;
+export const DEV_REQUIREMENTS_RE = /(dev|test|lint|docs|local|ci)/i;
 
 // ---------------------------------------------------------------------------
 // Python import extraction

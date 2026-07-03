@@ -2892,3 +2892,322 @@ repos:
       - id: GHSA-5vg9-5847-vvmq
         expected_reachability: data_flow
         source: "laravel/framework — koel v6.0.0 Laravel 2nd-app triage + adversarial verify 2026-07-03; scripts/labels/koel-v6.0.0.yaml + ledger"
+
+  # --- Arc 4a: Flask + FastAPI (opposite Python web stacks). MEASUREMENT-ONLY until
+  # ground_truth_cves is populated after blind triage + adversarial verify. Used to
+  # build + 2-app-validate the Flask/FastAPI framework reachability model.
+  - name: flaskbb
+    repo_url: https://github.com/flaskbb/flaskbb.git
+    ecosystem: pypi
+    # FlaskBB v2.1.0 — server-rendered Flask forum. Jinja2 templates (render_template),
+    # Werkzeug routing/request, WTForms, Flask-Login, SQLAlchemy. Opposite shape to the
+    # FastAPI JSON API below — exercises the Flask request-path rows (werkzeug/jinja2).
+    ref: v2.1.0
+    ground_truth_cves:
+      - id: CVE-2021-23727
+        expected_reachability: module
+        source: "celery — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-39689
+        expected_reachability: module
+        source: "certifi — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-23491
+        expected_reachability: module
+        source: "certifi — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-37920
+        expected_reachability: module
+        source: "certifi — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-29483
+        expected_reachability: module
+        source: "dnspython — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-27205
+        expected_reachability: function
+        source: "Flask — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-30861
+        expected_reachability: function
+        source: "Flask — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2021-33026
+        expected_reachability: module
+        source: "Flask-Caching — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-45409
+        expected_reachability: data_flow
+        source: "idna — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-3651
+        expected_reachability: data_flow
+        source: "idna — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2025-27516
+        expected_reachability: unreachable
+        source: "Jinja2 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-56201
+        expected_reachability: unreachable
+        source: "Jinja2 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-22195
+        expected_reachability: unreachable
+        source: "Jinja2 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-34064
+        expected_reachability: unreachable
+        source: "Jinja2 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-56326
+        expected_reachability: unreachable
+        source: "Jinja2 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-44307
+        expected_reachability: unreachable
+        source: "Mako — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-41205
+        expected_reachability: unreachable
+        source: "Mako — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-40023
+        expected_reachability: unreachable
+        source: "Mako — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-44896
+        expected_reachability: unreachable
+        source: "mistune — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-44708
+        expected_reachability: unreachable
+        source: "mistune — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-44897
+        expected_reachability: unreachable
+        source: "mistune — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-50447
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-28219
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-44271
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-22817
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-24303
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-4863
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-45198
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-22815
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-22816
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-42310
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-42308
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: GHSA-4fx9-vc88-q2xc
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: PYSEC-2023-175
+        expected_reachability: module
+        source: "Pillow — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-4539
+        expected_reachability: data_flow
+        source: "Pygments — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-40896
+        expected_reachability: data_flow
+        source: "Pygments — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-47081
+        expected_reachability: data_flow
+        source: "requests — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-35195
+        expected_reachability: module
+        source: "requests — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-25645
+        expected_reachability: module
+        source: "requests — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-32681
+        expected_reachability: module
+        source: "requests — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2025-66471
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-37891
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-21441
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-45803
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2025-66418
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2025-50181
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-44431
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-43804
+        expected_reachability: module
+        source: "urllib3 — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-27199
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-34069
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2026-21860
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-49766
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2025-66221
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-46136
+        expected_reachability: data_flow
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-23934
+        expected_reachability: data_flow
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2024-49767
+        expected_reachability: data_flow
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2023-25577
+        expected_reachability: data_flow
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+      - id: CVE-2022-29361
+        expected_reachability: unreachable
+        source: "Werkzeug — flaskbb v2.1.0 Flask 14th-app triage+verify 2026-07-03; scripts/labels/flaskbb.yaml + ledger"
+
+  - name: fastapi-realworld
+    repo_url: https://github.com/nsidnev/fastapi-realworld-example-app.git
+    ecosystem: pypi
+    # RealWorld (Conduit) backend in FastAPI — pure JSON API, no server-rendered
+    # templates. Starlette request stack, Pydantic v1 request validation, Uvicorn,
+    # PyJWT auth, passlib. poetry.lock-pinned. Opposite shape to FlaskBB — exercises
+    # the FastAPI request-path rows (starlette/pydantic/uvicorn/python-multipart).
+    ref: 029eb7781c60d5f563ee8990a0cbfb79b244538c
+    ground_truth_cves:
+      - id: CVE-2026-32274
+        expected_reachability: unreachable
+        source: "black — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-21503
+        expected_reachability: unreachable
+        source: "black — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-39689
+        expected_reachability: unreachable
+        source: "certifi — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2022-23491
+        expected_reachability: unreachable
+        source: "certifi — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-37920
+        expected_reachability: unreachable
+        source: "certifi — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-29483
+        expected_reachability: module
+        source: "dnspython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-24762
+        expected_reachability: module
+        source: "fastapi — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-22190
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-44243
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-41040
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2022-24439
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-40267
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-44244
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-40590
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-42284
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: GHSA-mv93-w799-cj2w
+        expected_reachability: unreachable
+        source: "gitpython — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2025-43859
+        expected_reachability: data_flow
+        source: "h11 — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-45409
+        expected_reachability: data_flow
+        source: "idna — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-3651
+        expected_reachability: data_flow
+        source: "idna — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-44307
+        expected_reachability: module
+        source: "mako — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-41205
+        expected_reachability: module
+        source: "mako — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2022-40023
+        expected_reachability: module
+        source: "mako — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-3772
+        expected_reachability: data_flow
+        source: "pydantic — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-4539
+        expected_reachability: unreachable
+        source: "pygments — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2022-40896
+        expected_reachability: unreachable
+        source: "pygments — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-32597
+        expected_reachability: data_flow
+        source: "pyjwt — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48522
+        expected_reachability: module
+        source: "pyjwt — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48524
+        expected_reachability: module
+        source: "pyjwt — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48526
+        expected_reachability: module
+        source: "pyjwt — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2025-45768
+        expected_reachability: module
+        source: "pyjwt — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2025-71176
+        expected_reachability: unreachable
+        source: "pytest — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-28684
+        expected_reachability: module
+        source: "python-dotenv — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2025-54121
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-30798
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-54283
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48710
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2024-47874
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-54282
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2023-29159
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48818
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
+      - id: CVE-2026-48817
+        expected_reachability: module
+        source: "starlette — fastapi-realworld FastAPI 15th-app triage+verify 2026-07-03; scripts/labels/fastapi.yaml + ledger"
