@@ -448,13 +448,25 @@ export function loadLibraryRepos(corpusPath: string): Set<string> {
   return libs;
 }
 
-/** CVE id → expected_reachability across every repo in the corpus YAML. */
-export function loadCorpusCveLabels(corpusPath: string): Map<string, string> {
+/**
+ * CVE id → the SET of expected_reachability labels across every repo in the
+ * corpus YAML. A single CVE legitimately carries DIFFERENT labels in different
+ * apps — the same Spring/Tomcat/Rack CVE is `function` in an app that serves
+ * static content (spring-petclinic) and `module`/`unreachable` in a REST API
+ * that does not (spring-security-polls); two Rails apps (discourse+mastodon)
+ * and two Go apps likewise share CVE ids at different reachability. Keying a
+ * flat last-write-wins map broke the baseline lock the moment the corpus held
+ * two apps of one framework, so this returns every observed label per CVE.
+ */
+export function loadCorpusCveLabels(corpusPath: string): Map<string, string[]> {
   const doc = yaml.load(fs.readFileSync(corpusPath, 'utf8')) as CorpusFileLike;
-  const labels = new Map<string, string>();
+  const labels = new Map<string, string[]>();
   for (const repo of doc?.repos ?? []) {
     for (const cve of repo.ground_truth_cves ?? []) {
-      if (cve?.id && cve.expected_reachability) labels.set(cve.id, cve.expected_reachability);
+      if (!cve?.id || !cve.expected_reachability) continue;
+      const arr = labels.get(cve.id) ?? [];
+      if (!arr.includes(cve.expected_reachability)) arr.push(cve.expected_reachability);
+      labels.set(cve.id, arr);
     }
   }
   return labels;
@@ -472,14 +484,17 @@ export interface BaselineLockResult {
  * number must not be flattered by quietly relabelling the baseline. Pure over
  * its two file inputs so the gate unit test can exercise it.
  */
-export function checkBaselineLock(corpusLabels: Map<string, string>, lockedLabels: Record<string, string>): BaselineLockResult {
+export function checkBaselineLock(corpusLabels: Map<string, string[]>, lockedLabels: Record<string, string>): BaselineLockResult {
   const violations: string[] = [];
   for (const [cve, expected] of Object.entries(lockedLabels)) {
     const current = corpusLabels.get(cve);
-    if (current === undefined) {
+    if (current === undefined || current.length === 0) {
       violations.push(`${cve}: frozen label '${expected}' but the CVE is no longer in the corpus`);
-    } else if (current !== expected) {
-      violations.push(`${cve}: frozen label '${expected}' but the corpus now says '${current}'`);
+    } else if (!current.includes(expected)) {
+      // The frozen label must still exist in SOME app — a new app adding its own
+      // app-specific label for the same CVE is fine; QUIETLY RELABELLING the
+      // frozen app's CVE (so the frozen label survives nowhere) is the violation.
+      violations.push(`${cve}: frozen label '${expected}' but the corpus now says '${current.join("', '")}'`);
     }
   }
   return { ok: violations.length === 0, violations };

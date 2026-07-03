@@ -194,21 +194,35 @@ describe('checkBaselineLock', () => {
 
   it('passes when every frozen label still matches the live corpus', () => {
     const corpus = new Map([
-      ['CVE-A', 'unreachable'],
-      ['CVE-B', 'function'],
-      ['CVE-C', 'module'],
-      ['CVE-NEW', 'unreachable'], // a Layer-3 addition — not locked, allowed
+      ['CVE-A', ['unreachable']],
+      ['CVE-B', ['function']],
+      ['CVE-C', ['module']],
+      ['CVE-NEW', ['unreachable']], // a Layer-3 addition — not locked, allowed
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(true);
     expect(r.violations).toEqual([]);
   });
 
-  it('fails when a frozen label was relabelled in the corpus', () => {
+  it('passes when a SECOND app adds its own app-specific label for a frozen CVE (shared CVE id)', () => {
+    // The same Spring/Rack/Go CVE is `function` in one app and `module`/
+    // `unreachable` in another; adding the second app must NOT trip the lock so
+    // long as the frozen app still carries the frozen label.
     const corpus = new Map([
-      ['CVE-A', 'module'], // was 'unreachable' — softened to flatter the metric
-      ['CVE-B', 'function'],
-      ['CVE-C', 'module'],
+      ['CVE-A', ['unreachable', 'module']], // 2nd app labels it module — fine
+      ['CVE-B', ['module', 'function']], // frozen 'function' still present
+      ['CVE-C', ['module']],
+    ]);
+    const r = checkBaselineLock(corpus, locked);
+    expect(r.ok).toBe(true);
+    expect(r.violations).toEqual([]);
+  });
+
+  it('fails when a frozen label was relabelled and survives in NO app', () => {
+    const corpus = new Map([
+      ['CVE-A', ['module']], // was 'unreachable' — softened to flatter, gone everywhere
+      ['CVE-B', ['function']],
+      ['CVE-C', ['module']],
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(false);
@@ -218,8 +232,8 @@ describe('checkBaselineLock', () => {
 
   it('fails when a frozen CVE was removed from the corpus', () => {
     const corpus = new Map([
-      ['CVE-A', 'unreachable'],
-      ['CVE-C', 'module'],
+      ['CVE-A', ['unreachable']],
+      ['CVE-C', ['module']],
     ]);
     const r = checkBaselineLock(corpus, locked);
     expect(r.ok).toBe(false);
