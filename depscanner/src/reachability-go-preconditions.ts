@@ -348,6 +348,25 @@ export const ALWAYS_ON_RUNTIME: GoAlwaysOnRule[] = [
     promoteTo: 'data_flow',
     threatTag: 'requires_untrusted_html',
   },
+  // --- golang.org/x/text/language — the language-tag matcher. Its
+  //     `ParseAcceptLanguage` is called on the client-supplied `Accept-Language`
+  //     request header by every i18n locale middleware, so the ReDoS in that
+  //     parser (CVE-2022-32149) fires on ordinary request traffic when the
+  //     server imports x/text/language for i18n (gitea's locale middleware
+  //     calls `language.ParseAcceptLanguage(req.Header.Get("Accept-Language"))`
+  //     on every request — ground truth labels it data_flow). Import-gated on
+  //     x/text/language + isDeployedHttpServer: a server that never imports it
+  //     (caddy) has the CVE demoted-unreachable already and never promotes.
+  //     Summary is specific to the Accept-Language parser so a different x/text
+  //     CVE (collation, transform, unicode tables) never matches. ---
+  {
+    sink: 'go-text-accept-language',
+    module: 'golang.org/x/text',
+    requiredSubpackage: 'golang.org/x/text/language',
+    patterns: [/accept-language/i, /accept language/i, /x\/text\/language/i, /parseacceptlanguage/i],
+    promoteTo: 'data_flow',
+    threatTag: 'requires_untrusted_request',
+  },
 ];
 
 export interface GoPromotionResult {

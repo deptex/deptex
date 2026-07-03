@@ -157,6 +157,30 @@ describe('evaluateGoAlwaysOnRuntimePromotion', () => {
     expect(evaluateGoAlwaysOnRuntimePromotion({ depName: NET, summary: NET_HTML_XSS, signals: nonServer }).promote).toBe(false);
   });
 
+  // --- x/text/language Accept-Language ReDoS on a server that imports it (gitea) ---
+  it('PROMOTES the x/text Accept-Language ReDoS to data_flow when the server imports x/text/language (gitea locale middleware)', () => {
+    const gitea = goSignals({ importedPackages: new Set(['golang.org/x/text/language']) });
+    const r = evaluateGoAlwaysOnRuntimePromotion({
+      depName: 'golang.org/x/text',
+      summary: 'golang.org/x/text/language Denial of service via crafted Accept-Language header',
+      signals: gitea,
+    });
+    expect(r.promote).toBe(true);
+    expect(r.promoteTo).toBe('data_flow');
+    expect(r.sink).toBe('go-text-accept-language');
+  });
+
+  it('does NOT promote the x/text Accept-Language CVE when the server does not import x/text/language (caddy)', () => {
+    // caddy-shape goSignals() does not import x/text/language → the CVE is
+    // demoted-unreachable by the import heuristic and the promotion refuses.
+    const r = evaluateGoAlwaysOnRuntimePromotion({
+      depName: 'golang.org/x/text',
+      summary: 'golang.org/x/text/language Denial of service via crafted Accept-Language header',
+      signals: goSignals(),
+    });
+    expect(r.promote).toBe(false);
+  });
+
   it('refuses to promote when the project is not a deployed HTTP server', () => {
     const r = evaluateGoAlwaysOnRuntimePromotion({
       depName: NET,
