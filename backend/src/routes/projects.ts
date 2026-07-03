@@ -4653,7 +4653,10 @@ router.patch('/:id/projects/:projectId/repositories/settings', async (req: AuthR
       return res.status(404).json({ error: 'No repository connected to this project' });
     }
 
-    const VALID_SYNC_FREQUENCIES = ['daily', 'weekly'] as const;
+    // 'manual' = scanning disabled: the scheduled-extraction cron only matches
+    // 'daily'/'weekly', and on-commit extraction is gated on scan_on_commit — so a
+    // 'manual' repo (with scan_on_commit off) runs no automated scans.
+    const VALID_SYNC_FREQUENCIES = ['daily', 'weekly', 'manual'] as const;
     if (sync_frequency !== undefined && !VALID_SYNC_FREQUENCIES.includes(sync_frequency)) {
       return res.status(400).json({ error: `Invalid sync_frequency. Must be one of: ${VALID_SYNC_FREQUENCIES.join(', ')}` });
     }
@@ -4709,10 +4712,12 @@ async function fetchEnrichedDependenciesForProject(
 ): Promise<any[]> {
   const debugTiming = options?.debugTiming === true;
   const t0 = debugTiming ? Date.now() : 0;
-  const activeExtractionId = await getActiveExtractionId(supabase, projectId);
-  // Get project dependencies with joined dependency analysis data
-    // Note: license column was removed from project_dependencies - it now comes from dependencies table
-    const { data: projectDeps, error: depsError } = await supabase
+  // The active-run lookup and the project_dependencies read are independent — run them
+  // together instead of one sequential round trip after the other.
+  // Note: license column was removed from project_dependencies - it now comes from dependencies table
+  const [activeExtractionId, projectDepsResp] = await Promise.all([
+    getActiveExtractionId(supabase, projectId),
+    supabase
       .from('project_dependencies')
       .select(`
         id,
@@ -4730,7 +4735,9 @@ async function fetchEnrichedDependenciesForProject(
       `)
       .eq('project_id', projectId)
       .is('removed_at', null)
-      .order('name', { ascending: true });
+      .order('name', { ascending: true }),
+  ]);
+  const { data: projectDeps, error: depsError } = projectDepsResp;
 
     if (depsError) {
       throw depsError;
@@ -4759,6 +4766,7 @@ async function fetchEnrichedDependenciesForProject(
       filePathRowsResult,
       depsByNameResult,
       projectTeamsResult,
+      pdvRowsResult,
     ] = await Promise.all([
       dependencyIds.length > 0
         ? Promise.all(
@@ -4797,6 +4805,9 @@ async function fetchEnrichedDependenciesForProject(
         ? supabase.from('dependencies').select('name, github_url, openssf_score, openssf_data, license, weekly_downloads, last_published_at, openssf_penalty, popularity_penalty, maintenance_penalty, releases_last_12_months, status, score, ecosystem, analyzed_at').in('name', namesNeedingFallback)
         : Promise.resolve({ data: null }),
       supabase.from('project_teams').select('team_id').eq('project_id', projectId),
+      // Max-depscore source (project_dependency_vulnerabilities) — independent of the other
+      // Wave-1 reads, so fetch it here instead of in its own sequential round trip below.
+      supabase.from('project_dependency_vulnerabilities').select('project_dependency_id, depscore').eq('project_id', projectId).eq('suppressed', false).eq('extraction_run_id', activeExtractionId ?? '__no_active_run__'),
     ]);
     const t1 = debugTiming ? Date.now() : 0;
     if (debugTiming) console.log('[fetchEnrichedDependencies] project_deps + wave1', t1 - t0, 'ms');
@@ -4824,22 +4835,17 @@ async function fetchEnrichedDependenciesForProject(
       }
     }
 
+    // vulnCountsByKey is fetched in Wave 2 below, in parallel with the score/deprecation/ban
+    // reads — it depends only on `allPairs` (a Wave 1 product), not on anything Wave 2
+    // produces, so it doesn't need its own sequential round trip here.
     let vulnCountsByKey = new Map<string, VulnCounts>();
-    if (allPairs.length > 0) {
-      vulnCountsByKey = await getVulnCountsBatch(supabase, allPairs);
-    }
     const t2 = debugTiming ? Date.now() : 0;
-    if (debugTiming) console.log('[fetchEnrichedDependencies] getVulnCountsBatch', t2 - t1, 'ms (pairs:', allPairs.length, ')');
 
     // Max depscore per project_dependency_id — from project_dependency_vulnerabilities (project-specific, includes reachability/tier)
     const maxDepscoreByPdId = new Map<string, number>();
     {
-      const { data: pdvRows } = await supabase
-        .from('project_dependency_vulnerabilities')
-        .select('project_dependency_id, depscore')
-        .eq('project_id', projectId)
-        .eq('suppressed', false)
-        .eq('extraction_run_id', activeExtractionId ?? '__no_active_run__');
+      // Prefetched in Wave 1 above (no extra round trip here).
+      const pdvRows = (pdvRowsResult as { data: any[] | null })?.data ?? null;
       if (pdvRows) {
         for (const row of pdvRows as Array<{ project_dependency_id: string; depscore: number | null }>) {
           if (row.depscore == null) continue;
@@ -4909,8 +4915,9 @@ async function fetchEnrichedDependenciesForProject(
       ? [...new Set([...namesMissingScore, ...namesMissingScore.filter((n: string) => n.startsWith('@')).map((n: string) => n.replace(/^@/, ''))])]
       : [];
 
-    // Wave 2: score fallback, versionDependencyIds deps, deprecations, banned
+    // Wave 2: vuln counts, score fallback, versionDependencyIds deps, deprecations, banned
     const [
+      vulnCountsResult,
       scoreFallbackBatches,
       versionDepsBatches,
       orgDepRowsResult,
@@ -4918,6 +4925,7 @@ async function fetchEnrichedDependenciesForProject(
       orgBansResult,
       teamBansResult,
     ] = await Promise.all([
+      allPairs.length > 0 ? getVulnCountsBatch(supabase, allPairs) : Promise.resolve(new Map<string, VulnCounts>()),
       allNamesForScore.length > 0
         ? Promise.all(
             Array.from({ length: Math.ceil(allNamesForScore.length / NAME_BATCH_SIZE) }, (_, i) => {
@@ -4944,8 +4952,9 @@ async function fetchEnrichedDependenciesForProject(
       depIds.length > 0 ? supabase.from('banned_versions').select('dependency_id, banned_version').eq('organization_id', organizationId).in('dependency_id', depIds) : Promise.resolve({ data: null }),
       depIds.length > 0 && teamIds.length > 0 ? supabase.from('team_banned_versions').select('dependency_id, banned_version').in('team_id', teamIds).in('dependency_id', depIds) : Promise.resolve({ data: null }),
     ]);
+    vulnCountsByKey = vulnCountsResult;
     const t3 = debugTiming ? Date.now() : 0;
-    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2', t3 - t2, 'ms');
+    if (debugTiming) console.log('[fetchEnrichedDependencies] wave2 (+vuln counts)', t3 - t2, 'ms');
 
     const scoreFallbackByName = new Map<string, { openssf_score: number | null; openssf_data: any; weekly_downloads: number | null; last_published_at: string | null; openssf_penalty?: number; popularity_penalty?: number; maintenance_penalty?: number; releases_last_12_months?: number | null; status?: string; score?: number | null; analyzed_at?: string | null }>();
     for (const resp of scoreFallbackBatches as Array<{ data: any[] | null }>) {
@@ -5138,6 +5147,15 @@ router.get('/:id/projects/:projectId/dependencies', async (req: AuthRequest, res
     const bypassCache = req.query.refresh === 'true' || req.query.bypass_cache === 'true';
     if (bypassCache) {
       await invalidateDependenciesCache(id, projectId);
+    } else {
+      // Read-through: the deps cache is invalidated on every data-change path (scan
+      // finalize in workers.ts, push webhooks, policy/deprecation changes), so a present
+      // entry is already current. Serve it instead of re-running the full multi-wave
+      // enrichment on every tab open — the endpoint previously recomputed unconditionally
+      // and only WROTE the cache, so a warm tab still paid full price. 12h TTL is the
+      // backstop; ?refresh=true (the manual Refresh) still forces a rebuild.
+      const cachedDeps = await getCached<any[]>(depsCacheKey);
+      if (cachedDeps) return res.json(cachedDeps);
     }
 
     const debugTiming = req.query.debug_timing === '1';

@@ -145,23 +145,28 @@ router.get('/:projectId/dast/config', async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const { projectId } = req.params;
 
-    const access = await resolveProjectAccess(userId, projectId);
+    // Access check + config row + targets(+creds) all fire concurrently. The reads are
+    // project-scoped by projectId and nothing is returned until the access check passes,
+    // so this collapses the old access→config→targets→creds waterfall (~5 sequential DB
+    // round trips) down to ~2 — the main reason the DAST tab felt slow to open.
+    const [access, configRes, targets] = await Promise.all([
+      resolveProjectAccess(userId, projectId),
+      supabase
+        .from('project_dast_config')
+        .select('enabled, scan_profile, scan_timeout_minutes, scope_config')
+        .eq('project_id', projectId)
+        .maybeSingle(),
+      loadTargetsWithCreds(projectId),
+    ]);
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
 
-    const { data, error } = await supabase
-      .from('project_dast_config')
-      .select('enabled, scan_profile, scan_timeout_minutes, scope_config')
-      .eq('project_id', projectId)
-      .maybeSingle();
-
+    const { data, error } = configRes;
     if (error) {
       console.error('[dast] GET config error:', error.message);
       return res.status(500).json({ error: 'Failed to load DAST config' });
     }
-
-    const targets = await loadTargetsWithCreds(projectId);
 
     const config: DastConfigDTO = data
       ? {
@@ -521,24 +526,36 @@ router.get(
       const userId = req.user!.id;
       const { projectId, targetId } = req.params;
 
-      const access = await resolveProjectAccess(userId, projectId);
-      if (access.deny) {
-        return res.status(access.deny.status).json({ error: access.deny.message });
-      }
-      if (!(await checkOrgManageIntegrationsPermission(userId, access.organizationId))) {
-        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
-      }
-
-      const guard = await loadTargetOrDeny(supabase, targetId, projectId, access.organizationId);
-      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
-
-      const { data: cred, error } = await supabase
+      // Fetch the credential row up front, concurrently with the access check. It's keyed
+      // by target_id and is never decrypted or returned until access + permission +
+      // target-tenancy + the org-match check below all pass, so racing it is safe — it
+      // shaves the old access→perm→guard→creds waterfall (~5 sequential round trips) to ~3.
+      const credP = supabase
         .from('project_dast_credentials')
         .select(
           'auth_strategy, encrypted_payload, encryption_key_version, organization_id, logged_in_indicator, logged_out_indicator, updated_at',
         )
         .eq('target_id', targetId)
         .maybeSingle();
+
+      const access = await resolveProjectAccess(userId, projectId);
+      if (access.deny) {
+        return res.status(access.deny.status).json({ error: access.deny.message });
+      }
+
+      // Permission + target-tenancy both depend only on the resolved org, so run them
+      // together (and the already-in-flight credential read completes alongside).
+      const [permOk, guard, credRes] = await Promise.all([
+        checkOrgManageIntegrationsPermission(userId, access.organizationId),
+        loadTargetOrDeny(supabase, targetId, projectId, access.organizationId),
+        credP,
+      ]);
+      if (!permOk) {
+        return res.status(403).json({ error: 'You do not have permission to manage integrations' });
+      }
+      if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
+
+      const { data: cred, error } = credRes;
       if (error) {
         console.error('[dast] GET creds error:', error.message);
         return res.status(500).json({ error: 'Failed to load credentials' });
@@ -1564,7 +1581,24 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
     const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
     const filterTargetId = typeof req.query.target_id === 'string' ? req.query.target_id : null;
 
-    const access = await resolveProjectAccess(userId, projectId);
+    // Access check + the jobs query run concurrently (jobs are project-scoped by
+    // projectId and nothing is returned until access passes), so the common no-filter
+    // path — what the DAST tab loads on open — is ~2 round trips instead of 3.
+    let query = supabase
+      .from('scan_jobs')
+      .select(
+        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, error_payload, attempts, created_at',
+      )
+      .eq('project_id', projectId)
+      .in('type', DAST_SCAN_TYPES)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (filterTargetId) query = query.eq('target_id', filterTargetId);
+
+    const [access, jobsRes] = await Promise.all([
+      resolveProjectAccess(userId, projectId),
+      query,
+    ]);
     if (access.deny) {
       return res.status(access.deny.status).json({ error: access.deny.message });
     }
@@ -1579,18 +1613,7 @@ router.get('/:projectId/dast/jobs', async (req: AuthRequest, res) => {
       if (isLoadTargetDeny(guard)) return res.status(404).json({ error: 'target_not_found' });
     }
 
-    let query = supabase
-      .from('scan_jobs')
-      .select(
-        'id, status, trigger_source, target_id, target_url, scan_profile, findings_count, duration_seconds, started_at, completed_at, error, error_category, error_payload, attempts, created_at',
-      )
-      .eq('project_id', projectId)
-      .in('type', DAST_SCAN_TYPES)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (filterTargetId) query = query.eq('target_id', filterTargetId);
-
-    const { data, error } = await query;
+    const { data, error } = jobsRes;
     if (error) {
       console.error('[dast] GET jobs error:', error.message);
       return res.status(500).json({ error: 'Failed to load DAST jobs' });
