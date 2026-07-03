@@ -74,13 +74,16 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('cancelled');
   });
 
-  test('an unexpected model error still finalizes (never leaves the row executing)', async () => {
+  test('an unexpected model error finalizes as system_error (raw message kept for logs, not the user)', async () => {
     (generateText as jest.Mock).mockImplementation(async () => {
       throw new Error('provider exploded');
     });
     await runTaskAgent({} as any, makeInput(), makeDeps());
     expect(finalizeFailure).toHaveBeenCalledTimes(1);
-    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('not_fixable');
+    // Unexpected exceptions must be system_error (generic user copy), never
+    // not_fixable (which would surface the raw provider message).
+    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('system_error');
+    // The raw message is still passed through — it lands in error_message (logs).
     expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/provider exploded/);
   });
 });

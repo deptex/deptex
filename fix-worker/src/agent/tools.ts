@@ -28,7 +28,7 @@ const MAX_GREP_LINES = 60;
  * Terminal categories the agent can resolve to. Mirrors the vocabulary
  * `describeFailure` understands so the FixFailureCard reads honestly.
  */
-export type FinishCategory = 'not_fixable' | 'budget_exhausted' | 'cancelled';
+export type FinishCategory = 'not_fixable' | 'budget_exhausted' | 'cancelled' | 'system_error';
 
 /** Mutable run state shared between the tools and the loop's terminal fallback. */
 export interface AgentRunState {
@@ -358,23 +358,50 @@ export function buildAgentTools(deps: AgentToolDeps) {
 export async function finalizeFailure(deps: AgentToolDeps, category: FinishCategory, message: string): Promise<void> {
   if (deps.state.terminal) return;
   deps.state.terminal = true;
-  const failCategory =
-    category === 'budget_exhausted' ? 'budget_wall_clock' : category === 'cancelled' ? 'not_fixable' : 'not_fixable';
-  const copy = describeFailure(failCategory, message, {});
-  const headline = category === 'cancelled' ? 'Task stopped at your request.' : copy.headline;
-  const leadIn = category === 'cancelled' ? 'Understood — stopping here.' : copy.leadIn;
-  const stepLabel = category === 'cancelled' ? 'Task cancelled' : copy.stepLabel;
+
+  // Build the user-facing copy per category. Infra/model failures (system_error)
+  // must NEVER surface the raw provider message to the user — the raw text stays
+  // in the error_message column for our logs, but the card + beat stay generic
+  // ("something went wrong"), not "your Anthropic credit balance is too low".
+  let headline: string;
+  let explanation: string;
+  let leadIn: string;
+  let stepLabel: string;
+  let nextStep: string;
+  if (category === 'cancelled') {
+    headline = 'Task stopped at your request.';
+    explanation = "You stopped this task, so I didn't make any changes.";
+    leadIn = 'Understood — stopping here.';
+    stepLabel = 'Task cancelled';
+    nextStep = "Send me a new task whenever you're ready.";
+  } else if (category === 'system_error') {
+    headline = 'Something went wrong';
+    explanation = "I hit a temporary problem on my side and stopped without making changes — this isn't a problem with your code.";
+    leadIn = 'Something went wrong on my end, so I stopped without making any changes.';
+    stepLabel = 'Something went wrong';
+    nextStep = 'Try running this again in a little while.';
+  } else {
+    // not_fixable (the agent's own stated reason) / budget_exhausted — safe,
+    // first-person copy from describeFailure.
+    const failCategory = category === 'budget_exhausted' ? 'budget_wall_clock' : 'not_fixable';
+    const copy = describeFailure(failCategory, message, {});
+    headline = copy.headline;
+    explanation = copy.explanation;
+    leadIn = copy.leadIn;
+    stepLabel = copy.stepLabel;
+    nextStep = copy.nextStep;
+  }
 
   await markFailed(deps.supabase, deps.fixId, message, category, {
     category,
     headline,
-    explanation: copy.explanation,
-    nextStep: copy.nextStep,
+    explanation,
+    nextStep,
   });
   await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
-  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, copy.nextStep);
+  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, nextStep);
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });
-  // Post the honest lead-in as a prose beat (best-effort — no throw).
+  // Post the lead-in as a prose beat (best-effort — no throw).
   try {
     const { makeTaskNarrator } = await import('./../task-chat');
     await makeTaskNarrator(deps.supabase, deps.threadId)(leadIn);

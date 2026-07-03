@@ -188,18 +188,27 @@ export async function runTaskAgent(
   // called, the row must not be left 'executing' (recovery would re-run the
   // whole agent). Resolve it honestly here.
   if (!state.terminal) {
-    const category =
-      abortReason === 'cancelled' ? 'cancelled' : abortReason ? 'budget_exhausted' : 'not_fixable';
+    // An unexpected exception (model/provider/infra error) → system_error, so the
+    // user sees a generic "something went wrong", not the raw provider message.
+    // Budget/stall/no-PR use our own safe copy.
+    const category: 'cancelled' | 'budget_exhausted' | 'system_error' | 'not_fixable' =
+      abortReason === 'cancelled'
+        ? 'cancelled'
+        : abortReason
+          ? 'budget_exhausted'
+          : loopError
+            ? 'system_error'
+            : 'not_fixable';
     const message =
       abortReason === 'cancelled'
         ? 'Task stopped by user.'
         : abortReason === 'wall_clock'
-          ? `The agent reached its ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
+          ? `Reached the ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
           : abortReason === 'stall'
-            ? 'The agent stopped making progress and was halted.'
+            ? 'Stopped making progress and was halted.'
             : loopError
-              ? loopError?.message ?? 'The agent hit an unexpected error.'
-              : 'The agent ended without opening a pull request.';
+              ? loopError?.message ?? 'Unexpected error in the agent loop.'
+              : "Couldn't complete a fix for this finding.";
     await finalizeFailure(toolDeps, category, message);
   }
 }
