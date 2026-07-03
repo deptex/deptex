@@ -74,6 +74,7 @@ function buildModel(provider: AIProvider, apiKey: string, modelName: string): La
 export async function getLanguageModelForOrg(
   supabase: SupabaseClient,
   organizationId: string,
+  modelIdOverride?: string,
 ): Promise<LanguageModel> {
   const { data, error } = await supabase
     .from('organizations')
@@ -81,6 +82,23 @@ export async function getLanguageModelForOrg(
     .eq('id', organizationId)
     .single();
   if (error) throw new Error(`Failed to load organization: ${error.message}`);
+
+  // An explicit override (e.g. AEGIS_TASK_MODEL for the autonomous agent) wins
+  // over the org default so the agent's model is toggleable without touching the
+  // org-wide setting. Provider is inferred from the model id, falling back to the
+  // org's default_ai_provider when the prefix is unrecognised.
+  if (modelIdOverride) {
+    const inferred = inferProviderFromModelId(modelIdOverride);
+    const provider = inferred ?? ((data?.default_ai_provider as AIProvider) ?? 'anthropic');
+    const modelName = inferred ? modelIdOverride : DEFAULT_MODELS[provider];
+    const apiKey = getPlatformKey(provider);
+    if (!apiKey) {
+      throw new Error(
+        `Platform API key for ${provider} is not configured on the fix-worker. Set ${envVarFor(provider)}.`,
+      );
+    }
+    return buildModel(provider, apiKey, modelName);
+  }
 
   // Mirror backend resolveOrgModel(): prefer default_model when the prefix
   // unambiguously identifies a provider, fall back to default_ai_provider

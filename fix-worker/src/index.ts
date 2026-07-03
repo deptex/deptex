@@ -19,6 +19,7 @@ import {
 import { createInstallationToken } from './github';
 import { createSandbox, cloneAtSha, setupForLanguage } from './sandbox';
 import { runFixPipeline, FixPipelineError } from './executor';
+import { runTaskAgent, type AgentRunInput } from './agent/loop';
 import { runBaseImageBump, describeBaseImageTarget } from './base-image';
 import { commitAndPushFix, openPullRequest } from './pr';
 import { FixLogger } from './logger';
@@ -50,6 +51,51 @@ function getSupabase(): SupabaseClient {
   return createClient(url, key);
 }
 
+/** The per-finding-type live-finding-id column on the fix row. */
+function agentFindingId(row: any): string {
+  switch (row.fix_type) {
+    case 'vulnerability':
+      return row.osv_id ?? '';
+    case 'semgrep':
+      return row.semgrep_finding_id ?? '';
+    case 'secret':
+      return row.secret_finding_id ?? '';
+    case 'malicious':
+      return row.malicious_finding_id ?? '';
+    case 'iac':
+      return row.iac_finding_id ?? '';
+    case 'container':
+      return row.container_finding_id ?? '';
+    case 'base_image':
+      return row.base_image_rec_id ?? '';
+    case 'dataflow':
+      return row.reachable_flow_id ?? '';
+    case 'dast':
+      return row.dast_finding_id ?? '';
+    default:
+      return '';
+  }
+}
+
+/** Normalize a claimed agentic fix row into the table-agnostic AgentRunInput. */
+function buildAgentInput(row: any, fixId: string): AgentRunInput {
+  // The sentinel plan carries only { strategy:'agent', summary, findingBrief? }.
+  const sentinel = (row.plan ?? {}) as { summary?: string; findingBrief?: string; severity?: string };
+  return {
+    fixId,
+    organizationId: row.organization_id,
+    projectId: row.project_id,
+    threadId: row.thread_id ?? null,
+    taskId: row.task_id ?? null,
+    fixType: row.fix_type,
+    finding: { type: row.fix_type, id: agentFindingId(row), severity: sentinel.severity },
+    summary: sentinel.summary ?? 'Fix the targeted security finding.',
+    findingBrief: sentinel.findingBrief,
+    baseBranch: row.plan_base_branch,
+    baseSha: row.plan_base_sha,
+  };
+}
+
 async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<void> {
   const fullRow = await loadFullRow(supabase, job.id);
   if (!fullRow) {
@@ -76,6 +122,23 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
 
   try {
     await logger.info('init', `Starting fix ${fullRow.fix_type}/${fullRow.osv_id ?? fullRow.semgrep_finding_id ?? fullRow.secret_finding_id ?? job.id}`);
+
+    // Autonomous agent path (strategy='agent'): one bounded tool-loop in the
+    // cloned repo that decides its own steps and opens the PR. It sits FIRST in
+    // the try so it never hits the deterministic pipeline's language gate or its
+    // plan-shaped assumptions, and INSIDE this try/finally so the existing 60s
+    // heartbeat + the meter event still cover it. It owns its own terminal state
+    // (markCompleted / markFailed); an unexpected throw falls through to the
+    // shared failure path below.
+    if (fullRow.strategy === 'agent') {
+      await runTaskAgent(supabase, buildAgentInput(fullRow, job.id), {
+        machineId: MACHINE_ID,
+        projectName,
+        logger,
+        workDir: sandbox.workDir,
+      });
+      return;
+    }
 
     const plan = job.plan;
 
