@@ -2,6 +2,7 @@ import { supabase } from '../supabase';
 import { generateFixPlan } from './fix-planner';
 import { signApprovalToken } from './approval-token';
 import { startFixMachine } from '../fly-machines';
+import { createInstallationToken, getBranchSha } from '../github';
 import type { FindingType, FixPlan, FixStatus, PlanRefusal } from './plan-types';
 
 // The fix-creation money-path, extracted from the two hand-copies that had
@@ -180,6 +181,83 @@ export async function insertFixRow(args: {
     .select('id')
     .single();
   if (error || !created) return { error: error?.message ?? 'Failed to create fix request' };
+  return { fixId: created.id as string };
+}
+
+/**
+ * Insert a fully-stamped AGENT fix row (strategy='agent') — the autonomous task
+ * path's claimable unit. Unlike insertFixRow (which starts at 'planning' and is
+ * filled in by the planner), this row is `approved` and ready to claim
+ * immediately: the agent generates and applies the fix itself, so there is no
+ * plan-generation step. We resolve the clone base (default branch + HEAD sha)
+ * up front — the retired planner used to stamp these, and cloneAtSha / the PR
+ * push both throw without them. `max_attempts=1` because a retry re-runs the
+ * whole nondeterministic agent from scratch (no resume), so we fail fast.
+ */
+export async function insertAgentFixRow(args: {
+  organizationId: string;
+  projectId: string;
+  findingType: FindingType;
+  findingId: string;
+  triggeredByUserId: string;
+  threadId: string;
+  taskId: string;
+  summary: string;
+  findingBrief?: string;
+}): Promise<{ fixId: string } | { error: string }> {
+  const { data: repo } = await supabase
+    .from('project_repositories')
+    .select('repo_full_name, default_branch, installation_id, status')
+    .eq('project_id', args.projectId)
+    .maybeSingle();
+  if (
+    !repo ||
+    repo.status === 'not_connected' ||
+    !repo.repo_full_name ||
+    !repo.default_branch ||
+    !repo.installation_id
+  ) {
+    return { error: 'Project is not connected to a repository' };
+  }
+
+  let baseSha: string;
+  try {
+    const token = await createInstallationToken(String(repo.installation_id));
+    baseSha = await getBranchSha(token, repo.repo_full_name, repo.default_branch);
+  } catch (e: any) {
+    return { error: `Could not resolve the repository HEAD: ${e?.message ?? e}` };
+  }
+
+  const now = new Date().toISOString();
+  const insertRow: Record<string, any> = {
+    project_id: args.projectId,
+    organization_id: args.organizationId,
+    fix_type: args.findingType,
+    strategy: 'agent',
+    status: 'approved' as FixStatus,
+    triggered_by: args.triggeredByUserId,
+    [fixTypeColumn(args.findingType)]: args.findingId,
+    payload: { source: 'aegis_task' },
+    thread_id: args.threadId,
+    task_id: args.taskId,
+    approved_at: now,
+    approved_by_user_id: args.triggeredByUserId,
+    // Sentinel plan: satisfies claimJob's `if (!row.plan) return null` guard and
+    // carries the opening brief for the agent. It is NOT a FixPlan — every
+    // FixPlan-shaped read on the worker is gated behind strategy==='agent'.
+    plan: { strategy: 'agent', summary: args.summary, findingBrief: args.findingBrief },
+    plan_generated_at: now,
+    plan_base_branch: repo.default_branch,
+    plan_base_sha: baseSha,
+    max_attempts: 1,
+  };
+
+  const { data: created, error } = await supabase
+    .from('project_security_fixes')
+    .insert(insertRow)
+    .select('id')
+    .single();
+  if (error || !created) return { error: error?.message ?? 'Failed to create agent fix' };
   return { fixId: created.id as string };
 }
 

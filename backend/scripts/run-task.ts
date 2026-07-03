@@ -25,8 +25,7 @@
 import 'dotenv/config';
 import { supabase } from '../src/lib/supabase';
 import { getActiveExtractionId } from '../src/lib/active-extraction';
-import { runTaskAgent } from '../src/lib/aegis-v3/task-runner';
-import { ensureTaskThread } from '../src/lib/aegis-v3/tasks';
+import { acceptTask } from '../src/lib/aegis-v3/tasks';
 import type { AegisTaskTarget, AegisTaskFindingType } from '../src/lib/aegis-v3/task-types';
 
 function arg(name: string): string | undefined {
@@ -277,7 +276,9 @@ async function main() {
         project_id: project ?? null,
         created_by: createdBy,
         kind: 'fix',
-        status: 'working',
+        // 'proposed' so acceptTask fans out the agent fix rows (it no-ops on
+        // any other status).
+        status: 'proposed',
         source: 'chat',
         title,
         description: arg('desc') ?? null,
@@ -296,21 +297,35 @@ async function main() {
     );
   }
 
-  // Resolve org + ensure the thread BEFORE running, so you can open the URL and
-  // watch the beats land live while the loop runs.
+  // Resolve org + accepting user, then accept: this fans out one AGENT fix row
+  // per target (strategy='agent', already 'approved') and boots a fix-worker
+  // machine that claims + runs the autonomous agent loop. Open the printed URL
+  // to watch the agent narrate its real tool calls live.
   const { data: trow } = await supabase
     .from('aegis_agent_tasks')
-    .select('organization_id')
+    .select('organization_id, created_by')
     .eq('id', taskId)
     .maybeSingle();
   const orgId = (trow as any)?.organization_id;
-  const threadId = await ensureTaskThread(taskId);
-  console.log(`\n▶ Open this NOW and watch it narrate live:\n  /organizations/${orgId}/aegis/${threadId}\n`);
+  let acceptUserId = (trow as any)?.created_by as string | undefined;
+  if (!acceptUserId) {
+    const { data: member } = await supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', orgId)
+      .limit(1)
+      .maybeSingle();
+    acceptUserId = (member as any)?.user_id;
+  }
+  if (!acceptUserId) throw new Error('Could not resolve an accepting user for the task');
 
-  console.log('Running task', taskId, '…');
-  const res = await runTaskAgent(taskId);
-  console.log('Result:', res);
-  process.exit(res.ok ? 0 : 1);
+  const { threadId } = await acceptTask({ taskId, userId: acceptUserId, organizationId: orgId });
+  console.log(`\n▶ Open this NOW and watch the agent narrate live:\n  /organizations/${orgId}/aegis/${threadId}\n`);
+  console.log(
+    'Accepted — the fix-worker will claim the queued agent fix(es) and run the autonomous loop.\n' +
+      '(Run the fix-worker locally, or let the Fly machine boot, to process them.)',
+  );
+  process.exit(0);
 }
 
 main().catch((e) => {

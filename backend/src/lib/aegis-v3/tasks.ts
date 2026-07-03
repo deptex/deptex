@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import { supabase } from '../supabase';
 import { getActiveExtractionId } from '../active-extraction';
 import { logSecurityEvent } from '../security-audit';
-import { insertFixRow, planAndApproveFix } from './fix-request';
+import { insertAgentFixRow } from './fix-request';
+import { startFixMachine } from '../fly-machines';
 import {
   AEGIS_TASK_MAX_TARGETS,
   type AegisTask,
@@ -422,12 +423,17 @@ export async function acceptTask(args: {
     return { threadId };
   }
 
-  // 5. Create all the fix ROWS instantly (status 'planning', no plan yet) and
-  //    file the Aegis chip per target. This is FAST — no LLM calls — so the
-  //    accept request returns in well under a second.
+  // 5. Create one AGENT fix row per target instantly (strategy='agent',
+  //    status='approved', fully stamped with the clone base + sentinel plan) and
+  //    file the Aegis chip. This is FAST — no LLM calls — so the accept request
+  //    returns in well under a second. Each row is claimed off the existing fix
+  //    pool by the worker, which runs the autonomous agent loop; there is no
+  //    plan-generation step to background anymore.
   const pending: Array<{ fixId: string; target: AegisTaskTarget; findingId: string }> = [];
   for (const { target, findingId } of resolved) {
-    const ins = await insertFixRow({
+    const summary = task.title;
+    const findingBrief = [target.label, task.description].filter(Boolean).join('\n\n') || undefined;
+    const ins = await insertAgentFixRow({
       organizationId,
       projectId: target.projectId,
       findingType: target.findingType,
@@ -435,9 +441,11 @@ export async function acceptTask(args: {
       triggeredByUserId: userId,
       threadId,
       taskId,
-      payloadSource: 'aegis_task',
+      summary,
+      findingBrief,
     });
     if ('fixId' in ins) pending.push({ fixId: ins.fixId, target, findingId });
+    else console.error('[aegis-task] agent fix row insert skipped:', target.findingKey, ins.error);
 
     // File an 'aegis' tracker link so the finding shows the Aegis chip. The
     // rollup trigger flips it to ✓ when the task resolves cleanly.
@@ -488,27 +496,17 @@ export async function acceptTask(args: {
     metadata: { fixCount: n, targets: task.targets.length },
   });
 
-  // 7. Generate plans + auto-approve + start the worker IN THE BACKGROUND so the
-  //    accept request returns immediately. Sequential to respect the AI
-  //    concurrency limit; each card live-updates as its plan lands. (The backend
-  //    is a long-running server — same pattern as the billing setImmediate work.)
-  void (async () => {
-    for (const p of pending) {
-      try {
-        await planAndApproveFix({
-          fixId: p.fixId,
-          organizationId,
-          projectId: p.target.projectId,
-          findingType: p.target.findingType,
-          findingId: p.findingId,
-          triggeredByUserId: userId,
-          autoApprove: true,
-        });
-      } catch (e: any) {
-        console.error('[aegis-task] background plan/approve failed', p.fixId, e?.message);
-      }
+  // 7. Boot ONE fix-worker machine to claim the queued agent rows. The rows are
+  //    already 'approved', so the worker claims + runs them immediately — no
+  //    background plan generation. Best-effort: if the boot fails, the
+  //    fix-recovery cron surfaces orphaned approved jobs and starts a machine.
+  if (pending.length > 0) {
+    try {
+      await startFixMachine();
+    } catch (e: any) {
+      console.warn(`[aegis-task] Failed to start fix-worker machine: ${e?.message ?? e}`);
     }
-  })();
+  }
 
   return { threadId };
 }
@@ -541,6 +539,49 @@ export async function declineTask(args: {
     targetType: 'aegis_task',
     targetId: taskId,
   });
+}
+
+/**
+ * Stop a running task. Rejects its in-flight agent fix rows — the worker's
+ * per-step cancel check (isJobCancelled → status==='rejected') aborts the run to
+ * an honest 'cancelled' failure and never pushes; if no worker is live, the
+ * rollup trigger rolls the task to failed. Tenant-scoped.
+ */
+export async function cancelTask(args: {
+  taskId: string;
+  userId: string;
+  organizationId: string;
+}): Promise<{ cancelled: number }> {
+  const { taskId, userId, organizationId } = args;
+  const { data: row } = await supabase
+    .from('aegis_agent_tasks')
+    .select('id, organization_id')
+    .eq('id', taskId)
+    .maybeSingle();
+  if (!row) throw new Error('Task not found');
+  if (row.organization_id !== organizationId) throw new Error('Task not in current organization');
+
+  const { data: updated } = await supabase
+    .from('project_security_fixes')
+    .update({
+      status: 'rejected',
+      rejected_at: new Date().toISOString(),
+      rejected_by_user_id: userId,
+    })
+    .eq('task_id', taskId)
+    .eq('strategy', 'agent')
+    .in('status', ['planning', 'approved', 'executing'])
+    .select('id');
+
+  await logSecurityEvent({
+    organizationId,
+    actorId: userId,
+    action: 'aegis_task_cancelled',
+    targetType: 'aegis_task',
+    targetId: taskId,
+    metadata: { cancelled: updated?.length ?? 0 },
+  });
+  return { cancelled: updated?.length ?? 0 };
 }
 
 /** The sidebar pile: newest first, tenant-scoped. */

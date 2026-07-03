@@ -3,6 +3,7 @@ import { authenticateUser, type AuthRequest } from '../middleware/auth';
 import { userHasOrgPermission } from '../lib/permissions';
 import {
   acceptTask,
+  cancelTask,
   declineTask,
   ensureTaskThread,
   findOpenTaskForFinding,
@@ -194,6 +195,23 @@ router.patch('/:taskId/decline', async (req: AuthRequest, res) => {
     return res.json({ success: true });
   } catch (err: any) {
     const message = err?.message ?? 'Failed to decline task';
+    return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/** Stop a running task — rejects its in-flight agent fixes so the worker aborts. */
+router.post('/:taskId/cancel', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId } = req.body ?? {};
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    const { cancelled } = await cancelTask({ taskId: req.params.taskId, userId, organizationId });
+    return res.json({ success: true, cancelled });
+  } catch (err: any) {
+    const message = err?.message ?? 'Failed to cancel task';
     return res.status(statusForError(message)).json({ error: message });
   }
 });
