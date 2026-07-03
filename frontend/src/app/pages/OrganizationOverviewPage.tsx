@@ -3328,7 +3328,7 @@ export default function OrganizationOverviewPage() {
               )}
             >
             {/* Header - Org avatar and name */}
-            <div className="flex-shrink-0 flex items-center justify-between gap-4 px-5 pt-5 pb-3">
+            <div className="flex-shrink-0 flex items-center justify-between gap-4 px-5 pt-5 pb-3 border-b border-border">
               <div className="flex items-center gap-3 min-w-0">
                 <img
                   src={organization.avatar_url || '/images/org_profile.png'}
@@ -3419,7 +3419,7 @@ export default function OrganizationOverviewPage() {
                   onRetry={() => setTeamSidebarRefetch((n) => n + 1)}
                   onProjectClick={openProjectInSidebar}
                   showTeamColumn={false}
-                  searchPlaceholder="Search projects, repos…"
+                  searchPlaceholder="Search projects"
                   emptyHint="This team doesn't have any projects yet."
                   errorContext="this team's projects"
                   action={(teamSidebarPermissions?.manage_projects || teamSidebarHasOrgManagePermission) ? (
