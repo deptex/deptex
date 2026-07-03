@@ -565,6 +565,15 @@ export interface AlwaysOnRuntime {
   owners: string[];
   /** Promote only when the advisory SUMMARY matches one of these. */
   summary: RegExp[];
+  /**
+   * Veto: a summary matching any of these is a feature-gated sibling that only
+   * LOOKS like the always-on class — never promote it. (The Tomcat FORM-auth
+   * open-redirect CVE-2023-41080 matches the generic `/open redirect/i` of the
+   * default-servlet row but is reachable only under Tomcat container FORM auth
+   * — j_security_check — which a Spring Security JWT app never uses; ground
+   * truth from spring-security-polls, 2026-07-02.)
+   */
+  exclude?: RegExp[];
   /** The tier to promote to. Never `confirmed` (that needs a proven flow). */
   promoteTo: 'function' | 'data_flow';
   /**
@@ -626,11 +635,17 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   },
   // --- Embedded servlet container: default servlet URL normalization ---
   // The default servlet normalizes every static-path URL; a normalization bug
-  // yields open redirect / path confusion on the ordinary request path.
+  // yields open redirect / path confusion on the ordinary request path. EXCLUDE
+  // the Tomcat container FORM-authentication (j_security_check) open-redirect
+  // CVE — it is reachable only when the app uses Tomcat's own FORM auth, which a
+  // Spring Security (or unsecured) Spring Boot app never does; matching it on
+  // the generic `open redirect` was an over-promotion (spring-security-polls
+  // ground truth labels CVE-2023-41080 unreachable).
   {
     sink: 'servlet-default-servlet-url-normalization',
     owners: ['tomcat', 'jetty', 'undertow'],
     summary: [/open[\s-]?redirect/i, /url\s+normaliz/i, /path\s+normaliz/i, /default\s+servlet/i],
+    exclude: [/form[\s-]?(based\s+)?auth/i, /j_security_check/i, /form\s+login/i, /formauthenticator/i],
     promoteTo: 'data_flow',
     requires: () => true,
   },
@@ -739,6 +754,8 @@ export function evaluateAlwaysOnRuntimePromotion(input: {
   const signals = input.signals ?? emptySpringFeatureSignals();
   for (const row of ALWAYS_ON_RUNTIME) {
     if (!row.owners.some((o) => dep.includes(o))) continue;
+    // A feature-gated sibling that only LOOKS like the always-on class — skip.
+    if (row.exclude && row.exclude.some((re) => re.test(summary))) continue;
     const matched = row.summary.find((re) => re.test(summary));
     if (!matched) continue;
     if (!row.requires(signals)) continue;
