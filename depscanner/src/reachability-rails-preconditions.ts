@@ -196,13 +196,18 @@ function awsS3EncryptionPresent(s: RailsFeatureSignals): boolean {
 }
 
 /**
- * The dev-only actionable-exceptions / pending-migration middleware runs in the
- * deployed environment. In a production Rails app these are OFF
- * (`consider_all_requests_local = false`, the Rails prod default). Present only
- * when a production env explicitly turns request-local error pages ON.
+ * Puma is DECLARED but never LOADED: the Gemfile pins it `require: false` and
+ * nothing explicitly `require`s it (a unicorn-served app like Discourse 2.5.0
+ * keeps puma as a dev-convenience dependency). Bundler.require skips
+ * require-false gems, so puma's HTTP parser never runs — promoting its CVEs on
+ * such an app manufactures noise (caught by the Discourse ground-truth labels,
+ * 2026-07-02: 7 puma CVEs labelled unreachable under unicorn).
  */
-function actionpackDevPagesEnabled(s: RailsFeatureSignals): boolean {
-  return /consider_all_requests_local\s*=\s*true/.test(s.configText);
+function pumaDeclaredButNotLoaded(s: RailsFeatureSignals): boolean {
+  const requireFalse = /gem\s+['"]puma['"][^\n]*require:\s*false/.test(s.configText);
+  if (!requireFalse) return false;
+  const explicitlyRequired = /require\s+['"]puma['"]/.test(s.configText) || /require\s+['"]puma['"]/.test(s.codeText);
+  return !explicitlyRequired;
 }
 
 /** MessageBus::Diagnostics is explicitly enabled (the CVE-2021-43840 precondition). */
@@ -280,15 +285,15 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     summary: [/oj::parser/i, /oj::doc/i, /\bsaj\b/i, /create_id/i, /array_class|hash_class/i, /each_child/i, /reentrant close/i, /symbol key cache/i],
     detect: (s) => resolve(ojStreamingApiUsed(s), s),
   },
-  // --- ActionPack development-only exposure (owner: actionpack). The
-  //     actionable-exceptions XSS page + the pending-migration runner only exist
-  //     when request-local error pages are on (dev); prod disables them. ---
-  {
-    feature: 'actionpack-dev-error-pages',
-    owners: ['actionpack'],
-    summary: [/actionable/i, /pending migration/i, /run pending migrations/i, /migrations in production/i, /actionable-?exceptions/i],
-    detect: (s) => resolve(actionpackDevPagesEnabled(s), s),
-  },
+  // --- actionpack-dev-error-pages row REMOVED (2026-07-02). Its premise —
+  //     that prod's `consider_all_requests_local = false` disables the
+  //     actionable-exceptions / pending-migration endpoints — is FALSE for the
+  //     affected Rails versions: CVE-2020-8185's whole point is that the
+  //     ActionableExceptions middleware sat in the DEFAULT PROD stack and
+  //     handled unauthenticated POST /rails/actions regardless of that setting
+  //     (fixed in 6.0.3.2 by gating it). Ground-truth on Discourse 2.5.0
+  //     (Rails 6.0.3.1) labels it data_flow; demoting it was a wrongful
+  //     silence. Those summaries now fall through to `module` (honest). ---
   // --- ActionView rails-ujs DOM XSS (owner: actionview). The vulnerable code is
   //     the @rails/ujs client script; an app whose frontend never ships rails-ujs
   //     (e.g. a React/Ember SPA) never loads it. ---
@@ -409,13 +414,16 @@ export interface AlwaysOnRuntime {
 export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   // --- Puma app server: parses 100% of inbound HTTP before any Rack middleware.
   //     Request-smuggling / keepalive-DoS / header-normalization / info-exposure
-  //     CVEs are all on the always-on request path of a deployed Rails app. ---
+  //     CVEs are all on the always-on request path of a deployed Rails app —
+  //     PROVIDED puma actually loads. A Gemfile `require: false` puma on a
+  //     unicorn-served app (Discourse 2.5.0) never boots; promoting there is
+  //     noise (Discourse ground-truth labels, 2026-07-02). ---
   {
     sink: 'rails-puma-http-server',
     owners: ['puma'],
     summary: [/./],
     promoteTo: 'data_flow',
-    requires: () => true,
+    requires: (s) => !pumaDeclaredButNotLoaded(s),
     threatTag: 'requires_untrusted_request',
   },
   // --- Rack request parsing (owner: rack): Rack::Request / Multipart / QueryParser

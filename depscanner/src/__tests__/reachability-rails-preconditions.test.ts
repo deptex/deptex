@@ -100,6 +100,25 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(r.sink).toBe('rails-puma-http-server');
   });
 
+  it('refuses the Puma promotion when puma is declared require:false and never required (unicorn-served Discourse shape)', () => {
+    // Bundler.require skips require-false gems — puma's parser never boots on
+    // a unicorn deploy. Promoting there is noise (Discourse 2.5.0 ground truth:
+    // 7 puma CVEs labelled unreachable under unicorn).
+    const discourseShaped = {
+      configText:
+        railsSignals().configText + "gem 'puma', require: false\nworker_processes 4 # unicorn.conf.rb\n",
+    };
+    expect(P('puma', PUMA_SMUGGLING, discourseShaped).promote).toBe(false);
+  });
+
+  it('still promotes Puma when require:false but the app explicitly requires puma', () => {
+    const explicitlyRequired = {
+      configText: railsSignals().configText + "gem 'puma', require: false\n",
+      codeText: railsSignals().codeText + "require 'puma'\n",
+    };
+    expect(P('puma', PUMA_SMUGGLING, explicitlyRequired).promote).toBe(true);
+  });
+
   it('promotes an ActionDispatch ReDoS to data_flow', () => {
     const r = P('actionpack', ACTIONDISPATCH_REDOS);
     expect(r.promote).toBe(true);
@@ -273,13 +292,13 @@ describe('evaluateRailsFeaturePreconditionDemotion', () => {
     expect(r.demote).toBe(false);
   });
 
-  it('demotes the actionpack pending-migration dev CVE in production', () => {
-    expect(D('actionpack', ACTIONPACK_DEV_MIGRATION).feature).toBe('actionpack-dev-error-pages');
-  });
-
-  it('does NOT demote the actionpack dev CVE when consider_all_requests_local = true', () => {
-    const r = D('actionpack', ACTIONPACK_DEV_MIGRATION, { configText: 'consider_all_requests_local = true' });
-    expect(r.demote).toBe(false);
+  it('does NOT demote the actionpack pending-migration CVE (row removed — CVE-2020-8185 ran in the default PROD stack on affected versions)', () => {
+    // Discourse 2.5.0 (Rails 6.0.3.1) ground truth: unauthenticated POST
+    // /rails/actions ran pending migrations in prod REGARDLESS of
+    // consider_all_requests_local — demoting it was a wrongful silence.
+    expect(D('actionpack', ACTIONPACK_DEV_MIGRATION).demote).toBe(false);
+    const withLocal = D('actionpack', ACTIONPACK_DEV_MIGRATION, { configText: 'consider_all_requests_local = true' });
+    expect(withLocal.demote).toBe(false);
   });
 
   it('demotes the aws-sdk-s3 encryption-client CVE when the encryption gem is absent', () => {
