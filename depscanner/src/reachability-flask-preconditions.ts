@@ -76,16 +76,10 @@ export interface FlaskFeatureSignals {
    * python-multipart DoS is unreachable on a pure-JSON API).
    */
   usesForms: boolean;
-  /** Serves static files via a Starlette `StaticFiles` mount. Gates the StaticFiles rows. */
-  usesStaticFiles: boolean;
   /** Decodes attacker-supplied JWTs on the request path (auth). Gates the PyJWT decode rows. */
   usesJwtAuth: boolean;
-  /** Uses a remote JWKS / `PyJWKClient` (RS256 remote keys) rather than a static HS256 secret. Gates the PyJWKClient rows. */
-  usesJwksClient: boolean;
   /** Validates an email/URL from request input (Pydantic `EmailStr` / WTForms EmailField / email-validator). */
   usesEmailValidation: boolean;
-  /** Processes untrusted images (Pillow avatar/upload → `Image.open`). Gates the pillow rows. */
-  usesImageUploads: boolean;
   /**
    * Uvicorn is a prod dependency AND httptools is NOT installed, so uvicorn falls
    * back to the pure-Python `h11` HTTP/1.1 parser that parses every request. Gates
@@ -108,11 +102,8 @@ export function emptyFlaskFeatureSignals(): FlaskFeatureSignals {
     codeText: '',
     isDeployedWebApp: false,
     usesForms: false,
-    usesStaticFiles: false,
     usesJwtAuth: false,
-    usesJwksClient: false,
     usesEmailValidation: false,
-    usesImageUploads: false,
     usesH11: false,
   };
 }
@@ -243,6 +234,18 @@ export interface AlwaysOnRuntime {
   requires: (s: FlaskFeatureSignals) => boolean;
   /** Exploit precondition the bare request path does not satisfy (depscore hint). */
   threatTag?: string;
+  /**
+   * When true, this promotion may override the `orphan_transitive_unreachable`
+   * heuristic floor (a direct dep declared-but-not-imported). Set ONLY on rows
+   * where the `requires` signal PROVABLY implies THIS exact orphan dep is
+   * transitively reached — i.e. the signal's consumer is a FIXED transitive
+   * consumer of this dep (idna is only ever reached via requests/email-validator's
+   * idna.encode). NOT set where the signal could be satisfied by an ALTERNATIVE
+   * library (usesJwtAuth = PyJWT OR python-jose; usesEmailValidation = pydantic OR
+   * WTForms) — otherwise an unused orphan dep would be promoted on the strength of
+   * a different library's usage (a cross-dependency false positive).
+   */
+  overridesOrphanFloor?: boolean;
 }
 
 /** Rows grounded in the FlaskBB + fastapi-realworld verified ground truth. */
@@ -291,7 +294,10 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   {
     sink: 'pydantic-email-redos',
     owners: ['pydantic'],
-    summary: [/regular expression denial/i, /redos/i, /email/i],
+    // Bare /email/i dropped (adversarial review): it would over-promote any future
+    // non-ReDoS pydantic "email" advisory. The ReDoS class is captured by the two
+    // specific patterns (CVE-2024-3772's summary is "regular expression denial of service").
+    summary: [/regular expression denial/i, /redos/i],
     promoteTo: 'data_flow',
     requires: (s) => s.usesEmailValidation,
     threatTag: 'requires_untrusted_request',
@@ -305,6 +311,11 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
     promoteTo: 'data_flow',
     requires: (s) => s.usesEmailValidation,
     threatTag: 'requires_untrusted_request',
+    // idna is a FIXED transitive consumer of request-email validation
+    // (email-validator → idna.encode on the untrusted domain), so validation
+    // provably reaches it even when idna is a direct-but-unimported (orphan) pin.
+    // The one rule permitted to override the orphan_transitive_unreachable floor.
+    overridesOrphanFloor: true,
   },
   // PyJWT crit-header parsing — an app that decodes attacker-supplied bearer JWTs
   // runs the vulnerable crit-header parse on every authenticated request. EXCLUDE
@@ -327,6 +338,8 @@ export interface AlwaysOnPromotionResult {
   promoteTo?: 'function' | 'data_flow';
   matchedPattern?: string;
   threatTag?: string;
+  /** True when the matched row may override the orphan_transitive_unreachable floor. */
+  overridesOrphanFloor?: boolean;
 }
 
 /**
@@ -360,6 +373,7 @@ export function evaluateFlaskAlwaysOnRuntimePromotion(input: {
       promoteTo: row.promoteTo,
       matchedPattern: matched?.source ?? (idMatched ? `id:${idMatched}` : undefined),
       threatTag: row.threatTag,
+      overridesOrphanFloor: row.overridesOrphanFloor === true,
     };
   }
   return { promote: false };
@@ -430,11 +444,15 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
 
   const prod = new Set<string>();
   const dev = new Set<string>();
+  // Raw PROD manifest text, retained so signals that depend on an EXTRA spec
+  // (e.g. `uvicorn[standard]`, which pulls httptools transitively) can be detected
+  // even though extras are stripped from the normalized depUniverse.
+  const manifestParts: string[] = [];
 
   const pyproject = safeRead(path.join(root, 'pyproject.toml'), MAX_CONFIG_BYTES);
-  if (pyproject) parsePyprojectToml(pyproject, prod, dev);
+  if (pyproject) { parsePyprojectToml(pyproject, prod, dev); manifestParts.push(pyproject); }
   const pipfile = safeRead(path.join(root, 'Pipfile'), MAX_CONFIG_BYTES);
-  if (pipfile) parsePipfile(pipfile, prod, dev);
+  if (pipfile) { parsePipfile(pipfile, prod, dev); manifestParts.push(pipfile); }
   const reqCandidates: string[] = [];
   try {
     for (const ent of fs.readdirSync(root, { withFileTypes: true })) {
@@ -453,7 +471,9 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
     if (!raw) continue;
     const isDev = DEV_REQUIREMENTS_RE.test(path.basename(file));
     parseRequirementsTxt(raw, isDev ? dev : prod);
+    if (!isDev) manifestParts.push(raw);
   }
+  const manifestText = manifestParts.join('\n');
 
   // Prod scope wins.
   for (const p of prod) dev.delete(p);
@@ -467,7 +487,9 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
   let truncated = false;
 
   const walk = (dir: string, depth: number): void => {
-    if (depth > MAX_DIR_DEPTH) return;
+    // Content below the depth cap goes unscanned — mark truncated so a signal that
+    // would have lived there resolves to `unknown` (demotion refused), not `absent`.
+    if (depth > MAX_DIR_DEPTH) { truncated = true; return; }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -491,7 +513,9 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
         continue;
       }
       const src = safeRead(path.join(dir, ent.name), MAX_FILE_BYTES);
-      if (!src) continue;
+      // Oversize (> MAX_FILE_BYTES) or unreadable → content unscanned: mark
+      // truncated so a missed marker becomes `unknown`, not `absent` (fail-safe).
+      if (!src) { truncated = true; continue; }
       codeFileCount += 1;
       codeBytes += src.length;
       codeParts.push(src.toLowerCase());
@@ -504,7 +528,13 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
   signals.truncated = truncated;
 
   const code = signals.codeText;
-  const flaskInDeps = signals.depUniverse.has('flask') || moduleImported(signals, 'flask');
+  // Quart is the ASGI reimplementation of the Flask API (same Werkzeug/Jinja2 +
+  // request.files/request.form surface), so it counts as the 'flask' stack.
+  const flaskInDeps =
+    signals.depUniverse.has('flask') ||
+    signals.depUniverse.has('quart') ||
+    moduleImported(signals, 'flask') ||
+    moduleImported(signals, 'quart');
   const fastapiInDeps =
     signals.depUniverse.has('fastapi') ||
     signals.depUniverse.has('starlette') ||
@@ -513,10 +543,12 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
   signals.framework =
     flaskInDeps && fastapiInDeps ? 'both' : flaskInDeps ? 'flask' : fastapiInDeps ? 'fastapi' : null;
 
-  // App-instantiation marker: `Flask(` / `FastAPI(` (lowercased in codeText), or a
-  // WSGI/ASGI module. Distinguishes a deployed app from a library that merely
-  // lists flask/starlette as a dependency.
-  const appMarker = hasWsgiOrAsgi || textIncludes(code, ['flask(', 'fastapi(', 'wsgi_app', 'asgi_app']);
+  // App-instantiation marker: `Flask(` / `FastAPI(` / `Starlette(` / `Quart(`
+  // (lowercased in codeText), or a WSGI/ASGI module. Distinguishes a deployed app
+  // from a library that merely lists flask/starlette as a dependency. `starlette(`
+  // covers pure-Starlette ASGI apps that instantiate `Starlette(routes=...)` with
+  // no asgi.py and no FastAPI wrapper.
+  const appMarker = hasWsgiOrAsgi || textIncludes(code, ['flask(', 'fastapi(', 'starlette(', 'quart(', 'wsgi_app', 'asgi_app']);
   signals.recognized = signals.framework != null && appMarker;
   signals.isDeployedWebApp = signals.recognized;
 
@@ -529,30 +561,34 @@ export function gatherFlaskFeatureSignals(root: string | undefined): FlaskFeatur
   signals.usesForms =
     hasAnyProdDep(signals, ['python-multipart']) ||
     textIncludes(code, [
-      'request.files', 'request.form', 'filefield', 'multipartform',
-      'multipart/form-data', 'enctype=multipart', 'enctype="multipart', "enctype='multipart",
+      // Werkzeug form parse is triggered by ANY of these access paths — request.form
+      // and request.values (CombinedMultiDict) and get_data(parse_form_data=True)
+      // all invoke it; Flask-RESTful reqparse location='form'|'files' does too.
+      'request.files', 'request.form', 'request.values', 'parse_form_data', 'get_data(',
+      'filefield', 'filestorage', 'multipartform', 'multipart/form-data',
+      'enctype=multipart', 'enctype="multipart', "enctype='multipart",
       'uploadfile', 'flaskform', 'flask_wtf', 'validate_on_submit', 'wtforms',
+      'reqparse', 'requestparser', "location='form'", 'location="form"',
+      "location='files'", 'location="files"',
     ]);
-  signals.usesStaticFiles = textIncludes(code, ['staticfiles']) || moduleImported(signals, 'starlette.staticfiles');
   signals.usesJwtAuth =
     textIncludes(code, ['jwt.decode', 'jwt.get_unverified', 'decode_token', 'jwtbearer', 'oauth2passwordbearer']) ||
     (hasAnyProdDep(signals, ['pyjwt', 'python-jose', 'jose']) && textIncludes(code, ['.decode(', 'jwt']));
-  signals.usesJwksClient = textIncludes(code, ['pyjwkclient', 'jwks', 'get_signing_key', 'jwk_client']);
   // email-validator is pulled only by pydantic[email]/WTForms Email() → its prod
   // presence implies request-email validation, which calls idna.encode on the
   // untrusted domain + runs pydantic's email regex.
   signals.usesEmailValidation =
     hasAnyProdDep(signals, ['email-validator']) ||
     textIncludes(code, ['emailstr', 'emailfield', 'email_validator', 'emailvalidator', 'validate_email']);
-  signals.usesImageUploads =
-    moduleImported(signals, 'pil') || textIncludes(code, ['image.open(', 'imagefield', 'pil.image', 'save_avatar']);
   // uvicorn without the [standard] extra ships no httptools, so it uses the
-  // pure-Python h11 parser for every request. h11 is uvicorn's UNCONDITIONAL
-  // dependency (transitive, so not in the manifest depUniverse) — the presence of
-  // an h11 finding at all proves it is installed, so gate purely on
-  // uvicorn-prod-without-httptools.
-  signals.usesH11 =
-    hasAnyProdDep(signals, ['uvicorn']) && !hasAnyProdDep(signals, ['httptools']);
+  // pure-Python h11 parser for every request. httptools arrives TRANSITIVELY via
+  // the `uvicorn[standard]` extra — extras are stripped from the normalized
+  // depUniverse, so a direct-dep check alone is a dead guard. Also scan the raw
+  // manifest text for the `uvicorn[standard]` extra spec (or a direct httptools
+  // pin): when httptools is present it, not h11, is the active request parser.
+  const hasHttptools =
+    hasAnyProdDep(signals, ['httptools']) || /uvicorn\s*\[[^\]]*\bstandard\b[^\]]*\]/i.test(manifestText);
+  signals.usesH11 = hasAnyProdDep(signals, ['uvicorn']) && !hasHttptools;
 
   return signals;
 }

@@ -738,6 +738,10 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
         (pdRows ?? []) as DualScopePdRow[],
         jobEcosystem,
       );
+      // Count how many vuln rows only attach via the normalized fallback. In steady
+      // state this is small; a large spike is the signal that the fallback is
+      // mis-attributing CVEs (two manifest-distinct names collapsing to one key).
+      let normalizedFallbackHits = 0;
 
       // id → directness/scope, for the SC1 dependency-context depscore taper.
       const pdById = new Map<string, PdScoringContext>();
@@ -813,6 +817,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
               // Registry-normalized fallback: VDR purl name is lowercase/PEP-503,
               // the manifest-declared project_dependencies name may be capitalized.
               pdId = pdByNameVersionNorm.get(`${normalizeDepName(parsed.name, jobEcosystem)}@${parsed.version}`);
+              if (pdId) normalizedFallbackHits += 1;
             }
             if (!pdId) continue;
             vulnRows.push({
@@ -840,6 +845,7 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
           let pdId = pdByNameVersion.get(`${compName}@${compVersion}`);
           if (!pdId) {
             pdId = pdByNameVersionNorm.get(`${normalizeDepName(compName, jobEcosystem)}@${compVersion}`);
+            if (pdId) normalizedFallbackHits += 1;
           }
           if (!pdId) continue;
           const severity = v.severity ?? v.ratings?.[0]?.severity ?? null;
@@ -860,6 +866,13 @@ export async function doDepScan(ctx: PipelineContext): Promise<DepScanOutput> {
             epd_prompt_version: 'epd-v1',
           });
         }
+      }
+
+      if (normalizedFallbackHits > 0) {
+        await log.info(
+          'vuln_scan',
+          `name-join: ${normalizedFallbackHits} vuln row(s) attached via the registry-normalized fallback (capitalized / PEP-503 manifest names the exact join missed)`,
+        );
       }
 
       const CVE_ID_RE = /^CVE-\d{4}-\d+$/i;

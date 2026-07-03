@@ -2307,7 +2307,21 @@ export async function updateReachabilityLevels(
                       : flaskPromotion.promote
                         ? flaskPromotion
                         : null;
-          if (chosen && chosen.promote && chosen.promoteTo) {
+          // Orphan-floor scoping: a finding that entered the promotion gate via the
+          // `orphan_transitive_unreachable` HEURISTIC (isOrphanFloor) may ONLY be
+          // promoted by a rule that PROVABLY implies the orphan dep is transitively
+          // reached — i.e. one flagged `overridesOrphanFloor` (currently only the
+          // Flask idna-encode rule, where email-validator→idna.encode is a fixed
+          // transitive consumer). Any other match leaves it `unreachable`: a
+          // workspace signal satisfied by a DIFFERENT library (e.g. python-jose
+          // setting usesJwtAuth) must never surface an unused orphan pin (e.g. a
+          // leftover PyJWT) as a false positive.
+          const chosenOverridesOrphan =
+            !!chosen && (chosen as { overridesOrphanFloor?: boolean }).overridesOrphanFloor === true;
+          if (
+            chosen && chosen.promote && chosen.promoteTo &&
+            (!isOrphanFloor || chosenOverridesOrphan)
+          ) {
             // Record the pre-promotion verdict honestly: the callgraph branch
             // stamps `callgraph_reached_transitive`; the embedded-runtime /
             // direct floor leaves details null → 'module'.
