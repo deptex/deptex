@@ -2128,7 +2128,337 @@ repos:
     # demotions must flip to "present"/refuse here if they are genuinely
     # import-driven rather than overfit to saleor.
     ref: v1.17.0
-    ground_truth_cves: []
+    ground_truth_cves:
+      - id: CVE-2024-39689
+        expected_reachability: module
+        source: "certifi — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-4340
+        expected_reachability: unreachable
+        source: "sqlparse — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-6176
+        expected_reachability: unreachable
+        source: "brotli — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-66471
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-37891
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-21441
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-32274
+        expected_reachability: unreachable
+        source: "black — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-50447
+        expected_reachability: unreachable
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-50782
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-49853
+        expected_reachability: unreachable
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-28219
+        expected_reachability: unreachable
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-33236
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-4539
+        expected_reachability: unreachable
+        source: "pygments — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-22702
+        expected_reachability: unreachable
+        source: "virtualenv — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-27459
+        expected_reachability: unreachable
+        source: "pyopenssl — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-47273
+        expected_reachability: unreachable
+        source: "setuptools — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-69534
+        expected_reachability: unreachable
+        source: "markdown — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-46338
+        expected_reachability: unreachable
+        source: "pymdown-extensions — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-45409
+        expected_reachability: module
+        source: "idna — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-0847
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-26130
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-57833
+        expected_reachability: module
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-71176
+        expected_reachability: unreachable
+        source: "pytest — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-47287
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-41164
+        expected_reachability: data_flow
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-14009
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-48432
+        expected_reachability: data_flow
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-44271
+        expected_reachability: function
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-52804
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-47081
+        expected_reachability: unreachable
+        source: "requests — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-33733
+        expected_reachability: module
+        source: "reportlab — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-0727
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-35195
+        expected_reachability: unreachable
+        source: "requests — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-41671
+        expected_reachability: unreachable
+        source: "twisted — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-41810
+        expected_reachability: unreachable
+        source: "twisted — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-38325
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-39705
+        expected_reachability: module
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-27516
+        expected_reachability: unreachable
+        source: "jinja2 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-49854
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-6345
+        expected_reachability: unreachable
+        source: "setuptools — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-70559
+        expected_reachability: module
+        source: "pdfminer.six — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-21503
+        expected_reachability: unreachable
+        source: "black — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-35536
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-64459
+        expected_reachability: module
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-45803
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-34062
+        expected_reachability: unreachable
+        source: "tqdm — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-25645
+        expected_reachability: unreachable
+        source: "requests — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-33230
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-66418
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-56201
+        expected_reachability: unreachable
+        source: "jinja2 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-42304
+        expected_reachability: unreachable
+        source: "twisted — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-21520
+        expected_reachability: module
+        source: "djangorestframework — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-22195
+        expected_reachability: unreachable
+        source: "jinja2 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-34064
+        expected_reachability: unreachable
+        source: "jinja2 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-43665
+        expected_reachability: module
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-0846
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-6827
+        expected_reachability: unreachable
+        source: "gunicorn — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-4863
+        expected_reachability: function
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-49083
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-5569
+        expected_reachability: unreachable
+        source: "zipp — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-3651
+        expected_reachability: module
+        source: "idna — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-33231
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-30922
+        expected_reachability: unreachable
+        source: "pyasn1 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-5206
+        expected_reachability: module
+        source: "scikit-learn — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-34073
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-28684
+        expected_reachability: unreachable
+        source: "python-dotenv — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-49855
+        expected_reachability: unreachable
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-54293
+        expected_reachability: module
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-50181
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-56326
+        expected_reachability: unreachable
+        source: "jinja2 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-44431
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-31958
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-46695
+        expected_reachability: unreachable
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-22701
+        expected_reachability: unreachable
+        source: "filelock — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-64458
+        expected_reachability: unreachable
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-68142
+        expected_reachability: unreachable
+        source: "pymdown-extensions — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-26007
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-42310
+        expected_reachability: unreachable
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-53899
+        expected_reachability: unreachable
+        source: "virtualenv — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-45231
+        expected_reachability: module
+        source: "django — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-43804
+        expected_reachability: unreachable
+        source: "urllib3 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-41066
+        expected_reachability: module
+        source: "lxml — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-27448
+        expected_reachability: unreachable
+        source: "pyopenssl — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-43859
+        expected_reachability: module
+        source: "h11 — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2024-1135
+        expected_reachability: unreachable
+        source: "gunicorn — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-68146
+        expected_reachability: module
+        source: "filelock — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2025-64512
+        expected_reachability: module
+        source: "pdfminer.six — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-42308
+        expected_reachability: module
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-46137
+        expected_reachability: unreachable
+        source: "twisted — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2023-25399
+        expected_reachability: module
+        source: "scipy — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-44545
+        expected_reachability: unreachable
+        source: "daphne — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-44546
+        expected_reachability: unreachable
+        source: "daphne — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-12243
+        expected_reachability: module
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: CVE-2026-0848
+        expected_reachability: unreachable
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-27jp-wm6q-gp25
+        expected_reachability: unreachable
+        source: "sqlparse — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-8rfp-98v4-mmr6
+        expected_reachability: function
+        source: "bleach — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-qppv-j76h-2rpx
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-rf74-v2fm-23pw
+        expected_reachability: module
+        source: "nltk — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-h4gh-qq45-vh27
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-753j-mpmx-qq6g
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-78cv-mqj4-43f7
+        expected_reachability: module
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-pw6j-qg29-8w7f
+        expected_reachability: unreachable
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-gj48-438w-jh9v
+        expected_reachability: function
+        source: "bleach — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-w235-7p84-xx57
+        expected_reachability: unreachable
+        source: "tornado — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-537c-gmf6-5ccf
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-6v7p-g79w-8964
+        expected_reachability: module
+        source: "msgpack — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-v8gr-m533-ghj9
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-jm77-qphf-c4w8
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: GHSA-5cpq-8wj7-hf2v
+        expected_reachability: module
+        source: "cryptography — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
+      - id: PYSEC-2023-175
+        expected_reachability: function
+        source: "pillow — paperless-ngx v1.17.0 Django 2nd-pypi triage + adversarial verify 2026-07-03 (cryptography 12 refuted unreachable->module); scripts/labels/paperless-ngx-v1.17.0.yaml + ledger"
   - name: koel
     repo_url: https://github.com/koel/koel.git
     ecosystem: composer
