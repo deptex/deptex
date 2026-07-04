@@ -17,20 +17,28 @@ jest.mock('../job-db', () => ({
   markAnswered: jest.fn(async () => {}),
   isJobCancelled: jest.fn(async () => false),
 }));
-jest.mock('../task-chat', () => ({
-  narrateStep: jest.fn(async () => {}),
-  postPrReadyCard: jest.fn(async () => {}),
-  postFailureCard: jest.fn(async () => {}),
-  describeFailure: () => ({ headline: 'h', explanation: 'e', nextStep: 'n', leadIn: 'l', stepLabel: 's' }),
-  markTaskFromFix: jest.fn(async () => {}),
-  makeTaskNarrator: () => async () => {},
-}));
+jest.mock('../task-chat', () => {
+  // A shared, assertable narrator: makeTaskNarrator always hands back this fn
+  // so tests can check the exact prose beats (e.g. the amend closing beat).
+  const narrator = jest.fn(async () => {});
+  return {
+    narrateStep: jest.fn(async () => {}),
+    postPrReadyCard: jest.fn(async () => {}),
+    postFailureCard: jest.fn(async () => {}),
+    describeFailure: () => ({ headline: 'h', explanation: 'e', nextStep: 'n', leadIn: 'l', stepLabel: 's' }),
+    markTaskFromFix: jest.fn(async () => {}),
+    makeTaskNarrator: jest.fn(() => narrator),
+    __narrator: narrator,
+  };
+});
 jest.mock('../logger', () => ({ FixLogger: class {} }));
 
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from '../agent/tools';
 import { commitAndPushFix, openPullRequest } from '../pr';
 import { markCompleted, markFailed, markAnswered } from '../job-db';
-import { markTaskFromFix, narrateStep } from '../task-chat';
+import { markTaskFromFix, narrateStep, postPrReadyCard } from '../task-chat';
+
+const taskChatNarrator = (jest.requireMock('../task-chat') as any).__narrator as jest.Mock;
 
 function fakeSupabase(leaseRow: any) {
   return {
@@ -237,8 +245,14 @@ describe('agent tools — resume mode', () => {
       expect.objectContaining({ prNumber: 42, prUrl: RESUME.prUrl, prBranch: 'aegis/prior' }),
       'me',
     );
-    // No duplicate PR-ready card queued (the run-1 card live-renders from this fixId).
-    expect(deps.state.pendingAfter).toHaveLength(0);
+    // No duplicate PR-ready card (the run-1 card live-renders from this fixId) —
+    // instead ONE deferred closing text beat so the timeline doesn't end
+    // abruptly on the step row.
+    expect(postPrReadyCard).not.toHaveBeenCalled();
+    expect(deps.state.pendingAfter).toHaveLength(1);
+    await deps.state.pendingAfter[0]();
+    expect(taskChatNarrator).toHaveBeenCalledWith('The update is up — same pull request, one new commit.');
+    expect(postPrReadyCard).not.toHaveBeenCalled();
     expect(deps.state.prOpened).toBe(true);
     expect(deps.state.terminal).toBe(true);
     expect(String(res)).toMatch(/update to pull request #42/i);

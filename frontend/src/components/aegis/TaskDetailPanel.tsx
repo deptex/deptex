@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PanelRight, Loader2 } from 'lucide-react';
 import { api, type VulnerabilityDetail } from '../../lib/api';
 import { aegisApi, type AegisTask, type AegisTaskTarget } from '../../lib/aegis-api';
+import { supabase } from '../../lib/supabase';
 import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
 import { FileDiffCard } from './FileDiffCard';
 import { Button } from '../ui/button';
@@ -185,10 +186,14 @@ export function TaskDetailPanel({
   task,
   open,
   onClose,
+  onOpen,
 }: {
   task: AegisTask | null;
   open: boolean;
   onClose: () => void;
+  // Reopen the collapsed panel (the persistent PanelRight toggle). Optional so
+  // existing call sites without it just lose the reopen affordance.
+  onOpen?: () => void;
 }) {
   const [width] = useState(panelWidth);
   const [tab, setTab] = useState<'task' | 'changes'>('task');
@@ -218,6 +223,14 @@ export function TaskDetailPanel({
 
   // Pull the change set out of the task's chat: the edit-step diffs + the fix's
   // PR. Drives both the Changes tab and the header stat/button.
+  //
+  // Re-runs on `refreshTick` (bumped by the realtime subscription below when an
+  // amend/resume run lands new messages on the same thread — keyed on threadId
+  // alone this could never update) and on `open` (reopening the panel refetches).
+  // The spinner only shows for a thread's FIRST load; refreshes of the same
+  // thread update in place so the tab doesn't flash empty mid-run.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const loadedThreadRef = useRef<string | null>(null);
   useEffect(() => {
     const threadId = task?.threadId;
     if (!threadId) {
@@ -227,7 +240,7 @@ export function TaskDetailPanel({
       return;
     }
     let cancelled = false;
-    setChangesLoading(true);
+    if (loadedThreadRef.current !== threadId) setChangesLoading(true);
     (async () => {
       try {
         const msgs = await aegisApi.getMessages(threadId);
@@ -248,17 +261,47 @@ export function TaskDetailPanel({
           setDiffs(editDiffs);
           setPrUrl(url);
           setChangesLoading(false);
+          loadedThreadRef.current = threadId;
         }
       } catch {
         if (!cancelled) {
-          setDiffs([]);
-          setPrUrl(null);
+          // First load falls back to empty; a failed REFRESH keeps what's on
+          // screen (the next insert retriggers anyway).
+          if (loadedThreadRef.current !== threadId) {
+            setDiffs([]);
+            setPrUrl(null);
+          }
           setChangesLoading(false);
         }
       }
     })();
     return () => {
       cancelled = true;
+    };
+  }, [task?.threadId, refreshTick, open]);
+
+  // Live refresh for the change set — mirrors ChatPane's narration reload: the
+  // worker persists each beat to aegis_chat_messages (in the realtime
+  // publication), so each INSERT on this thread schedules a refetch. Trailing
+  // 300ms debounce because steps land in bursts.
+  useEffect(() => {
+    const threadId = task?.threadId;
+    if (!threadId) return;
+    let timer: number | undefined;
+    const channel = supabase
+      .channel(`task-panel-msgs-${threadId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'aegis_chat_messages', filter: `thread_id=eq.${threadId}` },
+        () => {
+          if (timer !== undefined) window.clearTimeout(timer);
+          timer = window.setTimeout(() => setRefreshTick((t) => t + 1), 300);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      supabase.removeChannel(channel);
     };
   }, [task?.threadId]);
 
@@ -275,19 +318,26 @@ export function TaskDetailPanel({
     <div
       className="flex flex-shrink-0 relative transition-[width] duration-[220ms] ease-out"
       style={{ width: open ? width : 0 }}
-      aria-hidden={!open}
     >
-      {open && (
+      {/* Persistent toggle: the TaskHeader row (the only other way in) scrolls
+          away with the conversation, so the panel must stay reachable from a
+          fixed spot. The button sits just left of the panel edge (-left-8), so
+          when the panel is collapsed to width 0 it rests at the top-right edge
+          of the chat — same place it occupies while open. Kept OUTSIDE the
+          aria-hidden aside so it stays in the a11y tree when collapsed. (A
+          call site without onOpen falls back to the old open-only button —
+          never a visible dead control.) */}
+      {(open || onOpen) && (
         <button
           type="button"
-          onClick={onClose}
-          aria-label="Close panel"
+          onClick={open ? onClose : onOpen}
+          aria-label={open ? 'Close panel' : 'Open task details'}
           className="absolute top-3 -left-8 h-6 w-6 rounded-md text-foreground-secondary hover:bg-background-subtle hover:text-foreground inline-flex items-center justify-center transition-colors z-20"
         >
           <PanelRight className="h-4 w-4" />
         </button>
       )}
-      <aside className="flex-1 border-l border-border overflow-hidden">
+      <aside className="flex-1 border-l border-border overflow-hidden" aria-hidden={!open}>
         {task && (
           <div className="flex h-full flex-col overflow-hidden bg-background">
             <div className="border-b border-border px-6 pt-4">

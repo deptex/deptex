@@ -258,6 +258,7 @@ export default function AegisPage() {
             task={activeTask}
             open={taskPanelOpen}
             onClose={() => setTaskPanelOpen(false)}
+            onOpen={() => setTaskPanelOpen(true)}
           />
         )}
       </div>

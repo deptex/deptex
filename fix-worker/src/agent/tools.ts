@@ -512,7 +512,15 @@ export function buildAgentTools(deps: AgentToolDeps) {
             output: scrubSecrets(pushOutput, deps.installationToken),
           });
           // Do NOT queue postPrReadyCard: the run-1 card already live-renders
-          // from this fixId — a second card would duplicate.
+          // from this fixId — a second card would duplicate. But that card was
+          // run 1's closing beat, so without one the timeline ends abruptly on
+          // the step row — queue a short closing text beat instead, deferred
+          // via pendingAfter so it flushes last (mirrors the create path's
+          // deferred card).
+          state.pendingAfter.push(async () => {
+            const { makeTaskNarrator } = await import('./../task-chat');
+            await makeTaskNarrator(supabase, threadId)('The update is up — same pull request, one new commit.');
+          });
           await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary: title });
           state.prOpened = true;
           state.terminal = true;

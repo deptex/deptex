@@ -676,6 +676,30 @@ export function ChatPane({
     onThreadUpdatedRef.current?.();
   }, [stop]);
 
+  // Stop for a WORKER-side task run: the run isn't a useChat stream, so
+  // useChat.stop() can't touch it. Cancel the task instead — the same call
+  // TaskDetailPanel's Stop button makes — which rejects the task's in-flight
+  // agent fix rows; the worker aborts at its next step boundary and
+  // `taskWorking` flips off via the existing fix-row subscription. Best-effort:
+  // a failure is swallowed (the worker also halts on its own budget/stall).
+  const taskStoppingRef = useRef(false);
+  const handleTaskStop = useCallback(async () => {
+    if (!task || taskStoppingRef.current) return;
+    taskStoppingRef.current = true;
+    try {
+      await aegisApi.cancelTask(task.id, organizationId);
+    } catch {
+      /* best-effort — see above */
+    } finally {
+      taskStoppingRef.current = false;
+    }
+  }, [task, organizationId]);
+
+  // The composite "something is running" signal for the bottom input: a chat
+  // SSE stream OR the task's worker run. Drives the Stop affordance and the
+  // 'Add a follow-up' placeholder so task runs behave like chat streams.
+  const taskRunActive = liveReload && taskWorking;
+
   // Show the thinking dot whenever the stream is in flight and there's no
   // self-evident visible affordance for the user. Suppressed only by
   // (a) actively-typing text content — the typing animation IS the
@@ -847,14 +871,14 @@ export function ChatPane({
           <div className="rounded-2xl bg-background-card border border-border">
             <ChatInput
               onSubmit={handleSubmit}
-              placeholder={isStreaming || sendQueue.length > 0 ? 'Add a follow-up' : 'Ask anything'}
+              placeholder={isStreaming || taskRunActive || sendQueue.length > 0 ? 'Add a follow-up' : 'Ask anything'}
               autoFocus
               models={enabledModels}
               selectedModelId={selectedModelId}
               onSelectModel={setSelectedModelId}
               modelsLoading={modelsLoading}
-              isStreaming={isStreaming}
-              onStop={handleStop}
+              isStreaming={isStreaming || taskRunActive}
+              onStop={taskRunActive ? handleTaskStop : handleStop}
             />
           </div>
         </div>

@@ -27,7 +27,14 @@ const mocks = vi.hoisted(() => ({
   resumeStream: vi.fn(async () => undefined),
   stop: vi.fn(),
   sendTaskMessage: vi.fn(),
+  cancelTask: vi.fn(async () => ({ success: true, cancelled: 1 })),
   getMessages: vi.fn(async () => []),
+  // What useChat reports (set per-test to simulate a chat SSE stream).
+  chatStatus: 'ready' as string,
+  // Rows the project_security_fixes query resolves with — a queued/executing
+  // row flips ChatPane's `taskWorking` on (the worker-run signal driving the
+  // in-input Stop + thinking dot).
+  fixRows: [] as Array<{ status: string }>,
 }));
 
 // Stateful useChat mock: setMessages must actually re-render so the optimistic
@@ -44,7 +51,7 @@ vi.mock('@ai-sdk/react', async () => {
         sendMessage: mocks.sendMessage,
         regenerate: vi.fn(),
         stop: mocks.stop,
-        status: 'ready',
+        status: mocks.chatStatus,
         error: undefined,
         clearError: mocks.clearError,
         resumeStream: mocks.resumeStream,
@@ -63,6 +70,7 @@ vi.mock('ai', () => ({
 vi.mock('../../../lib/aegis-api', () => ({
   aegisApi: {
     sendTaskMessage: mocks.sendTaskMessage,
+    cancelTask: mocks.cancelTask,
     getMessages: mocks.getMessages,
     regenerate: vi.fn(),
   },
@@ -88,7 +96,7 @@ vi.mock('../../../lib/supabase', () => {
     supabase: {
       from: vi.fn(() => ({
         select: vi.fn(() => ({
-          eq: vi.fn(async () => ({ data: [] })),
+          eq: vi.fn(async () => ({ data: mocks.fixRows })),
         })),
       })),
       channel: vi.fn(() => makeChannel()),
@@ -151,6 +159,8 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     vi.clearAllMocks();
     mocks.getMessages.mockImplementation(async () => []);
     mocks.sendTaskMessage.mockResolvedValue({ woke: true, queued: false, threadId: 'thread-1' });
+    mocks.chatStatus = 'ready';
+    mocks.fixRows = [];
     // jsdom has no scrollIntoView (ChatPane auto-scrolls on new messages).
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
   });
@@ -222,5 +232,34 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
 
     await waitFor(() => expect(mocks.sendTaskMessage).toHaveBeenCalledWith('task-1', 'org-1', 'carry on'));
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('shows Stop in the input during a worker-side task run; clicking cancels the task, not useChat', async () => {
+    // A queued/executing fix row = the task agent is running server-side.
+    // useChat is idle ('ready'), so the Stop must come from taskWorking.
+    mocks.fixRows = [{ status: 'executing' }];
+    await renderChatPane({ liveReload: true, task });
+
+    // taskWorking resolves async (supabase query) → the input flips to its
+    // streaming form and the mic slot becomes the Stop square.
+    const stopBtn = await screen.findByRole('button', { name: 'Stop generating' });
+    fireEvent.click(stopBtn);
+
+    // Same call TaskDetailPanel's Stop makes — the worker aborts at its next
+    // step boundary. useChat.stop() must NOT fire (there's no SSE stream).
+    await waitFor(() => expect(mocks.cancelTask).toHaveBeenCalledWith('task-1', 'org-1'));
+    expect(mocks.cancelTask).toHaveBeenCalledTimes(1);
+    expect(mocks.stop).not.toHaveBeenCalled();
+  });
+
+  it('a streaming NON-task chat still stops via useChat.stop, never cancelTask', async () => {
+    mocks.chatStatus = 'streaming';
+    await renderChatPane({ liveReload: false, task: null, tasksLoading: false });
+
+    const stopBtn = await screen.findByRole('button', { name: 'Stop generating' });
+    fireEvent.click(stopBtn);
+
+    expect(mocks.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelTask).not.toHaveBeenCalled();
   });
 });
