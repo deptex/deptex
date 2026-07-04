@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import semver from 'semver';
 import { supabase } from '../supabase';
 import { getActiveExtractionId } from '../active-extraction';
 import { logSecurityEvent } from '../security-audit';
@@ -171,6 +172,78 @@ export function trackerFindingType(findingType: string): string {
   if (findingType === 'dataflow') return 'taint_flow';
   if (findingType === 'base_image') return 'container';
   return findingType;
+}
+
+// Pick the single version to cite from a PDV `fixed_versions text[]` (one
+// entry per affected range): the semver-max clears every range. Tolerant of
+// non-semver strings (falls back to the first entry).
+function pickFixedVersion(fixedVersions: unknown): string | null {
+  if (!Array.isArray(fixedVersions)) return null;
+  const entries = fixedVersions.filter(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  );
+  if (entries.length === 0) return null;
+  let best = entries[0];
+  let bestV = semver.coerce(best);
+  for (const entry of entries.slice(1)) {
+    const v = semver.coerce(entry);
+    if (v && (!bestV || semver.gt(v, bestV))) {
+      best = entry;
+      bestV = v;
+    }
+  }
+  return best;
+}
+
+/**
+ * Best-effort dependency-context line for a vulnerability target's finding
+ * brief. The live e2e showed the agent burning a run discovering that the
+ * vulnerable package was TRANSITIVE by spelunking the lockfile — the brief
+ * never told it. Tell it up front (direct vs transitive + the recorded fixed
+ * version) at accept time. Returns null on any miss or error: enriching the
+ * brief must never block an accept. Exported for tests.
+ */
+export async function vulnDependencyNote(target: AegisTaskTarget): Promise<string | null> {
+  try {
+    if (target.findingType !== 'vulnerability') return null;
+
+    // Same active-run scoping resolveTargetFindingId uses; fall back to the
+    // newest row if the project has no active run recorded.
+    const activeRun = await getActiveExtractionId(supabase, target.projectId);
+    let query = supabase
+      .from('project_dependency_vulnerabilities')
+      .select('project_dependency_id, fixed_versions')
+      .eq('project_id', target.projectId)
+      .eq('finding_key', target.findingKey);
+    if (activeRun) query = query.eq('extraction_run_id', activeRun);
+    const { data: vuln } = await query
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!vuln?.project_dependency_id) return null;
+
+    const { data: dep } = await supabase
+      .from('project_dependencies')
+      .select('name, version, is_direct')
+      .eq('id', vuln.project_dependency_id)
+      .maybeSingle();
+    if (!dep?.name) return null;
+
+    const fixed = pickFixedVersion((vuln as any).fixed_versions);
+    const pkg = `${dep.name}@${dep.version}`;
+    if (dep.is_direct === false) {
+      return (
+        `NOTE: ${pkg} is a TRANSITIVE dependency — it is not listed in the project manifest. ` +
+        `The standard fix is an "overrides" (npm) or "resolutions" (yarn) entry in package.json ` +
+        `forcing the fixed version${fixed ? ` (>= ${fixed})` : ''}; do not hand-edit the lockfile.`
+      );
+    }
+    return `NOTE: ${pkg} is a direct dependency listed in the project manifest${
+      fixed ? `; the fixed version is ${fixed}` : ''
+    }.`;
+  } catch {
+    return null; // best-effort — a brief without the note is still a valid brief
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -421,7 +494,11 @@ export async function acceptTask(args: {
   const pending: Array<{ fixId: string; target: AegisTaskTarget; findingId: string }> = [];
   for (const { target, findingId } of resolved) {
     const summary = task.title;
-    const findingBrief = [target.label, task.description].filter(Boolean).join('\n\n') || undefined;
+    // Dependency context (direct vs transitive + fixed version) saves the agent
+    // a lockfile-spelunking run; best-effort, null on any miss.
+    const depNote = await vulnDependencyNote(target);
+    const findingBrief =
+      [target.label, task.description, depNote].filter(Boolean).join('\n\n') || undefined;
     const ins = await insertAgentFixRow({
       organizationId,
       projectId: target.projectId,

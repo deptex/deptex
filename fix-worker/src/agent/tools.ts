@@ -28,8 +28,10 @@ const MAX_GREP_LINES = 60;
 /**
  * Terminal categories the agent can resolve to. Mirrors the vocabulary
  * `describeFailure` understands so the FixFailureCard reads honestly.
+ * 'stall' is loop-detected only — it is deliberately NOT in finish_task's
+ * schema (the model shouldn't self-report it).
  */
-export type FinishCategory = 'not_fixable' | 'budget_exhausted' | 'cancelled' | 'system_error';
+export type FinishCategory = 'not_fixable' | 'budget_exhausted' | 'cancelled' | 'system_error' | 'stall';
 
 /** Mutable run state shared between the tools and the loop's terminal fallback. */
 export interface AgentRunState {
@@ -39,6 +41,12 @@ export interface AgentRunState {
   terminal: boolean;
   /** Count of side-effecting tool calls, for stall detection. */
   progressCalls: number;
+  /** Distinct read-only calls already made (read:/list:/grep: keys) — repeats
+   *  of these are the true spin signal; new ones are legitimate investigation. */
+  seenCalls: Set<string>;
+  /** Count of FIRST-time read-only calls (novelty). The stall detector treats
+   *  a step that read/listed/grepped something NEW as progress. */
+  novelCalls: number;
   /** Repo-relative paths already shown live as a write_file diff (dedupe at PR time). */
   editedFiles: Set<string>;
   /** Tool steps queued during a model step, flushed by the loop AFTER that step's
@@ -234,11 +242,21 @@ export function buildAgentTools(deps: AgentToolDeps) {
     return Promise.resolve();
   };
   const redactDiffs = fixType === 'secret';
+  // Novelty tracking for the read-only tools: a FIRST-time read/list/grep is
+  // legitimate investigation and counts as progress for the stall detector;
+  // only repeats of calls already made signal a true spin.
+  const noteCall = (key: string): void => {
+    if (!state.seenCalls.has(key)) {
+      state.seenCalls.add(key);
+      state.novelCalls++;
+    }
+  };
 
   const read_file = tool({
     description: 'Read a UTF-8 text file from the repository (relative path). Returns file contents.',
     inputSchema: z.object({ path: z.string().describe('repo-relative file path') }),
     execute: async ({ path: rel }) => {
+      noteCall(`read:${rel}`);
       const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
       try {
@@ -247,7 +265,8 @@ export function buildAgentTools(deps: AgentToolDeps) {
         const raw = await fsp.readFile(r.full, 'utf-8');
         // Narrate the read so the investigation is visible in the timeline (the
         // agent's "let me look at X" isn't left as an unbacked claim). Read-only,
-        // so it doesn't count toward progress (stall detection stays honest).
+        // so it never bumps progressCalls — but the FIRST read of a path counts
+        // as novelty (noteCall above), so real investigation doesn't stall-trip.
         await step({ icon: 'read', label: `Read ${rel}` });
         return stat.size > MAX_FILE_PEEK_BYTES ? raw.slice(0, MAX_FILE_PEEK_BYTES) + '\n... [truncated]' : raw;
       } catch (e: any) {
@@ -260,6 +279,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
     description: 'List the entries of a repository directory (relative path; "." for the repo root).',
     inputSchema: z.object({ path: z.string().describe('repo-relative directory path') }),
     execute: async ({ path: rel }) => {
+      noteCall(`list:${rel}`);
       const r = resolveWithin(projectDir, repoRoot, rel);
       if (!r.ok) return r.error;
       try {
@@ -283,6 +303,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
       glob: z.string().optional().describe('optional path/glob filter, e.g. "src"'),
     }),
     execute: async ({ pattern, glob }) => {
+      noteCall(`grep:${pattern}|${glob ?? ''}`);
       const target = glob ? glob : '.';
       const { output } = await runShell(
         `grep -rInE --exclude-dir=node_modules --exclude-dir=.git -- ${JSON.stringify(pattern)} ${JSON.stringify(target)}`,
@@ -648,11 +669,27 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     leadIn = 'Something went wrong on my end, so I stopped without making any changes.';
     stepLabel = 'Something went wrong';
     nextStep = 'Try running this again in a little while.';
+  } else if (category === 'stall') {
+    // Loop-detected spin (no novel work for STALL_LIMIT steps). Deliberately
+    // NOT "budget/room" wording — a paying user reads that as their prepaid
+    // billing balance. The nextStep invites the reply-to-resume wake feature.
+    headline = "I couldn't find a clear fix";
+    explanation = "I investigated the code but couldn't find a safe change to make, so I stopped rather than guess.";
+    leadIn = "I've been investigating but haven't found a safe change I'm confident in — stopping here rather than guessing.";
+    stepLabel = 'Stopped — no clear fix found';
+    nextStep = "Reply with a hint (a file, a version, an approach) and I'll pick this up again.";
+  } else if (category === 'budget_exhausted') {
+    // Now strictly the wall-clock time limit. Same wording rule: "time limit",
+    // never "budget" (money collision); nextStep invites reply-to-resume.
+    headline = 'This ran past my time limit';
+    explanation = 'The task needed more time than a single run allows.';
+    leadIn = "I hit my time limit on this one — here's where I got to.";
+    stepLabel = 'Hit the time limit';
+    nextStep = "Reply and I'll pick it up again from where I left off.";
   } else {
-    // not_fixable (the agent's own stated reason) / budget_exhausted — safe,
-    // first-person copy from describeFailure.
-    const failCategory = category === 'budget_exhausted' ? 'budget_wall_clock' : 'not_fixable';
-    const copy = describeFailure(failCategory, message, {});
+    // not_fixable (the agent's own stated reason) — safe, first-person copy
+    // from describeFailure (shared with the old pipeline; not touched here).
+    const copy = describeFailure('not_fixable', message, {});
     headline = copy.headline;
     explanation = copy.explanation;
     leadIn = copy.leadIn;

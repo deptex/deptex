@@ -31,14 +31,20 @@ jest.mock('../agent/replay', () => ({
 jest.mock('../llm', () => ({ getLanguageModelForOrg: jest.fn(async () => ({})) }));
 jest.mock('../task-chat', () => ({ makeTaskNarrator: () => async () => {}, narrateStep: jest.fn(async () => {}) }));
 jest.mock('../logger', () => ({ FixLogger: class {} }));
-jest.mock('../agent/tools', () => ({ buildAgentTools: () => ({}), finalizeFailure: jest.fn(async () => {}) }));
+jest.mock('../agent/tools', () => ({ buildAgentTools: jest.fn(() => ({})), finalizeFailure: jest.fn(async () => {}) }));
 
 import { generateText } from 'ai';
 import { isJobCancelled } from '../job-db';
 import { cloneAtSha, cloneBranchHead } from '../sandbox';
 import { getPullRequestState } from '../pr';
-import { finalizeFailure } from '../agent/tools';
+import { buildAgentTools, finalizeFailure } from '../agent/tools';
 import { runTaskAgent, type AgentRunInput } from '../agent/loop';
+
+/** The live AgentRunState of the current run, captured off the buildAgentTools mock. */
+function capturedState(): any {
+  const calls = (buildAgentTools as jest.Mock).mock.calls;
+  return calls[calls.length - 1][0].state;
+}
 
 function makeInput(over: Partial<AgentRunInput> = {}): AgentRunInput {
   return {
@@ -108,6 +114,69 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('system_error');
     // The raw message is still passed through — it lands in error_message (logs).
     expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/provider exploded/);
+  });
+});
+
+describe('runTaskAgent — novelty-aware stall detection', () => {
+  const abortIfSignalled = (opts: any) => {
+    if (opts.abortSignal?.aborted) {
+      const e = new Error('aborted');
+      (e as any).name = 'AbortError';
+      throw e;
+    }
+  };
+
+  test('7+ DISTINCT read-only calls across steps is investigation, not a stall', async () => {
+    (generateText as jest.Mock).mockImplementation(async (opts: any) => {
+      const state = capturedState();
+      for (let i = 0; i < 8; i++) {
+        state.novelCalls++; // each step read/listed/grepped something NEW
+        await opts.onStepFinish({ text: '' });
+        abortIfSignalled(opts);
+      }
+      return {};
+    });
+    await runTaskAgent({} as any, makeInput(), makeDeps());
+    // No stall abort: the run ends through the ordinary no-PR fallback.
+    expect(finalizeFailure).toHaveBeenCalledTimes(1);
+    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('not_fixable');
+  });
+
+  test('6 steps of pure repetition (nothing new at all) aborts with category stall', async () => {
+    (generateText as jest.Mock).mockImplementation(async (opts: any) => {
+      const state = capturedState();
+      state.novelCalls = 3; // some earlier investigation happened...
+      for (let i = 0; i < 12; i++) {
+        // ...but every later step only repeats calls already made (no novelty,
+        // no side-effecting progress).
+        await opts.onStepFinish({ text: '' });
+        abortIfSignalled(opts);
+      }
+      return {};
+    });
+    await runTaskAgent({} as any, makeInput(), makeDeps());
+    expect(finalizeFailure).toHaveBeenCalledTimes(1);
+    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('stall');
+    // error_message stays the internal wording; the user copy lives in finalizeFailure.
+    expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/stopped making progress/i);
+  });
+
+  test('a wall-clock abort still finalizes as budget_exhausted (the time-limit copy)', async () => {
+    jest.useFakeTimers();
+    try {
+      (generateText as jest.Mock).mockImplementation(async (opts: any) => {
+        // Fire the 30-min wall timer.
+        jest.advanceTimersByTime(31 * 60 * 1000);
+        abortIfSignalled(opts);
+        return {};
+      });
+      await runTaskAgent({} as any, makeInput(), makeDeps());
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(finalizeFailure).toHaveBeenCalledTimes(1);
+    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('budget_exhausted');
+    expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/time budget/);
   });
 });
 

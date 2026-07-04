@@ -173,6 +173,8 @@ export async function runTaskAgent(
     prOpened: false,
     terminal: false,
     progressCalls: 0,
+    seenCalls: new Set<string>(),
+    novelCalls: 0,
     editedFiles: new Set<string>(),
     pendingSteps: [],
     pendingAfter: [],
@@ -209,6 +211,7 @@ export async function runTaskAgent(
     controller.abort();
   }, WALL_CLOCK_MS);
   let lastProgress = 0;
+  let lastNovel = 0;
   let stall = 0;
   let loopError: any = null;
 
@@ -236,10 +239,16 @@ export async function runTaskAgent(
     if (state.pendingAfter.length) {
       for (const fn of state.pendingAfter.splice(0)) await fn();
     }
-    // Stall detection: a step that made no write/command/PR call counts toward
-    // the limit; a read-only spin trips it well before the 40-step cap.
-    if (state.progressCalls > lastProgress) {
+    // Novelty-aware stall detection. Reading six NEW files (package.json →
+    // grep → lockfile chunks for a transitive dep) is legitimate investigation,
+    // not spinning — the detector exists for the old spin bug (repeating the
+    // same failing call forever). A step counts toward the stall limit only
+    // when it produced NOTHING new at all: no side-effecting call
+    // (progressCalls) AND no first-time read/list/grep (novelCalls). MAX_STEPS
+    // + the wall clock remain the hard backstops against endless wandering.
+    if (state.progressCalls > lastProgress || state.novelCalls > lastNovel) {
       lastProgress = state.progressCalls;
+      lastNovel = state.novelCalls;
       stall = 0;
     } else {
       stall++;
@@ -311,15 +320,19 @@ export async function runTaskAgent(
   if (!state.terminal) {
     // An unexpected exception (model/provider/infra error) → system_error, so the
     // user sees a generic "something went wrong", not the raw provider message.
-    // Budget/stall/no-PR use our own safe copy.
-    const category: 'cancelled' | 'budget_exhausted' | 'system_error' | 'not_fixable' =
+    // 'stall' and 'budget_exhausted' (= wall-clock only) each carry their own
+    // safe copy in finalizeFailure — kept distinct because "budget" wording
+    // reads as prepaid BILLING to a paying user.
+    const category: 'cancelled' | 'stall' | 'budget_exhausted' | 'system_error' | 'not_fixable' =
       abortReason === 'cancelled'
         ? 'cancelled'
-        : abortReason
-          ? 'budget_exhausted'
-          : loopError
-            ? 'system_error'
-            : 'not_fixable';
+        : abortReason === 'stall'
+          ? 'stall'
+          : abortReason
+            ? 'budget_exhausted'
+            : loopError
+              ? 'system_error'
+              : 'not_fixable';
     const message =
       abortReason === 'cancelled'
         ? 'Task stopped by user.'

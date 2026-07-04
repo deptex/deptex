@@ -30,7 +30,7 @@ jest.mock('../logger', () => ({ FixLogger: class {} }));
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from '../agent/tools';
 import { commitAndPushFix, openPullRequest } from '../pr';
 import { markCompleted, markFailed, markAnswered } from '../job-db';
-import { markTaskFromFix } from '../task-chat';
+import { markTaskFromFix, narrateStep } from '../task-chat';
 
 function fakeSupabase(leaseRow: any) {
   return {
@@ -44,6 +44,8 @@ function makeDeps(over: Partial<AgentToolDeps> = {}): AgentToolDeps {
     prOpened: false,
     terminal: false,
     progressCalls: 0,
+    seenCalls: new Set<string>(),
+    novelCalls: 0,
     editedFiles: new Set<string>(),
     pendingSteps: [],
     pendingAfter: [],
@@ -139,6 +141,23 @@ describe('agent tools', () => {
     const res = await (tools.str_replace.execute as any)({ path: 'g.txt', old_string: 'x', new_string: 'y' });
     expect(String(res)).toMatch(/more than once/i);
     expect(deps.state.pendingSteps).toHaveLength(0);
+  });
+
+  test('read-only tools count novelty once per distinct call (repeats are the spin signal)', async () => {
+    const deps = makeDeps();
+    fs.writeFileSync(path.join(deps.repoRoot, 'a.txt'), 'hello\n');
+    const tools = buildAgentTools(deps);
+    await (tools.read_file.execute as any)({ path: 'a.txt' });
+    await (tools.read_file.execute as any)({ path: 'a.txt' }); // repeat — not novel
+    expect(deps.state.novelCalls).toBe(1);
+    await (tools.grep.execute as any)({ pattern: 'hello' });
+    await (tools.grep.execute as any)({ pattern: 'hello' }); // repeat — not novel
+    expect(deps.state.novelCalls).toBe(2);
+    await (tools.grep.execute as any)({ pattern: 'hello', glob: 'src' }); // different glob = novel
+    await (tools.list_dir.execute as any)({ path: '.' });
+    expect(deps.state.novelCalls).toBe(4);
+    // Read-only calls never count as side-effecting progress.
+    expect(deps.state.progressCalls).toBe(0);
   });
 
   test('open_pull_request no-ops (no push) when the lease is held by another machine', async () => {
@@ -345,4 +364,57 @@ describe('agent tools — resume mode', () => {
     await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
     expect(commitAndPushFix).toHaveBeenCalledWith(expect.objectContaining({ branchSuffix: undefined }));
   }, GIT_SPAWN_TIMEOUT);
+});
+
+// Failure copy: 'stall' and 'budget_exhausted' (wall-clock) must never say
+// "budget/room" — a paying user reads that as their prepaid BILLING balance.
+describe('finalizeFailure — stall & time-limit copy', () => {
+  test("a stall says 'no clear fix found' and invites a reply-to-resume hint", async () => {
+    const deps = makeDeps();
+    await finalizeFailure(deps, 'stall', 'Stopped making progress and was halted.');
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.anything(),
+      'fix-1',
+      'Stopped making progress and was halted.',
+      'stall',
+      expect.objectContaining({
+        headline: "I couldn't find a clear fix",
+        explanation: expect.stringContaining('stopped rather than guess'),
+        nextStep: expect.stringContaining('Reply with a hint'),
+      }),
+      'me',
+    );
+    expect(narrateStep).toHaveBeenCalledWith(expect.anything(), 'thread-1', {
+      icon: 'failed',
+      label: 'Stopped — no clear fix found',
+    });
+    // The money-sounding words must not appear anywhere in the stored copy.
+    const details = (markFailed as jest.Mock).mock.calls[0][4];
+    expect(JSON.stringify(details)).not.toMatch(/budget|ran out of room/i);
+  });
+
+  test("a wall-clock exhaustion says 'time limit' and invites a reply-to-resume", async () => {
+    const deps = makeDeps();
+    await finalizeFailure(deps, 'budget_exhausted', 'Reached the 1800s time budget before finishing.');
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.anything(),
+      'fix-1',
+      expect.any(String),
+      'budget_exhausted',
+      expect.objectContaining({
+        headline: 'This ran past my time limit',
+        explanation: 'The task needed more time than a single run allows.',
+        nextStep: expect.stringContaining("Reply and I'll pick it up again"),
+      }),
+      'me',
+    );
+    expect(narrateStep).toHaveBeenCalledWith(expect.anything(), 'thread-1', {
+      icon: 'failed',
+      label: 'Hit the time limit',
+    });
+    // The USER-FACING copy must not sound like money ('budget'/'room'); the
+    // internal category key ('budget_exhausted') is DB-only and never rendered.
+    const details = (markFailed as jest.Mock).mock.calls[0][4];
+    expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget|ran out of room/i);
+  });
 });

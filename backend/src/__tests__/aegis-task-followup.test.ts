@@ -16,6 +16,7 @@
  */
 import {
   setTableResponse,
+  pushTableResponse,
   setRpcResponse,
   clearTableRegistry,
   clearRpcRegistry,
@@ -27,8 +28,22 @@ jest.mock('../lib/fly-machines', () => ({
   startFixMachine: jest.fn().mockResolvedValue('machine-1'),
 }));
 
+// acceptTask fans out via insertAgentFixRow (which stamps the clone base from
+// the live GitHub API) — stub it so the brief-enrichment tests can assert the
+// findingBrief it receives without network.
+jest.mock('../lib/aegis-v3/fix-request', () => ({
+  insertAgentFixRow: jest.fn(),
+}));
+
 import { startFixMachine } from '../lib/fly-machines';
-import { sendTaskFollowup, cancelTask } from '../lib/aegis-v3/tasks';
+import { insertAgentFixRow } from '../lib/aegis-v3/fix-request';
+import {
+  sendTaskFollowup,
+  cancelTask,
+  acceptTask,
+  vulnDependencyNote,
+} from '../lib/aegis-v3/tasks';
+import type { AegisTaskTarget } from '../lib/aegis-v3/task-types';
 
 const ORG_A = '00000000-0000-0000-0000-0000000000a1';
 const ORG_B = '00000000-0000-0000-0000-0000000000b1';
@@ -36,6 +51,7 @@ const TASK_ID = '00000000-0000-0000-0000-0000000000t1';
 const THREAD_ID = '00000000-0000-0000-0000-0000000000d1';
 const FIX_ID = '00000000-0000-0000-0000-0000000000f1';
 const USER_ID = '00000000-0000-0000-0000-000000000099';
+const PROJECT_ID = '00000000-0000-0000-0000-0000000000c1';
 
 const rpcMock = supabase.rpc as jest.Mock;
 
@@ -287,5 +303,156 @@ describe('cancelTask Stop-restore split', () => {
     expect(cancelled).toBe(1);
     expect(updateCallsWithStatus('completed')).toHaveLength(0);
     expect(updateCallsWithStatus('rejected')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Brief enrichment: vulnDependencyNote tells the agent up front whether the
+// vulnerable package is direct or transitive (live e2e: it otherwise burns a
+// run discovering transitivity by spelunking the lockfile) + the fixed version.
+// ---------------------------------------------------------------------------
+
+const VULN_TARGET: AegisTaskTarget = {
+  findingType: 'vulnerability',
+  findingKey: 'fk-setvalue',
+  projectId: PROJECT_ID,
+  label: 'set-value CVE-2021-23440',
+};
+
+function setActiveRun(runId: string | null) {
+  setTableResponse('projects', 'single', {
+    data: { active_extraction_run_id: runId },
+    error: null,
+  });
+}
+function setVulnRow(row: any) {
+  setTableResponse('project_dependency_vulnerabilities', 'maybeSingle', { data: row, error: null });
+}
+function setDepRow(row: any) {
+  setTableResponse('project_dependencies', 'maybeSingle', { data: row, error: null });
+}
+
+describe('vulnDependencyNote', () => {
+  it('transitive dep -> overrides/resolutions note with the fixed version', async () => {
+    setActiveRun('run-1');
+    setVulnRow({ project_dependency_id: 'pd-1', fixed_versions: ['3.36.0'] });
+    setDepRow({ name: 'set-value', version: '2.0.0', is_direct: false });
+
+    const note = await vulnDependencyNote(VULN_TARGET);
+    expect(note).toContain('set-value@2.0.0 is a TRANSITIVE dependency');
+    expect(note).toContain('"overrides" (npm) or "resolutions" (yarn)');
+    expect(note).toContain('(>= 3.36.0)');
+    expect(note).toContain('do not hand-edit the lockfile');
+  });
+
+  it('direct dep -> manifest note with the fixed version', async () => {
+    setActiveRun('run-1');
+    setVulnRow({ project_dependency_id: 'pd-1', fixed_versions: ['4.17.21'] });
+    setDepRow({ name: 'lodash', version: '4.17.20', is_direct: true });
+
+    const note = await vulnDependencyNote(VULN_TARGET);
+    expect(note).toContain('lodash@4.17.20 is a direct dependency listed in the project manifest');
+    expect(note).toContain('the fixed version is 4.17.21');
+    expect(note).not.toContain('TRANSITIVE');
+  });
+
+  it('returns null when the vuln row is missing', async () => {
+    setActiveRun('run-1');
+    setVulnRow(null);
+    expect(await vulnDependencyNote(VULN_TARGET)).toBeNull();
+  });
+
+  it('returns null when the dependency row is missing', async () => {
+    setActiveRun('run-1');
+    setVulnRow({ project_dependency_id: 'pd-1', fixed_versions: [] });
+    setDepRow(null);
+    expect(await vulnDependencyNote(VULN_TARGET)).toBeNull();
+  });
+
+  it('omits the version clause when fixed_versions is empty', async () => {
+    setActiveRun(null); // also covers the no-active-run fallback path
+    setVulnRow({ project_dependency_id: 'pd-1', fixed_versions: [] });
+    setDepRow({ name: 'set-value', version: '2.0.0', is_direct: false });
+
+    const note = await vulnDependencyNote(VULN_TARGET);
+    expect(note).toContain('TRANSITIVE');
+    expect(note).not.toContain('>=');
+  });
+
+  it('cites the semver-max across multiple fixed versions (one per affected range)', async () => {
+    setActiveRun('run-1');
+    setVulnRow({ project_dependency_id: 'pd-1', fixed_versions: ['1.2.3', '2.0.1', '1.9.9'] });
+    setDepRow({ name: 'set-value', version: '1.0.0', is_direct: true });
+
+    const note = await vulnDependencyNote(VULN_TARGET);
+    expect(note).toContain('the fixed version is 2.0.1');
+  });
+
+  it('returns null for non-vulnerability targets without querying', async () => {
+    const note = await vulnDependencyNote({ ...VULN_TARGET, findingType: 'semgrep' });
+    expect(note).toBeNull();
+    expect(supabase.from as jest.Mock).not.toHaveBeenCalled();
+  });
+});
+
+describe('acceptTask brief enrichment', () => {
+  const taskRow = {
+    id: TASK_ID,
+    organization_id: ORG_A,
+    project_id: PROJECT_ID,
+    thread_id: THREAD_ID, // finding-door shape: thread pre-created
+    kind: 'fix',
+    title: 'Fix set-value',
+    description: 'Fix set-value CVE-2021-23440',
+    status: 'proposed',
+    source: 'finding',
+    targets: [VULN_TARGET],
+    total_fixes: 0,
+    completed_fixes: 0,
+    failed_fixes: 0,
+    summary: null,
+    accepted_at: null,
+    completed_at: null,
+    created_at: '2026-07-04T00:00:00Z',
+    updated_at: '2026-07-04T00:00:00Z',
+  };
+  const args = { taskId: TASK_ID, userId: USER_ID, organizationId: ORG_A };
+
+  it('appends the dependency note to the findingBrief handed to insertAgentFixRow', async () => {
+    setTask(taskRow);
+    setActiveRun('run-1');
+    // One PDV maybeSingle response serves BOTH reads (resolveTargetFindingId
+    // needs osv_id; the note needs project_dependency_id + fixed_versions).
+    setVulnRow({ osv_id: 'GHSA-4jqc-8m5r-9rpr', project_dependency_id: 'pd-1', fixed_versions: ['3.36.0'] });
+    setDepRow({ name: 'set-value', version: '2.0.0', is_direct: false });
+    (insertAgentFixRow as jest.Mock).mockResolvedValue({ fixId: FIX_ID });
+
+    const { threadId } = await acceptTask(args);
+    expect(threadId).toBe(THREAD_ID);
+    expect(insertAgentFixRow).toHaveBeenCalledTimes(1);
+    const arg = (insertAgentFixRow as jest.Mock).mock.calls[0][0];
+    expect(arg.findingBrief).toContain('set-value CVE-2021-23440'); // label kept
+    expect(arg.findingBrief).toContain('TRANSITIVE');
+    expect(arg.findingBrief).toContain('(>= 3.36.0)');
+  });
+
+  it('leaves the brief untouched when the note is unavailable', async () => {
+    setTask(taskRow);
+    setActiveRun('run-1');
+    // Queue mode (no maybeSingle registered): the resolve read finds the vuln,
+    // the note read misses — the accept must proceed with the plain brief.
+    pushTableResponse('project_dependency_vulnerabilities', {
+      data: { osv_id: 'GHSA-4jqc-8m5r-9rpr' },
+      error: null,
+    });
+    pushTableResponse('project_dependency_vulnerabilities', { data: null, error: null });
+    setDepRow(null);
+    (insertAgentFixRow as jest.Mock).mockResolvedValue({ fixId: FIX_ID });
+
+    await acceptTask(args);
+    expect(insertAgentFixRow).toHaveBeenCalledTimes(1);
+    const arg = (insertAgentFixRow as jest.Mock).mock.calls[0][0];
+    expect(arg.findingBrief).toBe('set-value CVE-2021-23440\n\nFix set-value CVE-2021-23440');
+    expect(arg.findingBrief).not.toContain('NOTE:');
   });
 });
