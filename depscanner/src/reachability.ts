@@ -55,6 +55,7 @@ import {
   evaluateFlaskDevOnlyDemotion,
   evaluateFlaskAlwaysOnRuntimePromotion,
 } from './reachability-flask-preconditions';
+import { unionImportedModules, type TransitiveImportIndex } from './transitive-imports';
 
 interface LogLike {
   info(step: string, msg: string): Promise<void>;
@@ -592,6 +593,17 @@ export interface UpdateReachabilityOptions {
    * directly. An unrecognized / non-Go signals object refuses every move.
    */
   goImportSignals?: GoImportSignals;
+  /**
+   * Arc 2 (dependency-source import graphs): the transitive import index the
+   * dep-import-graph pipeline step computed for this run — `go list -deps`
+   * compile set (golang) or per-dist wheel import/token extraction (pypi).
+   * Merged into the matching ecosystem's signals object (NEW object, injected
+   * fields win, transitive data only in new fields) so the demotion pass and
+   * the promotion wouldDemote backstop see identical answers. Absent =
+   * today's behavior everywhere. Tests inject either this or pre-merged
+   * signals fields directly.
+   */
+  transitiveImports?: TransitiveImportIndex;
   /**
    * Python/Django framework-mediated reachability signals — the pypi mirror of
    * the dynamic-framework models plus a Go-style SUBMODULE import gate. Used to
@@ -1326,9 +1338,27 @@ export async function updateReachabilityLevels(
   // per run; only the `golang` ecosystem is modelled. `isDeployedHttpServer` is
   // the Go stand-in for the http-route-entry-point signal (a caddy-shaped server
   // routes via its own module system, so the framework detectors emit 0 routes).
-  const goSignals: GoImportSignals | null =
+  const goSignalsBase: GoImportSignals | null =
     options.goImportSignals ??
     (options.ecosystem === 'golang' ? gatherGoImportSignals(workspaceRoot) : null);
+  // Arc 2 merge (pinned rule): construct a NEW object — never mutate an
+  // injected signals object; injected transitive fields win; transitive data
+  // lives ONLY in the new fields; the index applies only to its own ecosystem.
+  // Both the demotion pass and the promotion wouldDemote backstop read this
+  // one merged object, so the two passes stay consistent automatically.
+  const goTransitiveIdx: TransitiveImportIndex | null =
+    options.transitiveImports?.ecosystem === 'golang' ? options.transitiveImports : null;
+  const goSignals: GoImportSignals | null = goSignalsBase
+    ? goTransitiveIdx &&
+      goSignalsBase.transitiveImportedPackages === undefined &&
+      goTransitiveIdx.status !== 'unavailable'
+      ? {
+          ...goSignalsBase,
+          transitiveImportedPackages: unionImportedModules(goTransitiveIdx),
+          transitiveComplete: goTransitiveIdx.status === 'complete',
+        }
+      : goSignalsBase
+    : null;
   const goServerReachable = goSignals?.isDeployedHttpServer ?? false;
   // Python/Django framework-mediated signals — the pypi mirror. Gathered ONCE
   // per run; only the `pypi` ecosystem is modelled (a non-Django Python app
@@ -1336,18 +1366,32 @@ export async function updateReachabilityLevels(
   // `options.djangoFeatureSignals`. `isDeployedWebApp` is the pypi stand-in for
   // the http-route-entry-point signal (a GraphQL-only Django app may emit 0
   // detected HTTP routes even though it serves requests).
-  const djangoSignals: DjangoFeatureSignals | null =
+  const pypiTransitiveIdx: TransitiveImportIndex | null =
+    options.transitiveImports?.ecosystem === 'pypi' ? options.transitiveImports : null;
+  const djangoSignalsBase: DjangoFeatureSignals | null =
     options.djangoFeatureSignals ??
     (options.ecosystem === 'pypi' ? gatherDjangoFeatureSignals(workspaceRoot) : null);
+  // Same pinned Arc 2 merge rule as goSignals above.
+  const djangoSignals: DjangoFeatureSignals | null = djangoSignalsBase
+    ? pypiTransitiveIdx && djangoSignalsBase.transitiveImports === undefined
+      ? { ...djangoSignalsBase, transitiveImports: pypiTransitiveIdx }
+      : djangoSignalsBase
+    : null;
   const djangoDeployed = djangoSignals?.isDeployedWebApp ?? false;
   // Flask/FastAPI framework-mediated signals — a SECOND pypi model beside
   // `djangoSignals`. A Flask/FastAPI app carries no django dep (so the Django
   // model's `recognized` is false there) and vice-versa, so the two never both
   // fire. Gathered ONCE per run for the pypi ecosystem; a non-Flask/FastAPI pypi
   // app yields unrecognized signals → no-op. Tests inject `options.flaskFeatureSignals`.
-  const flaskSignals: FlaskFeatureSignals | null =
+  const flaskSignalsBase: FlaskFeatureSignals | null =
     options.flaskFeatureSignals ??
     (options.ecosystem === 'pypi' ? gatherFlaskFeatureSignals(workspaceRoot) : null);
+  // Same pinned Arc 2 merge rule (no Flask row consults it in v1 — type parity).
+  const flaskSignals: FlaskFeatureSignals | null = flaskSignalsBase
+    ? pypiTransitiveIdx && flaskSignalsBase.transitiveImports === undefined
+      ? { ...flaskSignalsBase, transitiveImports: pypiTransitiveIdx }
+      : flaskSignalsBase
+    : null;
   const flaskDeployed = flaskSignals?.isDeployedWebApp ?? false;
   // Laravel framework-mediated signals — a SECOND composer-ecosystem model beside
   // `symfonySignals` (a Laravel app carries no symfony/framework-bundle, so the
@@ -1959,11 +2003,17 @@ export async function updateReachabilityLevels(
           signals: goSignals,
         });
         if (goDemotion.demote) {
+          // Arc 2: prod_path demotions (requiresTransitiveProof rules) carry
+          // their own honest verdict/reason; legacy first_party demotions stay
+          // byte-stable (verdict strings are consumer contracts).
+          const prodPath = goDemotion.proofStandard === 'prod_path';
           level = 'unreachable';
           details = {
-            reason: `subpackage_not_imported: ${goDemotion.subpackage} is not imported by any first-party source file`,
+            reason: prodPath
+              ? `subpackage_not_on_prod_path: ${goDemotion.subpackage} is not imported by any first-party source file nor compiled in by any package on the production dependency path`
+              : `subpackage_not_imported: ${goDemotion.subpackage} is not imported by any first-party source file`,
             scope: 'feature_precondition_absent',
-            verdict: 'go_subpackage_not_imported',
+            verdict: prodPath ? 'go_subpackage_not_on_prod_path' : 'go_subpackage_not_imported',
             feature: goDemotion.subpackage,
             matched_summary_pattern: goDemotion.matchedPattern ?? null,
             demoted_from:
@@ -2384,6 +2434,12 @@ export async function updateReachabilityLevels(
         used_transitives_count: options.usedTransitives?.size ?? null,
         callgraph_ran: (options.usedTransitives?.size ?? 0) > 0,
         is_client_spa: !!options.isClientSpaProject,
+        // Arc 2: lets the M2 cross-run differ distinguish "gate refused because
+        // the oracle was absent" from "the oracle answered". Counts only — no
+        // package lists, no URLs.
+        transitive_import_status: options.transitiveImports?.status ?? null,
+        transitive_extracted_count: options.transitiveImports?.extractedPackages.size ?? null,
+        transitive_failed_count: options.transitiveImports?.failedPackages.length ?? null,
       },
     });
 

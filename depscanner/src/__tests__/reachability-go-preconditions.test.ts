@@ -30,6 +30,10 @@ import {
   emptyGoImportSignals,
   type GoImportSignals,
 } from '../reachability-go-preconditions';
+import {
+  emptyTransitiveImportIndex,
+  type TransitiveImportIndex,
+} from '../transitive-imports';
 
 // ---------------------------------------------------------------------------
 // Representative advisory summaries (real caddy CVE phrasings)
@@ -721,5 +725,106 @@ describe('evaluateGoSubpackageDemotion — Arc 2 transitive compile-set proofs',
       }),
     });
     expect(r.demote).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Arc 2 e2e — options.transitiveImports merge through updateReachabilityLevels
+// ---------------------------------------------------------------------------
+
+describe('updateReachabilityLevels — Arc 2 transitive compile-set wiring', () => {
+  const PROTOBUF_MOD = 'google.golang.org/protobuf';
+  const PROTOJSON_SUMMARY =
+    'Infinite loop in protojson.Unmarshal when unmarshaling certain forms of invalid JSON in google.golang.org/protobuf';
+
+  function goIdx(
+    modules: string[],
+    status: TransitiveImportIndex['status'] = 'complete',
+  ): TransitiveImportIndex {
+    const idx = emptyTransitiveImportIndex('golang');
+    idx.status = status;
+    idx.perPackage.set('__modules__', { modules: new Set(modules), tokenHits: new Set() });
+    idx.extractedPackages.add('__modules__');
+    return idx;
+  }
+
+  async function runGoIdx(fsk: FakeStorage, signals: GoImportSignals, idx?: TransitiveImportIndex) {
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'golang',
+      workspaceRoot: '/nonexistent',
+      goImportSignals: signals,
+      transitiveImports: idx,
+      httpEntryPointCount: 0,
+    });
+  }
+
+  it('gitea shape: protojson absent from a COMPLETE compile set → module→unreachable, prod_path verdict', async () => {
+    const fsk = new FakeStorage();
+    seedGoDep(fsk, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    await runGoIdx(fsk, caddySignals(), goIdx(['google.golang.org/protobuf/proto', 'github.com/some/dep']));
+    const { level, details } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('unreachable');
+    expect(details?.verdict).toBe('go_subpackage_not_on_prod_path');
+    expect(details?.feature).toBe('google.golang.org/protobuf/encoding/protojson');
+    expect(String(details?.reason)).toContain('production dependency path');
+  });
+
+  it('caddy shape: protojson IN the compile set (cel-go) → stays module', async () => {
+    const fsk = new FakeStorage();
+    seedGoDep(fsk, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    await runGoIdx(
+      fsk,
+      caddySignals(),
+      goIdx(['google.golang.org/protobuf/proto', 'google.golang.org/protobuf/encoding/protojson']),
+    );
+    const { level } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('module');
+  });
+
+  it('no index: the requiresTransitiveProof rule refuses; a legacy rule still demotes with the byte-stable verdict', async () => {
+    // protojson without any oracle → stays module
+    const fsk1 = new FakeStorage();
+    seedGoDep(fsk1, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    await runGoIdx(fsk1, caddySignals(), undefined);
+    expect(verdictOf(fsk1, 'pdv-1').level).toBe('module');
+
+    // legacy x/net/html first-party demotion is unchanged
+    const fsk2 = new FakeStorage();
+    seedGoDep(fsk2, { name: 'golang.org/x/net', osvId: 'GHSA-x-html', summary: NET_HTML_TEXTNODE });
+    await runGoIdx(fsk2, caddySignals(), undefined);
+    const { level, details } = verdictOf(fsk2, 'pdv-1');
+    expect(level).toBe('unreachable');
+    expect(details?.verdict).toBe('go_subpackage_not_imported');
+  });
+
+  it('an UNAVAILABLE index is not merged — behaves exactly like no index', async () => {
+    const fsk = new FakeStorage();
+    seedGoDep(fsk, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    await runGoIdx(fsk, caddySignals(), goIdx([], 'unavailable'));
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
+  });
+
+  it('merge rule: injected pre-merged signals WIN over options.transitiveImports', async () => {
+    const fsk = new FakeStorage();
+    seedGoDep(fsk, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    // The injected signals already carry a compile set CONTAINING protojson —
+    // the options index (absent, complete) must NOT clobber them.
+    const injected = goSignals({
+      transitiveImportedPackages: new Set(['google.golang.org/protobuf/encoding/protojson']),
+      transitiveComplete: true,
+    });
+    await runGoIdx(fsk, injected, goIdx(['github.com/some/dep']));
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
+  });
+
+  it('records the oracle status in silence_events classifier_inputs', async () => {
+    const fsk = new FakeStorage();
+    seedGoDep(fsk, { name: PROTOBUF_MOD, osvId: 'CVE-2024-24786', summary: PROTOJSON_SUMMARY });
+    await runGoIdx(fsk, caddySignals(), goIdx(['github.com/some/dep']));
+    const se = fsk.updates.find((x) => x.table === 'silence_events');
+    expect(se).toBeTruthy();
+    expect(se!.values.classifier_inputs.transitive_import_status).toBe('complete');
+    expect(se!.values.classifier_inputs.transitive_extracted_count).toBe(1);
+    expect(se!.values.classifier_inputs.transitive_failed_count).toBe(0);
   });
 });

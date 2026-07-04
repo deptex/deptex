@@ -911,3 +911,69 @@ describe('Arc 2 transitive consumer veto (owner-excluded, veto-only)', () => {
     expect(demoteA2('Pillow', PIL_FONT_A2, signals).demote).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Arc 2 e2e — options.transitiveImports merge (pypi) through updateReachabilityLevels
+// ---------------------------------------------------------------------------
+
+describe('updateReachabilityLevels — Arc 2 pypi transitive-veto wiring', () => {
+  const PIL_FONT_E2E = 'Pillow has an integer overflow when processing fonts';
+
+  function pypiIdx(
+    entries: Record<string, { modules?: string[]; tokens?: string[] }>,
+    status: TransitiveImportIndex['status'] = 'partial',
+  ): TransitiveImportIndex {
+    const out = emptyTransitiveImportIndex('pypi');
+    out.status = status;
+    for (const [pkg, { modules = [], tokens = [] }] of Object.entries(entries)) {
+      out.perPackage.set(pkg, { modules: new Set(modules), tokenHits: new Set(tokens) });
+      out.extractedPackages.add(pkg);
+    }
+    return out;
+  }
+
+  async function runDjangoIdx(
+    fsk: FakeStorage,
+    signals: DjangoFeatureSignals,
+    idx?: TransitiveImportIndex,
+  ) {
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'pypi',
+      workspaceRoot: '/nonexistent',
+      djangoFeatureSignals: signals,
+      transitiveImports: idx,
+      httpEntryPointCount: 0,
+    });
+  }
+
+  it('a NON-OWNER dist importing pil.imagefont VETOES the pillow demotion end-to-end (stays module)', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    await runDjangoIdx(fsk, djSignals(), pypiIdx({ 'weird-thumbnailer': { modules: ['pil.imagefont'] } }));
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
+  });
+
+  it('OWNER self-hits only: the demotion still fires end-to-end (owner exclusion through the merge)', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    await runDjangoIdx(
+      fsk,
+      djSignals(),
+      pypiIdx({ pillow: { modules: ['pil.imagefont'], tokens: ['imagefont', 'truetype('] } }),
+    );
+    const { level, details } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('unreachable');
+    expect(details?.feature).toBe('pillow-imagefont');
+  });
+
+  it('a golang-ecosystem index is never merged into pypi signals', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    const goIdx = emptyTransitiveImportIndex('golang');
+    goIdx.status = 'complete';
+    goIdx.perPackage.set('x', { modules: new Set(['pil.imagefont']), tokenHits: new Set() });
+    await runDjangoIdx(fsk, djSignals(), goIdx);
+    // wrong-ecosystem index ignored → demotion fires as with no index
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('unreachable');
+  });
+});
