@@ -248,12 +248,16 @@ function execCapture(
         // child — `docker run -i` survives parent-stdin EOF if the
         // container process is mid-syscall (which cdxgen `--profile
         // research --deep` always is, doing remote git ls-remote calls).
-        // Sweep all running deptex-cli:local containers as a hammer; this
+        // Sweep all running containers of the SCAN IMAGE as a hammer; this
         // is acceptable for the corpus harness because we never run the
-        // harness alongside a "real" scan.
+        // harness alongside a "real" scan. The filter follows
+        // DEPTEX_CLI_IMAGE — a hardcoded deptex-cli:local left selfimprove-
+        // tagged runs unswept (zombie containers kept scanning after the
+        // harness timed out).
         try {
+          const sweepImage = process.env.DEPTEX_CLI_IMAGE || 'deptex-cli:local';
           require('node:child_process').execSync(
-            'docker ps -q --filter ancestor=deptex-cli:local',
+            `docker ps -q --filter ancestor=${JSON.stringify(sweepImage)}`,
             { encoding: 'utf8' },
           )
             .split('\n')
