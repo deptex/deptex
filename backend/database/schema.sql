@@ -1712,7 +1712,8 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   base_image_rec_id uuid,
   dast_finding_id uuid,
   reachable_flow_id uuid,
-  failure_details jsonb
+  failure_details jsonb,
+  run_seq integer NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS public.project_security_summaries (
   project_id uuid NOT NULL,
@@ -7219,6 +7220,65 @@ CREATE OR REPLACE FUNCTION public.vector(vector, integer, boolean)
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
 AS '$libdir/vector', $function$vector$function$
+;
+
+CREATE OR REPLACE FUNCTION public.wake_agent_fix(p_fix_id uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_id uuid;
+  v_task uuid;
+BEGIN
+  UPDATE public.project_security_fixes psf
+    SET status = 'approved',
+        attempts = 0,
+        machine_id = NULL,
+        heartbeat_at = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        error_message = NULL,
+        error_category = NULL,
+        failure_details = NULL,
+        rejected_at = NULL,
+        rejected_by_user_id = NULL,
+        rejection_reason = NULL,
+        approved_at = NOW(),
+        run_seq = psf.run_seq + 1,
+        -- plan.resume flags the worker's replay path; plan.prior_status lets a
+        -- Stop of a resume-of-completed restore the original success instead of
+        -- downgrading it to failed. (SET expressions read OLD column values.)
+        plan = COALESCE(psf.plan, '{}'::jsonb)
+                 || jsonb_build_object('resume', true, 'prior_status', psf.status)
+    WHERE psf.id = p_fix_id
+      AND psf.strategy = 'agent'
+      AND psf.status IN ('completed', 'failed', 'rejected')
+    RETURNING psf.id, psf.task_id INTO v_id, v_task;
+
+  IF v_id IS NULL THEN
+    RETURN NULL;  -- active run / already queued / non-agent: no-op
+  END IF;
+
+  IF v_task IS NOT NULL THEN
+    -- Re-open the task. The status flip above already fired the rollup trigger
+    -- (v_open>0 -> 'working'), but the trigger keeps the stale completed_at and
+    -- early-returns entirely for user-terminal ('cancelled'/'declined') tasks —
+    -- both handled here.
+    UPDATE public.aegis_agent_tasks
+      SET status = CASE WHEN status IN ('cancelled', 'declined') THEN 'working' ELSE status END,
+          completed_at = NULL,
+          updated_at = NOW()
+      WHERE id = v_task;
+    -- Un-green the chips while the resume runs; the trigger re-flips them to
+    -- 'done' only when the resume lands cleanly.
+    UPDATE public.finding_tracker_links
+      SET external_state = 'open', external_state_synced_at = NOW()
+      WHERE provider = 'aegis' AND external_id = v_task::text;
+  END IF;
+
+  RETURN v_id;
+END;
+$function$
 ;
 
 

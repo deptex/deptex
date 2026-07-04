@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import { supabase } from '../supabase';
 import { getActiveExtractionId } from '../active-extraction';
 import { logSecurityEvent } from '../security-audit';
+import { captureInfraError } from '../observability/capture';
 import { insertAgentFixRow } from './fix-request';
+import { saveUserMessage } from './persistence';
 import { startFixMachine } from '../fly-machines';
 import {
   AEGIS_TASK_MAX_TARGETS,
@@ -547,17 +549,55 @@ export async function cancelTask(args: {
   if (!row) throw new Error('Task not found');
   if (row.organization_id !== organizationId) throw new Error('Task not in current organization');
 
-  const { data: updated } = await supabase
+  const { data: candidates } = await supabase
     .from('project_security_fixes')
-    .update({
-      status: 'rejected',
-      rejected_at: new Date().toISOString(),
-      rejected_by_user_id: userId,
-    })
+    .select('id, status, plan')
     .eq('task_id', taskId)
     .eq('strategy', 'agent')
-    .in('status', ['planning', 'approved', 'executing'])
-    .select('id');
+    .in('status', ['planning', 'approved', 'executing']);
+  const rows = (candidates ?? []) as Array<{ id: string; status: string; plan: any }>;
+
+  // Stop-restore split: an UNCLAIMED resume of a previously-COMPLETED task
+  // (wake_agent_fix stamped plan.resume + plan.prior_status='completed', and no
+  // worker has claimed it yet) must NOT be downgraded to 'rejected' — the
+  // rollup counts rejected as failed, which would erase the original success.
+  // Restore those to 'completed'; the trigger re-completes the task and
+  // re-greens the chips. An EXECUTING resume-of-completed still flips to
+  // 'rejected' so the worker's per-step cancel check aborts the run — ITS
+  // finalizeFailure path restores the prior success.
+  const restoreIds = rows
+    .filter(
+      (r) =>
+        r.status !== 'executing' &&
+        r.plan?.resume === true &&
+        r.plan?.prior_status === 'completed',
+    )
+    .map((r) => r.id);
+  const rejectIds = rows.filter((r) => !restoreIds.includes(r.id)).map((r) => r.id);
+
+  // Both writes re-verify the status they decided on (the old single UPDATE
+  // was atomic on `.in('status', ...)`) — a row whose status changed between
+  // the SELECT and the UPDATE must not be clobbered: a just-completed row must
+  // not flip completed->rejected (erasing a real success), and a restore must
+  // not stomp a row a worker just claimed to 'executing'.
+  if (restoreIds.length > 0) {
+    await supabase
+      .from('project_security_fixes')
+      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .in('id', restoreIds)
+      .in('status', ['planning', 'approved']);
+  }
+  if (rejectIds.length > 0) {
+    await supabase
+      .from('project_security_fixes')
+      .update({
+        status: 'rejected',
+        rejected_at: new Date().toISOString(),
+        rejected_by_user_id: userId,
+      })
+      .in('id', rejectIds)
+      .in('status', ['planning', 'approved', 'executing']);
+  }
 
   await logSecurityEvent({
     organizationId,
@@ -565,9 +605,117 @@ export async function cancelTask(args: {
     action: 'aegis_task_cancelled',
     targetType: 'aegis_task',
     targetId: taskId,
-    metadata: { cancelled: updated?.length ?? 0 },
+    metadata: { cancelled: rejectIds.length, restored: restoreIds.length },
   });
-  return { cancelled: updated?.length ?? 0 };
+  return { cancelled: rejectIds.length };
+}
+
+/**
+ * Follow-up message on a task thread: persist the user turn into the task's
+ * chat, then idempotently wake the task's agent fix row so the SAME agent
+ * resumes (replays the thread, amends its PR). Never routes to the chat agent.
+ *
+ * Wake semantics live in the `wake_agent_fix` RPC: it resets a TERMINAL
+ * ('completed'/'failed'/'rejected') agent row back to 'approved' and does ALL
+ * the re-open housekeeping itself (run_seq bump for the billing meter,
+ * plan.resume + plan.prior_status stamp, task un-cancel + completed_at reset,
+ * aegis tracker chips back to 'open'). It returns NULL when the row is
+ * non-terminal — a run is active or already queued — in which case the message
+ * just sits in the thread and the worker's end-of-run drain picks it up.
+ */
+export async function sendTaskFollowup(args: {
+  taskId: string;
+  userId: string;
+  organizationId: string;
+  message: string;
+}): Promise<{ woke: boolean; queued: boolean; threadId: string }> {
+  const { taskId, userId, organizationId, message } = args;
+
+  // 1. Load + authorize the task; it must have a bound thread to message into.
+  const { data: row } = await supabase
+    .from('aegis_agent_tasks')
+    .select('id, organization_id, thread_id, status')
+    .eq('id', taskId)
+    .maybeSingle();
+  if (!row) throw new Error('Task not found');
+  if (row.organization_id !== organizationId) throw new Error('Task not in current organization');
+  if (!row.thread_id) throw new Error('Task has no chat thread');
+  const threadId = row.thread_id as string;
+
+  // 2. Persist the user turn FIRST (same shape as the chat path), so the
+  //    message is visible in the thread — and drainable by the worker — even if
+  //    everything after this point fails.
+  await saveUserMessage({ threadId, userId, content: message });
+
+  let woke = false;
+  let queued = false;
+  if (row.status === 'proposed') {
+    // 3a. Not accepted yet: the finding door pre-creates the thread while the
+    //     task is still 'proposed', so the input is live under the Accept card
+    //     — but nothing has been fanned out and acceptTask (not this path) is
+    //     the consent gate. Don't fall through to the misleading "nothing in
+    //     progress" reply below.
+    await postTaskOpeningMessage(
+      threadId,
+      "This task hasn't been accepted yet — accept it and I'll get started. I won't act on messages sent before then.",
+    );
+  } else {
+    // 3b. Resume target: the task's most-recent agent fix row (v1 resumes a
+    //     single target; multi-target tasks resume the newest row).
+    const { data: fixes } = await supabase
+      .from('project_security_fixes')
+      .select('id, status')
+      .eq('task_id', taskId)
+      .eq('strategy', 'agent')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const target = (fixes ?? [])[0] as { id: string } | undefined;
+
+    if (!target) {
+      // Zero-fix task (nothing was ever fanned out): nothing to resume.
+      await postTaskOpeningMessage(
+        threadId,
+        "There's nothing in progress here to continue — start a new task to fix something new.",
+      );
+    } else {
+      // 4. Idempotent wake — a no-op (NULL) while a run is active or queued.
+      //    An RPC ERROR must throw, not report queued: the target row is
+      //    terminal, so no end-of-run drain (and no recovery pass) would ever
+      //    deliver the message — surface a retryable failure to the sender.
+      const { data: wokeId, error: wakeError } = await supabase.rpc('wake_agent_fix', {
+        p_fix_id: target.id,
+      });
+      if (wakeError) {
+        throw new Error(`Failed to wake the task agent: ${wakeError.message}`);
+      }
+      if (wokeId) {
+        woke = true;
+        // 5. Best-effort boot. The row is already 'approved', so if this fails
+        //    the fix-recovery cron's orphaned-approved sweep is the boot
+        //    backstop (the wake is never lost, just delayed up to one cron
+        //    interval).
+        try {
+          await startFixMachine();
+        } catch (e: any) {
+          console.warn(`[aegis-task] wake boot failed: ${e?.message ?? e}`);
+          captureInfraError(e, 'aegis-task', { phase: 'wake-boot', task_id: taskId, fix_id: target.id });
+        }
+      } else {
+        queued = true;
+      }
+    }
+  }
+
+  await logSecurityEvent({
+    organizationId,
+    actorId: userId,
+    action: 'aegis_task_message',
+    targetType: 'aegis_task',
+    targetId: taskId,
+    metadata: { woke, queued },
+  });
+
+  return { woke, queued, threadId };
 }
 
 /** The sidebar pile: newest first, tenant-scoped. */

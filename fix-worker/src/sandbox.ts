@@ -82,6 +82,41 @@ export async function cloneAtSha(opts: {
   return cloneOutput.slice(-1500);
 }
 
+/**
+ * Clone a branch TIP — no reset to a pinned SHA. Used for (a) amending an
+ * existing PR branch (the clone IS that branch's head, so the later push
+ * fast-forwards), and (b) the resume-new-PR fallback off the CURRENT base tip
+ * instead of the stale accept-time SHA. Throws on failure.
+ */
+export async function cloneBranchHead(opts: {
+  workDir: string;
+  installationToken: string;
+  repoFullName: string;
+  branch: string;
+  logger: FixLogger;
+}): Promise<string> {
+  const { workDir, installationToken, repoFullName, branch, logger } = opts;
+  const cloneUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
+  const startedAt = Date.now();
+  await logger.info('clone', `Cloning ${repoFullName}@${branch} (branch tip)`);
+
+  // spawnSync (args array, no shell) captures git's progress output — which it
+  // writes to stderr — so the chat's terminal card can show the real transcript.
+  const clone = spawnSync(
+    'git',
+    ['clone', '--depth', '1', '--single-branch', '--branch', branch, cloneUrl, workDir],
+    { encoding: 'utf-8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  if (clone.status !== 0) {
+    throw new Error(`git clone failed: ${stripTokens((clone.stderr || '').slice(-500))}`);
+  }
+  const cloneOutput = stripTokens(`${clone.stderr || ''}${clone.stdout || ''}`).trim();
+
+  await logger.success('clone', `Cloned ${repoFullName}@${branch}`, Date.now() - startedAt);
+  // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.
+  return cloneOutput.slice(-1500);
+}
+
 function fileExists(workDir: string, relPath: string): boolean {
   return fs.existsSync(path.join(workDir, relPath));
 }

@@ -103,19 +103,37 @@ export default function AegisPage() {
   }, [orgId, canUseAegis]);
 
   // Track which threads are task-chats (to suppress the fix panel for them).
+  // `tasksReady` marks the first successful listTasks resolve: until then a
+  // thread's task-ness is UNKNOWN, and ChatPane must fail a send closed rather
+  // than route a task follow-up to the chat agent (the split-brain). A load
+  // failure is retried once after a short delay instead of being swallowed
+  // silently forever.
+  const [tasksReady, setTasksReady] = useState(false);
   useEffect(() => {
     if (!orgId || !canUseAegis) return;
-    const load = async () => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const load = async (isRetry = false) => {
       try {
-        setTasks(await aegisApi.listTasks(orgId));
-      } catch {
-        /* non-fatal */
+        const list = await aegisApi.listTasks(orgId);
+        if (cancelled) return;
+        setTasks(list);
+        setTasksReady(true);
+      } catch (err) {
+        console.error('[aegis] listTasks failed', err);
+        if (!isRetry && !cancelled) {
+          retryTimer = window.setTimeout(() => void load(true), 2000);
+        }
       }
     };
     void load();
     const handler = () => void load();
     window.addEventListener('aegis:taskListChanged', handler);
-    return () => window.removeEventListener('aegis:taskListChanged', handler);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      window.removeEventListener('aegis:taskListChanged', handler);
+    };
   }, [orgId, canUseAegis]);
 
   const handleSelect = useCallback((threadId: string) => {
@@ -226,6 +244,7 @@ export default function AegisPage() {
                 onThreadUpdated={handleThreadUpdated}
                 liveReload={isTaskThread}
                 task={activeTask}
+                tasksLoading={!tasksReady}
                 onOpenTaskDetails={() => setTaskPanelOpen(true)}
                 canManageBilling={userPermissions?.manage_billing === true}
                 userEmail={user?.email ?? null}

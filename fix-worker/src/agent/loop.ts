@@ -5,11 +5,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FindingType } from './../plan-types';
 import { getOrgInstallationId, isJobCancelled } from './../job-db';
 import { createInstallationToken } from './../github';
-import { cloneAtSha } from './../sandbox';
+import { cloneAtSha, cloneBranchHead } from './../sandbox';
+import { getPullRequestState } from './../pr';
 import { getLanguageModelForOrg } from './../llm';
 import { makeTaskNarrator, narrateStep } from './../task-chat';
 import { FixLogger } from './../logger';
-import { AGENT_SYSTEM, buildBrief } from './brief';
+import { AGENT_SYSTEM, buildBrief, buildResumeSystem } from './brief';
+import { reconstructAgentMessages } from './replay';
 import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from './tools';
 
 /** Wall-clock ceiling — an agent run bills by the second, so this bounds cost too.
@@ -37,6 +39,14 @@ export interface AgentRunInput {
   findingBrief?: string;
   baseBranch: string;
   baseSha: string;
+  /** plan.resume === true — this is a user wake, not a first run. */
+  resume: boolean;
+  /** row.run_seq — 0 = first run, +1 per user wake (billing + branch suffix). */
+  runSeq: number;
+  /** plan.prior_status — what the row was before the wake reset it. */
+  resumePriorStatus: string | null;
+  /** The prior run's PR (pr_* columns), when one was opened. */
+  priorPr: { branch: string; number: number; url: string; repoFullName: string } | null;
 }
 
 export interface AgentRunDeps {
@@ -75,7 +85,7 @@ export async function runTaskAgent(
   supabase: SupabaseClient,
   input: AgentRunInput,
   deps: AgentRunDeps,
-): Promise<void> {
+): Promise<{ replayedThrough: string | null; cancelled: boolean }> {
   const { machineId, projectName, logger, workDir } = deps;
   const narrate = makeTaskNarrator(supabase, input.threadId);
 
@@ -87,14 +97,72 @@ export async function runTaskAgent(
   // Clone the repo up front — this is infrastructure setup, not a step the user
   // needs to watch, so it isn't narrated. The agent's first visible beat is its
   // own investigation.
-  await cloneAtSha({
-    workDir,
-    installationToken,
-    repoFullName: repoInfo.repoFullName,
-    branch: input.baseBranch,
-    baseSha: input.baseSha,
-    logger,
-  });
+  //
+  // Resume fork: when a prior PR is still OPEN, clone ITS head branch — the
+  // earlier changes are already in the files and the eventual push
+  // fast-forwards the same PR (amend mode). Otherwise a resume clones the
+  // CURRENT base tip (new-PR mode); only first runs pin to the accept-time SHA.
+  let resumeMode: { prNumber: number; prUrl: string; branch: string } | null = null;
+  if (input.resume && input.priorPr && input.threadId) {
+    const prState = await getPullRequestState(
+      installationToken,
+      input.priorPr.repoFullName || repoInfo.repoFullName,
+      input.priorPr.number,
+    );
+    if (prState === 'unknown') {
+      // A transient GitHub failure must NOT default to new-PR mode — if the
+      // prior PR is actually still open, that would fork a duplicate PR. Fail
+      // retryable instead; only a confirmed 'closed' takes the new-PR path.
+      throw new Error('Could not verify the state of the existing pull request — retry this follow-up');
+    }
+    if (prState === 'open') {
+      try {
+        await cloneBranchHead({
+          workDir,
+          installationToken,
+          repoFullName: repoInfo.repoFullName,
+          branch: input.priorPr.branch,
+          logger,
+        });
+        resumeMode = { prNumber: input.priorPr.number, prUrl: input.priorPr.url, branch: input.priorPr.branch };
+      } catch (cloneErr: any) {
+        // Only a MISSING branch (deleted despite the open PR) falls through to
+        // new-PR mode. Any other clone failure (auth, network, disk) rethrows —
+        // a duplicate PR while the original is still open is worse than a
+        // retryable failed run.
+        const msg = String(cloneErr?.message ?? cloneErr);
+        if (!/remote branch .* not found|couldn't find remote ref|not found in upstream/i.test(msg)) {
+          throw cloneErr;
+        }
+        // Reset the sandbox dir (a failed clone can leave partial contents)
+        // before the fresh-tip clone below.
+        await fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
+        await fsp.mkdir(workDir, { recursive: true }).catch(() => {});
+      }
+    }
+  }
+  if (!resumeMode) {
+    if (input.resume && input.threadId) {
+      // Resume-new-PR mode: clone the CURRENT base tip (not the stale
+      // accept-time SHA) — the prior PR is merged/closed/gone.
+      await cloneBranchHead({
+        workDir,
+        installationToken,
+        repoFullName: repoInfo.repoFullName,
+        branch: input.baseBranch,
+        logger,
+      });
+    } else {
+      await cloneAtSha({
+        workDir,
+        installationToken,
+        repoFullName: repoInfo.repoFullName,
+        branch: input.baseBranch,
+        baseSha: input.baseSha,
+        logger,
+      });
+    }
+  }
 
   const projectDir = repoInfo.packageJsonPath ? path.join(workDir, repoInfo.packageJsonPath) : workDir;
   // Seed the brief with the PROJECT dir listing (the agent's tools + shell are
@@ -128,6 +196,9 @@ export async function runTaskAgent(
     logger,
     model,
     state,
+    resumeMode,
+    runSeq: input.runSeq,
+    resumePriorStatus: input.resumePriorStatus,
   };
   const tools = buildAgentTools(toolDeps);
 
@@ -151,46 +222,73 @@ export async function runTaskAgent(
     repoRootListing,
   });
 
+  let replayedThrough: string | null = null;
+
+  const onStepFinish = async (s: any) => {
+    const text = stripReasoning(s?.text ?? '');
+    if (text) await narrate(text);
+    // Flush this step's queued tool rows AFTER its reasoning text, so the
+    // narration reads "let me do X" → X (the tools ran before this callback).
+    // Then flush pendingAfter (the PR-ready card) so it lands last.
+    if (state.pendingSteps.length) {
+      for (const st of state.pendingSteps.splice(0)) await narrateStep(supabase, input.threadId, st);
+    }
+    if (state.pendingAfter.length) {
+      for (const fn of state.pendingAfter.splice(0)) await fn();
+    }
+    // Stall detection: a step that made no write/command/PR call counts toward
+    // the limit; a read-only spin trips it well before the 40-step cap.
+    if (state.progressCalls > lastProgress) {
+      lastProgress = state.progressCalls;
+      stall = 0;
+    } else {
+      stall++;
+    }
+    if (stall >= STALL_LIMIT && !state.terminal) {
+      abortReason = abortReason ?? 'stall';
+      controller.abort();
+      return;
+    }
+    // Cancel: a cheap status read between steps — the row went 'rejected'
+    // (user Stop) OR its machine_id no longer matches (a wake re-queued the
+    // row and another machine claimed it; this run is a zombie and must stop).
+    if (!state.terminal && (await isJobCancelled(supabase, input.fixId, machineId))) {
+      abortReason = abortReason ?? 'cancelled';
+      controller.abort();
+    }
+  };
+
   try {
-    await generateText({
-      model,
-      system: AGENT_SYSTEM,
-      prompt,
-      tools,
-      stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task')],
-      abortSignal: controller.signal,
-      onStepFinish: async (s: any) => {
-        const text = stripReasoning(s?.text ?? '');
-        if (text) await narrate(text);
-        // Flush this step's queued tool rows AFTER its reasoning text, so the
-        // narration reads "let me do X" → X (the tools ran before this callback).
-        // Then flush pendingAfter (the PR-ready card) so it lands last.
-        if (state.pendingSteps.length) {
-          for (const st of state.pendingSteps.splice(0)) await narrateStep(supabase, input.threadId, st);
-        }
-        if (state.pendingAfter.length) {
-          for (const fn of state.pendingAfter.splice(0)) await fn();
-        }
-        // Stall detection: a step that made no write/command/PR call counts toward
-        // the limit; a read-only spin trips it well before the 40-step cap.
-        if (state.progressCalls > lastProgress) {
-          lastProgress = state.progressCalls;
-          stall = 0;
-        } else {
-          stall++;
-        }
-        if (stall >= STALL_LIMIT && !state.terminal) {
-          abortReason = abortReason ?? 'stall';
-          controller.abort();
-          return;
-        }
-        // Cancel: a cheap status read between steps (the row goes 'rejected').
-        if (!state.terminal && (await isJobCancelled(supabase, input.fixId))) {
-          abortReason = abortReason ?? 'cancelled';
-          controller.abort();
-        }
-      },
-    });
+    if (input.resume && input.threadId) {
+      // Resume: replay the thread as conversation history. The brief seeds the
+      // first user turn (it was never persisted to the thread). A replay
+      // failure throws into this try — the run resolves as system_error rather
+      // than silently resuming with no memory.
+      const replay = await reconstructAgentMessages(supabase, input.threadId, { brief: prompt });
+      replayedThrough = replay.replayedThrough;
+      await generateText({
+        model,
+        system: buildResumeSystem(
+          resumeMode ? { prNumber: resumeMode.prNumber } : null,
+          input.resumePriorStatus === 'completed',
+        ),
+        messages: replay.messages,
+        tools,
+        stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task')],
+        abortSignal: controller.signal,
+        onStepFinish,
+      });
+    } else {
+      await generateText({
+        model,
+        system: AGENT_SYSTEM,
+        prompt,
+        tools,
+        stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('finish_task')],
+        abortSignal: controller.signal,
+        onStepFinish,
+      });
+    }
   } catch (e: any) {
     // An abort is expected (cancel / wall-clock / stall); anything else is a real error.
     if (!controller.signal.aborted) loopError = e;
@@ -234,4 +332,9 @@ export async function runTaskAgent(
               : "Couldn't complete a fix for this finding.";
     await finalizeFailure(toolDeps, category, message);
   }
+
+  // The drain watermark: what this run actually replayed (null on a first run —
+  // the caller falls back to approved_at). `cancelled` lets the caller SKIP the
+  // end-of-run drain after a user Stop — Stop must win over a queued follow-up.
+  return { replayedThrough, cancelled: abortReason === 'cancelled' };
 }

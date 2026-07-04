@@ -13,6 +13,7 @@ import {
   loadFullRow,
   markCompleted,
   markFailed,
+  maybeRequeueFollowup,
   sendHeartbeat,
   type FixJobRow,
 } from './job-db';
@@ -79,8 +80,15 @@ function agentFindingId(row: any): string {
 
 /** Normalize a claimed agentic fix row into the table-agnostic AgentRunInput. */
 function buildAgentInput(row: any, fixId: string): AgentRunInput {
-  // The sentinel plan carries only { strategy:'agent', summary, findingBrief? }.
-  const sentinel = (row.plan ?? {}) as { summary?: string; findingBrief?: string; severity?: string };
+  // The sentinel plan carries { strategy:'agent', summary, findingBrief? } plus,
+  // after a wake, { resume: true, prior_status } stamped by wake_agent_fix.
+  const sentinel = (row.plan ?? {}) as {
+    summary?: string;
+    findingBrief?: string;
+    severity?: string;
+    resume?: boolean;
+    prior_status?: string;
+  };
   return {
     fixId,
     organizationId: row.organization_id,
@@ -93,6 +101,18 @@ function buildAgentInput(row: any, fixId: string): AgentRunInput {
     findingBrief: sentinel.findingBrief,
     baseBranch: row.plan_base_branch,
     baseSha: row.plan_base_sha,
+    resume: sentinel.resume === true,
+    resumePriorStatus: sentinel.prior_status ?? null,
+    runSeq: row.run_seq ?? 0,
+    priorPr:
+      row.pr_branch && row.pr_number
+        ? {
+            branch: row.pr_branch,
+            number: row.pr_number,
+            url: row.pr_url ?? '',
+            repoFullName: row.pr_repo_full_name ?? '',
+          }
+        : null,
   };
 }
 
@@ -103,6 +123,11 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     captureInfraMessage('fix row could not be reloaded', 'fix-worker', { jobId: job.id });
     return;
   }
+
+  // Claim-time capture — the end-of-run drain bumps the DB run_seq BEFORE the
+  // finally-block meter fires; metering must bill THIS run's seq, and the NEXT
+  // run bills the bumped one.
+  const meterRunSeq = fullRow.run_seq ?? 0;
 
   const logger = new FixLogger(supabase, fullRow.project_id, fullRow.run_id);
   const sandbox = createSandbox(job.id);
@@ -131,12 +156,33 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     // (markCompleted / markFailed); an unexpected throw falls through to the
     // shared failure path below.
     if (fullRow.strategy === 'agent') {
-      await runTaskAgent(supabase, buildAgentInput(fullRow, job.id), {
-        machineId: MACHINE_ID,
-        projectName,
-        logger,
-        workDir: sandbox.workDir,
-      });
+      let agentResult: { replayedThrough: string | null; cancelled: boolean } | null = null;
+      try {
+        agentResult = await runTaskAgent(supabase, buildAgentInput(fullRow, job.id), {
+          machineId: MACHINE_ID,
+          projectName,
+          logger,
+          workDir: sandbox.workDir,
+        });
+      } finally {
+        // Drain: if the user messaged DURING this run, re-queue so the next run
+        // replays it. Runs even when setup THREW (token/clone/replay failures
+        // escape runTaskAgent) — the machine-id fence keeps the outer catch's
+        // markFailed from clobbering a woken row. Watermark = what the run
+        // actually saw (replayedThrough covers the claim→read window);
+        // approved_at fallback covers first runs (a message between accept and
+        // claim was unseen). SKIPPED when the user STOPPED the run — Stop must
+        // win over a queued follow-up.
+        if (!agentResult?.cancelled) {
+          await maybeRequeueFollowup(
+            supabase,
+            job.id,
+            fullRow.thread_id,
+            fullRow.task_id,
+            agentResult?.replayedThrough ?? fullRow.approved_at ?? fullRow.started_at ?? null,
+          );
+        }
+      }
       return;
     }
 
@@ -418,7 +464,16 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
     Sentry.captureException(err, {
       tags: { component: 'fix-worker', ...(category ? { category } : {}) },
       user: { id: fullRow.organization_id },
-      contexts: { fix_task: { fix_id: job.id, project_id: fullRow.project_id, run_id: fullRow.run_id } },
+      contexts: {
+        fix_task: {
+          fix_id: job.id,
+          project_id: fullRow.project_id,
+          run_id: fullRow.run_id,
+          // Resume failures group distinctly from first-run failures.
+          resume: (fullRow.plan as any)?.resume === true,
+          run_seq: meterRunSeq,
+        },
+      },
     });
     await logger.error('complete', `Fix failed: ${message}`, err);
 
@@ -430,16 +485,26 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
       job.plan?.fileChanges?.[0]?.path;
     const copy = describeFailure(category, message, { primaryFile });
 
-    // Record what was tried + why it stopped, so the FixFailureCard can show it.
-    await markFailed(supabase, job.id, message, category, {
-      category: category ?? 'unknown',
-      headline: copy.headline,
-      explanation: copy.explanation,
-      nextStep: copy.nextStep,
-      attemptedDiff: details?.attemptedDiff ?? null,
-      errorOutput: details?.errorOutput ?? null,
-      repairAttempts: details?.repairAttempts ?? null,
-    });
+    // Record what was tried + why it stopped, so the FixFailureCard can show
+    // it. Machine-fenced: harmless for standalone fixes (claimed under this
+    // machine), and it stops a zombie write onto a woken agent row that a NEW
+    // machine has since claimed.
+    await markFailed(
+      supabase,
+      job.id,
+      message,
+      category,
+      {
+        category: category ?? 'unknown',
+        headline: copy.headline,
+        explanation: copy.explanation,
+        nextStep: copy.nextStep,
+        attemptedDiff: details?.attemptedDiff ?? null,
+        errorOutput: details?.errorOutput ?? null,
+        repairAttempts: details?.repairAttempts ?? null,
+      },
+      MACHINE_ID,
+    );
 
     // Show the work: an honest lead-in beat → a failed step → the card with the
     // evidence (what I tried + the real error + the next step).
@@ -456,9 +521,15 @@ async function processJob(supabase: SupabaseClient, job: FixJobRow): Promise<voi
         orgId: fullRow.organization_id,
         projectId: fullRow.project_id,
         startedAtMs: pipelineStartMs,
+        runSeq: meterRunSeq,
       });
     } catch (err) {
       console.warn(`[FIX] meter-event emit failed`, err);
+      // A wake that silently fails to bill is unrecoverable — surface it.
+      Sentry.captureException(err, {
+        tags: { component: 'fix-worker', money_path: 'meter-emit' },
+        contexts: { fix_task: { fix_id: job.id, run_seq: meterRunSeq } },
+      });
     }
   }
 }
@@ -482,7 +553,15 @@ async function runWorker(): Promise<void> {
           console.error(`[FIX] Job ${job.id} fatal: ${e.message}`);
           Sentry.captureException(e, {
             tags: { component: 'fix-worker', phase: 'process-escape' },
-            contexts: { fix_task: { fix_id: job.id } },
+            contexts: {
+              fix_task: {
+                fix_id: job.id,
+                // Best-effort resume context off the claimed row (fullRow is
+                // out of scope here); groups resume escapes distinctly.
+                resume: (job.plan as any)?.resume === true,
+                run_seq: (job as any).run_seq ?? undefined,
+              },
+            },
           });
         }
         continue;

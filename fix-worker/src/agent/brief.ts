@@ -28,6 +28,23 @@ Rules:
 7. If the finding is already fixed, not present, or cannot be fixed with a safe in-repo code change, call finish_task with status "failed" and an honest category ("not_fixable"). Do NOT invent a change.
 8. Be decisive. Do the fewest steps that get the job done: investigate, apply the fix, open the PR, finish. Every command you run shows up in the user's timeline — don't pad it with redundant checks.`;
 
+/**
+ * The system prompt for a RESUME run: the base instructions plus a paragraph
+ * telling the model it's re-reading its own replayed work. Three cases with
+ * opposite instructions about what open_pull_request / finish_task should do:
+ * a prior PR still stands (amend it), the prior run SUCCEEDED but its PR was
+ * merged/closed (the fix stands — never finish "failed"), or the prior run
+ * never landed a fix (a new PR is the goal; "failed" stays honest).
+ */
+export function buildResumeSystem(prior: { prNumber: number } | null, priorCompleted: boolean): string {
+  const paragraph = prior
+    ? `RESUME MODE: You are resuming a task you already worked on. The conversation above is a replay of your own earlier work — you previously opened pull request #${prior.prNumber}, and the repository you are in is checked out on that pull request's branch, so your earlier changes are already present in the files. The user's latest message is a new instruction. If it requires code changes: make the smallest safe change, verify it, then call open_pull_request once — in this mode it pushes an update to pull request #${prior.prNumber} (it will NOT open a second pull request). If the message is only a question: answer it in your reply text, then call finish_task with status "completed" — the existing pull request stands as-is.`
+    : priorCompleted
+      ? `RESUME MODE: You are resuming a task you already completed. The conversation above is a replay of your own earlier work — you previously opened a pull request, and it has since been merged or closed, so the original fix already stands. The user's latest message is a new instruction. If it requires code changes: make the smallest safe change, verify it, then call open_pull_request once — this opens a NEW pull request (your earlier one is gone). If the message is only a question: answer it in your reply text, then call finish_task with status "completed" — never "failed"; this task already succeeded and the original fix stands.`
+      : `RESUME MODE: You are resuming a task you already attempted. The conversation above is a replay of your own earlier work. No open pull request exists for this task right now (the previous attempt did not open one, or it has since been closed or merged). The user's latest message is new guidance. If a safe fix is possible now, apply it, verify it, and call open_pull_request — this opens a new pull request. If it is only a question, answer it; then if the finding still cannot be fixed, call finish_task with status "failed" and an honest category.`;
+  return AGENT_SYSTEM + '\n\n' + paragraph;
+}
+
 export interface BriefInput {
   fixType: FindingType;
   finding: { type: FindingType; id: string; severity?: string };

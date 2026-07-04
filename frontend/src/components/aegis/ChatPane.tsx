@@ -102,6 +102,10 @@ interface ChatPaneProps {
   // task row is pinned above the conversation; clicking it opens the detail
   // panel via onOpenTaskDetails.
   task?: AegisTask | null;
+  // True while the parent's task list is still unresolved (listTasks in flight
+  // or failed), i.e. `task` above may be null only because task-ness is
+  // UNKNOWN. handleSubmit fails existing-thread sends closed while this is set.
+  tasksLoading?: boolean;
   onOpenTaskDetails?: () => void;
   // Billing: gates the in-chat "Top up" CTA on a cost_cap block, and prefills
   // the add-card form. Sourced from OrganizationLayout's userPermissions.
@@ -180,6 +184,7 @@ export function ChatPane({
   onSelectRecent,
   liveReload = false,
   task,
+  tasksLoading = false,
   onOpenTaskDetails,
   canManageBilling,
   userEmail,
@@ -499,6 +504,12 @@ export function ChatPane({
   // row's status — project_security_fixes is in the realtime publication. Dot on
   // while any of the thread's fixes is queued/executing; off once they resolve.
   const [taskWorking, setTaskWorking] = useState(false);
+  // A follow-up sent while the agent is mid-run is persisted + queued (the worker
+  // drains it when the current run ends). Surfaced so the bubble doesn't read as ignored.
+  const [taskQueuedHint, setTaskQueuedHint] = useState(false);
+  useEffect(() => {
+    if (!taskWorking) setTaskQueuedHint(false); // run ended → pickup imminent
+  }, [taskWorking]);
   useEffect(() => {
     if (!liveReload || !propThreadId) {
       setTaskWorking(false);
@@ -563,6 +574,37 @@ export function ChatPane({
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      // Fail closed while task-ness is unresolved. `task` derives from the
+      // parent's async listTasks(), so an existing thread with task=null might
+      // BE a task thread whose list simply hasn't loaded (direct URL load, or
+      // a failed fetch). Misrouting a task follow-up to the chat agent is the
+      // split-brain this feature exists to kill — block the send rather than
+      // fall through. Brand-new chats (no propThreadId) can't be task threads.
+      if (tasksLoading && propThreadId && !task) {
+        setSendError('Still loading this conversation — try again in a moment.');
+        return;
+      }
+      // Task threads: the message goes to the task's own agent (wake/queue), never the
+      // chat agent. Optimistic bubble here (useChat isn't involved on this path); the
+      // realtime reload reconciles it against the persisted row.
+      if (liveReload && task) {
+        setSendError(null);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `local-${Date.now()}`,
+            role: 'user',
+            parts: [{ type: 'text', text: trimmed }],
+          } as unknown as UIMessage,
+        ]);
+        void aegisApi
+          .sendTaskMessage(task.id, organizationId, trimmed)
+          .then((res) => {
+            if (res.queued) setTaskQueuedHint(true);
+          })
+          .catch(() => setSendError('Something went wrong. Please try again.'));
+        return;
+      }
       // First send of a brand-new chat: notify the parent so the URL
       // updates and an optimistic "New chat" entry slides into the sidebar.
       // Done here (not in transport.fetch) because the threadId is now
@@ -583,7 +625,7 @@ export function ChatPane({
       clearError();
       void sendMessage({ text: trimmed });
     },
-    [sendMessage, clearError],
+    [sendMessage, clearError, liveReload, task, tasksLoading, propThreadId, organizationId, setMessages],
   );
 
   const handleRemoveFromQueue = useCallback((id: string) => {
@@ -797,6 +839,11 @@ export function ChatPane({
         <div className="mx-auto max-w-3xl">
           <ChatTodos messages={messages} streaming={status === 'streaming'} />
           <SendQueuePanel queue={sendQueue} onRemove={handleRemoveFromQueue} />
+          {taskQueuedHint && (
+            <div className="mb-2 px-4 text-xs text-foreground-secondary">
+              Queued — I'll pick this up when the current run finishes.
+            </div>
+          )}
           <div className="rounded-2xl bg-background-card border border-border">
             <ChatInput
               onSubmit={handleSubmit}

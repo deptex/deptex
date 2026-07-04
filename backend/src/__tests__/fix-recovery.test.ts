@@ -6,7 +6,14 @@ import {
   setTableResponse,
   clearTableRegistry,
   clearRpcRegistry,
+  supabase,
 } from '../test/mocks/supabaseSingleton';
+
+// The crash-wake path re-queues a woken row to 'approved', which the orphan
+// sweep then tries to boot — stub the Fly client so no real API call happens.
+jest.mock('../lib/fly-machines', () => ({
+  startFixMachine: jest.fn().mockResolvedValue('machine-1'),
+}));
 
 // Smoke for the fix-recovery cron endpoint. Two regressions worth pinning:
 //
@@ -34,7 +41,12 @@ function makeApp() {
 beforeEach(() => {
   clearTableRegistry();
   clearRpcRegistry();
+  jest.clearAllMocks();
 });
+
+function wakeRpcCalls() {
+  return (supabase.rpc as jest.Mock).mock.calls.filter((c: any[]) => c[0] === 'wake_agent_fix');
+}
 
 describe('POST /api/internal/recovery/fix-jobs', () => {
   it('rejects without internal key', async () => {
@@ -79,5 +91,91 @@ describe('POST /api/internal/recovery/fix-jobs', () => {
     expect(res.status).toBe(200);
     expect(res.body.requeued).toBe(0);
     expect(res.body.failed).toBe(0);
+  });
+});
+
+// Crash-wake: a machine crash mid-run strands any follow-up the user sent
+// during that run (the worker's end-of-run drain never ran). The cron must
+// re-queue such rows via wake_agent_fix — and ONLY such rows.
+describe('POST /api/internal/recovery/fix-jobs crash-wake', () => {
+  const failedAgentJob = {
+    id: 'fix-3',
+    project_id: 'proj-3',
+    run_id: 'run-3',
+    attempts: 1,
+    strategy: 'agent',
+    thread_id: 'thread-1',
+    task_id: 'task-1',
+    started_at: '2026-07-01T00:00:00Z',
+    approved_at: '2026-06-30T23:59:00Z',
+  };
+
+  function post() {
+    return request(makeApp())
+      .post('/api/internal/recovery/fix-jobs')
+      .set('x-internal-api-key', 'test-internal-key');
+  }
+
+  it('re-queues a failed agent row whose thread has a user message newer than the run', async () => {
+    setRpcResponse('recover_stuck_fix_jobs', { data: [], error: null });
+    setRpcResponse('fail_exhausted_fix_jobs', { data: [failedAgentJob], error: null });
+    setRpcResponse('wake_agent_fix', { data: 'fix-3', error: null });
+    // Single agent row for the task (v1 guard passes); the same response also
+    // serves the orphan sweep, which then boots the stubbed machine.
+    setTableResponse('project_security_fixes', 'then', { data: [{ id: 'fix-3' }], error: null });
+    setTableResponse('aegis_chat_messages', 'then', { data: [{ id: 'msg-1' }], error: null });
+    setTableResponse('extraction_logs', 'then', { data: null, error: null });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(res.body.crash_wakes).toBe(1);
+    const wakes = wakeRpcCalls();
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0][1]).toEqual({ p_fix_id: 'fix-3' });
+  });
+
+  it('does NOT wake when no user message arrived during the run', async () => {
+    setRpcResponse('recover_stuck_fix_jobs', { data: [], error: null });
+    setRpcResponse('fail_exhausted_fix_jobs', { data: [failedAgentJob], error: null });
+    setTableResponse('project_security_fixes', 'then', { data: [{ id: 'fix-3' }], error: null });
+    setTableResponse('aegis_chat_messages', 'then', { data: [], error: null });
+    setTableResponse('extraction_logs', 'then', { data: null, error: null });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(res.body.crash_wakes).toBe(0);
+    expect(wakeRpcCalls()).toHaveLength(0);
+  });
+
+  it('skips multi-agent-row tasks (v1: single-target only)', async () => {
+    setRpcResponse('recover_stuck_fix_jobs', { data: [], error: null });
+    setRpcResponse('fail_exhausted_fix_jobs', { data: [failedAgentJob], error: null });
+    setTableResponse('project_security_fixes', 'then', { data: [{ id: 'fix-3' }, { id: 'fix-4' }], error: null });
+    setTableResponse('aegis_chat_messages', 'then', { data: [{ id: 'msg-1' }], error: null });
+    setTableResponse('extraction_logs', 'then', { data: null, error: null });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(res.body.crash_wakes).toBe(0);
+    expect(wakeRpcCalls()).toHaveLength(0);
+  });
+
+  it('ignores non-agent rows and rows without a thread', async () => {
+    setRpcResponse('recover_stuck_fix_jobs', { data: [], error: null });
+    setRpcResponse('fail_exhausted_fix_jobs', {
+      data: [
+        { ...failedAgentJob, id: 'fix-a', strategy: 'code_patch' },
+        { ...failedAgentJob, id: 'fix-b', thread_id: null },
+      ],
+      error: null,
+    });
+    setTableResponse('project_security_fixes', 'then', { data: [], error: null });
+    setTableResponse('aegis_chat_messages', 'then', { data: [{ id: 'msg-1' }], error: null });
+    setTableResponse('extraction_logs', 'then', { data: null, error: null });
+
+    const res = await post();
+    expect(res.status).toBe(200);
+    expect(res.body.crash_wakes).toBe(0);
+    expect(wakeRpcCalls()).toHaveLength(0);
   });
 });

@@ -58,6 +58,49 @@ function buildPRBody(plan: FixPlan, diffSummary: string): string {
   return lines.join('\n');
 }
 
+/** Configure committer identity for this repo only. */
+function configureIdentity(workDir: string): void {
+  execSync('git config user.email "aegis@deptex.dev"', { ...EXEC_OPTS, cwd: workDir });
+  execSync('git config user.name "Aegis Fix Agent"', { ...EXEC_OPTS, cwd: workDir });
+}
+
+/**
+ * Set the token remote, push, scrub the transcript, then clear the token from
+ * .git/config. Shared by create + amend so both modes handle the token
+ * identically.
+ */
+function pushBranch(opts: {
+  workDir: string;
+  installationToken: string;
+  repoFullName: string;
+  branch: string;
+  setUpstream: boolean;
+}): string {
+  const { workDir, installationToken, repoFullName, branch, setUpstream } = opts;
+  const remoteUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
+  execSync(`git remote set-url origin "${remoteUrl}"`, { ...EXEC_OPTS, cwd: workDir });
+  // spawnSync captures git push's progress (written to stderr) so the chat's
+  // terminal card can show the real transcript, including the "* [new branch]" line.
+  const args = setUpstream ? ['push', '--set-upstream', 'origin', branch] : ['push', 'origin', branch];
+  const push = spawnSync('git', args, {
+    cwd: workDir,
+    encoding: 'utf-8',
+    timeout: 120_000,
+    maxBuffer: 5 * 1024 * 1024,
+  });
+  if (push.status !== 0) {
+    throw new Error(`git push failed: ${stripTokens((push.stderr || '').slice(-500))}`);
+  }
+  const pushOutput = stripTokens(`${push.stderr || ''}${push.stdout || ''}`).trim().slice(-1500);
+
+  // Belt-and-braces: clear the token from origin so it isn't kept in .git/config.
+  execSync(`git remote set-url origin "https://github.com/${repoFullName}.git"`, {
+    ...EXEC_OPTS,
+    cwd: workDir,
+  });
+  return pushOutput;
+}
+
 export async function commitAndPushFix(opts: {
   workDir: string;
   fixId: string;
@@ -66,14 +109,69 @@ export async function commitAndPushFix(opts: {
   repoFullName: string;
   baseBranch: string;
   logger: FixLogger;
-}): Promise<{ prBranch: string; diffSummary: string; pushOutput: string }> {
-  const { workDir, fixId, plan, installationToken, repoFullName, baseBranch, logger } = opts;
+  /** 'create' (default) checks out a new branch off the clone; 'amend'
+   *  fast-forwards the existing PR branch the clone is already checked out on. */
+  mode?: 'create' | 'amend';
+  /** amend mode: the existing PR head branch (required). */
+  existingBranch?: string;
+  /** create mode: appended to the deterministic branch name. A resume that must
+   *  open a NEW PR reuses the same fix row → same deterministic branch name →
+   *  the old remote branch may survive a merge/close → non-fast-forward
+   *  rejection; the suffix makes each run's branch unique. */
+  branchSuffix?: string;
+}): Promise<{ prBranch: string; diffSummary: string; pushOutput: string; noChanges?: boolean }> {
+  const { workDir, fixId, plan, installationToken, repoFullName, logger, mode = 'create' } = opts;
 
-  // Configure committer identity for this repo only.
-  execSync('git config user.email "aegis@deptex.dev"', { ...EXEC_OPTS, cwd: workDir });
-  execSync('git config user.name "Aegis Fix Agent"', { ...EXEC_OPTS, cwd: workDir });
+  configureIdentity(workDir);
 
-  const branch = branchName(fixId, plan);
+  if (mode === 'amend') {
+    const branch = opts.existingBranch;
+    if (!branch) throw new Error('amend mode requires existingBranch');
+    execSync('git add -A', { ...EXEC_OPTS, cwd: workDir });
+    const stat = execSync('git diff --cached --stat', { ...EXEC_OPTS, cwd: workDir }).trim();
+    if (!stat) {
+      // Empty staging is NOT proof there's nothing to push: a previous amend
+      // attempt may have already committed locally and failed only at the
+      // push — retrying then stages nothing, and returning noChanges would
+      // silently drop the user's fix. Check whether the branch is ahead of
+      // origin; if so, push the existing commit(s) instead.
+      let ahead = 0;
+      try {
+        ahead =
+          parseInt(
+            execSync(`git rev-list --count "origin/${branch}..HEAD"`, { ...EXEC_OPTS, cwd: workDir }).trim(),
+            10,
+          ) || 0;
+      } catch {
+        ahead = 0;
+      }
+      if (ahead === 0) {
+        // Truly nothing: staging empty AND nothing committed-but-unpushed. The
+        // PR already reflects the current state. Not terminal.
+        return { prBranch: branch, diffSummary: '', pushOutput: '', noChanges: true };
+      }
+      // Summarize the already-committed range BEFORE pushing (the push updates
+      // the local origin/<branch> tracking ref, emptying the range).
+      let rangeStat = '';
+      try {
+        rangeStat = execSync(`git diff --stat "origin/${branch}..HEAD"`, { ...EXEC_OPTS, cwd: workDir }).trim();
+      } catch {
+        rangeStat = '';
+      }
+      await logger.info('pr', `Pushing update to ${branch} (recovering ${ahead} unpushed commit${ahead === 1 ? '' : 's'})`);
+      const pushOutput = pushBranch({ workDir, installationToken, repoFullName, branch, setUpstream: false });
+      return { prBranch: branch, diffSummary: rangeStat, pushOutput, noChanges: false };
+    }
+    // Pass the message via stdin to avoid shell-escaping pitfalls.
+    execSync(`git commit -F -`, { ...EXEC_OPTS, cwd: workDir, input: commitMessage(plan) });
+    await logger.info('pr', `Pushing update to ${branch}`);
+    // NO -u, NO force: the clone IS this branch's head, so the push is a
+    // fast-forward on the already-tracked upstream.
+    const pushOutput = pushBranch({ workDir, installationToken, repoFullName, branch, setUpstream: false });
+    return { prBranch: branch, diffSummary: stat, pushOutput, noChanges: false };
+  }
+
+  const branch = branchName(fixId, plan) + (opts.branchSuffix ?? '');
   await logger.info('pr', `Creating branch ${branch}`);
   execSync(`git checkout -b "${branch}"`, { ...EXEC_OPTS, cwd: workDir });
   execSync('git add -A', { ...EXEC_OPTS, cwd: workDir });
@@ -99,28 +197,37 @@ export async function commitAndPushFix(opts: {
   });
 
   await logger.info('pr', 'Pushing branch');
-  const remoteUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
-  execSync(`git remote set-url origin "${remoteUrl}"`, { ...EXEC_OPTS, cwd: workDir });
-  // spawnSync captures git push's progress (written to stderr) so the chat's
-  // terminal card can show the real transcript, including the "* [new branch]" line.
-  const push = spawnSync('git', ['push', '--set-upstream', 'origin', branch], {
-    cwd: workDir,
-    encoding: 'utf-8',
-    timeout: 120_000,
-    maxBuffer: 5 * 1024 * 1024,
-  });
-  if (push.status !== 0) {
-    throw new Error(`git push failed: ${stripTokens((push.stderr || '').slice(-500))}`);
-  }
-  const pushOutput = stripTokens(`${push.stderr || ''}${push.stdout || ''}`).trim().slice(-1500);
-
-  // Belt-and-braces: clear the token from origin so it isn't kept in .git/config.
-  execSync(`git remote set-url origin "https://github.com/${repoFullName}.git"`, {
-    ...EXEC_OPTS,
-    cwd: workDir,
-  });
+  const pushOutput = pushBranch({ workDir, installationToken, repoFullName, branch, setUpstream: true });
 
   return { prBranch: branch, diffSummary: stat, pushOutput };
+}
+
+/**
+ * The current state of an existing PR — the amend-vs-new-PR decision point.
+ * Only 'open' amends: pushing to a closed/merged PR's branch would silently
+ * update nothing the user sees. Non-ok responses and network failures return
+ * 'unknown' (treated as not-amendable by the caller).
+ */
+export async function getPullRequestState(
+  installationToken: string,
+  repoFullName: string,
+  prNumber: number,
+): Promise<'open' | 'closed' | 'unknown'> {
+  try {
+    const res = await fetch(`${GITHUB_API}/repos/${repoFullName}/pulls/${prNumber}`, {
+      headers: {
+        Authorization: `Bearer ${installationToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Deptex-Aegis-Fix',
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) return 'unknown';
+    const json = (await res.json()) as { state?: string };
+    return json.state === 'open' ? 'open' : 'closed';
+  } catch {
+    return 'unknown';
+  }
 }
 
 export async function openPullRequest(opts: {

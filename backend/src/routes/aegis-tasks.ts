@@ -10,6 +10,7 @@ import {
   getTask,
   listTasks,
   proposeTaskFromFinding,
+  sendTaskFollowup,
 } from '../lib/aegis-v3/tasks';
 import { AEGIS_TASK_FINDING_TYPES, type AegisTaskFindingType } from '../lib/aegis-v3/task-types';
 
@@ -148,6 +149,33 @@ router.patch('/:taskId/decline', async (req: AuthRequest, res) => {
   } catch (err: any) {
     const message = err?.message ?? 'Failed to decline task';
     return res.status(statusForError(message)).json({ error: message });
+  }
+});
+
+/**
+ * Follow-up message on a task thread: persist it, then wake the SAME agent to
+ * resume (amend its PR / act on the instruction). Never routes to the chat agent.
+ */
+router.post('/:taskId/message', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { organizationId, message } = req.body ?? {};
+  if (!organizationId || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'organizationId and message are required' });
+  }
+  if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
+    return res.status(403).json({ error: 'You do not have permission to trigger fixes' });
+  }
+  try {
+    const result = await sendTaskFollowup({
+      taskId: req.params.taskId,
+      userId,
+      organizationId,
+      message: message.trim(),
+    });
+    return res.json(result);
+  } catch (err: any) {
+    const message2 = err?.message ?? 'Failed to send message';
+    return res.status(statusForError(message2)).json({ error: message2 });
   }
 });
 

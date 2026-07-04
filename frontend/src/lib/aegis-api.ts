@@ -271,6 +271,15 @@ export const aegisApi = {
     });
   },
 
+  /** Follow-up message on a task thread — persists it and wakes the task's own agent (never the chat agent). */
+  async sendTaskMessage(taskId: string, organizationId: string, message: string):
+    Promise<{ woke: boolean; queued: boolean; threadId: string }> {
+    return fetchWithAuth(`/api/aegis/tasks/${taskId}/message`, {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, message }),
+    });
+  },
+
   /** Send-to-Aegis: create a task from a finding. Returns the proposed task + its chat. */
   async createTaskFromFinding(body: {
     organizationId: string;

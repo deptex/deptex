@@ -17,7 +17,17 @@ jest.mock('../job-db', () => ({
   isJobCancelled: jest.fn(async () => false),
 }));
 jest.mock('../github', () => ({ createInstallationToken: jest.fn(async () => 'tok') }));
-jest.mock('../sandbox', () => ({ cloneAtSha: jest.fn(async () => 'cloned output') }));
+jest.mock('../sandbox', () => ({
+  cloneAtSha: jest.fn(async () => 'cloned output'),
+  cloneBranchHead: jest.fn(async () => 'cloned branch tip'),
+}));
+jest.mock('../pr', () => ({ getPullRequestState: jest.fn(async () => 'open') }));
+jest.mock('../agent/replay', () => ({
+  reconstructAgentMessages: jest.fn(async () => ({
+    messages: [{ role: 'user', content: 'replayed brief' }],
+    replayedThrough: '2026-07-03T00:00:00Z',
+  })),
+}));
 jest.mock('../llm', () => ({ getLanguageModelForOrg: jest.fn(async () => ({})) }));
 jest.mock('../task-chat', () => ({ makeTaskNarrator: () => async () => {}, narrateStep: jest.fn(async () => {}) }));
 jest.mock('../logger', () => ({ FixLogger: class {} }));
@@ -25,10 +35,12 @@ jest.mock('../agent/tools', () => ({ buildAgentTools: () => ({}), finalizeFailur
 
 import { generateText } from 'ai';
 import { isJobCancelled } from '../job-db';
+import { cloneAtSha, cloneBranchHead } from '../sandbox';
+import { getPullRequestState } from '../pr';
 import { finalizeFailure } from '../agent/tools';
 import { runTaskAgent, type AgentRunInput } from '../agent/loop';
 
-function makeInput(): AgentRunInput {
+function makeInput(over: Partial<AgentRunInput> = {}): AgentRunInput {
   return {
     fixId: 'fix-1',
     organizationId: 'org-1',
@@ -40,6 +52,11 @@ function makeInput(): AgentRunInput {
     summary: 'fix it',
     baseBranch: 'main',
     baseSha: 'deadbeef',
+    resume: false,
+    runSeq: 0,
+    resumePriorStatus: null,
+    priorPr: null,
+    ...over,
   };
 }
 
@@ -58,7 +75,7 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('not_fixable');
   });
 
-  test('a cancelled run finalizes as cancelled', async () => {
+  test('a cancelled run finalizes as cancelled and reports cancelled=true (drain skip)', async () => {
     (isJobCancelled as jest.Mock).mockResolvedValue(true);
     (generateText as jest.Mock).mockImplementation(async (opts: any) => {
       await opts.onStepFinish({ text: '' });
@@ -69,9 +86,15 @@ describe('runTaskAgent — always-terminal guarantee', () => {
       }
       return {};
     });
-    await runTaskAgent({} as any, makeInput(), makeDeps());
+    const res = await runTaskAgent({} as any, makeInput(), makeDeps());
     expect(finalizeFailure).toHaveBeenCalledTimes(1);
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('cancelled');
+    // The caller skips the end-of-run drain on a user Stop.
+    expect(res.cancelled).toBe(true);
+    // The cancel probe carries this machine's id — a reassigned (zombie) run
+    // aborts on machine mismatch, not just on status='rejected'.
+    expect(isJobCancelled).toHaveBeenCalledWith(expect.anything(), 'fix-1', 'me');
+    (isJobCancelled as jest.Mock).mockResolvedValue(false);
   });
 
   test('an unexpected model error finalizes as system_error (raw message kept for logs, not the user)', async () => {
@@ -85,5 +108,95 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('system_error');
     // The raw message is still passed through — it lands in error_message (logs).
     expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/provider exploded/);
+  });
+});
+
+describe('runTaskAgent — resume mode', () => {
+  const PRIOR = { branch: 'aegis/fix-x-abc', number: 7, url: 'https://github.com/o/r/pull/7', repoFullName: 'o/r' };
+
+  test('a first run pins to the base SHA, uses the prompt path, and returns a null watermark', async () => {
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    const res = await runTaskAgent({} as any, makeInput(), makeDeps());
+    expect(res).toEqual({ replayedThrough: null, cancelled: false });
+    expect(cloneAtSha).toHaveBeenCalledTimes(1);
+    expect(cloneBranchHead).not.toHaveBeenCalled();
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    expect(call.prompt).toBeDefined();
+    expect(call.messages).toBeUndefined();
+  });
+
+  test('a resume with an OPEN prior PR clones the PR branch, replays the thread, and returns the watermark', async () => {
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    const res = await runTaskAgent(
+      {} as any,
+      makeInput({ resume: true, runSeq: 1, priorPr: { ...PRIOR } }),
+      makeDeps(),
+    );
+    expect(res).toEqual({ replayedThrough: '2026-07-03T00:00:00Z', cancelled: false });
+    expect(cloneBranchHead).toHaveBeenCalledWith(expect.objectContaining({ branch: 'aegis/fix-x-abc' }));
+    expect(cloneAtSha).not.toHaveBeenCalled();
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    expect(call.messages).toEqual([{ role: 'user', content: 'replayed brief' }]);
+    expect(call.prompt).toBeUndefined();
+    // Amend-mode resume system names the PR it will update.
+    expect(String(call.system)).toContain('pull request #7');
+  });
+
+  test('a resume whose prior PR is CLOSED clones the base tip and uses the no-PR resume system', async () => {
+    (getPullRequestState as jest.Mock).mockResolvedValueOnce('closed');
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    await runTaskAgent({} as any, makeInput({ resume: true, runSeq: 2, priorPr: { ...PRIOR } }), makeDeps());
+    // Fallback clones the CURRENT base tip (not the stale accept-time SHA).
+    expect(cloneBranchHead).toHaveBeenCalledWith(expect.objectContaining({ branch: 'main' }));
+    expect(cloneAtSha).not.toHaveBeenCalled();
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    expect(String(call.system)).toContain('No open pull request');
+  });
+
+  test('a resume of a COMPLETED task whose PR was merged uses the prior-success system paragraph', async () => {
+    (getPullRequestState as jest.Mock).mockResolvedValueOnce('closed');
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    await runTaskAgent(
+      {} as any,
+      makeInput({ resume: true, runSeq: 1, resumePriorStatus: 'completed', priorPr: { ...PRIOR } }),
+      makeDeps(),
+    );
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    // The model must know the fix already stands and must never finish "failed".
+    expect(String(call.system)).toContain('merged or closed');
+    expect(String(call.system)).toContain('never "failed"');
+  });
+
+  test('an UNKNOWN prior-PR state throws (retryable) instead of forking a duplicate PR', async () => {
+    (getPullRequestState as jest.Mock).mockResolvedValueOnce('unknown');
+    await expect(
+      runTaskAgent({} as any, makeInput({ resume: true, runSeq: 1, priorPr: { ...PRIOR } }), makeDeps()),
+    ).rejects.toThrow(/Could not verify the state of the existing pull request/);
+    expect(cloneBranchHead).not.toHaveBeenCalled();
+    expect(cloneAtSha).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('an amend-clone failure that is NOT a missing branch rethrows (no duplicate-PR fallback)', async () => {
+    (cloneBranchHead as jest.Mock).mockRejectedValueOnce(new Error('git clone failed: network unreachable'));
+    await expect(
+      runTaskAgent({} as any, makeInput({ resume: true, runSeq: 1, priorPr: { ...PRIOR } }), makeDeps()),
+    ).rejects.toThrow(/network unreachable/);
+    // No fresh-tip fallback clone, no model run.
+    expect(cloneBranchHead).toHaveBeenCalledTimes(1);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('an amend-clone failure for a MISSING branch falls through to the fresh-tip clone', async () => {
+    (cloneBranchHead as jest.Mock).mockRejectedValueOnce(
+      new Error('git clone failed: fatal: Remote branch aegis/fix-x-abc not found in upstream origin'),
+    );
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    await runTaskAgent({} as any, makeInput({ resume: true, runSeq: 1, priorPr: { ...PRIOR } }), makeDeps());
+    // First call = PR branch (rejected), second = base tip fallback.
+    expect(cloneBranchHead).toHaveBeenCalledTimes(2);
+    expect((cloneBranchHead as jest.Mock).mock.calls[1][0]).toEqual(expect.objectContaining({ branch: 'main' }));
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    expect(String(call.system)).toContain('No open pull request');
   });
 });

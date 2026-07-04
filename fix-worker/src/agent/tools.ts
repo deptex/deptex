@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { LanguageModel } from 'ai';
 import type { FindingType, FixPlan } from './../plan-types';
 import { commitAndPushFix, openPullRequest } from './../pr';
-import { markCompleted, markFailed, isJobCancelled } from './../job-db';
+import { markCompleted, markFailed, markAnswered, isJobCancelled } from './../job-db';
 import {
   narrateStep,
   postPrReadyCard,
@@ -74,6 +74,14 @@ export interface AgentToolDeps {
   logger: FixLogger;
   model: LanguageModel;
   state: AgentRunState;
+  /** Non-null when this is a resume amending a still-open prior PR: the clone
+   *  is that PR's head branch, and open_pull_request pushes an update to it. */
+  resumeMode: { prNumber: number; prUrl: string; branch: string } | null;
+  /** row.run_seq — 0 = first run; >0 suffixes the create-mode branch name. */
+  runSeq: number;
+  /** plan.prior_status — lets a Stop of a resume-of-completed restore the
+   *  original success instead of downgrading it to failed. */
+  resumePriorStatus: string | null;
 }
 
 /**
@@ -410,7 +418,14 @@ export function buildAgentTools(deps: AgentToolDeps) {
       try {
         // Deterministic lockfile guarantee for dep bumps: regenerate so CI's
         // `npm ci` resolves even if the model skipped the install itself.
-        if (deps.fixType === 'vulnerability' && fs.existsSync(path.join(projectDir, 'package.json'))) {
+        // SKIPPED on an edit-free amend: an answer-only turn that wrongly calls
+        // open_pull_request must stay a true noChanges — the regen would dirty
+        // the lockfile and push a pointless commit.
+        if (
+          deps.fixType === 'vulnerability' &&
+          fs.existsSync(path.join(projectDir, 'package.json')) &&
+          !(deps.resumeMode && state.editedFiles.size === 0)
+        ) {
           const { output } = await runShell('npm install --package-lock-only --ignore-scripts', projectDir);
           await deps.logger.info('setup', `Regenerated lockfile before PR:\n${cap(output)}`);
         }
@@ -434,6 +449,55 @@ export function buildAgentTools(deps: AgentToolDeps) {
           /* change-set narration is best-effort */
         }
 
+        // AMEND (resume with a still-open prior PR): push a fast-forward commit
+        // to the SAME branch/PR — never a second PR.
+        if (deps.resumeMode) {
+          const { diffSummary, pushOutput, noChanges } = await commitAndPushFix({
+            workDir: repoRoot,
+            fixId: deps.fixId,
+            plan,
+            installationToken: deps.installationToken,
+            repoFullName: deps.repoFullName,
+            baseBranch: deps.baseBranch,
+            logger: deps.logger,
+            mode: 'amend',
+            existingBranch: deps.resumeMode.branch,
+          });
+          if (noChanges) {
+            // Not terminal — the agent can still answer and finish_task.
+            return 'no new changes to push — the pull request already reflects the current state';
+          }
+          // Re-check the lease immediately before the terminal write.
+          if (!(await leaseHeld(deps))) return 'this task was reassigned mid-push; not marking complete';
+
+          // Re-stamp the EXISTING PR (same number/url/branch, fresh diff
+          // summary). Machine-fenced: a zombie run must not clobber a reclaim.
+          await markCompleted(
+            supabase,
+            deps.fixId,
+            {
+              prUrl: deps.resumeMode.prUrl,
+              prNumber: deps.resumeMode.prNumber,
+              prBranch: deps.resumeMode.branch,
+              prRepoFullName: deps.repoFullName,
+              diffSummary,
+            },
+            deps.machineId,
+          );
+          await step({
+            icon: 'pr',
+            label: `Updated pull request #${deps.resumeMode.prNumber}`,
+            command: `git push origin ${deps.resumeMode.branch}`,
+            output: scrubSecrets(pushOutput, deps.installationToken),
+          });
+          // Do NOT queue postPrReadyCard: the run-1 card already live-renders
+          // from this fixId — a second card would duplicate.
+          await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary: title });
+          state.prOpened = true;
+          state.terminal = true;
+          return `Pushed an update to pull request #${deps.resumeMode.prNumber}. Call finish_task with status "completed" to end.`;
+        }
+
         const { prBranch, diffSummary, pushOutput } = await commitAndPushFix({
           workDir: repoRoot,
           fixId: deps.fixId,
@@ -442,6 +506,10 @@ export function buildAgentTools(deps: AgentToolDeps) {
           repoFullName: deps.repoFullName,
           baseBranch: deps.baseBranch,
           logger: deps.logger,
+          // A resume that must open a NEW PR reuses the same fix row → same
+          // deterministic branch name → the old remote branch may survive a
+          // merge/close → non-fast-forward rejection. Suffix per run.
+          branchSuffix: deps.runSeq > 0 ? `-r${deps.runSeq}` : undefined,
         });
         const pr = await openPullRequest({
           installationToken: deps.installationToken,
@@ -455,13 +523,18 @@ export function buildAgentTools(deps: AgentToolDeps) {
         // Re-check the lease immediately before the terminal write.
         if (!(await leaseHeld(deps))) return 'this task was reassigned mid-push; not marking complete';
 
-        await markCompleted(supabase, deps.fixId, {
-          prUrl: pr.prUrl,
-          prNumber: pr.prNumber,
-          prBranch: pr.prBranch,
-          prRepoFullName: pr.prRepoFullName,
-          diffSummary,
-        });
+        await markCompleted(
+          supabase,
+          deps.fixId,
+          {
+            prUrl: pr.prUrl,
+            prNumber: pr.prNumber,
+            prBranch: pr.prBranch,
+            prRepoFullName: pr.prRepoFullName,
+            diffSummary,
+          },
+          deps.machineId,
+        );
         await step({
           icon: 'pr',
           label: `Opened pull request #${pr.prNumber}`,
@@ -492,7 +565,25 @@ export function buildAgentTools(deps: AgentToolDeps) {
     execute: async ({ status, summary, category }) => {
       if (status === 'completed') {
         if (state.prOpened) return 'task completed';
-        // "completed" without a PR is not a real success — record it honestly.
+        if (deps.resumeMode) {
+          // Answer-only resume on a still-open PR: a legit completion — the
+          // prior PR already stands. markAnswered preserves pr_*/diff_summary.
+          await markAnswered(supabase, deps.fixId, deps.machineId);
+          await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary });
+          state.terminal = true;
+          return 'task completed — the existing pull request stands';
+        }
+        if (deps.resumePriorStatus === 'completed' && !state.prOpened) {
+          // The prior run genuinely SUCCEEDED but its PR is merged/closed (so
+          // no resumeMode). An answer-only turn must NOT downgrade the task to
+          // failed — the original fix already stands.
+          await markAnswered(supabase, deps.fixId, deps.machineId);
+          await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary });
+          state.terminal = true;
+          return 'task completed — the original fix already stands';
+        }
+        // "completed" without a PR (and no standing PR) is not a real success —
+        // record it honestly.
         await finalizeFailure(deps, 'not_fixable', summary || 'The agent finished without opening a pull request.');
         return 'no pull request was opened, so this was recorded as unresolved';
       }
@@ -507,6 +598,33 @@ export function buildAgentTools(deps: AgentToolDeps) {
 /** The single terminal-failure writer: markFailed + honest FixFailureCard + task rollup. */
 export async function finalizeFailure(deps: AgentToolDeps, category: FinishCategory, message: string): Promise<void> {
   if (deps.state.terminal) return;
+
+  // ANY failure of a resume-of-completed (Stop, not_fixable, budget, system
+  // error) must RESTORE the original success, not downgrade it: the rollup
+  // counts 'rejected'/'failed' rows as failures and would silently flip a
+  // genuinely-completed task to failed. This also covers the merged/closed-PR
+  // resume (resumeMode null) — the fix already landed. No failure card, no
+  // failed step — the earlier fix still stands.
+  if (deps.resumePriorStatus === 'completed' && !deps.state.prOpened) {
+    deps.state.terminal = true;
+    await markAnswered(deps.supabase, deps.fixId, deps.machineId);
+    await markTaskFromFix(deps.supabase, deps.taskId, { status: 'completed' });
+    try {
+      const { makeTaskNarrator } = await import('./../task-chat');
+      // Never leak a raw provider message (system_error) into the chat.
+      const safeMessage =
+        category === 'system_error' ? 'I hit a temporary problem on my side.' : message;
+      const line =
+        category === 'cancelled'
+          ? 'Understood — stopping. The pull request I opened earlier still stands.'
+          : `I couldn't complete that follow-up — ${safeMessage} The fix I made earlier still stands.`;
+      await makeTaskNarrator(deps.supabase, deps.threadId)(line);
+    } catch {
+      /* narration is best-effort */
+    }
+    return;
+  }
+
   deps.state.terminal = true;
 
   // Build the user-facing copy per category. Infra/model failures (system_error)
@@ -542,12 +660,19 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     nextStep = copy.nextStep;
   }
 
-  await markFailed(deps.supabase, deps.fixId, message, category, {
+  await markFailed(
+    deps.supabase,
+    deps.fixId,
+    message,
     category,
-    headline,
-    explanation,
-    nextStep,
-  });
+    {
+      category,
+      headline,
+      explanation,
+      nextStep,
+    },
+    deps.machineId,
+  );
   await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
   await postFailureCard(deps.supabase, deps.threadId, deps.fixId, nextStep);
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });

@@ -36,6 +36,17 @@ interface FullFixRow {
   // onto the task. Null for a standalone fix.
   thread_id: string | null;
   task_id: string | null;
+  // Wake-the-task-agent resume context. run_seq is the billing-meter dedup
+  // boundary (0 = first run, +1 per user wake); started_at/approved_at feed the
+  // end-of-run drain watermark; the pr_* columns are the prior run's PR so a
+  // resume can amend it instead of opening a duplicate.
+  run_seq: number;
+  started_at: string | null;
+  approved_at: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
+  pr_branch: string | null;
+  pr_repo_full_name: string | null;
 }
 
 export async function claimJob(
@@ -62,7 +73,7 @@ export async function loadFullRow(
   const { data } = await supabase
     .from('project_security_fixes')
     .select(
-      'id, project_id, organization_id, fix_type, strategy, status, run_id, plan, plan_base_sha, plan_base_branch, payload, attempts, osv_id, semgrep_finding_id, secret_finding_id, iac_finding_id, container_finding_id, base_image_rec_id, dast_finding_id, reachable_flow_id, thread_id, task_id',
+      'id, project_id, organization_id, fix_type, strategy, status, run_id, plan, plan_base_sha, plan_base_branch, payload, attempts, osv_id, semgrep_finding_id, secret_finding_id, iac_finding_id, container_finding_id, base_image_rec_id, dast_finding_id, reachable_flow_id, thread_id, task_id, run_seq, started_at, approved_at, pr_url, pr_number, pr_branch, pr_repo_full_name',
     )
     .eq('id', fixId)
     .maybeSingle();
@@ -74,6 +85,24 @@ export async function sendHeartbeat(supabase: SupabaseClient, fixId: string) {
     .from('project_security_fixes')
     .update({ heartbeat_at: new Date().toISOString() })
     .eq('id', fixId);
+}
+
+/**
+ * Machine-id fence for terminal writes. A Stopped-then-woken row can be
+ * reclaimed by a NEW machine while the OLD agent is still running; the old
+ * (zombie) run's terminal writes must become no-ops instead of clobbering the
+ * new run. Fenced on machine_id ONLY, NOT status — the cancel-restore path
+ * legitimately writes while the row is 'rejected'.
+ */
+function terminalUpdate(
+  supabase: SupabaseClient,
+  fixId: string,
+  patch: Record<string, unknown>,
+  machineId?: string,
+) {
+  let q = supabase.from('project_security_fixes').update(patch).eq('id', fixId);
+  if (machineId) q = q.eq('machine_id', machineId);
+  return q;
 }
 
 export async function markCompleted(
@@ -88,10 +117,12 @@ export async function markCompleted(
     tokensUsed?: number;
     estimatedCost?: number;
   },
+  machineId?: string,
 ) {
-  await supabase
-    .from('project_security_fixes')
-    .update({
+  await terminalUpdate(
+    supabase,
+    fixId,
+    {
       status: 'completed',
       pr_url: result.prUrl,
       pr_number: result.prNumber,
@@ -102,8 +133,9 @@ export async function markCompleted(
       tokens_used: result.tokensUsed ?? null,
       estimated_cost: result.estimatedCost ?? null,
       completed_at: new Date().toISOString(),
-    })
-    .eq('id', fixId);
+    },
+    machineId,
+  );
 }
 
 export async function markFailed(
@@ -112,26 +144,100 @@ export async function markFailed(
   errorMessage: string,
   errorCategory?: string,
   failureDetails?: Record<string, unknown> | null,
+  machineId?: string,
 ) {
-  await supabase
-    .from('project_security_fixes')
-    .update({
+  await terminalUpdate(
+    supabase,
+    fixId,
+    {
       status: 'failed',
       error_message: errorMessage,
       error_category: errorCategory ?? null,
       failure_details: failureDetails ?? null,
       completed_at: new Date().toISOString(),
-    })
-    .eq('id', fixId);
+    },
+    machineId,
+  );
 }
 
-export async function isJobCancelled(supabase: SupabaseClient, fixId: string): Promise<boolean> {
+/**
+ * Answer-only terminal write: flips the row to completed WITHOUT touching
+ * pr_url/pr_number/pr_branch/diff_summary — used for answer-only resumes (the
+ * prior PR still stands as-is) and for restoring a Stopped resume of a
+ * previously-completed row (the rollup counts failed/rejected rows as failures
+ * and would silently downgrade a completed task).
+ */
+export async function markAnswered(supabase: SupabaseClient, fixId: string, machineId?: string) {
+  await terminalUpdate(
+    supabase,
+    fixId,
+    { status: 'completed', completed_at: new Date().toISOString() },
+    machineId,
+  );
+}
+
+/**
+ * End-of-run drain: if the user sent a follow-up DURING this run (after the
+ * watermark the run actually replayed), re-queue the row via wake_agent_fix so
+ * the next run picks the message up. Returns true when it re-queued. Never
+ * throws — post-run cleanup must not fail the job.
+ */
+export async function maybeRequeueFollowup(
+  supabase: SupabaseClient,
+  fixId: string,
+  threadId: string | null,
+  taskId: string | null,
+  watermarkIso: string | null,
+): Promise<boolean> {
+  try {
+    if (!threadId || !watermarkIso) return false;
+    if (taskId) {
+      // v1: drain only single-target tasks — a multi-target task's wake fans
+      // out through the /message endpoint, not the per-row drain.
+      const { data: agentRows } = await supabase
+        .from('project_security_fixes')
+        .select('id')
+        .eq('task_id', taskId)
+        .eq('strategy', 'agent')
+        .limit(2);
+      if ((agentRows?.length ?? 0) > 1) return false;
+    }
+    const { data: newer } = await supabase
+      .from('aegis_chat_messages')
+      .select('id')
+      .eq('thread_id', threadId)
+      .eq('role', 'user')
+      .gt('created_at', watermarkIso)
+      .limit(1);
+    if (!newer || newer.length === 0) return false;
+    await supabase.rpc('wake_agent_fix', { p_fix_id: fixId });
+    console.log(`[FIX] follow-up arrived during the run — re-queued ${fixId}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Should the running job abort? True on a user Stop (status='rejected') OR —
+ * when machineId is provided — on a lease reassignment (a Stopped-then-woken
+ * row reset machine_id and may now belong to a NEW machine; the OLD still-
+ * running agent must abort at the next step boundary instead of zombie-writing
+ * over the new run).
+ */
+export async function isJobCancelled(
+  supabase: SupabaseClient,
+  fixId: string,
+  machineId?: string,
+): Promise<boolean> {
   const { data } = await supabase
     .from('project_security_fixes')
-    .select('status')
+    .select('status, machine_id')
     .eq('id', fixId)
     .maybeSingle();
-  return data?.status === 'rejected';
+  if (!data) return false;
+  if (data.status === 'rejected') return true;
+  return machineId != null && data.machine_id !== machineId;
 }
 
 export async function getOrgInstallationId(
