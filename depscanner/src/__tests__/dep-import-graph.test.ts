@@ -47,16 +47,32 @@ describe('enumerateGoModules', () => {
     fs.mkdirSync(path.join(dir, 'testdata', 'fixture'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'testdata', 'fixture', 'go.mod'), 'module fixture\n');
 
-    const mods = enumerateGoModules(dir).map((m) => path.relative(dir, m) || '.');
+    const { dirs, truncated } = enumerateGoModules(dir);
+    const mods = dirs.map((m) => path.relative(dir, m) || '.');
     expect(mods).toContain('.');
     expect(mods).toContain('cli');
     expect(mods).not.toContain(path.join('vendor', 'dep'));
     expect(mods).not.toContain(path.join('testdata', 'fixture'));
+    expect(truncated).toBe(false);
   });
 
   it('returns empty for a workspace with no go.mod anywhere', () => {
     fs.writeFileSync(path.join(dir, 'main.go'), 'package main\n');
-    expect(enumerateGoModules(dir)).toEqual([]);
+    expect(enumerateGoModules(dir)).toEqual({ dirs: [], truncated: false });
+  });
+
+  it('flags truncated when a nested module sits past the depth cap (Gate-3: caller must refuse)', () => {
+    fs.writeFileSync(path.join(dir, 'go.mod'), 'module example.com/root\n');
+    // GO_MODULE_ENUM_MAX_DEPTH = 6 → a go.mod at depth 8 is dropped, and the
+    // dropped module could hold the driver whose closure includes the gated
+    // subpackage, so absence over the partial union would be unsound.
+    let deep = dir;
+    for (let i = 0; i < 8; i++) deep = path.join(deep, `d${i}`);
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, 'go.mod'), 'module example.com/root/deep\n');
+    const { dirs, truncated } = enumerateGoModules(dir);
+    expect(dirs.map((m) => path.relative(dir, m) || '.')).toContain('.');
+    expect(truncated).toBe(true);
   });
 });
 

@@ -88,15 +88,25 @@ export function parseGoListOutput(stdout: string): string[] {
  * Enumerate go.mod module directories under the workspace — `./...` does not
  * cross module boundaries, so every nested module must be listed separately.
  * vendor/ and testdata/ are never module roots we ship; dot-dirs skipped.
+ *
+ * `truncated` is set when the walk stopped short of exhausting the tree (depth
+ * cap hit, or an unreadable directory). A truncated enumeration cannot promise
+ * the union is the FULL compile set — a dropped nested module might hold the
+ * first-party driver whose closure includes the gated subpackage — so the
+ * caller must refuse absence proofs (Gate-3 safety), exactly like the
+ * count-cap path.
  */
-export function enumerateGoModules(workspaceRoot: string): string[] {
+export function enumerateGoModules(workspaceRoot: string): { dirs: string[]; truncated: boolean } {
   const out: string[] = [];
+  let truncated = false;
   const walk = (dir: string, depth: number): void => {
-    if (depth > GO_MODULE_ENUM_MAX_DEPTH || out.length >= GO_MODULE_ENUM_MAX_MODULES) return;
+    if (out.length >= GO_MODULE_ENUM_MAX_MODULES) return; // count-cap handled by caller
+    if (depth > GO_MODULE_ENUM_MAX_DEPTH) { truncated = true; return; }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      truncated = true;
       return;
     }
     if (entries.some((e) => e.isFile() && e.name === 'go.mod')) out.push(dir);
@@ -107,7 +117,7 @@ export function enumerateGoModules(workspaceRoot: string): string[] {
     }
   };
   walk(workspaceRoot, 0);
-  return out;
+  return { dirs: out, truncated };
 }
 
 async function buildGoIndex(ctx: PipelineContext): Promise<TransitiveImportIndex | null> {
@@ -126,11 +136,13 @@ async function buildGoIndex(ctx: PipelineContext): Promise<TransitiveImportIndex
   );
   if (!hasGatedDep) return null;
 
-  const modules = enumerateGoModules(workspaceRoot);
+  const { dirs: modules, truncated: enumTruncated } = enumerateGoModules(workspaceRoot);
   if (modules.length === 0) return null;
-  if (modules.length >= GO_MODULE_ENUM_MAX_MODULES) {
-    // Enumeration cap hit — we cannot promise the union is complete. Refuse.
-    await log.warn('dep_import_graph', `go module enumeration capped at ${GO_MODULE_ENUM_MAX_MODULES} — transitive proofs disabled`);
+  if (enumTruncated || modules.length >= GO_MODULE_ENUM_MAX_MODULES) {
+    // Enumeration incomplete (count cap OR depth cap OR an unreadable dir) — the
+    // module union cannot be promised complete, so absence proofs would be
+    // unsound. Refuse (→ unavailable → today's behavior). Gate-3 safety.
+    await log.warn('dep_import_graph', `go module enumeration incomplete (capped/truncated) — transitive proofs disabled`);
     return emptyTransitiveImportIndex('golang');
   }
 
