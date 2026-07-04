@@ -131,9 +131,19 @@ export class DepSourceCache {
     // same slug and write into the same dir — the caller would then scan a
     // merged tree. Append a short hash of the full `ecosystem/name@version`
     // key so each package gets a collision-free destination.
+    //
+    // BOTH name AND version are sanitized the SAME way before building the
+    // dest path: the ecosystem shape gates (NPM_NAME_RE / PYPI_NAME_RE +
+    // version regex) run later inside fetchNpm/fetchPypi, but the dest dir is
+    // built + mkdir'd HERE first — a raw `version` containing `../` (SBOM
+    // versions come from cdxgen-parsed manifests in the scanned repo) would
+    // otherwise escape `this.root` and the catch-block rmSync would recursively
+    // delete an attacker-named path outside the cache root. The keyHash still
+    // uses the raw key, so collision-freeness is preserved.
     const slug = packageName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const versionSlug = version.replace(/[^a-zA-Z0-9._-]/g, '_');
     const keyHash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 12);
-    const dest = path.join(this.root, ecosystem, `${slug}-${version}-${keyHash}`);
+    const dest = path.join(this.root, ecosystem, `${slug}-${versionSlug}-${keyHash}`);
     fs.mkdirSync(dest, { recursive: true });
 
     try {

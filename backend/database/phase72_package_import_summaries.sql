@@ -22,8 +22,15 @@
 --     never be served to other orgs (the container_image_scan_cache rule).
 --   - `artifact_sha256` is reserved for v2 integrity checks (absence claims);
 --     the v1 writer leaves it null.
---   - No RLS: the table is not tenant-scoped and is only reachable with the
---     worker's service-role key, matching package_capabilities.
+--   - Defense-in-depth RLS: the table is tenant-global and the worker
+--     reads/writes via service role (which bypasses RLS). Without RLS the
+--     public schema's default anon/authenticated grants make the PUBLIC anon
+--     key a read+WRITE credential — and a poisoned row FORGES a transitive
+--     absence proof (an emptied consumer row flips a Django veto false →
+--     silences a genuinely-reachable CVE cross-org, breaking the fail-safe
+--     doctrine). So we ENABLE RLS + deny-all for non-service roles, exactly
+--     like phase27e did for container_image_scan_cache (the package_capabilities
+--     precedent this table first copied is ITSELF unremediated).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS public.package_import_summaries (
@@ -52,5 +59,19 @@ CREATE TABLE IF NOT EXISTS public.package_import_summaries (
 CREATE INDEX IF NOT EXISTS idx_pis_lookup
   ON public.package_import_summaries (ecosystem, package_name, version);
 
+-- Defense-in-depth RLS (mirrors phase27e_cache_rls.sql). ENABLE alone already
+-- denies non-service roles; the explicit deny-all policies make the intent
+-- visible in the schema. The worker's service-role key bypasses RLS, so the
+-- read/write path in dep-import-graph.ts is unaffected.
+ALTER TABLE public.package_import_summaries ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS pis_deny_anon_select ON public.package_import_summaries;
+CREATE POLICY pis_deny_anon_select ON public.package_import_summaries
+  FOR SELECT TO anon, authenticated USING (false);
+
+DROP POLICY IF EXISTS pis_deny_anon_write ON public.package_import_summaries;
+CREATE POLICY pis_deny_anon_write ON public.package_import_summaries
+  FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
+
 COMMENT ON TABLE public.package_import_summaries IS
-  'Arc 2: per-dist question-relevant import/token summaries from public registry artifacts. Global cache; never contains org-derived data.';
+  'Arc 2: per-dist question-relevant import/token summaries from public registry artifacts. Global cache; never contains org-derived data. RLS deny-all for non-service roles (phase27e pattern) — a poisoned row forges a transitive absence proof.';
