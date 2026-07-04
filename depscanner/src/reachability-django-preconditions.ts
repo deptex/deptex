@@ -480,11 +480,24 @@ export function evaluateDjangoFeaturePreconditionDemotion(input: {
   let chosen: FeaturePrecondition | undefined;
   for (const fp of applicable) {
     if (fp.detect(signals) !== 'absent') return { demote: false };
-    // A NON-OWNER prod dist imports / mentions this row's question — a
-    // transitive consumer may load the vulnerable submodule. Refuse.
+    // A NON-OWNER prod dist IMPORTS this row's question module — a transitive
+    // consumer actively drives the vulnerable submodule (weasyprint imports
+    // fontTools; a thumbnail lib imports PIL.ImageFont). Refuse.
+    //
+    // IMPORT-statement matches ONLY: question-token substring hits are
+    // collected + cached but deliberately NOT veto evidence in v1 — a
+    // dependency MENTIONING a submodule is the normal dormant-wrapper case
+    // (pyopenssl's sources contain 'pkcs7', pip's contain 'easy_install'),
+    // and a token veto reversed 11 labelled-unreachable saleor/paperless
+    // demotions when trialled during Arc 2 validation. Tokens become
+    // evidence only for the v2 ABSENCE direction (plan §8).
     if (
-      fp.question &&
-      transitiveConsumerVeto(signals.transitiveImports, fp.question, vetoOwners)
+      fp.question?.modules &&
+      transitiveConsumerVeto(
+        signals.transitiveImports,
+        { modules: fp.question.modules },
+        vetoOwners,
+      )
     ) {
       return { demote: false };
     }

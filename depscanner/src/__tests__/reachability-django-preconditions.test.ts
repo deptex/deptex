@@ -850,18 +850,25 @@ describe('Arc 2 transitive consumer veto (owner-excluded, veto-only)', () => {
     expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(false);
   });
 
-  it('a NON-OWNER token hit vetoes (the importlib/dynamic-import hole): truetype( in another dist', () => {
+  it('a NON-OWNER token hit does NOT veto in v1 — dependency sources MENTIONING a submodule is the dormant-wrapper case', () => {
+    // pyopenssl's sources contain 'pkcs7', pip's contain 'easy_install' — a
+    // token veto reversed 11 labelled-unreachable saleor/paperless demotions
+    // in validation. Tokens are cached for the v2 absence direction only.
     const signals = a2Signals({
       transitiveImports: idx({ captchagen: { tokens: ['truetype('] } }),
     });
-    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(false);
+    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(true);
+    const pkcs = a2Signals({
+      transitiveImports: idx({ pyopenssl: { tokens: ['pkcs7'] } }),
+    });
+    expect(demoteA2('cryptography', CRYPTO_PKCS7_A2, pkcs).demote).toBe(true);
   });
 
-  it('positive veto evidence is valid on a PARTIAL index', () => {
-    const partial = idx({ acmeclient: { tokens: ['pkcs7'] } }, 'partial');
+  it('positive IMPORT veto evidence is valid on a PARTIAL index', () => {
+    const partial = idx({ 'weird-thumbnailer': { modules: ['pil.imagefont'] } }, 'partial');
     partial.failedPackages.push('some-failed-dist');
     const signals = a2Signals({ transitiveImports: partial });
-    expect(demoteA2('cryptography', CRYPTO_PKCS7_A2, signals).demote).toBe(false);
+    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(false);
   });
 
   it('an UNAVAILABLE index changes nothing — today’s behavior', () => {

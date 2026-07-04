@@ -696,7 +696,10 @@ describe('evaluateGoSubpackageDemotion — Arc 2 transitive compile-set proofs',
     expect(r.demote).toBe(false);
   });
 
-  it('legacy rule (x/net/html): unchanged first_party demotion without oracle; the compile-set veto refuses when html IS compiled in', () => {
+  it('legacy rule (x/net/html): first_party demotion is UNAFFECTED by the compile set — compiled-but-dormant is the normal Go case', () => {
+    // caddy compiles smallstep's ssh wrappers + x/net/html via its PKI chain
+    // yet never drives them; the labels bless unreachable. A blanket
+    // compiled-in veto reversed 35 labelled-correct demotions in validation.
     const without = evaluateGoSubpackageDemotion({
       depName: NET,
       summary: NET_HTML_TEXTNODE,
@@ -705,14 +708,16 @@ describe('evaluateGoSubpackageDemotion — Arc 2 transitive compile-set proofs',
     expect(without.demote).toBe(true);
     expect(without.proofStandard).toBe('first_party');
 
-    const vetoed = evaluateGoSubpackageDemotion({
+    const withCompiledIn = evaluateGoSubpackageDemotion({
       depName: NET,
       summary: NET_HTML_TEXTNODE,
       signals: goSignals({
+        transitiveComplete: true,
         transitiveImportedPackages: new Set(['golang.org/x/net/html']),
       }),
     });
-    expect(vetoed.demote).toBe(false);
+    expect(withCompiledIn.demote).toBe(true);
+    expect(withCompiledIn.proofStandard).toBe('first_party');
   });
 
   it('a descendant in the compile set counts as compiled (belt-and-suspenders refusal)', () => {

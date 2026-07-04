@@ -138,7 +138,10 @@ async function buildGoIndex(ctx: PipelineContext): Promise<TransitiveImportIndex
   for (const moduleDir of modules) {
     const rel = path.relative(workspaceRoot, moduleDir) || '.';
     try {
-      const stdout = execFileSync('go', ['list', '-deps', './...'], {
+      // -buildvcs=false: VCS stamping shells out to git and fails on
+      // ownership-mismatched mounts (exit 128, "error obtaining VCS status");
+      // the compile set doesn't depend on VCS info.
+      const stdout = execFileSync('go', ['list', '-deps', '-buildvcs=false', './...'], {
         cwd: moduleDir,
         encoding: 'utf8',
         timeout: GO_LIST_TIMEOUT_MS,

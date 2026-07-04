@@ -343,15 +343,13 @@ export function evaluateGoSubpackageDemotion(input: {
     // First matching rule wins (most-specific-first). Demote only when the
     // affected subpackage is provably not imported.
     if (importsSubpackage(signals, rule.subpackage)) return { demote: false };
-    // Arc 2 veto: the toolchain compile set is ground truth — a subpackage
-    // compiled in via ANY dependency chain (certmagic→idna, cel-go→protojson)
-    // refutes first-party absence. Positive evidence is valid regardless of
-    // completeness; it only ever refuses.
-    if (transitivelyCompiled(signals, rule.subpackage)) return { demote: false };
     if (rule.requiresTransitiveProof) {
-      // First-party absence is KNOWN-unsound for this subpackage: demote only
-      // on a complete transitive absence proof. Anything less = unknown = refuse.
+      // First-party absence is KNOWN-unsound for this subpackage (it EXECUTES
+      // via common dependency chains — idna in every h2 transport, protojson
+      // via cel-go): demote only when the COMPLETE compile set proves the
+      // subpackage is not in the binary at all. Anything less = unknown = refuse.
       if (signals.transitiveComplete !== true) return { demote: false };
+      if (transitivelyCompiled(signals, rule.subpackage)) return { demote: false };
       return {
         demote: true,
         subpackage: rule.subpackage,
@@ -359,6 +357,13 @@ export function evaluateGoSubpackageDemotion(input: {
         proofStandard: 'prod_path',
       };
     }
+    // Legacy rules deliberately do NOT consult the compile set: transitive
+    // COMPILATION without a first-party driver is the normal dormant-module
+    // case in Go (caddy compiles smallstep's ssh wrappers + x/net/html via its
+    // PKI chain yet never drives them — 29 caddy + 6 gitea labelled-unreachable
+    // demotions were wrongly reversed when a blanket compiled-in veto was
+    // trialled during Arc 2 validation). "Compiled in" ≠ "reachable"; these
+    // rules' absence proof is "no first-party driver", which the labels bless.
     return {
       demote: true,
       subpackage: rule.subpackage,
