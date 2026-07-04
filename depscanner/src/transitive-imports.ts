@@ -66,6 +66,17 @@ export interface TransitiveImportIndex {
   failedPackages: string[];
 }
 
+/**
+ * PEP-503 name normalization (lowercase, extras stripped, runs of `-_.` → `-`)
+ * — the ONE normalization both the index builder (perPackage keys) and the
+ * evaluators (owner exclusion) must share, so `Flask`, `zope.interface` and
+ * `typing_extensions` key identically on both sides. Lives here (the shared
+ * dependency-free module) to avoid model↔pipeline import cycles.
+ */
+export function pep503Normalize(name: string): string {
+  return name.toLowerCase().replace(/\[.*$/, '').replace(/[-_.]+/g, '-').trim();
+}
+
 /** The "nothing usable" sentinel — callers treat it identically to no index. */
 export function emptyTransitiveImportIndex(
   ecosystem: TransitiveImportIndex['ecosystem'],

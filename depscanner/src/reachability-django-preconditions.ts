@@ -57,6 +57,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  pep503Normalize,
+  transitiveConsumerVeto,
+  type TransitiveImportIndex,
+  type TransitiveQuestion,
+} from './transitive-imports';
 
 // ---------------------------------------------------------------------------
 // Project-feature signals
@@ -113,6 +119,16 @@ export interface DjangoFeatureSignals {
    * `Image.open(` call. Gates the pillow WebP-decode promotion.
    */
   usesImageUploads: boolean;
+  /**
+   * Arc 2 (dependency-source import graphs): per-dist imports + question-token
+   * hits extracted from the installed prod dists' wheels. Populated by the
+   * reachability classifier's signals merge (from
+   * `options.transitiveImports`), never by `gatherDjangoFeatureSignals`.
+   * v1 is VETO-ONLY: a non-owner dist importing/mentioning a row's question
+   * refuses that demotion; absence proves nothing here (hard lists survive).
+   * Undefined = the oracle didn't run.
+   */
+  transitiveImports?: TransitiveImportIndex;
 }
 
 export type FeaturePresence = 'present' | 'absent' | 'unknown';
@@ -213,6 +229,17 @@ interface FeaturePrecondition {
    * h11 shadow) which stay `module`-only out of caution.
    */
   functionSafe?: boolean;
+  /**
+   * Arc 2: this row's TRANSITIVE consumer question — which module imports /
+   * liberal substring tokens in a NON-OWNER prod dist's sources indicate the
+   * vulnerable submodule may load. A hit VETOES the demotion (v1 is veto-only;
+   * absence never bypasses the hard list — see the arc plan §8). Set ONLY on
+   * submodule-load rows: consumer-SEMANTICS rows (sqlparse: "does something
+   * feed sqlparse ATTACKER sql?", brotli-via-Scrapy, the h11 shadow) must NOT
+   * carry one — Django itself imports sqlparse for trusted sqlmigrate SQL, so
+   * a raw import veto would reverse paperless's two labelled-unreachable wins.
+   */
+  question?: TransitiveQuestion;
 }
 
 export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
@@ -243,6 +270,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['pillow'],
     summary: [/imagefont/i, /\bfont/i],
+    question: { modules: ['pil.imagefont'], tokens: ['imagefont', 'truetype('] },
     detect: (s) =>
       resolve(
         pillowSubmoduleUsed(s, 'imagefont', ['truetype(']) ||
@@ -278,6 +306,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['cryptography'],
     summary: [/pkcs7/i, /pkcs\s*#?\s*7/i],
+    question: { tokens: ['pkcs7'] },
     detect: (s) =>
       resolve(textIncludes(s.codeText, ['pkcs7']) || hasAnyProdDep(s, ['acme', 'josepy']), s),
   },
@@ -287,6 +316,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['cryptography'],
     summary: [/pkcs12/i, /pkcs\s*#?\s*12/i],
+    question: { tokens: ['pkcs12'] },
     detect: (s) =>
       resolve(textIncludes(s.codeText, ['pkcs12']) || hasAnyProdDep(s, ['requests-pkcs12']), s),
   },
@@ -299,6 +329,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['cryptography'],
     summary: [/ssh certificate/i, /\bssh\b/i],
+    question: { tokens: ['load_ssh', 'ssh_certificate', 'sshcertificate'] },
     detect: (s) =>
       resolve(
         textIncludes(s.codeText, ['load_ssh', 'ssh_certificate', 'sshcertificate']) ||
@@ -352,6 +383,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     feature: 'fonttools-untrusted-fonts',
     owners: ['fonttools'],
     summary: [/xxe/i, /external entity/i],
+    question: { modules: ['fonttools'], tokens: ['fonttools', 'ttlib'] },
     detect: (s) =>
       resolve(moduleImported(s, 'fonttools') || textIncludes(s.codeText, ['fonttools', 'ttlib']), s),
   },
@@ -363,6 +395,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     feature: 'setuptools-packageindex',
     owners: ['setuptools'],
     summary: [/package.?index/i, /easy_install/i, /package url/i],
+    question: { tokens: ['package_index', 'easy_install'] },
     detect: (s) => resolve(textIncludes(s.codeText, ['package_index', 'easy_install']), s),
   },
   // --- tqdm CLI argument injection (owner: tqdm). CVE-2024-34062 lives in tqdm's
@@ -378,6 +411,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['tqdm'],
     summary: [/\bcli\b/i, /command.?line/i, /\bargument/i],
+    question: { modules: ['tqdm.cli'], tokens: ['tqdm.cli', 'tqdm.__main__'] },
     detect: (s) =>
       resolve(
         moduleImported(s, 'tqdm.cli') ||
@@ -397,6 +431,7 @@ export const FEATURE_PRECONDITIONS: FeaturePrecondition[] = [
     functionSafe: true,
     owners: ['filelock'],
     summary: [/softfilelock/i, /soft.?file.?lock/i],
+    question: { tokens: ['softfilelock'] },
     detect: (s) => resolve(textIncludes(s.codeText, ['softfilelock']), s),
   },
 ];
@@ -439,9 +474,20 @@ export function evaluateDjangoFeaturePreconditionDemotion(input: {
   );
   if (applicable.length === 0) return { demote: false };
 
+  // Arc 2 veto: owner exclusion keeps the vulnerable package's own
+  // self-imports/self-mentions from counting as consumer evidence.
+  const vetoOwners = [pep503Normalize(depName)];
   let chosen: FeaturePrecondition | undefined;
   for (const fp of applicable) {
     if (fp.detect(signals) !== 'absent') return { demote: false };
+    // A NON-OWNER prod dist imports / mentions this row's question — a
+    // transitive consumer may load the vulnerable submodule. Refuse.
+    if (
+      fp.question &&
+      transitiveConsumerVeto(signals.transitiveImports, fp.question, vetoOwners)
+    ) {
+      return { demote: false };
+    }
     if (!chosen) chosen = fp;
   }
   const matched = chosen!.summary.find((re) => re.test(summary));
@@ -450,6 +496,35 @@ export function evaluateDjangoFeaturePreconditionDemotion(input: {
   // whole demotion module-only.
   const functionSafe = applicable.every((fp) => fp.functionSafe === true);
   return { demote: true, feature: chosen!.feature, matchedPattern: matched?.source, functionSafe };
+}
+
+/**
+ * Arc 2 — the transitive-question registry, DERIVED from the row table (never
+ * hand-synced): every module prefix + token the dep-import-graph pipeline step
+ * must scan dependency sources for, and the owner names whose findings make
+ * the pypi leg worth running at all (the trigger guard). The extractor version
+ * hash incorporates this registry, so editing a row's `question` invalidates
+ * cached summaries automatically.
+ */
+export function djangoTransitiveQuestionRegistry(): {
+  modules: string[];
+  tokens: string[];
+  owners: string[];
+} {
+  const modules = new Set<string>();
+  const tokens = new Set<string>();
+  const owners = new Set<string>();
+  for (const fp of FEATURE_PRECONDITIONS) {
+    if (!fp.question) continue;
+    for (const m of fp.question.modules ?? []) modules.add(m);
+    for (const t of fp.question.tokens ?? []) tokens.add(t);
+    for (const o of fp.owners) owners.add(o);
+  }
+  return {
+    modules: [...modules].sort(),
+    tokens: [...tokens].sort(),
+    owners: [...owners].sort(),
+  };
 }
 
 // ---------------------------------------------------------------------------
