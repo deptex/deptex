@@ -156,6 +156,44 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: 'libxml2 out-of-bounds read while parsing HTML', hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0002'] }).promote).toBe(true);
   });
 
+  it('does NOT promote non-parse-path nokogiri advisory classes (DOM-API misuse / type-confusion / CSS-selector / zlib)', () => {
+    // Reachable only when the app's OWN code calls a specific low-level Nokogiri
+    // mutator with bad input — off the always-on Loofah/Sanitize parse path on ANY
+    // Rails app (discourse + mastodon ground truth: all module/unreachable). These
+    // slip the /nokogiri/ + memory-safety promoters; the (b)-(d) excludes veto them.
+    const nonParsePath = [
+      'Nokogiri Improperly Handles Unexpected Data Type',                                                   // CVE-2022-29181 type-confusion
+      'Nokogiri: Possible Use-After-Free when `Nokogiri::XML::Document#encoding=` raises an exception',      // GHSA-5v8h
+      'Nokogiri: Possible Use-After-Free when directly using `Nokogiri::XML::XPathContext` beyond document lifetime', // GHSA-p67v
+      'Nokogiri: Null Pointer Dereference calling methods on uninitialized wrapper classes',                 // GHSA-9cv2
+      'Nokogiri: Possible Use-After-Free when setting `Document#root=` to an invalid node type',             // GHSA-wjv4
+      'Nokogiri: Possible Use-After-Free when setting an attribute value via `Nokogiri::XML::Attr#value=` or `#content=`', // GHSA-phwj
+      'Nokogiri: Possible Out-of-Bounds Read in `Nokogiri::XML::NodeSet#[]`',                                // GHSA-5prr
+      'Nokogiri CSS selector tokenizer has regular expression backtracking',                                 // GHSA-c4rq
+      'Out-of-bounds Write in zlib affects Nokogiri',                                                        // GHSA-v6gp (generalizes the CVE-2018-25032 id-veto)
+    ];
+    for (const summary of nonParsePath) {
+      expect(P('nokogiri', summary).promote).toBe(false);
+    }
+  });
+
+  it('STILL promotes the genuine libxml2 parse-path nokogiri memory-safety + vendored-rollup CVEs', () => {
+    // Guard against over-correction: the excludes must not demote the reachable set
+    // (discourse+mastodon ground truth: these are data_flow).
+    const parsePath = [
+      'Nokogiri contains libxml Out-of-bounds Write vulnerability',              // CVE-2021-3517
+      'Nokogiri Implements libxml2 version vulnerable to null pointer dereferencing', // CVE-2021-3537
+      'Nokogiri Inefficient Regular Expression Complexity',                     // CVE-2022-24836 (parse ReDoS)
+      'Nokogiri patches vendored libxml2 to resolve multiple CVEs',             // GHSA-353f rollup
+      'Integer Overflow or Wraparound in libxml2 affects Nokogiri',             // GHSA-cgx6
+    ];
+    for (const summary of parsePath) {
+      const r = P('nokogiri', summary);
+      expect(r.promote).toBe(true);
+      expect(r.sink).toBe('rails-nokogiri-html-parser');
+    }
+  });
+
   it('does NOT promote the Ruby-version-gated SafeBuffer#bytesplice XSS by id', () => {
     // CVE-2023-28120: bytesplice only exists on Ruby ≥3.2; mastodon pins <3.1
     // (mastodon ground truth: unreachable). Excluded by id → not promoted.
