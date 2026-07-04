@@ -273,6 +273,14 @@ export const SUBPACKAGE_GATES: ModuleSubpackageGate[] = [
   },
 ];
 
+/**
+ * Arc 2 trigger guard: the gated module names — the dep-import-graph step
+ * only pays for `go list` when one of these is actually a dependency.
+ */
+export function goSubpackageGateModules(): Set<string> {
+  return new Set(SUBPACKAGE_GATES.map((g) => g.module.toLowerCase()));
+}
+
 export interface GoDemotionResult {
   demote: boolean;
   subpackage?: string;

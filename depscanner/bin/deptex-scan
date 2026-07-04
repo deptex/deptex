@@ -215,6 +215,20 @@ if [ -n "${DEPTEX_OSV_FALLBACK:-}" ]; then
   ENV_FLAGS+=(-e "DEPTEX_OSV_FALLBACK=$DEPTEX_OSV_FALLBACK")
 fi
 
+# Arc 2 dep-import-graph knobs (pipeline-steps/dep-import-graph.ts): the pypi
+# leg's wall cap + dist cap, and the kill switch. Corpus runs raise the wall
+# cap (e.g. 900000) so per-dist wheel extraction completes deterministically —
+# CLI scans use in-memory PGLite, so the cross-org DB cache never warms there.
+if [ -n "${DEPTEX_DEP_IMPORT_WALL_MS:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_WALL_MS=$DEPTEX_DEP_IMPORT_WALL_MS")
+fi
+if [ -n "${DEPTEX_DEP_IMPORT_MAX_DISTS:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_MAX_DISTS=$DEPTEX_DEP_IMPORT_MAX_DISTS")
+fi
+if [ -n "${DEPTEX_DEP_IMPORT_DISABLE:-}" ]; then
+  ENV_FLAGS+=(-e "DEPTEX_DEP_IMPORT_DISABLE=$DEPTEX_DEP_IMPORT_DISABLE")
+fi
+
 # OpenAI-compatible third-party hosts (DeepInfra, OpenRouter, Alibaba). When
 # DEPTEX_RULE_BASE_URL is set, the rule_generation step routes the openai-
 # style call to that host instead of api.openai.com. Forward the matching
