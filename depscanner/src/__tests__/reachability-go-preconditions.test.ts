@@ -565,3 +565,161 @@ describe('updateReachabilityLevels — Go framework-mediated model', () => {
     expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Arc 2 — transitive compile-set proofs (dependency-source import graphs)
+// ---------------------------------------------------------------------------
+
+describe('evaluateGoSubpackageDemotion — Arc 2 transitive compile-set proofs', () => {
+  const NET = 'golang.org/x/net';
+  const PROTOBUF = 'google.golang.org/protobuf';
+  const PROTOJSON_LOOP =
+    'Infinite loop in protojson.Unmarshal when unmarshaling certain forms of invalid JSON in google.golang.org/protobuf';
+  // A core-protobuf CVE whose summary mentions JSON generically but never names
+  // the protojson subpackage — must NOT ride the protojson rule (pattern criterion).
+  const CORE_PROTO_JSON_MENTION =
+    'proto.Unmarshal in google.golang.org/protobuf mishandles certain messages, unlike JSON unmarshaling';
+
+  it('idna (requiresTransitiveProof): refuses with no transitive data — first-party absence alone is known-unsound', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_IDNA_PUNYCODE,
+      signals: goSignals(),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('idna: demotes on a COMPLETE compile set that lacks idna, stamped prod_path', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_IDNA_PUNYCODE,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set(['golang.org/x/net/http2', 'github.com/some/dep']),
+      }),
+    });
+    expect(r.demote).toBe(true);
+    expect(r.subpackage).toBe('golang.org/x/net/idna');
+    expect(r.proofStandard).toBe('prod_path');
+  });
+
+  it('idna: refuses when the compile set CONTAINS idna (the gitea→certmagic / caddy-h2 shape)', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_IDNA_PUNYCODE,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set(['golang.org/x/net/idna']),
+      }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('idna: an INCOMPLETE compile set never proves absence, but its positive hit still vetoes', () => {
+    // absence on incomplete → refuse
+    expect(
+      evaluateGoSubpackageDemotion({
+        depName: NET,
+        summary: NET_IDNA_PUNYCODE,
+        signals: goSignals({
+          transitiveComplete: false,
+          transitiveImportedPackages: new Set(['github.com/some/dep']),
+        }),
+      }).demote,
+    ).toBe(false);
+    // positive on incomplete → also refuse (veto path)
+    expect(
+      evaluateGoSubpackageDemotion({
+        depName: NET,
+        summary: NET_IDNA_PUNYCODE,
+        signals: goSignals({
+          transitiveComplete: false,
+          transitiveImportedPackages: new Set(['golang.org/x/net/idna']),
+        }),
+      }).demote,
+    ).toBe(false);
+  });
+
+  it('idna: a first-party idna import refuses regardless of the oracle', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_IDNA_PUNYCODE,
+      signals: goSignals({
+        importedPackages: new Set(['golang.org/x/net/idna']),
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set<string>(),
+      }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('protojson: two-directional — demotes on the gitea shape, refuses on the caddy (cel-go) shape', () => {
+    const gitea = evaluateGoSubpackageDemotion({
+      depName: PROTOBUF,
+      summary: PROTOJSON_LOOP,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set(['google.golang.org/protobuf/proto']),
+      }),
+    });
+    expect(gitea.demote).toBe(true);
+    expect(gitea.subpackage).toBe('google.golang.org/protobuf/encoding/protojson');
+    expect(gitea.proofStandard).toBe('prod_path');
+
+    const caddy = evaluateGoSubpackageDemotion({
+      depName: PROTOBUF,
+      summary: PROTOJSON_LOOP,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set([
+          'google.golang.org/protobuf/proto',
+          'google.golang.org/protobuf/encoding/protojson',
+        ]),
+      }),
+    });
+    expect(caddy.demote).toBe(false);
+  });
+
+  it('protojson: a core-protobuf CVE that only mentions JSON generically never matches the rule', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: PROTOBUF,
+      summary: CORE_PROTO_JSON_MENTION,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set<string>(),
+      }),
+    });
+    expect(r.demote).toBe(false);
+  });
+
+  it('legacy rule (x/net/html): unchanged first_party demotion without oracle; the compile-set veto refuses when html IS compiled in', () => {
+    const without = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_HTML_TEXTNODE,
+      signals: goSignals(),
+    });
+    expect(without.demote).toBe(true);
+    expect(without.proofStandard).toBe('first_party');
+
+    const vetoed = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_HTML_TEXTNODE,
+      signals: goSignals({
+        transitiveImportedPackages: new Set(['golang.org/x/net/html']),
+      }),
+    });
+    expect(vetoed.demote).toBe(false);
+  });
+
+  it('a descendant in the compile set counts as compiled (belt-and-suspenders refusal)', () => {
+    const r = evaluateGoSubpackageDemotion({
+      depName: NET,
+      summary: NET_IDNA_PUNYCODE,
+      signals: goSignals({
+        transitiveComplete: true,
+        transitiveImportedPackages: new Set(['golang.org/x/net/idna/internal']),
+      }),
+    });
+    expect(r.demote).toBe(false);
+  });
+});

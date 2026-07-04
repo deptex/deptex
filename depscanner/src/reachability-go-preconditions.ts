@@ -87,6 +87,26 @@ export interface GoImportSignals {
    * (no dot in the first segment) are excluded to bound the set.
    */
   importedPackages: Set<string>;
+  /**
+   * Arc 2 (dependency-source import graphs): the toolchain-computed transitive
+   * COMPILE SET — `go list -deps ./...` output, unioned across every module in
+   * the workspace. Contains every package compiled into the build, first-party
+   * AND dependency-internal, so it is ground truth for "is this subpackage in
+   * the binary?". Populated by the reachability classifier's signals merge
+   * (from `options.transitiveImports`), never by `gatherGoImportSignals`.
+   * Undefined = the oracle didn't run. Consulted ONLY by the demotion gate —
+   * a transitive import is NEVER promotion evidence (the promotion's
+   * `requiredSubpackage` reads `importedPackages` alone).
+   */
+  transitiveImportedPackages?: Set<string>;
+  /**
+   * True only when the compile set is COMPLETE: `go list -deps` succeeded for
+   * the single root module, or for EVERY module of a multi-module workspace
+   * (union). The precondition for any transitive ABSENCE claim
+   * (`requiresTransitiveProof` rules). A positive membership answer in
+   * `transitiveImportedPackages` is valid regardless — it only ever refuses.
+   */
+  transitiveComplete?: boolean;
 }
 
 /** Empty (nothing recognized) signals — the "cannot reason" sentinel. */
@@ -122,8 +142,23 @@ function importsSubpackage(signals: GoImportSignals, pkg: string): boolean {
 interface SubpackageRule {
   /** The affected import path. Demote when the repo imports neither it nor a descendant. */
   subpackage: string;
-  /** The advisory summary indicates this subpackage. */
+  /**
+   * The advisory summary indicates this subpackage. Rules with
+   * `requiresTransitiveProof` may only carry patterns that NAME the affected
+   * subpackage (`/protojson/i`, `/\bidna\b/i`) — a generic term (`/json/i`)
+   * would let a future CVE in a DIFFERENT subpackage of the same module ride a
+   * transitive absence proof it doesn't deserve.
+   */
   patterns: RegExp[];
+  /**
+   * Arc 2: first-party import absence is KNOWN-UNSOUND for this subpackage —
+   * common dependency chains compile it in transitively (idna via certmagic /
+   * any x/net h2 consumer; protojson via cel-go). Demote ONLY when the
+   * toolchain-computed compile set is complete AND the subpackage is absent
+   * from it. Without the flag a rule keeps today's first-party-only behavior
+   * when no compile set is available.
+   */
+  requiresTransitiveProof?: boolean;
 }
 
 interface ModuleSubpackageGate {
@@ -199,15 +234,41 @@ export const SUBPACKAGE_GATES: ModuleSubpackageGate[] = [
           /character reference/i,
         ],
       },
-      // idna — REMOVED (2026-07-02). The idna gate demoted on first-party
-      // import absence, but ground-truth verification proved that claim
-      // unsound on BOTH validated apps: `go mod why` traces
-      // gitea → certmagic → golang.org/x/net/idna (compiled in transitively),
-      // and caddy's h2 client transport executes idna.ToASCII on every proxied
-      // request. First-party import absence does NOT prove a subpackage out of
-      // the binary when common dependency chains (certmagic, minio-go, any
-      // x/net h2 consumer) pull it in. Restore only with transitive
-      // import-graph proof (dependency-source import graphs — max-plan Arc 2).
+      // idna — RESTORED (Arc 2) behind a transitive proof. History: removed
+      // 2026-07-02 because first-party import absence was proven unsound on
+      // BOTH validated apps (`go mod why` traces gitea → certmagic →
+      // golang.org/x/net/idna; caddy's h2 client transport executes
+      // idna.ToASCII on every proxied request). With `requiresTransitiveProof`
+      // the rule demotes ONLY when the toolchain-computed compile set is
+      // complete and idna is absent from it — on gitea and caddy the compile
+      // set CONTAINS idna, so this rule refuses there (labels: `module` both).
+      {
+        subpackage: 'golang.org/x/net/idna',
+        patterns: [/\bidna\b/i, /punycode/i],
+        requiresTransitiveProof: true,
+      },
+    ],
+  },
+  // --- google.golang.org/protobuf — the protojson encoder is a separate
+  //     compilation unit most protobuf consumers never pull (the wire format
+  //     lives in proto/; protojson is opt-in JSON transcoding). First-party
+  //     absence proves nothing (caddy: cel-go's object.go calls protojson from
+  //     the celmatcher eval path — a labelled transitive chain), so the rule
+  //     requires the transitive compile-set proof. Two-directional corpus
+  //     ground truth: caddy CVE-2024-24786 `module` (cel-go compiles protojson
+  //     in → refuse), gitea same CVE `unreachable` (nothing on gitea's prod
+  //     path compiles protojson → demote). ---
+  {
+    module: 'google.golang.org/protobuf',
+    rules: [
+      {
+        subpackage: 'google.golang.org/protobuf/encoding/protojson',
+        // Subpackage-naming pattern ONLY — /json/i was reviewed and rejected:
+        // it would let a future core-protobuf CVE whose summary merely mentions
+        // JSON ride this rule's absence proof.
+        patterns: [/protojson/i],
+        requiresTransitiveProof: true,
+      },
     ],
   },
 ];
@@ -216,6 +277,31 @@ export interface GoDemotionResult {
   demote: boolean;
   subpackage?: string;
   matchedPattern?: string;
+  /**
+   * Which absence standard backed the demotion: 'first_party' (today's
+   * import-scan proof) or 'prod_path' (Arc 2: the complete toolchain compile
+   * set — first-party AND every dependency on the production path). Drives
+   * the verdict stamp; legacy rules always stamp 'first_party' so their
+   * verdict strings stay byte-stable.
+   */
+  proofStandard?: 'first_party' | 'prod_path';
+}
+
+/**
+ * Is `pkg` (or a descendant) in the transitive COMPILE SET? Ground truth from
+ * the Go toolchain — a positive answer refuses a demotion regardless of
+ * completeness (`go list -deps` closures are exact: if ssh is compiled it is
+ * listed, so exact membership suffices; the descendant check is harmless
+ * belt-and-suspenders in the refusal direction).
+ */
+function transitivelyCompiled(signals: GoImportSignals, pkg: string): boolean {
+  const set = signals.transitiveImportedPackages;
+  if (!set) return false;
+  const prefix = pkg + '/';
+  for (const p of set) {
+    if (p === pkg || p.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 /**
@@ -249,7 +335,28 @@ export function evaluateGoSubpackageDemotion(input: {
     // First matching rule wins (most-specific-first). Demote only when the
     // affected subpackage is provably not imported.
     if (importsSubpackage(signals, rule.subpackage)) return { demote: false };
-    return { demote: true, subpackage: rule.subpackage, matchedPattern: matched.source };
+    // Arc 2 veto: the toolchain compile set is ground truth — a subpackage
+    // compiled in via ANY dependency chain (certmagic→idna, cel-go→protojson)
+    // refutes first-party absence. Positive evidence is valid regardless of
+    // completeness; it only ever refuses.
+    if (transitivelyCompiled(signals, rule.subpackage)) return { demote: false };
+    if (rule.requiresTransitiveProof) {
+      // First-party absence is KNOWN-unsound for this subpackage: demote only
+      // on a complete transitive absence proof. Anything less = unknown = refuse.
+      if (signals.transitiveComplete !== true) return { demote: false };
+      return {
+        demote: true,
+        subpackage: rule.subpackage,
+        matchedPattern: matched.source,
+        proofStandard: 'prod_path',
+      };
+    }
+    return {
+      demote: true,
+      subpackage: rule.subpackage,
+      matchedPattern: matched.source,
+      proofStandard: 'first_party',
+    };
   }
   return { demote: false };
 }
