@@ -122,6 +122,10 @@ export async function runTaskAgent(
           installationToken,
           repoFullName: repoInfo.repoFullName,
           branch: input.priorPr.branch,
+          // Amend mode also needs the BASE ref (origin/<base>) to compare
+          // against or restore files from — a single-branch clone of the PR
+          // branch alone blinded the lockfile heal into a churny regen.
+          alsoFetchBranch: input.baseBranch,
           logger,
         });
         resumeMode = { prNumber: input.priorPr.number, prUrl: input.priorPr.url, branch: input.priorPr.branch };
@@ -280,6 +284,7 @@ export async function runTaskAgent(
         system: buildResumeSystem(
           resumeMode ? { prNumber: resumeMode.prNumber } : null,
           input.resumePriorStatus === 'completed',
+          input.baseBranch,
         ),
         messages: replay.messages,
         tools,

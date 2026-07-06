@@ -93,9 +93,18 @@ export async function cloneBranchHead(opts: {
   installationToken: string;
   repoFullName: string;
   branch: string;
+  /**
+   * Also fetch this branch's tip into refs/remotes/origin/<name>. A
+   * --single-branch clone has NO other refs, which blinds an amend-mode agent:
+   * it cannot compare against or restore files from the base branch (the
+   * lockfile-heal incident — `git checkout master -- package-lock.json` was
+   * impossible, forcing a churny from-scratch regen). Best-effort: a failure
+   * degrades to today's single-ref behavior, never fails the clone.
+   */
+  alsoFetchBranch?: string;
   logger: FixLogger;
 }): Promise<string> {
-  const { workDir, installationToken, repoFullName, branch, logger } = opts;
+  const { workDir, installationToken, repoFullName, branch, alsoFetchBranch, logger } = opts;
   const cloneUrl = `https://x-access-token:${installationToken}@github.com/${repoFullName}.git`;
   const startedAt = Date.now();
   await logger.info('clone', `Cloning ${repoFullName}@${branch} (branch tip)`);
@@ -111,6 +120,21 @@ export async function cloneBranchHead(opts: {
     throw new Error(`git clone failed: ${stripTokens((clone.stderr || '').slice(-500))}`);
   }
   const cloneOutput = stripTokens(`${clone.stderr || ''}${clone.stdout || ''}`).trim();
+
+  if (alsoFetchBranch && alsoFetchBranch !== branch) {
+    // The token URL is still set on origin here, so private repos work.
+    try {
+      execSync(
+        `git -C "${workDir}" fetch --depth 1 origin +refs/heads/${alsoFetchBranch}:refs/remotes/origin/${alsoFetchBranch}`,
+        { ...EXEC_OPTS, timeout: 120_000 },
+      );
+    } catch (e: any) {
+      await logger.warn(
+        'clone',
+        `Could not fetch base branch ${alsoFetchBranch}: ${stripTokens(String(e?.message ?? e)).slice(0, 200)}`,
+      );
+    }
+  }
 
   await logger.success('clone', `Cloned ${repoFullName}@${branch}`, Date.now() - startedAt);
   // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.

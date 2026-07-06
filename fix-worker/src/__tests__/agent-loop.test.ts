@@ -202,13 +202,31 @@ describe('runTaskAgent — resume mode', () => {
       makeDeps(),
     );
     expect(res).toEqual({ replayedThrough: '2026-07-03T00:00:00Z', cancelled: false });
-    expect(cloneBranchHead).toHaveBeenCalledWith(expect.objectContaining({ branch: 'aegis/fix-x-abc' }));
+    // The amend clone also fetches the BASE ref so the agent can compare
+    // against / restore files from origin/<base> (the lockfile-heal gap).
+    expect(cloneBranchHead).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'aegis/fix-x-abc', alsoFetchBranch: 'main' }),
+    );
     expect(cloneAtSha).not.toHaveBeenCalled();
     const call = (generateText as jest.Mock).mock.calls[0][0];
     expect(call.messages).toEqual([{ role: 'user', content: 'replayed brief' }]);
     expect(call.prompt).toBeUndefined();
-    // Amend-mode resume system names the PR it will update.
+    // Amend-mode resume system names the PR it will update + the base ref.
     expect(String(call.system)).toContain('pull request #7');
+    expect(String(call.system)).toContain('origin/main');
+  });
+
+  test('the amend resume system names the actual base branch (origin/master)', async () => {
+    (generateText as jest.Mock).mockImplementation(async () => ({}));
+    await runTaskAgent(
+      {} as any,
+      makeInput({ resume: true, runSeq: 1, priorPr: { ...PRIOR }, baseBranch: 'master' }),
+      makeDeps(),
+    );
+    expect(cloneBranchHead).toHaveBeenCalledWith(expect.objectContaining({ alsoFetchBranch: 'master' }));
+    const call = (generateText as jest.Mock).mock.calls[0][0];
+    expect(String(call.system)).toContain('origin/master');
+    expect(String(call.system)).toContain('git checkout origin/master --');
   });
 
   test('a resume whose prior PR is CLOSED clones the base tip and uses the no-PR resume system', async () => {
