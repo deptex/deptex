@@ -46,7 +46,11 @@ export function buildResumeSystem(
     : priorCompleted
       ? `RESUME MODE: You are resuming a task you already completed. The conversation above is a replay of your own earlier work — you previously opened a pull request, and it has since been merged or closed, so the original fix already stands. The user's latest message is a new instruction. If it requires code changes: make the smallest safe change, verify it, then call open_pull_request once — this opens a NEW pull request (your earlier one is gone). If the message is only a question: answer it in your reply text, then call finish_task with status "completed" — never "failed"; this task already succeeded and the original fix stands.`
       : `RESUME MODE: You are resuming a task you already attempted. The conversation above is a replay of your own earlier work. No open pull request exists for this task right now (the previous attempt did not open one, or it has since been closed or merged). The user's latest message is new guidance. If a safe fix is possible now, apply it, verify it, and call open_pull_request — this opens a new pull request. If it is only a question, answer it; then if the finding still cannot be fixed, call finish_task with status "failed" and an honest category.`;
-  return AGENT_SYSTEM + '\n\n' + paragraph;
+  // Anti-imitation, shared by all three variants: a weak model shown the
+  // replay transcript will otherwise MIMIC its lines as prose and believe the
+  // text executed something (caught live — zero tool calls, run ended empty).
+  const antiImitation = `The replay above is a compressed transcript — '(earlier step: …)' lines describe tool calls that already ran. Writing text never executes anything: to act now you MUST call your tools (read_file, run_command, str_replace, open_pull_request, finish_task); never write a command as prose.`;
+  return AGENT_SYSTEM + '\n\n' + paragraph + '\n\n' + antiImitation;
 }
 
 export interface BriefInput {

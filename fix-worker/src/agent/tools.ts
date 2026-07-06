@@ -485,13 +485,26 @@ export function buildAgentTools(deps: AgentToolDeps) {
       try {
         // Deterministic lockfile guarantee for dep bumps: regenerate so CI's
         // `npm ci` resolves even if the model skipped the install itself.
-        // SKIPPED on an edit-free amend: an answer-only turn that wrongly calls
-        // open_pull_request must stay a true noChanges — the regen would dirty
-        // the lockfile and push a pointless commit.
+        // SKIPPED only on a TRUE edit-free amend (an answer-only turn that
+        // wrongly calls open_pull_request must stay a true noChanges) — and
+        // "did this amend change anything?" is answered by GIT, not the
+        // editor-tool ledger: the heal-2 incident restored package-lock.json
+        // via run_command (`git checkout origin/<base> -- <file>`), which left
+        // state.editedFiles empty, skipped the regen, and shipped a lockfile
+        // out of sync with the manifest's overrides (npm ci EUSAGE). Any dirty
+        // tree — whichever tool dirtied it — runs the regen: it's idempotent,
+        // and the plausibility guard below protects its output.
+        // (`git status --porcelain` is staging-agnostic, and this runs BEFORE
+        // the change-set narration's `git add -A` anyway.)
+        let skipRegenForCleanAmend = false;
+        if (deps.resumeMode && deps.fixType === 'vulnerability') {
+          const { output: porcelain } = await runShell('git status --porcelain', repoRoot);
+          skipRegenForCleanAmend = porcelain.trim() === '';
+        }
         if (
           deps.fixType === 'vulnerability' &&
           fs.existsSync(path.join(projectDir, 'package.json')) &&
-          !(deps.resumeMode && state.editedFiles.size === 0)
+          !skipRegenForCleanAmend
         ) {
           // Pre-regen size — the plausibility baseline for the guard below.
           let lockBytesBefore = 0;

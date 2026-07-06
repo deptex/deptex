@@ -102,6 +102,15 @@ function makeGitDeps(over: Partial<AgentToolDeps> = {}): AgentToolDeps {
   return deps;
 }
 
+/** Commit everything in the test repo (identity + autocrlf pinned for byte-stable restores). */
+function commitAll(repoRoot: string) {
+  execSync('git config core.autocrlf false', { cwd: repoRoot });
+  execSync('git config user.email "t@deptex.dev"', { cwd: repoRoot });
+  execSync('git config user.name "t"', { cwd: repoRoot });
+  execSync('git add -A', { cwd: repoRoot });
+  execSync('git commit -qm init', { cwd: repoRoot });
+}
+
 afterEach(() => jest.clearAllMocks());
 
 describe('agent tools', () => {
@@ -232,8 +241,10 @@ describe('agent tools — resume mode', () => {
   const RESUME = { prNumber: 42, prUrl: 'https://github.com/o/r/pull/42', branch: 'aegis/prior' };
 
   // open_pull_request runs real (best-effort) git narration commands in the
-  // temp dir — give the spawns headroom on slow Windows CI boxes.
+  // temp dir — give the spawns headroom on slow Windows CI boxes. Tests that
+  // reach the LIVE npm lockfile regen need more.
   const GIT_SPAWN_TIMEOUT = 30_000;
+  const NPM_LIVE_TIMEOUT = 120_000;
 
   test('open_pull_request in amend mode pushes to the existing branch and re-stamps the same PR', async () => {
     const deps = makeGitDeps({ resumeMode: { ...RESUME }, runSeq: 1, resumePriorStatus: 'completed' });
@@ -355,7 +366,7 @@ describe('agent tools — resume mode', () => {
     );
   });
 
-  test('lockfile regen is skipped on an edit-free amend (answer-only turn stays a true noChanges)', async () => {
+  test('lockfile regen is skipped on a CLEAN-tree amend (answer-only turn stays a true noChanges)', async () => {
     (commitAndPushFix as jest.Mock).mockResolvedValueOnce({
       prBranch: 'aegis/prior',
       diffSummary: '',
@@ -364,11 +375,33 @@ describe('agent tools — resume mode', () => {
     });
     const deps = makeGitDeps({ resumeMode: { ...RESUME } });
     fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    commitAll(deps.repoRoot); // clean working tree = a true edit-free amend
     const tools = buildAgentTools(deps);
     expect(deps.state.editedFiles.size).toBe(0);
     await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
     expect(deps.logger.info).not.toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
   }, GIT_SPAWN_TIMEOUT);
+
+  test('an amend dirtied by a SHELL-side change (editor ledger empty) still runs the regen', async () => {
+    (commitAndPushFix as jest.Mock).mockResolvedValueOnce({
+      prBranch: 'aegis/prior',
+      diffSummary: 'd',
+      pushOutput: 'p',
+      noChanges: false,
+    });
+    const deps = makeGitDeps({ resumeMode: { ...RESUME } });
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    commitAll(deps.repoRoot);
+    // Simulate the heal-2 incident: a tracked file changed via run_command
+    // (e.g. `git checkout origin/master -- package-lock.json`) — the tree is
+    // dirty but state.editedFiles never saw it. The skip must ask GIT, not the
+    // editor ledger, so the regen still runs.
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.1"}\n');
+    const tools = buildAgentTools(deps);
+    expect(deps.state.editedFiles.size).toBe(0);
+    await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
+    expect(deps.logger.info).toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
+  }, NPM_LIVE_TIMEOUT);
 
   test('create path with runSeq>0 uses a run-unique branch suffix', async () => {
     const deps = makeGitDeps({ runSeq: 1 });
@@ -447,15 +480,6 @@ describe('revertImplausibleLockfileRegen — lockfile stub guard', () => {
   const LOCK = 'package-lock.json';
   const GIT_TIMEOUT = 30_000;
   const NPM_TIMEOUT = 120_000;
-
-  function commitAll(repoRoot: string) {
-    // autocrlf off so the restored bytes match what the test wrote.
-    execSync('git config core.autocrlf false', { cwd: repoRoot });
-    execSync('git config user.email "t@deptex.dev"', { cwd: repoRoot });
-    execSync('git config user.name "t"', { cwd: repoRoot });
-    execSync('git add -A', { cwd: repoRoot });
-    execSync('git commit -qm init', { cwd: repoRoot });
-  }
 
   test('restores a committed lockfile that shrank implausibly', async () => {
     const deps = makeGitDeps();

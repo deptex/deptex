@@ -53,10 +53,11 @@ describe('reconstructAgentMessages', () => {
       { role: 'user', content: 'THE BRIEF' },
       { role: 'user', content: 'fix this CVE' },
       { role: 'assistant', content: 'Looking at the manifest' },
-      { role: 'assistant', content: '[read] Read package.json' },
-      // Step rows fold to one line: icon + label + command; output/diff omitted.
-      { role: 'assistant', content: '[verify] Regenerate the lockfile — $ npm install' },
-      { role: 'assistant', content: '[showed the pull request change card to the user]' },
+      { role: 'assistant', content: '(earlier step: Read package.json)' },
+      // Step rows fold to ONE descriptive past-tense line — never a
+      // command-shaped `$ …` line a weak model could imitate as its output.
+      { role: 'assistant', content: '(earlier step: Regenerate the lockfile — ran `npm install`)' },
+      { role: 'assistant', content: '(earlier: showed the pull request change card to the user)' },
       { role: 'assistant', content: 'raw beat with no parts' },
       { role: 'user', content: 'now bump to 4.2 instead' },
     ]);
@@ -88,8 +89,8 @@ describe('reconstructAgentMessages', () => {
     });
     expect(messages).toEqual([
       { role: 'user', content: brief },
-      { role: 'assistant', content: '[… earlier work omitted …]' },
-      { role: 'assistant', content: '[earlier: opened pull request #7]' },
+      { role: 'assistant', content: '(earlier: … work omitted …)' },
+      { role: 'assistant', content: '(earlier: opened pull request #7)' },
       { role: 'user', content: 'please bump to 4.2' },
     ]);
   });
@@ -105,7 +106,7 @@ describe('reconstructAgentMessages', () => {
     });
     expect(messages).toEqual([
       { role: 'user', content: 'B' },
-      { role: 'assistant', content: '[… earlier work omitted …]' },
+      { role: 'assistant', content: '(earlier: … work omitted …)' },
       { role: 'user', content: 'try again' },
     ]);
   });
@@ -160,7 +161,7 @@ describe('reconstructAgentMessages', () => {
     const { messages } = await reconstructAgentMessages(stubThread(rows), 'thread-1', { brief: 'B' });
     expect(messages).toEqual([
       { role: 'user', content: 'B' },
-      { role: 'assistant', content: '[showed the failure card to the user]' },
+      { role: 'assistant', content: '(earlier: showed the failure card to the user)' },
       { role: 'user', content: 'why did it fail?' },
     ]);
   });

@@ -211,9 +211,12 @@ describe('runTaskAgent — resume mode', () => {
     const call = (generateText as jest.Mock).mock.calls[0][0];
     expect(call.messages).toEqual([{ role: 'user', content: 'replayed brief' }]);
     expect(call.prompt).toBeUndefined();
-    // Amend-mode resume system names the PR it will update + the base ref.
+    // Amend-mode resume system names the PR it will update + the base ref,
+    // and carries the shared anti-imitation instruction (a weak model must
+    // not mimic the replay transcript as prose instead of calling tools).
     expect(String(call.system)).toContain('pull request #7');
     expect(String(call.system)).toContain('origin/main');
+    expect(String(call.system)).toContain('never write a command as prose');
   });
 
   test('the amend resume system names the actual base branch (origin/master)', async () => {

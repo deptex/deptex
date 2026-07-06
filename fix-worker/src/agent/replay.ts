@@ -11,7 +11,7 @@ export interface ReplayMessage {
   content: string;
 }
 
-const OMISSION_MARKER = '[… earlier work omitted …]';
+const OMISSION_MARKER = '(earlier: … work omitted …)';
 
 /**
  * Fetch + fold the thread into model messages.
@@ -67,15 +67,20 @@ export async function reconstructAgentMessages(
         if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
           mapped.push({ role: 'assistant', content: part.text.trim() });
         } else if (part?.type === 'step') {
-          // Compact single line: icon + label (+ command). Diff/output bodies
-          // are deliberately omitted — in amend mode the checked-out branch
-          // already carries the code, and the bodies would blow the budget.
+          // Compact single line, deliberately DESCRIPTIVE/PAST-TENSE — never
+          // command-shaped. A weak model shown `[verify] X — $ cmd` lines will
+          // IMITATE the format as its own output and believe writing the text
+          // executed the command (caught live: DeepSeek emitted the transcript
+          // as prose, made zero tool calls, and ended the run with nothing
+          // done). Diff/output bodies are omitted — in amend mode the
+          // checked-out branch already carries the code, and they'd blow the
+          // budget.
           const label = String(part.label ?? '').trim();
           if (!label) continue;
           const cmd = String(part.command ?? '').trim();
           mapped.push({
             role: 'assistant',
-            content: `[${part.icon ?? 'step'}] ${label}${cmd ? ` — $ ${cmd}` : ''}`,
+            content: `(earlier step: ${label}${cmd ? ` — ran \`${cmd}\`` : ''})`,
           });
         } else if (part?.type === 'tool-result') {
           // The PR-ready card vs the failure card — replaying a failure as a
@@ -84,8 +89,8 @@ export async function reconstructAgentMessages(
             role: 'assistant',
             content:
               part.result?.failed === true
-                ? '[showed the failure card to the user]'
-                : '[showed the pull request change card to the user]',
+                ? '(earlier: showed the failure card to the user)'
+                : '(earlier: showed the pull request change card to the user)',
           });
         }
       }
@@ -123,7 +128,7 @@ export async function reconstructAgentMessages(
     for (const m of dropped) {
       const match = m.content.match(/pull request #(\d+)/);
       if (match) {
-        inject.push({ role: 'assistant', content: `[earlier: opened pull request #${match[1]}]` });
+        inject.push({ role: 'assistant', content: `(earlier: opened pull request #${match[1]})` });
         break;
       }
     }
