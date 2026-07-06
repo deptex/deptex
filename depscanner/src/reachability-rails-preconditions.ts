@@ -538,8 +538,13 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
   },
   // --- Nokogiri libxml2 HTML/XML parser (owner: nokogiri): exercised whenever
   //     Rails sanitizes user posts / oneboxed remote HTML via Loofah/Sanitize.
-  //     Parser + memory-safety + CSS + zlib CVEs are on the content path. EXCLUDE
-  //     the XSLT/Schema/XInclude/C14N/JRuby feature-gated siblings. ---
+  //     libxml2 parser + memory-safety CVEs on the untrusted-content parse path
+  //     PROMOTE. EXCLUDE (a) the XSLT/Schema/XInclude/C14N/JRuby feature-gated
+  //     siblings, and (b)-(d) the non-parse-path advisory classes below — advisories
+  //     that need the APP to directly misuse a specific Nokogiri DOM-manipulation
+  //     API, plus CSS-selector ReDoS / zlib-deflate / type-confusion, none of which
+  //     the always-on Loofah/Sanitize path reaches (discourse + mastodon ground
+  //     truth: promoting these was 16 visible false-positives, 2026-07-04). ---
   {
     sink: 'rails-nokogiri-html-parser',
     owners: ['nokogiri'],
@@ -553,25 +558,41 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
       /null pointer/i,
       /integer overflow/i,
       /memory leak/i,
-      /css selector/i,
-      /zlib/i,
       /denial of service|dos\b|regular expression/i,
       /nokogiri/i,
     ],
-    exclude: [/(?<!lib)xslt/i, /schema/i, /xinclude/i, /c14n/i, /canonical/i, /jruby/i, /xerces/i, /nonet/i, /relaxng/i],
-    // CVE-2021-30560 + CVE-2021-3518: libxml2 UAF in the XInclude processing path
-    // (a non-default parse option Discourse never enables); their summaries say
-    // only "use-after-free" / "libxml2 and libxslt", hiding the XInclude gate, so
-    // the id is the only signal (Discourse ground truth labels both unreachable).
-    // CVE-2018-25032: a zlib DEFLATE (compression) out-of-bounds write, triggered
-    // when COMPRESSING crafted input under a non-default memLevel/strategy.
-    // Nokogiri only uses zlib INFLATE (decompressing gzipped content) on the parse
-    // path — it never deflates untrusted input — so this compression bug is NOT on
-    // the untrusted-HTML content path. Summary ("Nokogiri affected by zlib's
-    // Out-of-bounds Write") matches the generic /zlib/ + /out-of-bounds/ promoters
-    // but hides the deflate-vs-inflate distinction, so the id is the only signal
-    // (Discourse ground truth labels it module).
-    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518', 'CVE-2018-25032'],
+    exclude: [
+      // (a) Feature-gated XML siblings — reached only via the opt-in XSLT / Schema /
+      //     XInclude / C14N APIs or the JRuby / Xerces backend, never the sanitize path.
+      /(?<!lib)xslt/i, /schema/i, /xinclude/i, /c14n/i, /canonical/i, /jruby/i, /xerces/i, /nonet/i, /relaxng/i,
+      // (b) DOM-manipulation API-misuse UAF / NPE: reachable only when the app's OWN
+      //     code calls a specific low-level Nokogiri mutator with bad input
+      //     (Document#encoding=, XPathContext beyond document lifetime, Document#root=,
+      //     Attr#value= / #content=, NodeSet#[], uninitialized wrapper classes) or
+      //     passes an unexpected data type. Rails' Loofah / Sanitize call
+      //     Nokogiri.HTML() / DocumentFragment.parse — never these mutators — so the
+      //     vulnerable code is off the always-on path on ANY Rails app (discourse +
+      //     mastodon ground truth label all of them module / unreachable).
+      /#encoding=/i, /xpathcontext/i, /uninitialized wrapper/i, /#root=|document#root/i,
+      /attr#value|#content=/i, /nodeset#/i, /unexpected data type/i,
+      // (c) CSS-selector-tokenizer ReDoS: needs UNTRUSTED selectors passed to
+      //     .css() / .at_css(); sanitizers use only static developer-authored selectors.
+      //     `[- ]` so a hyphenated "CSS-selector" advisory is vetoed too.
+      /css[- ]selector/i,
+      // (d) zlib DEFLATE (compression) OOB write: Nokogiri only INFLATEs gzip on the
+      //     parse path, never deflates untrusted input, so no zlib CVE is on the
+      //     content path. `/zlib/` catches any (incl. future) zlib advisory generically;
+      //     the two known deflate advisories are ALSO pinned in excludeIds as
+      //     belt-and-suspenders against a feed rewording the summary without "zlib".
+      /zlib/i,
+    ],
+    // Id-vetoes for advisories whose coarse summary hides the gate that makes them
+    // unreachable: CVE-2021-30560 + CVE-2021-3518 (libxml2 UAF in the non-default
+    // XInclude path — summaries say only "use-after-free" / "libxml2 and libxslt"),
+    // and CVE-2018-25032 + GHSA-v6gp (zlib DEFLATE OOB — pinned here so the veto
+    // holds even if the summary loses the "zlib" token the /zlib/ exclude keys on).
+    // Discourse + mastodon ground truth: all module/unreachable.
+    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518', 'CVE-2018-25032', 'GHSA-v6gp-9mmm-c6p5'],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_html',
