@@ -33,7 +33,13 @@ jest.mock('../task-chat', () => {
 });
 jest.mock('../logger', () => ({ FixLogger: class {} }));
 
-import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from '../agent/tools';
+import {
+  buildAgentTools,
+  finalizeFailure,
+  revertImplausibleLockfileRegen,
+  type AgentRunState,
+  type AgentToolDeps,
+} from '../agent/tools';
 import { commitAndPushFix, openPullRequest } from '../pr';
 import { markCompleted, markFailed, markAnswered } from '../job-db';
 import { markTaskFromFix, narrateStep, postPrReadyCard } from '../task-chat';
@@ -431,4 +437,85 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     const details = (markFailed as jest.Mock).mock.calls[0][4];
     expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget|ran out of room/i);
   });
+});
+
+// Lockfile stub guard: npm quirks (a "//" comment key inside "overrides") can
+// silently treat the manifest as EMPTY and rewrite the lockfile as a 7-line
+// stub — the guard reverts implausible shrinkage so the stub never reaches
+// the PR (prod bug: PR #16 committed a -27509-line lockfile).
+describe('revertImplausibleLockfileRegen — lockfile stub guard', () => {
+  const LOCK = 'package-lock.json';
+  const GIT_TIMEOUT = 30_000;
+  const NPM_TIMEOUT = 120_000;
+
+  function commitAll(repoRoot: string) {
+    // autocrlf off so the restored bytes match what the test wrote.
+    execSync('git config core.autocrlf false', { cwd: repoRoot });
+    execSync('git config user.email "t@deptex.dev"', { cwd: repoRoot });
+    execSync('git config user.name "t"', { cwd: repoRoot });
+    execSync('git add -A', { cwd: repoRoot });
+    execSync('git commit -qm init', { cwd: repoRoot });
+  }
+
+  test('restores a committed lockfile that shrank implausibly', async () => {
+    const deps = makeGitDeps();
+    const big = `{"name":"x","padding":"${'p'.repeat(30000)}"}\n`;
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), big);
+    commitAll(deps.repoRoot);
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), '{"name":"x","packages":{}}\n'); // the stub
+    const tripped = await revertImplausibleLockfileRegen(deps.projectDir, deps.repoRoot, big.length, deps.logger);
+    expect(tripped).toBe(true);
+    const restored = fs.readFileSync(path.join(deps.projectDir, LOCK), 'utf-8');
+    expect(restored.length).toBeGreaterThan(20000);
+    expect(deps.logger.warn).toHaveBeenCalledWith('setup', expect.stringContaining('implausibly small'));
+  }, GIT_TIMEOUT);
+
+  test('a sane shrink is left untouched', async () => {
+    const deps = makeGitDeps();
+    const big = `{"name":"x","padding":"${'p'.repeat(30000)}"}\n`;
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), big);
+    commitAll(deps.repoRoot);
+    const smaller = `{"name":"x","padding":"${'q'.repeat(20000)}"}\n`;
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), smaller);
+    const tripped = await revertImplausibleLockfileRegen(deps.projectDir, deps.repoRoot, big.length, deps.logger);
+    expect(tripped).toBe(false);
+    expect(fs.readFileSync(path.join(deps.projectDir, LOCK), 'utf-8')).toBe(smaller);
+    expect(deps.logger.warn).not.toHaveBeenCalled();
+  }, GIT_TIMEOUT);
+
+  test('a tiny fresh stub where no lockfile existed is deleted', async () => {
+    const deps = makeDeps();
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), '{"packages":{}}\n');
+    const tripped = await revertImplausibleLockfileRegen(deps.projectDir, deps.repoRoot, 0, deps.logger);
+    expect(tripped).toBe(true);
+    expect(fs.existsSync(path.join(deps.projectDir, LOCK))).toBe(false);
+    expect(deps.logger.warn).toHaveBeenCalledWith('setup', expect.stringContaining('implausibly small'));
+  });
+
+  test('a real new lockfile where none existed is kept', async () => {
+    const deps = makeDeps();
+    const real = `{"name":"x","padding":"${'p'.repeat(50000)}"}\n`;
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), real);
+    const tripped = await revertImplausibleLockfileRegen(deps.projectDir, deps.repoRoot, 0, deps.logger);
+    expect(tripped).toBe(false);
+    expect(fs.readFileSync(path.join(deps.projectDir, LOCK), 'utf-8')).toBe(real);
+    expect(deps.logger.warn).not.toHaveBeenCalled();
+  });
+
+  test('the PR-time regen call site guards with the pre-regen size (live npm)', async () => {
+    const deps = makeGitDeps();
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    // A plausible committed lockfile that a dep-less regen will rewrite as a
+    // ~250-byte stub — exactly the prod failure shape.
+    const big = `{"name":"x","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"x","version":"1.0.0","padding":"${'p'.repeat(30000)}"}}}\n`;
+    fs.writeFileSync(path.join(deps.projectDir, LOCK), big);
+    commitAll(deps.repoRoot);
+    const tools = buildAgentTools(deps);
+    await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
+    // The regen ran…
+    expect(deps.logger.info).toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
+    // …shrank the lockfile implausibly, and the guard restored the original.
+    expect(deps.logger.warn).toHaveBeenCalledWith('setup', expect.stringContaining('implausibly small'));
+    expect(fs.readFileSync(path.join(deps.projectDir, LOCK), 'utf-8').length).toBeGreaterThan(20000);
+  }, NPM_TIMEOUT);
 });

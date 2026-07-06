@@ -217,6 +217,52 @@ async function leaseHeld(deps: AgentToolDeps): Promise<boolean> {
   return !!data && data.machine_id === deps.machineId && data.status === 'executing';
 }
 
+/**
+ * npm quirks (e.g. a "//" comment key inside "overrides") can silently treat
+ * the manifest as EMPTY and rewrite the lockfile as a 7-line stub ("up to
+ * date, audited 1 package") — valid JSON, catastrophic semantics: committing
+ * it breaks `npm ci` on the PR. If the regenerated lockfile shrank
+ * implausibly, restore the pre-regen version and keep going (the PR's CI
+ * regenerates it). Returns true when it tripped. Never throws — the guard is
+ * strictly best-effort protection around a best-effort regen.
+ */
+export async function revertImplausibleLockfileRegen(
+  projectDir: string,
+  repoRoot: string,
+  beforeBytes: number,
+  logger: FixLogger,
+): Promise<boolean> {
+  try {
+    const lockPath = path.join(projectDir, 'package-lock.json');
+    let after = 0;
+    try {
+      after = fs.statSync(lockPath).size;
+    } catch {
+      after = 0;
+    }
+    // Trip on: an existing lockfile shrinking to under a tenth of its size, or
+    // a suspiciously tiny lockfile appearing where none existed before.
+    const implausibleShrink = beforeBytes > 2048 && after < beforeBytes / 10;
+    const freshStub = beforeBytes === 0 && after > 0 && after < 1024;
+    if (!implausibleShrink && !freshStub) return false;
+
+    if (beforeBytes > 0) {
+      // The file came from the clone, so it's tracked — restore it from git.
+      const gitRel = toGitPath(repoRoot, lockPath);
+      await runShell(`git checkout -- ${JSON.stringify(gitRel)}`, repoRoot);
+    } else {
+      fs.rmSync(lockPath, { force: true });
+    }
+    await logger.warn(
+      'setup',
+      `Lockfile regen produced an implausibly small file (${beforeBytes} -> ${after} bytes) — reverted; the PR CI will regenerate it.`,
+    );
+    return true;
+  } catch {
+    return true; // tripped but the restore itself failed — still non-fatal
+  }
+}
+
 /** Build a PR-shaped plan for commitAndPushFix/openPullRequest from the agent's title/body. */
 function prPlan(deps: AgentToolDeps, title: string, body: string): FixPlan {
   return {
@@ -447,8 +493,18 @@ export function buildAgentTools(deps: AgentToolDeps) {
           fs.existsSync(path.join(projectDir, 'package.json')) &&
           !(deps.resumeMode && state.editedFiles.size === 0)
         ) {
+          // Pre-regen size — the plausibility baseline for the guard below.
+          let lockBytesBefore = 0;
+          try {
+            lockBytesBefore = fs.statSync(path.join(projectDir, 'package-lock.json')).size;
+          } catch {
+            lockBytesBefore = 0;
+          }
           const { output } = await runShell('npm install --package-lock-only --ignore-scripts', projectDir);
           await deps.logger.info('setup', `Regenerated lockfile before PR:\n${cap(output)}`);
+          // Guard: a manifest quirk can make npm silently rewrite the lockfile
+          // as an empty stub — revert implausible shrinkage (non-fatal).
+          await revertImplausibleLockfileRegen(projectDir, repoRoot, lockBytesBefore, deps.logger);
         }
 
         // Authoritative change set: whatever actually changed (write_file, sed,
