@@ -252,6 +252,51 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     expect(mocks.stop).not.toHaveBeenCalled();
   });
 
+  it('poll fallback surfaces a late reply when realtime never delivers (the "nothing until refresh" fix)', async () => {
+    // The supabase channel mock never invokes its subscription callback, so this
+    // harness models a DEAD realtime socket — the exact "I asked and nothing came
+    // back until I refreshed" case. Only the send-armed poll can surface the reply.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.getMessages.mockResolvedValue([]);
+      mocks.fixRows = []; // idle input at submit time; the poll reloads regardless
+      mocks.sendTaskMessage.mockResolvedValue({ woke: true, queued: false, threadId: 'thread-1' });
+
+      render(
+        <ChatPane
+          organizationId="org-1"
+          threadId="thread-1"
+          currentUserId="user-1"
+          displayName="Henry"
+          onThreadCreated={vi.fn()}
+          liveReload
+          task={task}
+        />,
+      );
+      await vi.advanceTimersByTimeAsync(50);
+
+      submitText('does the override resolve to 4.1.0?');
+      await waitFor(() => expect(mocks.sendTaskMessage).toHaveBeenCalledTimes(1));
+
+      // The worker (eventually) persists its answer; realtime stays silent.
+      mocks.getMessages.mockResolvedValue([
+        {
+          id: 'm-answer',
+          role: 'assistant',
+          content: 'Yes — the override forces set-value to 4.1.0.',
+          metadata: { parts: [{ type: 'text', text: 'Yes — the override forces set-value to 4.1.0.' }] },
+        },
+      ] as any);
+
+      // Advance past one poll cadence — the fallback reloads and renders the reply
+      // without any realtime event.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(screen.getByText('Yes — the override forces set-value to 4.1.0.')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a streaming NON-task chat still stops via useChat.stop, never cancelTask', async () => {
     mocks.chatStatus = 'streaming';
     await renderChatPane({ liveReload: false, task: null, tasksLoading: false });

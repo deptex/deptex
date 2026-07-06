@@ -34,6 +34,15 @@ const TYPE_MS = 55;
 const BACKSPACE_MS = 30;
 const HOLD_MS = 2400;
 
+// A task's fix row is "running" (agent working) in any of these states.
+const TASK_RUNNING_STATUSES = new Set(['approved', 'planning', 'executing']);
+// Follow-up poll fallback (for when realtime silently stalls): cadence, the cap
+// if a run never even starts (wake failed / queued behind another), and the
+// hard ceiling while a run is genuinely going (realtime covers anything longer).
+const FOLLOWUP_POLL_MS = 3500;
+const FOLLOWUP_NEVER_STARTED_CAP_MS = 90_000;
+const FOLLOWUP_MAX_MS = 15 * 60_000;
+
 function formatRelative(iso: string): string {
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return '';
@@ -507,6 +516,10 @@ export function ChatPane({
   // A follow-up sent while the agent is mid-run is persisted + queued (the worker
   // drains it when the current run ends). Surfaced so the bubble doesn't read as ignored.
   const [taskQueuedHint, setTaskQueuedHint] = useState(false);
+  // Bumped each time a task follow-up is sent — arms the realtime-independent
+  // poll fallback below so the reply always lands even if the realtime socket
+  // has silently stalled (the "nothing came until I refreshed" bug).
+  const [followupPollNonce, setFollowupPollNonce] = useState(0);
   useEffect(() => {
     if (!taskWorking) setTaskQueuedHint(false); // run ended → pickup imminent
   }, [taskWorking]);
@@ -515,14 +528,13 @@ export function ChatPane({
       setTaskWorking(false);
       return;
     }
-    const RUNNING = new Set(['approved', 'planning', 'executing']);
     let cancelled = false;
     const evaluate = async () => {
       const { data } = await supabase
         .from('project_security_fixes')
         .select('status')
         .eq('thread_id', propThreadId);
-      if (!cancelled) setTaskWorking((data ?? []).some((r: { status: string }) => RUNNING.has(r.status)));
+      if (!cancelled) setTaskWorking((data ?? []).some((r: { status: string }) => TASK_RUNNING_STATUSES.has(r.status)));
     };
     void evaluate();
     const channel = supabase
@@ -570,6 +582,63 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveReload, propThreadId]);
 
+  // Realtime-independent fallback for the narration. Supabase's postgres_changes
+  // socket can silently stall (dropped connection, an access token that expired
+  // while the tab sat open) and stop delivering INSERTs until a manual refresh
+  // forces a reconnect — which looked like "I asked a follow-up and nothing came
+  // back until I refreshed". Armed on each task send (followupPollNonce): poll
+  // the thread directly until its run settles, reloading messages AND recomputing
+  // taskWorking, so both the reply and the thinking dot land regardless of the
+  // socket. Cheap reads, self-limiting, and it stops shortly after the run ends.
+  useEffect(() => {
+    if (!liveReload || !propThreadId || followupPollNonce === 0) return;
+    let cancelled = false;
+    let sawRunning = false;
+    let settledStreak = 0;
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      // Don't fight an in-flight useChat stream (task threads don't use one, but
+      // guard anyway) — just reschedule.
+      if (!cancelled && !inFlightRef.current) {
+        try {
+          const [msgs, fixes] = await Promise.all([
+            aegisApi.getMessages(propThreadId),
+            supabase.from('project_security_fixes').select('status').eq('thread_id', propThreadId),
+          ]);
+          if (cancelled) return;
+          setMessages(buildInitialMessages(msgs));
+          const running = (fixes.data ?? []).some((r: { status: string }) => TASK_RUNNING_STATUSES.has(r.status));
+          setTaskWorking(running);
+          if (running) {
+            sawRunning = true;
+            settledStreak = 0;
+          } else {
+            settledStreak += 1;
+          }
+        } catch {
+          /* transient — the next tick retries */
+        }
+      }
+      if (cancelled) return;
+      const elapsed = Date.now() - startedAt;
+      // Stop once: the run started and has been settled two ticks (terminal beat
+      // captured), OR it never started within the idle cap, OR the hard ceiling.
+      const done =
+        (sawRunning && settledStreak >= 2) ||
+        (!sawRunning && elapsed > FOLLOWUP_NEVER_STARTED_CAP_MS) ||
+        elapsed > FOLLOWUP_MAX_MS;
+      if (!done) timer = setTimeout(tick, FOLLOWUP_POLL_MS);
+    };
+    timer = setTimeout(tick, FOLLOWUP_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followupPollNonce, liveReload, propThreadId]);
+
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -597,6 +666,9 @@ export function ChatPane({
             parts: [{ type: 'text', text: trimmed }],
           } as unknown as UIMessage,
         ]);
+        // Arm the poll fallback immediately so the reply lands even if realtime
+        // is dead (the "nothing until refresh" bug).
+        setFollowupPollNonce((n) => n + 1);
         void aegisApi
           .sendTaskMessage(task.id, organizationId, trimmed)
           .then((res) => {
