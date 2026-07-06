@@ -577,18 +577,22 @@ export const ALWAYS_ON_RUNTIME: AlwaysOnRuntime[] = [
       /attr#value|#content=/i, /nodeset#/i, /unexpected data type/i,
       // (c) CSS-selector-tokenizer ReDoS: needs UNTRUSTED selectors passed to
       //     .css() / .at_css(); sanitizers use only static developer-authored selectors.
-      /css selector/i,
+      //     `[- ]` so a hyphenated "CSS-selector" advisory is vetoed too.
+      /css[- ]selector/i,
       // (d) zlib DEFLATE (compression) OOB write: Nokogiri only INFLATEs gzip on the
       //     parse path, never deflates untrusted input, so no zlib CVE is on the
-      //     content path (generalizes the old CVE-2018-25032 id-veto to GHSA-v6gp +
-      //     any future zlib advisory).
+      //     content path. `/zlib/` catches any (incl. future) zlib advisory generically;
+      //     the two known deflate advisories are ALSO pinned in excludeIds as
+      //     belt-and-suspenders against a feed rewording the summary without "zlib".
       /zlib/i,
     ],
-    // CVE-2021-30560 + CVE-2021-3518: libxml2 UAF in the XInclude processing path
-    // (a non-default parse option these apps never enable); their summaries say
-    // only "use-after-free" / "libxml2 and libxslt", hiding the XInclude gate, so
-    // the id is the only signal (discourse + mastodon ground truth: unreachable).
-    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518'],
+    // Id-vetoes for advisories whose coarse summary hides the gate that makes them
+    // unreachable: CVE-2021-30560 + CVE-2021-3518 (libxml2 UAF in the non-default
+    // XInclude path — summaries say only "use-after-free" / "libxml2 and libxslt"),
+    // and CVE-2018-25032 + GHSA-v6gp (zlib DEFLATE OOB — pinned here so the veto
+    // holds even if the summary loses the "zlib" token the /zlib/ exclude keys on).
+    // Discourse + mastodon ground truth: all module/unreachable.
+    excludeIds: ['CVE-2021-30560', 'CVE-2021-3518', 'CVE-2018-25032', 'GHSA-v6gp-9mmm-c6p5'],
     promoteTo: 'data_flow',
     requires: () => true,
     threatTag: 'requires_untrusted_html',
