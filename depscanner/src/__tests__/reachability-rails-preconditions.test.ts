@@ -143,17 +143,69 @@ describe('evaluateRailsAlwaysOnRuntimePromotion', () => {
     expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: nokoUAF, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0001'] }).promote).toBe(true);
   });
 
-  it('does NOT promote the zlib DEFLATE (compression) OOB CVE by id', () => {
-    // CVE-2018-25032: a zlib deflate/COMPRESSION out-of-bounds write. Nokogiri
-    // only uses zlib INFLATE (decompressing gzipped content) on the parse path —
-    // it never deflates untrusted input — so this compression bug is NOT on the
-    // untrusted-HTML content path. Its summary matches the generic /zlib/ +
-    // /out-of-bounds/ promoters, so the id is the only signal (discourse ground
-    // truth labels it module).
-    const zlibOob = "Nokogiri affected by zlib's Out-of-bounds Write vulnerability";
-    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: zlibOob, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2018-25032'] }).promote).toBe(false);
-    // A genuine inflate-path libxml2 OOB with a different id still promotes.
-    expect(evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary: 'libxml2 out-of-bounds read while parsing HTML', hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds: ['CVE-2099-0002'] }).promote).toBe(true);
+  it('does NOT promote the zlib DEFLATE (compression) OOB nokogiri advisories (both /zlib/ exclude AND id-veto)', () => {
+    // Nokogiri only uses zlib INFLATE (decompressing gzipped content) on the parse
+    // path — it never deflates untrusted input — so a zlib DEFLATE OOB write is NOT
+    // on the untrusted-HTML content path. Its summary matches the generic
+    // /out-of-bounds/ promoter, so it is vetoed two ways as belt-and-suspenders
+    // (discourse + mastodon ground truth: module):
+    //   (i) the /zlib/ summary exclude catches any zlib advisory, incl. future ones;
+    //  (ii) CVE-2018-25032 + GHSA-v6gp are ALSO pinned in excludeIds, so the veto
+    //       holds even if a feed drops the "zlib" token from the summary.
+    const pz = (summary: string, osvIds?: string[]) =>
+      evaluateRailsAlwaysOnRuntimePromotion({ depName: 'nokogiri', summary, hasHttpRouteEntryPoint: true, signals: railsSignals(), osvIds }).promote;
+    // (i) /zlib/ exclude — fires on the real summaries regardless of id, case-insensitive
+    expect(pz("Nokogiri affected by zlib's Out-of-bounds Write vulnerability", ['CVE-2018-25032'])).toBe(false);
+    expect(pz('Out-of-bounds Write in ZLIB affects Nokogiri', ['unknown-id'])).toBe(false); // /zlib/i case-insensitive + id-independent
+    // (ii) id-veto backstop — a reworded deflate summary WITHOUT the "zlib" token is
+    //      still vetoed by the pinned excludeIds (the /zlib/ exclude would miss it).
+    expect(pz('Nokogiri Out-of-bounds Write in the DEFLATE compression path', ['CVE-2018-25032'])).toBe(false);
+    expect(pz('Nokogiri Out-of-bounds Write in the DEFLATE compression path', ['GHSA-v6gp-9mmm-c6p5'])).toBe(false);
+    // A genuine inflate-path libxml2 OOB with a different id (no zlib token) still promotes.
+    expect(pz('libxml2 out-of-bounds read while parsing HTML', ['CVE-2099-0002'])).toBe(true);
+  });
+
+  it('does NOT promote non-parse-path nokogiri advisory classes (DOM-API misuse / type-confusion / CSS-selector / zlib)', () => {
+    // Reachable only when the app's OWN code calls a specific low-level Nokogiri
+    // mutator with bad input — off the always-on Loofah/Sanitize parse path on ANY
+    // Rails app (discourse + mastodon ground truth: all module/unreachable). These
+    // slip the /nokogiri/ + memory-safety promoters; the (b)-(d) excludes veto them.
+    const nonParsePath = [
+      'Nokogiri Improperly Handles Unexpected Data Type',                                                   // CVE-2022-29181 type-confusion
+      'Nokogiri: Possible Use-After-Free when `Nokogiri::XML::Document#encoding=` raises an exception',      // GHSA-5v8h
+      'Nokogiri: Possible Use-After-Free when directly using `Nokogiri::XML::XPathContext` beyond document lifetime', // GHSA-p67v
+      'Nokogiri: Null Pointer Dereference calling methods on uninitialized wrapper classes',                 // GHSA-9cv2
+      'Nokogiri: Possible Use-After-Free when setting `Document#root=` to an invalid node type',             // GHSA-wjv4
+      'Nokogiri: Possible Use-After-Free when setting an attribute value via `Nokogiri::XML::Attr#value=` or `#content=`', // GHSA-phwj
+      'Nokogiri: Possible Out-of-Bounds Read in `Nokogiri::XML::NodeSet#[]`',                                // GHSA-5prr
+      'Nokogiri CSS selector tokenizer has regular expression backtracking',                                 // GHSA-c4rq
+      'Out-of-bounds Write in zlib affects Nokogiri',                                                        // GHSA-v6gp (generalizes the CVE-2018-25032 id-veto)
+    ];
+    for (const summary of nonParsePath) {
+      expect(P('nokogiri', summary).promote).toBe(false);
+    }
+  });
+
+  it('STILL promotes the genuine libxml2 parse-path nokogiri memory-safety + vendored-rollup CVEs', () => {
+    // Guard against over-correction: the excludes must not demote the reachable set
+    // (discourse+mastodon ground truth: these are data_flow).
+    const parsePath = [
+      'Nokogiri contains libxml Out-of-bounds Write vulnerability',              // CVE-2021-3517
+      'Nokogiri Implements libxml2 version vulnerable to null pointer dereferencing', // CVE-2021-3537
+      'Nokogiri Inefficient Regular Expression Complexity',                     // CVE-2022-24836 (parse ReDoS)
+      'Nokogiri patches vendored libxml2 to resolve multiple CVEs',             // GHSA-353f rollup
+      'Integer Overflow or Wraparound in libxml2 affects Nokogiri',             // GHSA-cgx6
+      // GHSA-fq42 (data_flow) has a GENERIC summary with NO parse-path token — it
+      // promotes ONLY via the /nokogiri/ catch-all. This locks in why the catch-all
+      // must stay: dropping it to "promote only on a parse-path token" would silence
+      // this genuinely-reachable rollup (a silence-FN).
+      'Vulnerable dependencies in Nokogiri',                                    // GHSA-fq42 rollup
+    ];
+    for (const summary of parsePath) {
+      const r = P('nokogiri', summary);
+      expect(r.promote).toBe(true);
+      expect(r.sink).toBe('rails-nokogiri-html-parser');
+    }
   });
 
   it('does NOT promote the Ruby-version-gated SafeBuffer#bytesplice XSS by id', () => {
@@ -625,6 +677,53 @@ describe('updateReachabilityLevels — Rails framework-mediated model', () => {
       usedTransitives: new Set(['rack']),
       railsFeatureSignals: railsSignals(),
       httpEntryPointCount: 0,
+    });
+    const { level } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('module');
+  });
+
+  it('PROMOTES a genuine libxml2 parse-path nokogiri CVE module → data_flow on a deployed web app', async () => {
+    // The nokogiri PROMOTION path (not just XSLT demotion) wired end-to-end.
+    const fsk = new FakeStorage();
+    seedGemDep(fsk, { name: 'nokogiri', osvId: 'CVE-2021-3517', summary: NOKOGIRI_LIBXML_OOB });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'gem',
+      usedTransitives: new Set(['nokogiri']),
+      railsFeatureSignals: railsSignals(),
+      httpEntryPointCount: 75,
+    });
+    const { level, details } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('data_flow');
+    expect(details?.verdict).toBe('always_on_framework_runtime');
+    expect(details?.sink).toBe('rails-nokogiri-html-parser');
+  });
+
+  it('STAYS module: an EXCLUDED nokogiri finding (zlib DEFLATE) is NOT promoted on a deployed web app', async () => {
+    // The /zlib/ summary exclude blocks promotion end-to-end → honest module tier
+    // (the core 24→8 visible-FP fix, verified through the real classifier).
+    const fsk = new FakeStorage();
+    seedGemDep(fsk, { name: 'nokogiri', osvId: 'GHSA-v6gp-9mmm-c6p5', summary: 'Out-of-bounds Write in zlib affects Nokogiri' });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'gem',
+      usedTransitives: new Set(['nokogiri']),
+      railsFeatureSignals: railsSignals(),
+      httpEntryPointCount: 75,
+    });
+    const { level } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('module');
+  });
+
+  it('STAYS module via the excludeId backstop: osvIds thread through updateReachabilityLevels', async () => {
+    // A reworded deflate summary WITHOUT the "zlib" token would match /out-of-bounds/
+    // and promote — but CVE-2018-25032 pinned in excludeIds vetoes it. This proves
+    // the finding's osv_id is threaded into the promotion excludeIds check e2e.
+    const fsk = new FakeStorage();
+    seedGemDep(fsk, { name: 'nokogiri', osvId: 'CVE-2018-25032', summary: 'Nokogiri Out-of-bounds Write in the DEFLATE compression path' });
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'gem',
+      usedTransitives: new Set(['nokogiri']),
+      railsFeatureSignals: railsSignals(),
+      httpEntryPointCount: 75,
     });
     const { level } = verdictOf(fsk, 'pdv-1');
     expect(level).toBe('module');
