@@ -7,6 +7,7 @@ import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard
 import { FileDiffCard } from './FileDiffCard';
 import { VscodeFileIcon } from './VscodeFileIcon';
 import { Button } from '../ui/button';
+import { Skeleton } from '../ui/skeleton';
 
 // The task sidebar: the chat's own header (task title) + tabs. `Task` shows the
 // goal + the finding card(s); `Changes` is the PR's cumulative "Files changed"
@@ -144,6 +145,27 @@ function FileSummaryRow({ file }: { file: FixChangeFile }) {
   );
 }
 
+// Faded placeholder shaped like a FileDiffCard — same border + header chrome,
+// pulsing bars where the icon, filename, +/− counts, and diff lines land, so
+// the loading state previews the layout instead of announcing itself.
+function FileDiffCardSkeleton({ bodyWidths }: { bodyWidths: string[] }) {
+  return (
+    <div className="my-1 overflow-hidden rounded-lg border border-border bg-background-card-header opacity-60">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <Skeleton className="h-4 w-4 rounded" />
+        <Skeleton className="h-3 w-40" />
+        <Skeleton className="ml-1 h-3 w-6" />
+        <Skeleton className="h-3 w-6" />
+      </div>
+      <div className="space-y-2 border-t border-border px-3 py-3">
+        {bodyWidths.map((w, i) => (
+          <Skeleton key={i} className={`h-3 ${w}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // The Changes tab body. Preferred view: the NET change per file (initial vs
 // now, one card per file — the PR's "Files changed") so a stage-by-stage run
 // (edit → mistake → revert → fix) reads as one cumulative diff instead of 3-4
@@ -164,9 +186,9 @@ function ChangesTab({
 }) {
   if (loading) {
     return (
-      <div className="flex items-center gap-2 px-6 py-8 text-sm text-foreground-secondary">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading changes…
+      <div aria-label="Loading changes" className="space-y-4 px-6 pb-6 pt-5">
+        <FileDiffCardSkeleton bodyWidths={['w-3/4', 'w-1/2', 'w-5/6', 'w-2/3']} />
+        <FileDiffCardSkeleton bodyWidths={['w-2/3', 'w-4/5', 'w-1/2']} />
       </div>
     );
   }
