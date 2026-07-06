@@ -36,6 +36,7 @@ jest.mock('../logger', () => ({ FixLogger: class {} }));
 import {
   buildAgentTools,
   finalizeFailure,
+  maybeFinalizeAnsweredNaturalStop,
   revertImplausibleLockfileRegen,
   type AgentRunState,
   type AgentToolDeps,
@@ -350,6 +351,54 @@ describe('agent tools — resume mode', () => {
     expect(markAnswered).not.toHaveBeenCalled();
     expect(markFailed).toHaveBeenCalledTimes(1);
   });
+
+  // maybeFinalizeAnsweredNaturalStop: a weak model on a resume routinely writes
+  // its answer as prose and stops WITHOUT calling finish_task. A clean tree +
+  // narrated text = an answer-only turn; resolving it here is what stops the
+  // "I couldn't complete that follow-up" being appended to a perfect answer
+  // (the PR #16 wake bug). A freshly `git init`'d empty repo has a clean
+  // porcelain status, so no seed commit is needed for the clean-tree cases.
+  test('natural stop on a still-open-PR resume with a clean tree + narration marks answered', async () => {
+    const deps = makeGitDeps({ resumeMode: { ...RESUME } });
+    const resolved = await maybeFinalizeAnsweredNaturalStop(deps, true);
+    expect(resolved).toBe(true);
+    expect(markAnswered).toHaveBeenCalledWith(expect.anything(), 'fix-1', 'me');
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(markTaskFromFix).toHaveBeenCalledWith(expect.anything(), 'task-1', { status: 'completed' });
+    expect(deps.state.terminal).toBe(true);
+  }, GIT_SPAWN_TIMEOUT);
+
+  test('natural stop on a prior-completed resume (PR merged/closed) with a clean tree marks answered', async () => {
+    const deps = makeGitDeps({ resumeMode: null, resumePriorStatus: 'completed' });
+    const resolved = await maybeFinalizeAnsweredNaturalStop(deps, true);
+    expect(resolved).toBe(true);
+    expect(markAnswered).toHaveBeenCalledTimes(1);
+    expect(deps.state.terminal).toBe(true);
+  }, GIT_SPAWN_TIMEOUT);
+
+  test('natural stop with a DIRTY tree does NOT mark answered (half-made edits must not pass as success)', async () => {
+    const deps = makeGitDeps({ resumeMode: { ...RESUME } });
+    fs.writeFileSync(path.join(deps.repoRoot, 'package.json'), '{"half":"edited"}\n');
+    const resolved = await maybeFinalizeAnsweredNaturalStop(deps, true);
+    expect(resolved).toBe(false);
+    expect(markAnswered).not.toHaveBeenCalled();
+    expect(deps.state.terminal).toBe(false);
+  }, GIT_SPAWN_TIMEOUT);
+
+  test('natural stop with NO narration is not an answer (leaves the failure path to resolve it)', async () => {
+    const deps = makeGitDeps({ resumeMode: { ...RESUME } });
+    const resolved = await maybeFinalizeAnsweredNaturalStop(deps, false);
+    expect(resolved).toBe(false);
+    expect(markAnswered).not.toHaveBeenCalled();
+    expect(deps.state.terminal).toBe(false);
+  }, GIT_SPAWN_TIMEOUT);
+
+  test('natural stop on a FIRST run (no resume) is never an answer-only completion', async () => {
+    const deps = makeGitDeps({ resumeMode: null, resumePriorStatus: null });
+    const resolved = await maybeFinalizeAnsweredNaturalStop(deps, true);
+    expect(resolved).toBe(false);
+    expect(markAnswered).not.toHaveBeenCalled();
+  }, GIT_SPAWN_TIMEOUT);
 
   test('zombie fence: finalizeFailure threads this machine id into the terminal write', async () => {
     // The row may have been re-woken and reclaimed by ANOTHER machine; the

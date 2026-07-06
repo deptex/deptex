@@ -666,18 +666,14 @@ export function buildAgentTools(deps: AgentToolDeps) {
         if (deps.resumeMode) {
           // Answer-only resume on a still-open PR: a legit completion — the
           // prior PR already stands. markAnswered preserves pr_*/diff_summary.
-          await markAnswered(supabase, deps.fixId, deps.machineId);
-          await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary });
-          state.terminal = true;
+          await finalizeAnswered(deps, summary);
           return 'task completed — the existing pull request stands';
         }
         if (deps.resumePriorStatus === 'completed' && !state.prOpened) {
           // The prior run genuinely SUCCEEDED but its PR is merged/closed (so
           // no resumeMode). An answer-only turn must NOT downgrade the task to
           // failed — the original fix already stands.
-          await markAnswered(supabase, deps.fixId, deps.machineId);
-          await markTaskFromFix(supabase, deps.taskId, { status: 'completed', summary });
-          state.terminal = true;
+          await finalizeAnswered(deps, summary);
           return 'task completed — the original fix already stands';
         }
         // "completed" without a PR (and no standing PR) is not a real success —
@@ -691,6 +687,47 @@ export function buildAgentTools(deps: AgentToolDeps) {
   });
 
   return { read_file, list_dir, grep, str_replace, write_file, run_command, open_pull_request, finish_task };
+}
+
+/** Answer-only terminal: the standing fix survives (open-PR amend resume, or a
+ *  prior-completed run whose PR is merged/closed) and this turn's outcome was
+ *  an ANSWER, not a change. markAnswered preserves the pr_ columns + diff
+ *  summary; the task stays completed. The success mirror of finalizeFailure. */
+export async function finalizeAnswered(deps: AgentToolDeps, summary?: string): Promise<void> {
+  if (deps.state.terminal) return;
+  await markAnswered(deps.supabase, deps.fixId, deps.machineId);
+  await markTaskFromFix(
+    deps.supabase,
+    deps.taskId,
+    summary ? { status: 'completed', summary } : { status: 'completed' },
+  );
+  deps.state.terminal = true;
+}
+
+/** A NATURAL stop (no abort, no error, no finish_task) on a resume whose fix
+ *  already stands, where the model answered in chat and left the working tree
+ *  clean, IS an answer-only turn — weak models routinely write the answer and
+ *  stop without calling finish_task. Record it as answered: appending
+ *  "I couldn't complete that follow-up" to a perfectly good answer reads as
+ *  nonsense (the PR #16 wake). A dirty tree stays on the failure path so
+ *  half-made edits are never silently passed off as success. Returns whether
+ *  it resolved the run. */
+export async function maybeFinalizeAnsweredNaturalStop(
+  deps: AgentToolDeps,
+  narrated: boolean,
+): Promise<boolean> {
+  if (deps.state.terminal || deps.state.prOpened) return false;
+  if (!narrated) return false;
+  if (!deps.resumeMode && deps.resumePriorStatus !== 'completed') return false;
+  try {
+    const { output } = await runShell('git status --porcelain', deps.repoRoot);
+    if (output.trim() !== '') return false;
+    await finalizeAnswered(deps);
+    return true;
+  } catch {
+    // Git or DB hiccup — let the always-terminal failure path resolve the row.
+    return false;
+  }
 }
 
 /** The single terminal-failure writer: markFailed + honest FixFailureCard + task rollup. */

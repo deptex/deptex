@@ -12,7 +12,13 @@ import { makeTaskNarrator, narrateStep } from './../task-chat';
 import { FixLogger } from './../logger';
 import { AGENT_SYSTEM, buildBrief, buildResumeSystem } from './brief';
 import { reconstructAgentMessages } from './replay';
-import { buildAgentTools, finalizeFailure, type AgentRunState, type AgentToolDeps } from './tools';
+import {
+  buildAgentTools,
+  finalizeFailure,
+  maybeFinalizeAnsweredNaturalStop,
+  type AgentRunState,
+  type AgentToolDeps,
+} from './tools';
 
 /** Wall-clock ceiling — an agent run bills by the second, so this bounds cost too.
  *  Configurable via AEGIS_TASK_WALL_CLOCK_SEC; default 30 min (a slower/cheaper
@@ -218,6 +224,10 @@ export async function runTaskAgent(
   let lastNovel = 0;
   let stall = 0;
   let loopError: any = null;
+  // Did the model produce ANY chat text this run? A resume that answers in
+  // prose and stops without calling finish_task is an answer-only turn, not a
+  // failure — see maybeFinalizeAnsweredNaturalStop.
+  let narrated = false;
 
   const prompt = buildBrief({
     fixType: input.fixType,
@@ -233,7 +243,10 @@ export async function runTaskAgent(
 
   const onStepFinish = async (s: any) => {
     const text = stripReasoning(s?.text ?? '');
-    if (text) await narrate(text);
+    if (text) {
+      narrated = true;
+      await narrate(text);
+    }
     // Flush this step's queued tool rows AFTER its reasoning text, so the
     // narration reads "let me do X" → X (the tools ran before this callback).
     // Then flush pendingAfter (the PR-ready card) so it lands last.
@@ -317,6 +330,15 @@ export async function runTaskAgent(
   }
   for (const fn of state.pendingAfter.splice(0)) {
     await fn().catch(() => {});
+  }
+
+  // A clean natural stop (no abort, no error) on a resume whose fix already
+  // stands, where the model answered in prose, IS an answer-only turn — resolve
+  // it as answered BEFORE the failure fallback so a good answer isn't stamped
+  // "I couldn't complete that follow-up" (the PR #16 wake bug). A dirty tree or
+  // an abort/error falls through to the honest failure path below.
+  if (!state.terminal && !abortReason && !loopError) {
+    await maybeFinalizeAnsweredNaturalStop(toolDeps, narrated);
   }
 
   // Always-terminal guarantee: if a PR wasn't opened and finish_task wasn't

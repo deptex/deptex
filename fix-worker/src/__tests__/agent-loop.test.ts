@@ -31,13 +31,20 @@ jest.mock('../agent/replay', () => ({
 jest.mock('../llm', () => ({ getLanguageModelForOrg: jest.fn(async () => ({})) }));
 jest.mock('../task-chat', () => ({ makeTaskNarrator: () => async () => {}, narrateStep: jest.fn(async () => {}) }));
 jest.mock('../logger', () => ({ FixLogger: class {} }));
-jest.mock('../agent/tools', () => ({ buildAgentTools: jest.fn(() => ({})), finalizeFailure: jest.fn(async () => {}) }));
+jest.mock('../agent/tools', () => ({
+  buildAgentTools: jest.fn(() => ({})),
+  finalizeFailure: jest.fn(async () => {}),
+  // Default: not an answer-only turn, so the failure fallback runs and the
+  // existing terminal-category assertions hold. The answer-only test overrides
+  // this to return true.
+  maybeFinalizeAnsweredNaturalStop: jest.fn(async () => false),
+}));
 
 import { generateText } from 'ai';
 import { isJobCancelled } from '../job-db';
 import { cloneAtSha, cloneBranchHead } from '../sandbox';
 import { getPullRequestState } from '../pr';
-import { buildAgentTools, finalizeFailure } from '../agent/tools';
+import { buildAgentTools, finalizeFailure, maybeFinalizeAnsweredNaturalStop } from '../agent/tools';
 import { runTaskAgent, type AgentRunInput } from '../agent/loop';
 
 /** The live AgentRunState of the current run, captured off the buildAgentTools mock. */
@@ -114,6 +121,36 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('system_error');
     // The raw message is still passed through — it lands in error_message (logs).
     expect((finalizeFailure as jest.Mock).mock.calls[0][2]).toMatch(/provider exploded/);
+  });
+
+  test('an answer-only natural stop (resume, clean tree, narration) completes — no failure fallback', async () => {
+    // The PR #16 wake bug: on a resume the model answered in prose and stopped
+    // without finish_task. maybeFinalizeAnsweredNaturalStop resolves it as
+    // answered (returns true, sets state.terminal); finalizeFailure must NOT
+    // run — otherwise the good answer gets "I couldn't complete that follow-up".
+    (generateText as jest.Mock).mockImplementation(async (opts: any) => {
+      await opts.onStepFinish({ text: 'Yes — the override forces set-value to 4.1.0.' });
+      return {};
+    });
+    (maybeFinalizeAnsweredNaturalStop as jest.Mock).mockImplementation(async (deps: any) => {
+      deps.state.terminal = true; // the real fn marks the row answered + terminal
+      return true;
+    });
+    await runTaskAgent(
+      {} as any,
+      makeInput({
+        resume: true,
+        resumePriorStatus: 'completed',
+        priorPr: { branch: 'aegis/fix-x-abc', number: 16, url: 'https://github.com/o/r/pull/16', repoFullName: 'o/r' },
+      }),
+      makeDeps(),
+    );
+    // The natural-stop path was consulted with narrated=true …
+    expect(maybeFinalizeAnsweredNaturalStop).toHaveBeenCalledTimes(1);
+    expect((maybeFinalizeAnsweredNaturalStop as jest.Mock).mock.calls[0][1]).toBe(true);
+    // … and because it resolved the run, the failure writer never fired.
+    expect(finalizeFailure).not.toHaveBeenCalled();
+    (maybeFinalizeAnsweredNaturalStop as jest.Mock).mockResolvedValue(false);
   });
 });
 
