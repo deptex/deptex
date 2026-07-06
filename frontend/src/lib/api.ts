@@ -364,6 +364,25 @@ export interface FixStalenessResponse {
   baseBranch: string | null;
 }
 
+// One file's NET change on a fix's PR (GitHub PR-files shape). `patch` is a
+// unified-diff BODY (hunk headers + +/- lines, no `diff --git` header); null
+// means large/binary/lockfile — show the row without a diff.
+export interface FixChangeFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string | null;
+}
+
+// The cumulative "Files changed" view of a fix's PR: initial vs now, one entry
+// per file. `prNumber: null` = no PR yet (the run is still mid-flight).
+export interface FixChangesResponse {
+  prNumber: number | null;
+  prUrl: string | null;
+  files: FixChangeFile[];
+}
+
 export async function getAuthToken(): Promise<string | null> {
   const { data: { session }, error } = await supabase.auth.getSession();
 
@@ -3822,6 +3841,11 @@ export const api = {
 
   async getFix(fixId: string): Promise<{ fix: FixRecord }> {
     return fetchWithAuth(`/api/aegis/fix/${fixId}`);
+  },
+
+  /** Net per-file change set of a fix's PR (initial vs now) — the Changes tab's "Files changed" view. */
+  async getFixChanges(fixId: string): Promise<FixChangesResponse> {
+    return fetchWithAuth(`/api/aegis/fix/${fixId}/changes`);
   },
 
   async getFixStaleness(fixId: string): Promise<FixStalenessResponse> {

@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { PanelRight, Loader2 } from 'lucide-react';
-import { api, type VulnerabilityDetail } from '../../lib/api';
+import { api, type FixChangeFile, type VulnerabilityDetail } from '../../lib/api';
 import { aegisApi, type AegisTask, type AegisTaskTarget } from '../../lib/aegis-api';
 import { supabase } from '../../lib/supabase';
 import { VulnerabilityExpandedCard } from '../security/VulnerabilityExpandedCard';
 import { FileDiffCard } from './FileDiffCard';
+import { VscodeFileIcon } from './VscodeFileIcon';
 import { Button } from '../ui/button';
 
 // The task sidebar: the chat's own header (task title) + tabs. `Task` shows the
-// goal + the finding card(s); `Changes` shows the file diffs Aegis made with a
-// "View pull request" action. Mirrors the fix panel chrome (bg-background aside
-// behind a border-l, PanelRight toggle, ESC to close, width up to 2/5 vw).
+// goal + the finding card(s); `Changes` is the PR's cumulative "Files changed"
+// view — the NET diff per file (initial vs now), with the chat's chronological
+// edit-step diffs as the fallback before a PR exists. "View pull request" in
+// the header. Mirrors the fix panel chrome (bg-background aside behind a
+// border-l, PanelRight toggle, ESC to close, width up to 2/5 vw).
 
 const TYPE_LABEL: Record<string, string> = {
   vulnerability: 'Vulnerability',
@@ -117,13 +120,44 @@ function TaskTab({ task }: { task: AegisTask }) {
   );
 }
 
-// The Changes tab body — just the diffs (the +/− stat and View PR button live in
-// the sidebar header). Reads like a PR's "Files changed".
+// FileDiffCard parses full `git diff` output and reads the filename from the
+// `+++ b/…` header; the PR-files API returns only the hunk body (`patch`).
+// Synthesize the minimal header so the card renders unchanged.
+function toUnifiedDiff(path: string, patch: string): string {
+  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${patch}`;
+}
+
+// A diff-less net-change row (patch: null = large/binary/lockfile). Mirrors
+// FileDiffCard's header chrome — icon + name + counts — so the list reads
+// uniformly; just no diff body underneath.
+function FileSummaryRow({ file }: { file: FixChangeFile }) {
+  return (
+    <div className="my-1 overflow-hidden rounded-lg border border-border bg-background-card-header">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <VscodeFileIcon file={file.path} size={16} />
+        <span className="truncate font-mono text-xs text-foreground/90">{file.path}</span>
+        <span className="ml-1 shrink-0 font-mono text-[11px] text-success">+{file.additions}</span>
+        <span className="shrink-0 font-mono text-[11px] text-destructive">−{file.deletions}</span>
+        <span className="ml-auto shrink-0 text-[11px] text-foreground-secondary">diff not shown</span>
+      </div>
+    </div>
+  );
+}
+
+// The Changes tab body. Preferred view: the NET change per file (initial vs
+// now, one card per file — the PR's "Files changed") so a stage-by-stage run
+// (edit → mistake → revert → fix) reads as one cumulative diff instead of 3-4
+// cards for the same file. Before a PR exists (netFiles === null) it falls
+// back to the chronological edit-step diffs from the chat so live work still
+// shows; the first refresh after the PR lands flips to the net view. The chat
+// timeline keeps the stages either way.
 function ChangesTab({
+  netFiles,
   diffs,
   prUrl,
   loading,
 }: {
+  netFiles: FixChangeFile[] | null;
   diffs: string[];
   prUrl: string | null;
   loading: boolean;
@@ -133,6 +167,32 @@ function ChangesTab({
       <div className="flex items-center gap-2 px-6 py-8 text-sm text-foreground-secondary">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading changes…
+      </div>
+    );
+  }
+
+  if (netFiles !== null) {
+    if (netFiles.length === 0) {
+      return (
+        <div className="px-6 py-8 text-sm leading-relaxed text-foreground-secondary">
+          {prUrl ? 'The change is in the pull request.' : 'No changes yet — Aegis is still working this task.'}
+        </div>
+      );
+    }
+    // Diffable files (manifests/source) first; diff-less rows (lockfiles,
+    // binaries) last. Stable sort keeps the API's order within each group.
+    const sorted = netFiles
+      .slice()
+      .sort((a, b) => Number(a.patch === null) - Number(b.patch === null));
+    return (
+      <div className="space-y-4 px-6 pb-6 pt-5">
+        {sorted.map((f) =>
+          f.patch !== null ? (
+            <FileDiffCard key={f.path} diff={toUnifiedDiff(f.path, f.patch)} />
+          ) : (
+            <FileSummaryRow key={f.path} file={f} />
+          ),
+        )}
       </div>
     );
   }
@@ -198,6 +258,9 @@ export function TaskDetailPanel({
   const [width] = useState(panelWidth);
   const [tab, setTab] = useState<'task' | 'changes'>('task');
   const [diffs, setDiffs] = useState<string[]>([]);
+  // The PR's net per-file change set. null = no PR yet (or endpoint unavailable)
+  // → the Changes tab falls back to the message-derived stage diffs above.
+  const [netFiles, setNetFiles] = useState<FixChangeFile[] | null>(null);
   const [prUrl, setPrUrl] = useState<string | null>(null);
   const [changesLoading, setChangesLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
@@ -221,8 +284,12 @@ export function TaskDetailPanel({
     setTab('task');
   }, [task?.id]);
 
-  // Pull the change set out of the task's chat: the edit-step diffs + the fix's
-  // PR. Drives both the Changes tab and the header stat/button.
+  // Load the change set. Two sources, one winner:
+  //   1. The chat's edit-step diffs (chronological stages) — the pre-PR
+  //      fallback, and where the fixId is discovered.
+  //   2. `GET /api/aegis/fix/:fixId/changes` — the PR's NET per-file view
+  //      (initial vs now). Once `prNumber` is non-null this is what renders;
+  //      it also supplies the header's prUrl.
   //
   // Re-runs on `refreshTick` (bumped by the realtime subscription below when an
   // amend/resume run lands new messages on the same thread — keyed on threadId
@@ -235,6 +302,7 @@ export function TaskDetailPanel({
     const threadId = task?.threadId;
     if (!threadId) {
       setDiffs([]);
+      setNetFiles(null);
       setPrUrl(null);
       setChangesLoading(false);
       return;
@@ -252,14 +320,29 @@ export function TaskDetailPanel({
             if (p?.type === 'tool-result' && p.result?.fixId) fixId = p.result.fixId;
           }
         }
-        let url: string | null = null;
+        // `undefined` = the changes fetch failed → keep the previous net view
+        // and prUrl instead of flashing back to stage diffs on a refresh blip.
+        let net: { prUrl: string | null; files: FixChangeFile[] | null } | undefined;
         if (fixId) {
-          const { fix } = await api.getFix(fixId);
-          url = fix?.prUrl ?? null;
+          try {
+            const changes = await api.getFixChanges(fixId);
+            net = {
+              prUrl: changes.prUrl ?? null,
+              // prNumber null = no PR yet → stage-diff fallback stays active.
+              files: changes.prNumber != null ? changes.files ?? [] : null,
+            };
+          } catch {
+            /* endpoint unavailable — keep the previous net view */
+          }
+        } else {
+          net = { prUrl: null, files: null };
         }
         if (!cancelled) {
           setDiffs(editDiffs);
-          setPrUrl(url);
+          if (net !== undefined) {
+            setNetFiles(net.files);
+            setPrUrl(net.prUrl);
+          }
           setChangesLoading(false);
           loadedThreadRef.current = threadId;
         }
@@ -269,6 +352,7 @@ export function TaskDetailPanel({
           // screen (the next insert retriggers anyway).
           if (loadedThreadRef.current !== threadId) {
             setDiffs([]);
+            setNetFiles(null);
             setPrUrl(null);
           }
           setChangesLoading(false);
@@ -376,7 +460,7 @@ export function TaskDetailPanel({
               {tab === 'task' ? (
                 <TaskTab task={task} />
               ) : (
-                <ChangesTab diffs={diffs} prUrl={prUrl} loading={changesLoading} />
+                <ChangesTab netFiles={netFiles} diffs={diffs} prUrl={prUrl} loading={changesLoading} />
               )}
             </div>
           </div>

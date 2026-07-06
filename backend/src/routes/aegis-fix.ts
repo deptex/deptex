@@ -467,6 +467,106 @@ router.get('/:fixId', async (req: AuthRequest, res) => {
   return res.json({ fix: await shapeFixRowWithFinding(row) });
 });
 
+// Paths whose diffs are machine-generated noise (a lockfile bump can be
+// thousands of lines): the change-set keeps their name + stats but drops the
+// patch body — mirrors the fix-worker's noisy-file treatment.
+const NOISY_PATCH_RE =
+  /(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|composer\.lock|Gemfile\.lock|go\.sum)$/;
+const PATCH_CHAR_CAP = 12000;
+
+/**
+ * Net change-set for a fix's PR: the cumulative files list from GitHub —
+ * authoritative across ALL commits (amends from resumed runs included) — so
+ * the panel shows "initial vs now" per file instead of every intermediate
+ * edit. Same guard as GET /:fixId.
+ */
+router.get('/:fixId/changes', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { data: row } = await supabase
+    .from('project_security_fixes')
+    .select('id, organization_id, project_id, pr_number, pr_url, pr_repo_full_name')
+    .eq('id', req.params.fixId)
+    .maybeSingle();
+  if (!row) return res.status(404).json({ error: 'Fix not found' });
+  if (!(await isOrgMember(row.organization_id, userId))) {
+    return res.status(403).json({ error: 'Not a member of this organization' });
+  }
+
+  // No PR yet (run still working, or it failed before pushing): empty set.
+  if (!row.pr_number || !row.pr_repo_full_name) {
+    return res.json({ prNumber: null, prUrl: null, files: [] });
+  }
+
+  try {
+    // Installation token, resolved the same way the staleness route above and
+    // insertAgentFixRow do: project_repositories.installation_id by project,
+    // falling back to the org-level installation.
+    const { data: repo } = await supabase
+      .from('project_repositories')
+      .select('installation_id')
+      .eq('project_id', row.project_id)
+      .maybeSingle();
+    const installationId =
+      (repo as any)?.installation_id ??
+      (
+        await supabase
+          .from('organizations')
+          .select('github_installation_id')
+          .eq('id', row.organization_id)
+          .single()
+      ).data?.github_installation_id;
+    if (!installationId) {
+      return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+    }
+    const token = await createInstallationToken(String(installationId));
+
+    // Cumulative PR files. v1 caps at 2 pages (200 files) — an agent fix PR
+    // beyond that is pathological; the panel would truncate the list anyway.
+    const rawFiles: any[] = [];
+    for (let page = 1; page <= 2; page++) {
+      const resp = await fetch(
+        `https://api.github.com/repos/${row.pr_repo_full_name}/pulls/${row.pr_number}/files?per_page=100&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'Deptex-App',
+          },
+        },
+      );
+      if (!resp.ok) {
+        return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+      }
+      const batch = (await resp.json()) as any[];
+      if (!Array.isArray(batch)) break;
+      rawFiles.push(...batch);
+      if (batch.length < 100) break;
+    }
+
+    return res.json({
+      prNumber: row.pr_number,
+      prUrl: row.pr_url ?? null,
+      files: rawFiles.map((f: any) => {
+        // GitHub omits `patch` for large/binary files — pass null through.
+        let patch: string | null = typeof f.patch === 'string' ? f.patch : null;
+        if (patch && NOISY_PATCH_RE.test(String(f.filename ?? ''))) patch = null;
+        if (patch && patch.length > PATCH_CHAR_CAP) {
+          patch = `${patch.slice(0, PATCH_CHAR_CAP)}\n… (truncated)`;
+        }
+        return {
+          path: f.filename as string,
+          status: f.status as string,
+          additions: (f.additions as number) ?? 0,
+          deletions: (f.deletions as number) ?? 0,
+          patch,
+        };
+      }),
+    });
+  } catch {
+    // Token mint or network failure — the frontend keeps its previous view.
+    return res.status(502).json({ error: 'Could not load the change set from GitHub' });
+  }
+});
 
 router.get('/:fixId/staleness', async (req: AuthRequest, res) => {
   const userId = req.user!.id;
