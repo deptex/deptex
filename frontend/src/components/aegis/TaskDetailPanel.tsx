@@ -179,9 +179,14 @@ function ChangesTab({
         </div>
       );
     }
-    // Diffable files (manifests/source) first; diff-less rows (lockfiles,
-    // binaries) last. Stable sort keeps the API's order within each group.
-    const sorted = netFiles
+    // Lockfiles are machine-regenerated fallout of a manifest edit, not a
+    // change Aegis made — hide them. Unless the PR is lockfile-ONLY (a pure
+    // transitive bump), in which case they ARE the change and stay visible.
+    const authored = netFiles.filter((f) => !f.lockfile);
+    const shown = authored.length > 0 ? authored : netFiles;
+    // Diffable files (manifests/source) first; diff-less rows (binaries,
+    // oversize) last. Stable sort keeps the API's order within each group.
+    const sorted = shown
       .slice()
       .sort((a, b) => Number(a.patch === null) - Number(b.patch === null));
     return (

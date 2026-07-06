@@ -146,14 +146,17 @@ describe('GET /api/aegis/fix/:fixId/changes', () => {
       additions: 3,
       deletions: 1,
       patch: '@@ -1 +1 @@',
+      lockfile: false,
     });
-    // Lockfile: stats survive, diff body dropped.
+    // Lockfile: stats survive, diff body dropped, flagged so the Changes tab
+    // can hide it (machine-regenerated, not an authored change).
     expect(res.body.files[1]).toEqual({
       path: 'package-lock.json',
       status: 'modified',
       additions: 512,
       deletions: 209,
       patch: null,
+      lockfile: true,
     });
     // Oversized patch: capped + marked.
     expect(res.body.files[2].patch.endsWith('\n… (truncated)')).toBe(true);

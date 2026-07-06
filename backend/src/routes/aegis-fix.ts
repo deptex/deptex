@@ -547,9 +547,10 @@ router.get('/:fixId/changes', async (req: AuthRequest, res) => {
       prNumber: row.pr_number,
       prUrl: row.pr_url ?? null,
       files: rawFiles.map((f: any) => {
+        const lockfile = NOISY_PATCH_RE.test(String(f.filename ?? ''));
         // GitHub omits `patch` for large/binary files — pass null through.
         let patch: string | null = typeof f.patch === 'string' ? f.patch : null;
-        if (patch && NOISY_PATCH_RE.test(String(f.filename ?? ''))) patch = null;
+        if (patch && lockfile) patch = null;
         if (patch && patch.length > PATCH_CHAR_CAP) {
           patch = `${patch.slice(0, PATCH_CHAR_CAP)}\n… (truncated)`;
         }
@@ -559,6 +560,7 @@ router.get('/:fixId/changes', async (req: AuthRequest, res) => {
           additions: (f.additions as number) ?? 0,
           deletions: (f.deletions as number) ?? 0,
           patch,
+          lockfile,
         };
       }),
     });

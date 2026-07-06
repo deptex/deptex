@@ -6,8 +6,10 @@ import { TaskDetailPanel } from '../TaskDetailPanel';
 // The Changes tab is the PR's cumulative "Files changed" view. These pin:
 // (a) with a PR (`prNumber != null`), the NET change renders — exactly ONE
 //     card per file from GET /api/aegis/fix/:fixId/changes, message-derived
-//     stage diffs suppressed, `patch: null` files (lockfiles/binaries) shown
-//     as name + counts + "diff not shown", diffable files sorted first;
+//     stage diffs suppressed, and `lockfile: true` files (machine-regenerated
+//     fallout, not authored changes) hidden outright — UNLESS the PR is
+//     lockfile-only, in which case they're the change and render as
+//     name + counts + "diff not shown";
 // (b) before a PR exists (`prNumber: null`), the tab falls back to the
 //     chronological edit-step stage diffs from the chat;
 // (c) a realtime INSERT on the thread refetches (300ms trailing debounce) and
@@ -137,10 +139,9 @@ function netChanges(version: string) {
     prNumber: 7,
     prUrl: 'https://github.com/o/r/pull/7',
     files: [
-      // Server order deliberately lockfile-first: the tab must sort the
-      // diff-less lockfile row BELOW the diffable manifest.
-      { path: 'package-lock.json', status: 'modified', additions: 120, deletions: 118, patch: null },
-      { path: 'package.json', status: 'modified', additions: 1, deletions: 1, patch: packageJsonPatch(version) },
+      // The lockfile rides along on every manifest edit — the tab must hide it.
+      { path: 'package-lock.json', status: 'modified', additions: 120, deletions: 118, patch: null, lockfile: true },
+      { path: 'package.json', status: 'modified', additions: 1, deletions: 1, patch: packageJsonPatch(version), lockfile: false },
     ],
   };
 }
@@ -164,31 +165,45 @@ describe('TaskDetailPanel — Changes tab net view + live refresh + persistent t
 
   afterEach(() => cleanup());
 
-  it('renders the NET view once a PR exists: one card per file, lockfile diff-less + sorted last, stage diffs suppressed', async () => {
+  it('renders the NET view once a PR exists: one card per authored file, lockfile hidden, stage diffs suppressed', async () => {
     mocks.getFixChanges.mockImplementation(async () => netChanges('3.30.0'));
     await openChangesTab();
 
     // One card per file — the whole point: no per-stage duplicates.
     expect(await screen.findByText('package.json')).toBeInTheDocument();
     expect(screen.getAllByText('package.json')).toHaveLength(1);
-    expect(screen.getAllByText('package-lock.json')).toHaveLength(1);
     expect(mocks.getFixChanges).toHaveBeenCalledWith('fix-1');
 
     // The manifest's diff body renders (syntax highlighting splits tokens
     // across spans, so assert on concatenated text).
     expect(document.body.textContent).toContain('3.30.0');
 
-    // Lockfile: name + counts + muted note, no diff body.
-    expect(screen.getByText('diff not shown')).toBeInTheDocument();
-    expect(screen.getByText('+120')).toBeInTheDocument();
-    expect(screen.getByText('−118')).toBeInTheDocument();
-
-    // Diffable manifest sorts ABOVE the diff-less lockfile despite server order.
-    const text = document.body.textContent ?? '';
-    expect(text.indexOf('package.json')).toBeLessThan(text.indexOf('package-lock.json'));
+    // The regenerated lockfile is machine fallout, not a change Aegis
+    // authored — no card, no counts.
+    expect(screen.queryByText('package-lock.json')).toBeNull();
+    expect(screen.queryByText('+120')).toBeNull();
+    expect(screen.queryByText('diff not shown')).toBeNull();
 
     // The message-derived stage diff must NOT render alongside the net view.
     expect(screen.queryByText('src/one.ts')).toBeNull();
+  });
+
+  it('a lockfile-ONLY PR (pure transitive bump) still shows the lockfile summary row', async () => {
+    mocks.getFixChanges.mockImplementation(async () => ({
+      prNumber: 7,
+      prUrl: 'https://github.com/o/r/pull/7',
+      files: [
+        { path: 'package-lock.json', status: 'modified', additions: 12, deletions: 9, patch: null, lockfile: true },
+      ],
+    }));
+    await openChangesTab();
+
+    // Hiding it here would leave the tab empty while the PR has real content.
+    expect(await screen.findByText('package-lock.json')).toBeInTheDocument();
+    expect(screen.getByText('+12')).toBeInTheDocument();
+    expect(screen.getByText('−9')).toBeInTheDocument();
+    expect(screen.getByText('diff not shown')).toBeInTheDocument();
+    expect(screen.queryByText(/No changes yet/)).toBeNull();
   });
 
   it('falls back to the chronological stage diffs while no PR exists (prNumber: null)', async () => {

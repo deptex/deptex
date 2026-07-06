@@ -366,13 +366,15 @@ export interface FixStalenessResponse {
 
 // One file's NET change on a fix's PR (GitHub PR-files shape). `patch` is a
 // unified-diff BODY (hunk headers + +/- lines, no `diff --git` header); null
-// means large/binary/lockfile — show the row without a diff.
+// means large/binary/lockfile — show the row without a diff. `lockfile` marks
+// machine-regenerated files (package-lock.json etc.) the Changes tab hides.
 export interface FixChangeFile {
   path: string;
   status: string;
   additions: number;
   deletions: number;
   patch: string | null;
+  lockfile?: boolean;
 }
 
 // The cumulative "Files changed" view of a fix's PR: initial vs now, one entry
