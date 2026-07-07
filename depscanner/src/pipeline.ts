@@ -34,6 +34,7 @@ import { loadImportance } from './pipeline-steps/importance';
 import { doDepScan } from './pipeline-steps/dep-scan';
 import { doRuleGeneration } from './pipeline-steps/rule-generation';
 import { doTaintEngine } from './pipeline-steps/taint-engine';
+import { doDepImportGraph } from './pipeline-steps/dep-import-graph';
 import { doReachabilityAndEpd } from './pipeline-steps/reachability';
 import { doIaCContainer } from './pipeline-steps/iac-container';
 import { doComposition } from './pipeline-steps/composition';
@@ -142,6 +143,14 @@ export async function runPipeline(
     const { validOsvIds, fpFilterCostUsd, cveSinkPatterns, usedDependencies } =
       await doTaintEngine(ctx);
 
+    // === Dependency-source import graphs (Arc 2) ===
+    // Builds the transitive import index the reachability precondition models
+    // consult (go list -deps compile set / pypi wheel import extraction).
+    // Trigger-guarded + fail-safe: null = the classifier behaves as before.
+    // Must run BEFORE reachability and OUTSIDE the optional-scans block.
+    if (checkCancelled && await checkCancelled()) return;
+    const transitiveImports = await doDepImportGraph(ctx);
+
     // === Reachability classification + depscore recalc + EPD scoring ===
     await doReachabilityAndEpd(
       ctx,
@@ -150,6 +159,7 @@ export async function runPipeline(
       scanStart,
       cveSinkPatterns,
       usedDependencies,
+      transitiveImports,
     );
 
     // === IaC, Malicious, Semgrep, TruffleHog (OPTIONAL) ===

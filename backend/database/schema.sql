@@ -906,6 +906,18 @@ CREATE TABLE IF NOT EXISTS public.package_contributors (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS public.package_import_summaries (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  ecosystem text NOT NULL,
+  package_name text NOT NULL,
+  version text NOT NULL,
+  extractor_version text NOT NULL,
+  imported_modules jsonb NOT NULL DEFAULT '[]'::jsonb,
+  question_hits jsonb NOT NULL DEFAULT '[]'::jsonb,
+  files_scanned integer NOT NULL DEFAULT 0,
+  artifact_sha256 text,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS public.package_maintainer_snapshots (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   package_name text NOT NULL,
@@ -1573,50 +1585,6 @@ CREATE TABLE IF NOT EXISTS public.project_reachable_flows (
   sink_code text,
   vuln_class text
 );
--- phase66: silence-event log (workstream M / M1). Append-one-row-per-(run,pdv)
--- durable record of the reachability classifier verdict + its inputs. Pure
--- observability (nothing reads it on the prod silence path); M2 diffs the two
--- most-recent runs to catch silence false-negatives. Written by depscanner
--- reachability.updateReachabilityLevels via Storage.upsert(extraction_run_id,pdv_id).
--- No FK constraints (matches project_reachable_flows): pdv_id/project_dependency_id
--- point at rows reap_old_extractions() prunes; a CASCADE would erode the history.
-CREATE TABLE IF NOT EXISTS public.silence_events (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  project_id uuid NOT NULL,
-  extraction_run_id text NOT NULL,
-  pdv_id uuid NOT NULL,
-  project_dependency_id uuid NOT NULL,
-  dependency_id uuid NOT NULL,
-  osv_id text NOT NULL,
-  reachability_level text NOT NULL,
-  is_reachable boolean NOT NULL,
-  verdict text,
-  graph_trusted boolean NOT NULL,
-  ast_parsed boolean NOT NULL,
-  ecosystem text,
-  files_importing_count integer,
-  is_direct boolean,
-  dev_scoped boolean,
-  callgraph_reached boolean,
-  classifier_inputs jsonb,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT silence_events_run_pdv_uniq UNIQUE (extraction_run_id, pdv_id)
-);
-CREATE INDEX IF NOT EXISTS idx_silence_events_finding
-  ON public.silence_events (project_id, project_dependency_id, osv_id, extraction_run_id);
-CREATE INDEX IF NOT EXISTS idx_silence_events_project_run
-  ON public.silence_events (project_id, extraction_run_id);
-CREATE INDEX IF NOT EXISTS idx_silence_events_silenced
-  ON public.silence_events (project_id, extraction_run_id, verdict)
-  WHERE reachability_level IN ('unreachable', 'module');
-COMMENT ON TABLE public.silence_events IS
-  'M1 silence-event log: append-one-row-per-(run,pdv) durable record of the reachability classifier verdict + its inputs. Pure observability (nothing reads it on the prod silence path). M2 diffs the two most-recent runs to catch silence false-negatives. Written by depscanner reachability.updateReachabilityLevels via Storage.upsert(onConflict extraction_run_id,pdv_id).';
-COMMENT ON COLUMN public.silence_events.project_dependency_id IS
-  'Stable across runs (project_dependencies upserts on project_id+name+version+is_direct+source); the primary cross-run join key with osv_id. pdv_id is NOT stable across runs.';
-COMMENT ON COLUMN public.silence_events.verdict IS
-  'Fine-grained silence reason from reachability_details.verdict (dev_scope_unreachable / orphan_transitive_unreachable / transitive_of_reachable / callgraph_reached_transitive). NULL for non-silence / plain-module verdicts. M2 buckets transitions by this.';
-COMMENT ON COLUMN public.silence_events.callgraph_reached IS
-  'Whether the taint-engine callgraph confirmed a CallEdge into this dep (depMatchesUsedTransitives). A prior unreachable row later showing TRUE here is a silence false-negative signal.';
 CREATE TABLE IF NOT EXISTS public.project_repositories (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   project_id uuid,
@@ -1935,6 +1903,27 @@ CREATE TABLE IF NOT EXISTS public.security_debt_snapshots (
   breakdown jsonb NOT NULL,
   snapshot_date date NOT NULL DEFAULT CURRENT_DATE,
   created_at timestamp with time zone DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.silence_events (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  project_id uuid NOT NULL,
+  extraction_run_id text NOT NULL,
+  pdv_id uuid NOT NULL,
+  project_dependency_id uuid NOT NULL,
+  dependency_id uuid NOT NULL,
+  osv_id text NOT NULL,
+  reachability_level text NOT NULL,
+  is_reachable boolean NOT NULL,
+  verdict text,
+  graph_trusted boolean NOT NULL,
+  ast_parsed boolean NOT NULL,
+  ecosystem text,
+  files_importing_count integer,
+  is_direct boolean,
+  dev_scoped boolean,
+  callgraph_reached boolean,
+  classifier_inputs jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.sla_policy_changes (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -2473,74 +2462,6 @@ AS $function$
     LEFT JOIN billing_transactions bt ON bt.organization_id = ob.organization_id
     GROUP BY ob.organization_id, ob.balance_cents
     HAVING ob.balance_cents != COALESCE(SUM(bt.amount_cents), 0);
-$function$
-;
-
--- phase66b: M2 cross-run silence-FN differ (read-only). For every project with a
--- non-null previous_extraction_run_id, diffs the prior run's silenced findings
--- (unreachable|module) against the current run via the stable
--- (project_id, project_dependency_id, osv_id) key. Returns one row per
--- (project, prior_verdict) bucket of PROMOTED findings. Called daily by
--- POST /api/internal/silence/check-cross-run-drift; log-only, no writes.
-CREATE OR REPLACE FUNCTION public.silence_cross_run_drift()
- RETURNS TABLE(project_id uuid, prior_verdict text, upgraded_count bigint, silence_fn_count bigint, to_levels text[])
- LANGUAGE sql
- STABLE
-AS $function$
-  WITH lvl(level, rnk) AS (
-    VALUES ('unreachable', 0), ('module', 1), ('function', 2), ('data_flow', 3), ('confirmed', 4)
-  ),
-  runs AS (   -- every project with a prior run to diff against
-    SELECT p.id                         AS project_id,
-           p.previous_extraction_run_id AS prev_run,
-           p.active_extraction_run_id   AS cur_run
-    FROM public.projects p
-    WHERE p.previous_extraction_run_id IS NOT NULL
-      AND p.active_extraction_run_id IS NOT NULL
-  ),
-  prev AS (   -- the prior run's SILENCED findings (unreachable|module = rnk <= 1)
-    SELECT r.project_id,
-           se.project_dependency_id,
-           se.osv_id,
-           COALESCE(se.verdict, se.reachability_level) AS prior_verdict,
-           pl.rnk                                      AS prior_rnk
-    FROM runs r
-    JOIN public.silence_events se
-      ON se.project_id = r.project_id
-     AND se.extraction_run_id = r.prev_run
-    JOIN lvl pl ON pl.level = se.reachability_level
-    WHERE se.reachability_level IN ('unreachable', 'module')
-  ),
-  cur AS (    -- the current run's verdict for every finding
-    SELECT r.project_id,
-           se.project_dependency_id,
-           se.osv_id,
-           se.reachability_level AS cur_level,
-           cl.rnk                AS cur_rnk
-    FROM runs r
-    JOIN public.silence_events se
-      ON se.project_id = r.project_id
-     AND se.extraction_run_id = r.cur_run
-    JOIN lvl cl ON cl.level = se.reachability_level
-  )
-  SELECT
-    prev.project_id,
-    prev.prior_verdict,
-    count(*)                                                      AS upgraded_count,
-    -- silence FN = prior tier SILENCED (prev CTE = unreachable|module) AND now
-    -- VISIBLE (cur_rnk >= 2: function|data_flow|confirmed). unreachable->module
-    -- stays silenced = a healthy R1 floor correction (fn=0); module->function is
-    -- a real silence FN (an auto-ignored vuln became visible).
-    count(*) FILTER (WHERE cur.cur_rnk >= 2)                      AS silence_fn_count,
-    array_agg(DISTINCT cur.cur_level)                             AS to_levels
-  FROM prev
-  JOIN cur
-    ON cur.project_id            = prev.project_id
-   AND cur.project_dependency_id = prev.project_dependency_id
-   AND cur.osv_id                = prev.osv_id
-  WHERE cur.cur_rnk > prev.prior_rnk   -- any upward move from a silenced tier
-  GROUP BY prev.project_id, prev.prior_verdict
-  ORDER BY prev.project_id, upgraded_count DESC;
 $function$
 ;
 
@@ -4581,46 +4502,24 @@ CREATE OR REPLACE FUNCTION public.get_project_vulnerabilities_from_pdv(p_project
  STABLE
 AS $function$
   SELECT
-    pdv.id,
-    pd.dependency_id,
-    pdv.osv_id,
-    pdv.severity,
-    pdv.summary,
-    NULL::TEXT AS details,
-    pdv.aliases,
-    pdv.fixed_versions,
-    pdv.published_at,
-    NULL::TIMESTAMPTZ AS modified_at,
-    pdv.created_at,
-    pd.name AS dependency_name,
-    pd.version AS dependency_version,
-    pdv.is_reachable,
-    pdv.reachability_level,
-    pdv.reachability_details,
-    pdv.epss_score,
-    pdv.cvss_score,
-    pdv.cisa_kev,
-    pdv.depscore,
-    pdv.contextual_depscore,
-    pdv.entry_point_classification,
-    pdv.epd_status,
-    pdv.sla_status,
-    pdv.sla_deadline_at,
-    pdv.runtime_confirmed_at,
-    pdv.finding_key,
-    pdv.status,
-    pdv.auto_ignored,
-    pdv.auto_ignore_reason,
-    pdv.ignore_reason,
-    pdv.ignore_note,
-    pdv.suppressed,
-    pdv.risk_accepted
+    pdv.id, pd.dependency_id, pdv.osv_id, pdv.severity, pdv.summary,
+    NULL::TEXT AS details, pdv.aliases, pdv.fixed_versions, pdv.published_at,
+    NULL::TIMESTAMPTZ AS modified_at, pdv.created_at,
+    CASE
+      WHEN pd.namespace IS NOT NULL AND pd.namespace <> '' AND left(pd.namespace, 1) = '@'
+        THEN pd.namespace || '/' || pd.name
+      ELSE pd.name
+    END AS dependency_name,
+    pd.version AS dependency_version, pdv.is_reachable, pdv.reachability_level,
+    pdv.reachability_details, pdv.epss_score, pdv.cvss_score, pdv.cisa_kev,
+    pdv.depscore, pdv.contextual_depscore, pdv.entry_point_classification,
+    pdv.epd_status, pdv.sla_status, pdv.sla_deadline_at, pdv.runtime_confirmed_at,
+    pdv.finding_key, pdv.status, pdv.auto_ignored, pdv.auto_ignore_reason,
+    pdv.ignore_reason, pdv.ignore_note, pdv.suppressed, pdv.risk_accepted
   FROM project_dependency_vulnerabilities pdv
   INNER JOIN project_dependencies pd
-    ON pd.id = pdv.project_dependency_id
-   AND pd.project_id = pdv.project_id
-  INNER JOIN projects p
-    ON p.id = pdv.project_id
+    ON pd.id = pdv.project_dependency_id AND pd.project_id = pdv.project_id
+  INNER JOIN projects p ON p.id = pdv.project_id
   WHERE pdv.project_id = p_project_id
     AND pdv.extraction_run_id = p.active_extraction_run_id;
 $function$
@@ -6457,6 +6356,68 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.silence_cross_run_drift()
+ RETURNS TABLE(project_id uuid, prior_verdict text, upgraded_count bigint, silence_fn_count bigint, to_levels text[])
+ LANGUAGE sql
+ STABLE
+AS $function$
+  WITH lvl(level, rnk) AS (
+    VALUES ('unreachable', 0), ('module', 1), ('function', 2), ('data_flow', 3), ('confirmed', 4)
+  ),
+  runs AS (   -- every project with a prior run to diff against
+    SELECT p.id                         AS project_id,
+           p.previous_extraction_run_id AS prev_run,
+           p.active_extraction_run_id   AS cur_run
+    FROM public.projects p
+    WHERE p.previous_extraction_run_id IS NOT NULL
+      AND p.active_extraction_run_id IS NOT NULL
+  ),
+  prev AS (   -- the prior run's SILENCED findings (unreachable|module = rnk <= 1)
+    SELECT r.project_id,
+           se.project_dependency_id,
+           se.osv_id,
+           COALESCE(se.verdict, se.reachability_level) AS prior_verdict,
+           pl.rnk                                      AS prior_rnk
+    FROM runs r
+    JOIN public.silence_events se
+      ON se.project_id = r.project_id
+     AND se.extraction_run_id = r.prev_run
+    JOIN lvl pl ON pl.level = se.reachability_level
+    WHERE se.reachability_level IN ('unreachable', 'module')
+  ),
+  cur AS (    -- the current run's verdict for every finding
+    SELECT r.project_id,
+           se.project_dependency_id,
+           se.osv_id,
+           se.reachability_level AS cur_level,
+           cl.rnk                AS cur_rnk
+    FROM runs r
+    JOIN public.silence_events se
+      ON se.project_id = r.project_id
+     AND se.extraction_run_id = r.cur_run
+    JOIN lvl cl ON cl.level = se.reachability_level
+  )
+  SELECT
+    prev.project_id,
+    prev.prior_verdict,
+    count(*)                                                      AS upgraded_count,
+    -- silence FN = prior tier SILENCED (prev CTE = unreachable|module) AND now
+    -- VISIBLE (cur_rnk >= 2: function|data_flow|confirmed). unreachable->module
+    -- stays silenced = a healthy R1 floor correction (fn=0); module->function is
+    -- a real silence FN (an auto-ignored vuln became visible).
+    count(*) FILTER (WHERE cur.cur_rnk >= 2)                      AS silence_fn_count,
+    array_agg(DISTINCT cur.cur_level)                             AS to_levels
+  FROM prev
+  JOIN cur
+    ON cur.project_id            = prev.project_id
+   AND cur.project_dependency_id = prev.project_dependency_id
+   AND cur.osv_id                = prev.osv_id
+  WHERE cur.cur_rnk > prev.prior_rnk   -- any upward move from a silenced tier
+  GROUP BY prev.project_id, prev.prior_verdict
+  ORDER BY prev.project_id, upgraded_count DESC;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.sparsevec_cmp(sparsevec, sparsevec)
  RETURNS integer
  LANGUAGE c
@@ -7202,7 +7163,6 @@ CREATE OR REPLACE FUNCTION public.vector(vector, integer, boolean)
 AS '$libdir/vector', $function$vector$function$
 ;
 
-
 -- ============================================
 -- CONSTRAINTS (PK, UNIQUE, CHECK, FK — in that order)
 -- ============================================
@@ -7275,6 +7235,7 @@ ALTER TABLE public.package_anomalies ADD CONSTRAINT package_anomalies_pkey PRIMA
 ALTER TABLE public.package_capabilities ADD CONSTRAINT package_capabilities_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_pkey PRIMARY KEY (id);
+ALTER TABLE public.package_import_summaries ADD CONSTRAINT package_import_summaries_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT package_maintainer_snapshots_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_pkey PRIMARY KEY (id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_pkey PRIMARY KEY (id);
@@ -7380,6 +7341,7 @@ ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_natural_key UNIQUE (pa
 ALTER TABLE public.package_commit_touched_functions ADD CONSTRAINT package_commit_touched_functi_watched_package_id_commit_sha_key UNIQUE (watched_package_id, commit_sha, function_name);
 ALTER TABLE public.package_commits ADD CONSTRAINT package_commits_watched_package_id_sha_key UNIQUE (watched_package_id, sha);
 ALTER TABLE public.package_contributors ADD CONSTRAINT package_contributors_watched_package_id_author_email_key UNIQUE (watched_package_id, author_email);
+ALTER TABLE public.package_import_summaries ADD CONSTRAINT pis_natural_key UNIQUE (ecosystem, package_name, version);
 ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_natural_key UNIQUE NULLS NOT DISTINCT (package_name, version, ecosystem, observed_at);
 ALTER TABLE public.package_reputation_scores ADD CONSTRAINT package_reputation_scores_dependency_id_key UNIQUE (dependency_id);
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_key UNIQUE (package_name, version, ecosystem, scanner);
@@ -7412,6 +7374,7 @@ ALTER TABLE public.project_watchlist ADD CONSTRAINT project_watchlist_project_id
 ALTER TABLE public.projects ADD CONSTRAINT projects_organization_id_name_key UNIQUE (organization_id, name);
 ALTER TABLE public.scim_user_mappings ADD CONSTRAINT scim_user_mappings_organization_id_scim_external_id_key UNIQUE (organization_id, scim_external_id);
 ALTER TABLE public.security_debt_snapshots ADD CONSTRAINT security_debt_snapshots_organization_id_project_id_snapshot_key UNIQUE (organization_id, project_id, snapshot_date);
+ALTER TABLE public.silence_events ADD CONSTRAINT silence_events_run_pdv_uniq UNIQUE (extraction_run_id, pdv_id);
 ALTER TABLE public.taint_engine_framework_models ADD CONSTRAINT taint_engine_framework_models_organization_id_framework_nam_key UNIQUE (organization_id, framework_name, framework_version);
 ALTER TABLE public.taint_engine_runs ADD CONSTRAINT taint_engine_runs_project_id_extraction_run_id_key UNIQUE (project_id, extraction_run_id);
 ALTER TABLE public.team_members ADD CONSTRAINT team_members_team_id_user_id_key UNIQUE (team_id, user_id);
@@ -7483,6 +7446,8 @@ ALTER TABLE public.organizations ADD CONSTRAINT chk_organizations_subscription_t
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_default_ai_provider_check CHECK ((default_ai_provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text, 'deepinfra'::text])));
 ALTER TABLE public.organizations ADD CONSTRAINT organizations_epd_budget_exceeded_behavior_check CHECK ((epd_budget_exceeded_behavior = ANY (ARRAY['fail_job'::text, 'continue_with_fallback'::text])));
 ALTER TABLE public.package_capabilities ADD CONSTRAINT pc_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
+ALTER TABLE public.package_import_summaries ADD CONSTRAINT pis_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text])));
+ALTER TABLE public.package_import_summaries ADD CONSTRAINT pis_size_chk CHECK (((octet_length((imported_modules)::text) <= 65536) AND (octet_length((question_hits)::text) <= 8192)));
 ALTER TABLE public.package_maintainer_snapshots ADD CONSTRAINT pms_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.package_security_cache ADD CONSTRAINT package_security_cache_scanner_chk CHECK ((scanner = ANY (ARRAY['guarddog'::text, 'ai_review'::text])));
@@ -8014,6 +7979,7 @@ CREATE INDEX idx_piacf_framework ON public.project_iac_findings USING btree (fra
 CREATE INDEX idx_piacf_org_status_depscore ON public.project_iac_findings USING btree (organization_id, status, depscore DESC NULLS LAST);
 CREATE INDEX idx_piacf_project_run ON public.project_iac_findings USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_piacf_severity ON public.project_iac_findings USING btree (severity);
+CREATE INDEX idx_pis_lookup ON public.package_import_summaries USING btree (ecosystem, package_name, version);
 CREATE INDEX idx_pmf_dep ON public.project_malicious_findings USING btree (dependency_id);
 CREATE INDEX idx_pmf_org ON public.project_malicious_findings USING btree (organization_id);
 CREATE INDEX idx_pmf_project_open ON public.project_malicious_findings USING btree (project_id, suppressed, risk_accepted);
@@ -8143,6 +8109,9 @@ CREATE INDEX idx_secret_project_finding_key ON public.project_secret_findings US
 CREATE INDEX idx_secret_project_status ON public.project_secret_findings USING btree (project_id, status);
 CREATE INDEX idx_semgrep_project_finding_key ON public.project_semgrep_findings USING btree (project_id, finding_key);
 CREATE INDEX idx_semgrep_project_status ON public.project_semgrep_findings USING btree (project_id, status);
+CREATE INDEX idx_silence_events_finding ON public.silence_events USING btree (project_id, project_dependency_id, osv_id, extraction_run_id);
+CREATE INDEX idx_silence_events_project_run ON public.silence_events USING btree (project_id, extraction_run_id);
+CREATE INDEX idx_silence_events_silenced ON public.silence_events USING btree (project_id, extraction_run_id, verdict) WHERE (reachability_level = ANY (ARRAY['unreachable'::text, 'module'::text]));
 CREATE INDEX idx_sla_policies_org ON public.organization_sla_policies USING btree (organization_id);
 CREATE INDEX idx_sla_policy_changes_created ON public.sla_policy_changes USING btree (created_at DESC);
 CREATE INDEX idx_sla_policy_changes_org ON public.sla_policy_changes USING btree (organization_id);

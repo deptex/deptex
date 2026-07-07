@@ -33,8 +33,13 @@ import {
   gatherDjangoFeatureSignals,
   extractPythonImports,
   emptyDjangoFeatureSignals,
+  djangoTransitiveQuestionRegistry,
   type DjangoFeatureSignals,
 } from '../reachability-django-preconditions';
+import {
+  emptyTransitiveImportIndex,
+  type TransitiveImportIndex,
+} from '../transitive-imports';
 
 // ---------------------------------------------------------------------------
 // Representative advisory summaries (real saleor CVE phrasings)
@@ -782,5 +787,200 @@ describe('updateReachabilityLevels — Django framework-mediated model', () => {
     seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT });
     await runDjango(fsk, djSignals({ truncated: true }));
     expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Arc 2 — transitive consumer VETO (dependency-source import graphs, v1)
+// ---------------------------------------------------------------------------
+
+describe('Arc 2 transitive consumer veto (owner-excluded, veto-only)', () => {
+  const PIL_FONT_A2 = 'Pillow has an integer overflow when processing fonts';
+  const CRYPTO_PKCS7_A2 = 'cryptography vulnerable to NULL-dereference when loading PKCS7 certificates';
+  const SQLPARSE_DOS_A2 = 'sqlparse parsing heavily nested list leads to Denial of Service';
+
+  function a2Signals(over: Partial<DjangoFeatureSignals> = {}): DjangoFeatureSignals {
+    return {
+      ...emptyDjangoFeatureSignals(),
+      recognized: true,
+      truncated: false,
+      devDeps: new Set<string>(),
+      depUniverse: new Set(['django', 'pillow', 'cryptography', 'sqlparse']),
+      importedModules: new Set(['django', 'pil', 'pil.image']),
+      codeText: 'installed_apps = ["django.contrib.auth"]\nwsgi_application = "app.wsgi"',
+      isDeployedWebApp: true,
+      ...over,
+    };
+  }
+
+  function idx(
+    entries: Record<string, { modules?: string[]; tokens?: string[] }>,
+    status: TransitiveImportIndex['status'] = 'partial',
+  ): TransitiveImportIndex {
+    const out = emptyTransitiveImportIndex('pypi');
+    out.status = status;
+    for (const [pkg, { modules = [], tokens = [] }] of Object.entries(entries)) {
+      out.perPackage.set(pkg, { modules: new Set(modules), tokenHits: new Set(tokens) });
+      out.extractedPackages.add(pkg);
+    }
+    return out;
+  }
+
+  const demoteA2 = (depName: string, summary: string, signals: DjangoFeatureSignals) =>
+    evaluateDjangoFeaturePreconditionDemotion({ depName, summary, signals });
+
+  it('OWNER self-hit only: pillow mentioning its own ImageFont never vetoes — the demotion keeps firing', () => {
+    const signals = a2Signals({
+      transitiveImports: idx({
+        pillow: { modules: ['pil.imagefont'], tokens: ['imagefont', 'truetype('] },
+      }),
+    });
+    const r = demoteA2('pillow', PIL_FONT_A2, signals);
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('pillow-imagefont');
+  });
+
+  it('a NON-OWNER dist importing pil.imagefont vetoes the pillow demotion', () => {
+    const signals = a2Signals({
+      transitiveImports: idx({
+        pillow: { tokens: ['imagefont'] },
+        'weird-thumbnailer': { modules: ['pil.imagefont'] },
+      }),
+    });
+    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(false);
+  });
+
+  it('a NON-OWNER token hit does NOT veto in v1 — dependency sources MENTIONING a submodule is the dormant-wrapper case', () => {
+    // pyopenssl's sources contain 'pkcs7', pip's contain 'easy_install' — a
+    // token veto reversed 11 labelled-unreachable saleor/paperless demotions
+    // in validation. Tokens are cached for the v2 absence direction only.
+    const signals = a2Signals({
+      transitiveImports: idx({ captchagen: { tokens: ['truetype('] } }),
+    });
+    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(true);
+    const pkcs = a2Signals({
+      transitiveImports: idx({ pyopenssl: { tokens: ['pkcs7'] } }),
+    });
+    expect(demoteA2('cryptography', CRYPTO_PKCS7_A2, pkcs).demote).toBe(true);
+  });
+
+  it('positive IMPORT veto evidence is valid on a PARTIAL index', () => {
+    const partial = idx({ 'weird-thumbnailer': { modules: ['pil.imagefont'] } }, 'partial');
+    partial.failedPackages.push('some-failed-dist');
+    const signals = a2Signals({ transitiveImports: partial });
+    expect(demoteA2('pillow', PIL_FONT_A2, signals).demote).toBe(false);
+  });
+
+  it('an UNAVAILABLE index changes nothing — today’s behavior', () => {
+    const signals = a2Signals({
+      transitiveImports: idx({ acmeclient: { tokens: ['pkcs7'] } }, 'unavailable'),
+    });
+    expect(demoteA2('cryptography', CRYPTO_PKCS7_A2, signals).demote).toBe(true);
+  });
+
+  it('no index at all: every demotion behaves exactly as before', () => {
+    expect(demoteA2('pillow', PIL_FONT_A2, a2Signals()).demote).toBe(true);
+    expect(demoteA2('cryptography', CRYPTO_PKCS7_A2, a2Signals()).demote).toBe(true);
+  });
+
+  it('consumer-semantics rows are UNTOUCHED: django importing sqlparse never vetoes the sqlparse demotion (the paperless labels)', () => {
+    // django statically imports sqlparse (sqlmigrate — trusted SQL); sqlparse
+    // self-imports absolutely. Neither may reverse the labelled demotion.
+    const signals = a2Signals({
+      transitiveImports: idx({
+        django: { modules: ['sqlparse'], tokens: ['sqlparse'] },
+        sqlparse: { modules: ['sqlparse.engine'], tokens: ['sqlparse'] },
+      }),
+    });
+    const r = demoteA2('sqlparse', SQLPARSE_DOS_A2, signals);
+    expect(r.demote).toBe(true);
+    expect(r.feature).toBe('sqlparse-untrusted-sql');
+  });
+
+  it('the question registry is DERIVED from the rows: submodule-load owners in, consumer-semantics owners out', () => {
+    const reg = djangoTransitiveQuestionRegistry();
+    expect(reg.owners).toEqual(
+      expect.arrayContaining(['pillow', 'cryptography', 'fonttools', 'setuptools', 'tqdm', 'filelock']),
+    );
+    expect(reg.owners).not.toContain('sqlparse');
+    expect(reg.owners).not.toContain('brotli');
+    expect(reg.owners).not.toContain('h11');
+    expect(reg.tokens).toEqual(
+      expect.arrayContaining(['imagefont', 'truetype(', 'pkcs7', 'pkcs12', 'load_ssh', 'softfilelock']),
+    );
+    expect(reg.modules).toEqual(expect.arrayContaining(['pil.imagefont', 'fonttools', 'tqdm.cli']));
+  });
+
+  it('owner normalization is PEP-503: a "Pillow"-cased dep name still excludes the pillow dist', () => {
+    const signals = a2Signals({
+      transitiveImports: idx({ pillow: { modules: ['pil.imagefont'], tokens: ['imagefont'] } }),
+    });
+    expect(demoteA2('Pillow', PIL_FONT_A2, signals).demote).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Arc 2 e2e — options.transitiveImports merge (pypi) through updateReachabilityLevels
+// ---------------------------------------------------------------------------
+
+describe('updateReachabilityLevels — Arc 2 pypi transitive-veto wiring', () => {
+  const PIL_FONT_E2E = 'Pillow has an integer overflow when processing fonts';
+
+  function pypiIdx(
+    entries: Record<string, { modules?: string[]; tokens?: string[] }>,
+    status: TransitiveImportIndex['status'] = 'partial',
+  ): TransitiveImportIndex {
+    const out = emptyTransitiveImportIndex('pypi');
+    out.status = status;
+    for (const [pkg, { modules = [], tokens = [] }] of Object.entries(entries)) {
+      out.perPackage.set(pkg, { modules: new Set(modules), tokenHits: new Set(tokens) });
+      out.extractedPackages.add(pkg);
+    }
+    return out;
+  }
+
+  async function runDjangoIdx(
+    fsk: FakeStorage,
+    signals: DjangoFeatureSignals,
+    idx?: TransitiveImportIndex,
+  ) {
+    await updateReachabilityLevels(PROJECT_ID, RUN_ID, fsk as unknown as Storage, log, undefined, {
+      ecosystem: 'pypi',
+      workspaceRoot: '/nonexistent',
+      djangoFeatureSignals: signals,
+      transitiveImports: idx,
+      httpEntryPointCount: 0,
+    });
+  }
+
+  it('a NON-OWNER dist importing pil.imagefont VETOES the pillow demotion end-to-end (stays module)', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    await runDjangoIdx(fsk, djSignals(), pypiIdx({ 'weird-thumbnailer': { modules: ['pil.imagefont'] } }));
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('module');
+  });
+
+  it('OWNER self-hits only: the demotion still fires end-to-end (owner exclusion through the merge)', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    await runDjangoIdx(
+      fsk,
+      djSignals(),
+      pypiIdx({ pillow: { modules: ['pil.imagefont'], tokens: ['imagefont', 'truetype('] } }),
+    );
+    const { level, details } = verdictOf(fsk, 'pdv-1');
+    expect(level).toBe('unreachable');
+    expect(details?.feature).toBe('pillow-imagefont');
+  });
+
+  it('a golang-ecosystem index is never merged into pypi signals', async () => {
+    const fsk = new FakeStorage();
+    seedPypiDep(fsk, { name: 'pillow', osvId: 'CVE-2026-42308', summary: PIL_FONT_E2E });
+    const goIdx = emptyTransitiveImportIndex('golang');
+    goIdx.status = 'complete';
+    goIdx.perPackage.set('x', { modules: new Set(['pil.imagefont']), tokenHits: new Set() });
+    await runDjangoIdx(fsk, djSignals(), goIdx);
+    // wrong-ecosystem index ignored → demotion fires as with no index
+    expect(verdictOf(fsk, 'pdv-1').level).toBe('unreachable');
   });
 });

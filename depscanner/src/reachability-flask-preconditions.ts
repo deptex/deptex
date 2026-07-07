@@ -86,6 +86,15 @@ export interface FlaskFeatureSignals {
    * the h11 request-parser rows.
    */
   usesH11: boolean;
+  /**
+   * Arc 2 (dependency-source import graphs): per-dist imports + question-token
+   * hits from the installed prod dists' wheels — populated by the reachability
+   * classifier's signals merge (from `options.transitiveImports`), never by
+   * `gatherFlaskFeatureSignals`. No Flask row consults it in v1 (the single
+   * multipart demotion row is form-FEATURE logic, not consumer-import logic);
+   * the field exists for merge/type parity with the Django model.
+   */
+  transitiveImports?: import('./transitive-imports').TransitiveImportIndex;
 }
 
 export type FeaturePresence = 'present' | 'absent' | 'unknown';

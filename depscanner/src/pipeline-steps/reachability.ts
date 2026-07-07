@@ -30,6 +30,7 @@ import {
 } from '../depscore';
 import { applyEpdScoringFallback, EpdBudgetExceededError } from '../epd';
 import type { PipelineContext } from '../pipeline-types';
+import type { TransitiveImportIndex } from '../transitive-imports';
 
 /** The slice of a project_dependencies row the rescore multiplier reads. */
 export interface RescorePdContext {
@@ -94,6 +95,9 @@ export async function doReachabilityAndEpd(
   scanStart: number,
   cveSinkPatterns: Map<string, string[]>,
   usedDependencies: Set<string>,
+  // Arc 2: the dep-import-graph step's transitive index (null = didn't run /
+  // failed — the classifier behaves exactly as before).
+  transitiveImports?: TransitiveImportIndex | null,
 ): Promise<void> {
   const {
     supabase,
@@ -207,6 +211,9 @@ export async function doReachabilityAndEpd(
     // always-on framework code (servlet-container request parser, MVC resource
     // handler) to a visible tier.
     httpEntryPointCount: ctx.httpEntryPointCount,
+    // Arc 2: transitive import index from the dep-import-graph step — merged
+    // into the matching ecosystem's signals inside updateReachabilityLevels.
+    transitiveImports: transitiveImports ?? undefined,
   });
   if (jobEcosystem === 'maven') {
     await computeImportCountsFromUsageSlices(projectId, runId, jobEcosystem, supabase, log);
