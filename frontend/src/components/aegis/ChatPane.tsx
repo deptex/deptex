@@ -40,6 +40,10 @@ const TASK_RUNNING_STATUSES = new Set(['approved', 'planning', 'executing']);
 // if a run never even starts (wake failed / queued behind another), and the
 // hard ceiling while a run is genuinely going (realtime covers anything longer).
 const FOLLOWUP_POLL_MS = 3500;
+// A snappier cadence until the run is confirmed running, so the thinking dot /
+// Stop reconcile quickly right after a send (the wake RPC has already flipped
+// the fix row by the time this fires).
+const FOLLOWUP_STARTUP_POLL_MS = 900;
 const FOLLOWUP_NEVER_STARTED_CAP_MS = 90_000;
 const FOLLOWUP_MAX_MS = 15 * 60_000;
 
@@ -610,12 +614,18 @@ export function ChatPane({
           if (cancelled) return;
           setMessages(buildInitialMessages(msgs));
           const running = (fixes.data ?? []).some((r: { status: string }) => TASK_RUNNING_STATUSES.has(r.status));
-          setTaskWorking(running);
+          const elapsed = Date.now() - startedAt;
           if (running) {
+            setTaskWorking(true);
             sawRunning = true;
             settledStreak = 0;
           } else {
             settledStreak += 1;
+            // Only turn the dot OFF once the run has actually been seen running
+            // (so a read during the wake/boot gap — row not yet 'approved' —
+            // doesn't blink off the optimistic "starting…" state), or after the
+            // never-started grace window (wake genuinely failed / queued).
+            if (sawRunning || elapsed > FOLLOWUP_NEVER_STARTED_CAP_MS) setTaskWorking(false);
           }
         } catch {
           /* transient — the next tick retries */
@@ -629,9 +639,11 @@ export function ChatPane({
         (sawRunning && settledStreak >= 2) ||
         (!sawRunning && elapsed > FOLLOWUP_NEVER_STARTED_CAP_MS) ||
         elapsed > FOLLOWUP_MAX_MS;
-      if (!done) timer = setTimeout(tick, FOLLOWUP_POLL_MS);
+      if (!done) timer = setTimeout(tick, sawRunning ? FOLLOWUP_POLL_MS : FOLLOWUP_STARTUP_POLL_MS);
     };
-    timer = setTimeout(tick, FOLLOWUP_POLL_MS);
+    // First tick fires quickly so the run state reconciles fast (the wake RPC
+    // has already flipped the fix row); cadence relaxes once it's running.
+    timer = setTimeout(tick, FOLLOWUP_STARTUP_POLL_MS);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
@@ -666,6 +678,12 @@ export function ChatPane({
             parts: [{ type: 'text', text: trimmed }],
           } as unknown as UIMessage,
         ]);
+        // Instant feedback: a follow-up wakes the agent, so flip the thinking
+        // dot + in-input Stop ON right now instead of waiting for a poll/realtime
+        // read to notice the fix row went running (the "mic stays for a few
+        // seconds" lag). The poll below reconciles — and won't blink it back off
+        // during the wake/boot gap.
+        setTaskWorking(true);
         // Arm the poll fallback immediately so the reply lands even if realtime
         // is dead (the "nothing until refresh" bug).
         setFollowupPollNonce((n) => n + 1);
@@ -697,7 +715,18 @@ export function ChatPane({
       clearError();
       void sendMessage({ text: trimmed });
     },
-    [sendMessage, clearError, liveReload, task, tasksLoading, propThreadId, organizationId, setMessages],
+    [
+      sendMessage,
+      clearError,
+      liveReload,
+      task,
+      tasksLoading,
+      propThreadId,
+      organizationId,
+      setMessages,
+      setTaskWorking,
+      setFollowupPollNonce,
+    ],
   );
 
   const handleRemoveFromQueue = useCallback((id: string) => {

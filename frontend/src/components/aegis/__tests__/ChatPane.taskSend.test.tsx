@@ -149,7 +149,10 @@ async function renderChatPane(props: {
 }
 
 function submitText(text: string) {
-  const textarea = screen.getByPlaceholderText('Ask anything');
+  // Target the textbox by role, not placeholder — the placeholder flips to
+  // "Add a follow-up" once a task run is active (taskWorking), so a
+  // placeholder-keyed query would miss it on a second, mid-run send.
+  const textarea = screen.getByRole('textbox');
   fireEvent.change(textarea, { target: { value: text } });
   fireEvent.keyDown(textarea, { key: 'Enter' });
 }
@@ -250,6 +253,25 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     await waitFor(() => expect(mocks.cancelTask).toHaveBeenCalledWith('task-1', 'org-1'));
     expect(mocks.cancelTask).toHaveBeenCalledTimes(1);
     expect(mocks.stop).not.toHaveBeenCalled();
+  });
+
+  it('shows the in-input Stop the instant a task follow-up is sent (before any fix row goes running)', async () => {
+    // The lag bug: the thinking dot + Stop are driven by taskWorking, which used
+    // to flip only once a poll/realtime read saw the fix row running — so for a
+    // few seconds after send the mic still showed. No running row exists yet
+    // here; the Stop must appear from the optimistic flip on send alone.
+    mocks.fixRows = []; // no running fix row
+    await renderChatPane({ liveReload: true, task });
+
+    // Idle before sending: the input shows the mic, not Stop.
+    expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull();
+
+    submitText('bump it once more');
+
+    // Immediately after send (no await for any poll/realtime read) the input is
+    // in its streaming form with Stop.
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
+    await waitFor(() => expect(mocks.sendTaskMessage).toHaveBeenCalledTimes(1));
   });
 
   it('poll fallback surfaces a late reply when realtime never delivers (the "nothing until refresh" fix)', async () => {
