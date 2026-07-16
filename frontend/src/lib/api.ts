@@ -5436,6 +5436,9 @@ export interface DataFlowFinding {
   entry_point_line: number | null;
   entry_point_method: string | null;
   entry_point_tag: string | null;
+  /** Matched entry-point auth class parsed server-side from entry_point_tag;
+   *  null (no badge) for unmatched / legacy flows. */
+  entry_point_class: EpdEntryPointClassification | null;
   entry_point_code: string | null;
   sink_file: string | null;
   sink_line: number | null;
