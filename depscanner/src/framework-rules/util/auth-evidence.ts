@@ -97,6 +97,13 @@ export const AUTH_NAME_PATTERNS: readonly RegExp[] = [
   // ThrottlerGuard / RolesGuard deliberately do NOT match (rate-limit /
   // authorization-only names are not authentication evidence on their own).
   /auth.?guard/i,
+  // Middleware-class convention (Slim `->add(new AuthMiddleware())`, PSR-15).
+  /auth.?middleware/i,
+  // authenticate / authentication / authenticator / authenticating — substring,
+  // camelCase-tolerant (JwtAuthentication, TokenAuthenticator). "unauthenticated"
+  // names are rescued by the PUBLIC_OVERRIDE `unauthenticated` pattern, which
+  // callers must check FIRST (categorizeMiddlewareTokens does).
+  /authenticat/i,
 ];
 
 /**
@@ -134,7 +141,10 @@ export const PUBLIC_OVERRIDE_PATTERNS: readonly RegExp[] = [
   /\bskip.?auth\b/i,
   /\bno.?auth\b/i,
   /\bunprotected\b/i,
-  /\ballow.?unauth\b/i,
+  // camelCase-tolerant substrings (allowUnauthenticated, skipUnauthCheck):
+  // over-matching here is the safe direction (public = no demotion).
+  /allow.?unauth/i,
+  /unauthenticated/i,
 ];
 
 /**
@@ -248,7 +258,9 @@ export function classifyRoute(evidence: RouteAuthEvidence): {
   // name matching. The caller's `optional` flag (arg inspection) disqualifies
   // both kinds.
   const validAuthTokens = (evidence.authTokens ?? []).filter(
-    (t) => matchesAuthName(t) && !isOptionalVetoed(t),
+    // Override-shaped names (allowUnauthenticated) are never auth evidence even
+    // when a caller routes them here without pre-categorizing.
+    (t) => matchesAuthName(t) && !isOptionalVetoed(t) && !matchesPublicOverride(t),
   );
   const hasAuth = (validAuthTokens.length > 0 || (evidence.vettedAuthTokens ?? []).length > 0)
     && !evidence.optional;
