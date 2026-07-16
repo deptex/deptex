@@ -1,8 +1,57 @@
 import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
+import {
+  classifyRoute,
+  isOptionalVetoed,
+  matchesAuthName,
+  spanOfNode,
+} from '../util/auth-evidence';
 
 function textOf(n: Node | null, src: string): string {
   return n ? src.slice(n.startIndex, n.endIndex) : '';
+}
+
+/**
+ * Auth-shaped `.wrap(...)` middleware on a chain rooted at `App::new()` (the
+ * whole-app middleware idiom — `HttpAuthentication::bearer(validator)`).
+ * Scope-level wraps (`web::scope(...).wrap(...)`) are deliberately ignored:
+ * applying them file-wide could wrongly demote routes outside the scope, and
+ * resolving scope membership is out of v1 (coverage loss, fail-safe).
+ */
+function appRootWrapTokens(root: Node, source: string): string[] {
+  const out: string[] = [];
+  const walk = (n: Node): void => {
+    if (n.type === 'call_expression') {
+      const fn = n.childForFieldName('function');
+      if (fn?.type === 'field_expression' && textOf(fn.childForFieldName('field'), source) === 'wrap') {
+        // Walk the receiver chain down to its root call.
+        let cur: Node | null = fn.childForFieldName('value') ?? fn.namedChild(0);
+        while (cur && cur.type === 'call_expression') {
+          const innerFn: Node | null = cur.childForFieldName('function');
+          if (innerFn?.type === 'field_expression') {
+            cur = innerFn.childForFieldName('value') ?? innerFn.namedChild(0);
+          } else if (innerFn?.type === 'scoped_identifier' || innerFn?.type === 'identifier') {
+            cur = innerFn;
+            break;
+          } else {
+            cur = null;
+          }
+        }
+        if (cur && /(^|::)App::new$|^App$/.test(textOf(cur, source))) {
+          const args = n.childForFieldName('arguments');
+          if (args) {
+            for (let i = 0; i < args.namedChildCount; i++) {
+              const t = textOf(args.namedChild(i)!, source);
+              if (t) out.push(t);
+            }
+          }
+        }
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
+  };
+  walk(root);
+  return out;
 }
 
 function rustStringLiteral(node: Node | null, source: string): string | null {
@@ -36,6 +85,11 @@ export const actixDetector: FrameworkDetector = {
     const { tree, file, source } = ctx;
     const entryPoints: EntryPoint[] = [];
 
+    // Whole-app `.wrap(...)` middleware on App::new() (centralized — the belt
+    // applies to belt routes).
+    const wrapTokens = appRootWrapTokens(tree.rootNode, source)
+      .filter((t) => matchesAuthName(t) && !isOptionalVetoed(t));
+
     const walk = (node: Node): void => {
       if (node.type === 'function_item') {
         const attrs = collectPrecedingAttributes(node, source);
@@ -44,6 +98,11 @@ export const actixDetector: FrameworkDetector = {
           if (!verb) continue;
           if (attr.firstStringArg === null) continue;
           const name = node.childForFieldName('name');
+          const result = classifyRoute({
+            vettedAuthTokens: wrapTokens,
+            routePattern: attr.firstStringArg,
+            centralizedOnly: true,
+          });
           entryPoints.push({
             filePath: file.filePath,
             lineNumber: node.startPosition.row + 1,
@@ -52,10 +111,14 @@ export const actixDetector: FrameworkDetector = {
             httpMethod: verb,
             routePattern: attr.firstStringArg,
             entryPointType: 'http_route',
-            classification: 'PUBLIC_UNAUTH',
-            authenticated: null,
+            classification: result.classification,
+            authenticated: result.authenticated,
             authMechanism: null,
-            middlewareChain: null,
+            middlewareChain: wrapTokens.length ? wrapTokens : null,
+            // Attribute-macro routes are declaration-bound (Sem 6): the macro
+            // travels with the fn wherever it's serviced.
+            handlerSpan: spanOfNode(node),
+            demotionEligible: true,
             metadata: { macro: attr.name },
           });
         }
