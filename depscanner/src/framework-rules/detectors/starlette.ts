@@ -1,7 +1,6 @@
 import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
-  HTTP_METHOD_NAMES,
-  classifyFromAuth,
+  decoratorTokenText,
   decoratorsOf,
   detectPyAuthMechanism,
   findClassInstances,
@@ -11,6 +10,7 @@ import {
   textOf,
   walkTree,
 } from '../util/python';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // Starlette routing:
 //   app = Starlette(routes=[Route('/', endpoint), Route('/users', users)])
@@ -29,8 +29,8 @@ export const starletteDetector: FrameworkDetector = {
     const instances = findClassInstances(tree.rootNode, source, ['Starlette']);
     if (instances.size === 0) return [];
 
-    const authMechanism = detectPyAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from @requires evidence.
+    const authMechanismHint = detectPyAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -39,6 +39,22 @@ export const starletteDetector: FrameworkDetector = {
       if (decorators.length === 0) return;
       const funcName = node.childForFieldName('name');
       const handlerName = funcName ? textOf(funcName, source) : null;
+
+      // starlette.authentication.requires — `@requires('authenticated')` /
+      // `@requires(['authenticated', 'admin'])` is a positive auth constraint on
+      // the endpoint (Sem 1). Any other co-decorator goes through the shared
+      // name patterns.
+      const vettedAuthTokens: string[] = [];
+      const authTokens: string[] = [];
+      for (const dec of decorators) {
+        const parsed = parseDecorator(dec, source);
+        if (parsed.object && instances.has(parsed.object)) continue; // the route decorator
+        const token = decoratorTokenText(dec, source);
+        if (!token) continue;
+        if (/^requires\s*\(/.test(token)) vettedAuthTokens.push(token);
+        else authTokens.push(token);
+      }
+
       for (const dec of decorators) {
         const parsed = parseDecorator(dec, source);
         if (!parsed.object || !instances.has(parsed.object)) continue;
@@ -47,6 +63,12 @@ export const starletteDetector: FrameworkDetector = {
         const routeArg = args?.namedChild(0);
         const routePattern = pythonStringLiteral(routeArg ?? null, source);
         if (!routePattern) continue;
+        const result = classifyRoute({
+          vettedAuthTokens,
+          authTokens,
+          routePattern,
+          centralizedOnly: false,
+        });
         entryPoints.push({
           filePath: file.filePath,
           lineNumber: lineOf(node),
@@ -55,10 +77,13 @@ export const starletteDetector: FrameworkDetector = {
           httpMethod: null, // Starlette accepts all methods unless `methods=` kwarg
           routePattern,
           entryPointType: 'http_route',
-          classification,
-          authenticated: !!authMechanism,
-          authMechanism,
-          middlewareChain: null,
+          classification: result.classification,
+          authenticated: result.authenticated,
+          authMechanism: authMechanismHint,
+          middlewareChain: vettedAuthTokens.length ? vettedAuthTokens : null,
+          // Declaration-bound family — span always demotion-eligible (Sem 6).
+          handlerSpan: spanOfNode(node),
+          demotionEligible: true,
           metadata: { instance: parsed.object },
         });
       }

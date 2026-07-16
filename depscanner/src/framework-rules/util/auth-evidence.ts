@@ -81,7 +81,8 @@ export interface RouteAuthEvidence {
  */
 export const AUTH_NAME_PATTERNS: readonly RegExp[] = [
   /\bauthenticate(d|or)?\b/i,
-  /\brequires?auth\b/i,
+  // camelCase + snake_case tolerant: requireAuth / requires_auth / require_auth.
+  /requires?_?auth/i,
   /\bensure(auth|logged)\b/i,
   /\bisauthenticated\b/i,
   /\blogin_?required\b/i,

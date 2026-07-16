@@ -120,6 +120,67 @@ export function decoratorsOf(funcDef: Node): Node[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Python route-auth evidence helpers (entry-point auth classification, T7c).
+// ---------------------------------------------------------------------------
+
+/**
+ * Full text of a decorator's inner expression — `login_required`,
+ * `jwt_required(optional=True)`, `auth.login_required` — used as the evidence
+ * token so kwarg-shaped vetoes (`optional=True`) are veto-visible.
+ */
+export function decoratorTokenText(dec: Node, source: string): string {
+  const inner = dec.namedChild(0);
+  return inner ? textOf(inner, source) : '';
+}
+
+/**
+ * FastAPI auth-dependency targets beyond the shared auth-name patterns:
+ * `Depends(get_current_user)` / `Depends(oauth2_scheme)` — canonical
+ * tutorial/idiom names for enforced authentication.
+ */
+export const FASTAPI_AUTH_DEP_RE = /current_?user|oauth2|api_?key|http_?bearer|security_?scheme/i;
+
+/**
+ * Collect `Depends(x)` / `Security(x)` target tokens from a subtree — used on
+ * a FastAPI function's parameter list and on a decorator/constructor
+ * `dependencies=[...]` kwarg value. `Security(...)` targets are ALWAYS
+ * security requirements; `Depends(...)` targets are evidence only when their
+ * name is auth-shaped (caller filters).
+ */
+export function collectDependencyTargets(root: Node | null, source: string): Array<{ kind: 'depends' | 'security'; target: string }> {
+  if (!root) return [];
+  const out: Array<{ kind: 'depends' | 'security'; target: string }> = [];
+  const walk = (n: Node): void => {
+    if (n.type === 'call') {
+      const fn = n.childForFieldName('function');
+      const fnName = fn?.type === 'identifier' ? textOf(fn, source) : null;
+      if (fnName === 'Depends' || fnName === 'Security') {
+        const args = n.childForFieldName('arguments');
+        const first = args?.namedChild(0);
+        const target = first ? textOf(first, source) : '';
+        out.push({ kind: fnName === 'Security' ? 'security' : 'depends', target });
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
+  };
+  walk(root);
+  return out;
+}
+
+/** The `name=` keyword-argument value node of a call's argument list. */
+export function keywordArgValue(callNode: Node | null, name: string, source: string): Node | null {
+  const args = callNode?.childForFieldName('arguments');
+  if (!args) return null;
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const c = args.namedChild(i)!;
+    if (c.type !== 'keyword_argument') continue;
+    const key = c.childForFieldName('name');
+    if (key && textOf(key, source) === name) return c.childForFieldName('value');
+  }
+  return null;
+}
+
 /** `@obj.attr(...)` → returns `{ object: 'obj', attr: 'attr', call: <Node> }`. */
 export function parseDecorator(dec: Node, source: string): {
   object: string | null;
