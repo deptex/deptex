@@ -1,13 +1,12 @@
 import type { Node, Tree } from 'web-tree-sitter';
 import type { ImportBinding } from '../../tree-sitter-extractor/languages/types';
 import type { EntryPointClassification, HttpMethod } from '../types';
-import {
-  classifyRoute,
-  matchesInternalName,
-  matchesPublicOverride,
-  spanOfNode,
-  type HandlerSpan,
-} from './auth-evidence';
+import { spanOfNode, type HandlerSpan, type MiddlewareToken } from './auth-evidence';
+
+// Re-exported for the JS detectors (the definitions are language-agnostic and
+// live in auth-evidence.ts so the Go/PHP utils share them).
+export { categorizeMiddlewareTokens, hasRouteLocalAuth } from './auth-evidence';
+export type { MiddlewareToken } from './auth-evidence';
 
 export function textOf(node: Node | null, source: string): string {
   if (!node) return '';
@@ -261,17 +260,6 @@ function rootsAtExports(node: Node, source: string): boolean {
 // logic can never diverge between them.
 // ---------------------------------------------------------------------------
 
-/**
- * A middleware argument reduced to two token views: `display` (a clean symbol
- * name for the chain field + the fp-filter prompt) and `classify` (a richer
- * string that also captures string-literal args, so name-pattern vetoes see
- * `passport.authenticate('anonymous')`'s `'anonymous'`).
- */
-export interface MiddlewareToken {
-  display: string;
-  classify: string;
-}
-
 export function middlewareToken(node: Node, source: string): MiddlewareToken | null {
   if (node.type === 'identifier') {
     const t = textOf(node, source);
@@ -298,31 +286,6 @@ export function middlewareToken(node: Node, source: string): MiddlewareToken | n
     return { display: fnText, classify: `${fnText} ${argStrings.join(' ')}`.trim() };
   }
   return null;
-}
-
-/** Partition middleware tokens into the three evidence buckets classifyRoute reads. */
-export function categorizeMiddlewareTokens(tokens: MiddlewareToken[]): {
-  authTokens: string[];
-  internalTokens: string[];
-  publicOverrides: string[];
-} {
-  const authTokens: string[] = [];
-  const internalTokens: string[] = [];
-  const publicOverrides: string[] = [];
-  for (const t of tokens) {
-    if (matchesPublicOverride(t.classify)) publicOverrides.push(t.classify);
-    else if (matchesInternalName(t.classify)) internalTokens.push(t.classify);
-    else authTokens.push(t.classify);
-  }
-  return { authTokens, internalTokens, publicOverrides };
-}
-
-/** Does any token constitute valid (non-veto) route-local auth? Drives centralizedOnly. */
-export function hasRouteLocalAuth(tokens: MiddlewareToken[]): boolean {
-  const { authTokens } = categorizeMiddlewareTokens(tokens);
-  // classifyRoute applies the same auth-name + optional-veto logic; probing it
-  // keeps the definition of "valid auth" in one place.
-  return classifyRoute({ authTokens }).classification === 'AUTH_INTERNAL';
 }
 
 /** True when `node` is a program-level statement (no enclosing function/method/arrow). */

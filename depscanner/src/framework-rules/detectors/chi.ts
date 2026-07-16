@@ -1,16 +1,19 @@
 import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   GO_HTTP_METHODS_PASCAL,
-  classifyFromAuth,
+  buildGoRouteEntryPoint,
   detectGoAuthMechanism,
   findInstancesFromFactory,
   findRouteCalls,
-  lineOf,
+  findUseCalls,
 } from '../util/go';
 
 // Chi:
 //   r := chi.NewRouter()
+//   r.Use(jwtauth.Verifier(tokenAuth))      ← parse-only, NOT auth evidence
+//   r.Use(jwtauth.Authenticator)            ← enforce → auth evidence
 //   r.Get("/path", handler)
+//   r.With(requireAuth).Get("/admin", h)    ← per-route middleware chain
 
 export const chiDetector: FrameworkDetector = {
   name: 'chi',
@@ -19,8 +22,8 @@ export const chiDetector: FrameworkDetector = {
   triggerImports: ['github.com/go-chi/chi'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectGoAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from middleware evidence.
+    const authMechanismHint = detectGoAuthMechanism(file.imports);
 
     const chiImp = file.imports.find((i) => i.source.startsWith('github.com/go-chi/chi'));
     const chiAlias = chiImp?.localName ?? 'chi';
@@ -29,23 +32,15 @@ export const chiDetector: FrameworkDetector = {
     ]);
     if (instances.size === 0) return [];
 
+    const uses = findUseCalls(tree, source, instances);
     const entryPoints: EntryPoint[] = [];
     for (const call of findRouteCalls(tree, source, instances, GO_HTTP_METHODS_PASCAL, ['Handle', 'HandleFunc'])) {
       if (!call.httpMethod) continue;
-      entryPoints.push({
-        filePath: file.filePath,
-        lineNumber: lineOf(call.node),
-        framework: 'chi',
-        handlerName: call.handlerName,
-        httpMethod: call.httpMethod,
-        routePattern: call.routePattern,
-        entryPointType: 'http_route',
-        classification,
-        authenticated: !!authMechanism,
-        authMechanism,
-        middlewareChain: null,
+      entryPoints.push(buildGoRouteEntryPoint({
+        call, root: tree.rootNode, source, filePath: file.filePath,
+        framework: 'chi', authMechanismHint, uses,
         metadata: { method: call.methodName },
-      });
+      }));
     }
     return entryPoints;
   },

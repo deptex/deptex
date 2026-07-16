@@ -1,11 +1,11 @@
 import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   GO_HTTP_METHODS_UPPER,
-  classifyFromAuth,
+  buildGoRouteEntryPoint,
   detectGoAuthMechanism,
   findInstancesFromFactory,
   findRouteCalls,
-  lineOf,
+  findUseCalls,
 } from '../util/go';
 
 // Echo:
@@ -19,8 +19,8 @@ export const echoDetector: FrameworkDetector = {
   triggerImports: ['github.com/labstack/echo'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectGoAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from middleware evidence.
+    const authMechanismHint = detectGoAuthMechanism(file.imports);
 
     const echoImp = file.imports.find((i) => i.source.startsWith('github.com/labstack/echo'));
     const echoAlias = echoImp?.localName ?? 'echo';
@@ -29,23 +29,15 @@ export const echoDetector: FrameworkDetector = {
     ]);
     if (instances.size === 0) return [];
 
+    const uses = findUseCalls(tree, source, instances);
     const entryPoints: EntryPoint[] = [];
     for (const call of findRouteCalls(tree, source, instances, GO_HTTP_METHODS_UPPER)) {
       if (!call.httpMethod) continue;
-      entryPoints.push({
-        filePath: file.filePath,
-        lineNumber: lineOf(call.node),
-        framework: 'echo',
-        handlerName: call.handlerName,
-        httpMethod: call.httpMethod,
-        routePattern: call.routePattern,
-        entryPointType: 'http_route',
-        classification,
-        authenticated: !!authMechanism,
-        authMechanism,
-        middlewareChain: null,
+      entryPoints.push(buildGoRouteEntryPoint({
+        call, root: tree.rootNode, source, filePath: file.filePath,
+        framework: 'echo', authMechanismHint, uses,
         metadata: { method: call.methodName },
-      });
+      }));
     }
     return entryPoints;
   },

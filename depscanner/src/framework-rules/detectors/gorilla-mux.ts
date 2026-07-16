@@ -1,8 +1,13 @@
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
+import type { MiddlewareToken } from '../util/auth-evidence';
 import {
-  classifyFromAuth,
+  addSubrouterInstances,
+  classifyGoRoute,
   detectGoAuthMechanism,
   findInstancesFromFactory,
+  findUseCalls,
+  goHandlerSpan,
+  goMiddlewareToken,
   goStringLiteral,
   handlerTextOf,
   lineOf,
@@ -41,8 +46,8 @@ export const gorillaMuxDetector: FrameworkDetector = {
   triggerImports: ['github.com/gorilla/mux'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectGoAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from Use/wrapper evidence.
+    const authMechanismHint = detectGoAuthMechanism(file.imports);
 
     const muxImp = file.imports.find((i) => i.source === 'github.com/gorilla/mux');
     const muxAlias = muxImp?.localName ?? 'mux';
@@ -50,7 +55,11 @@ export const gorillaMuxDetector: FrameworkDetector = {
       { pkgAlias: muxAlias, fn: 'NewRouter' },
     ]);
     if (instances.size === 0) return [];
+    // Track `s := r.PathPrefix("/x").Subrouter()` instances so their Use/routes
+    // are visible (the canonical gorilla auth grouping).
+    addSubrouterInstances(tree, source, instances);
 
+    const uses = findUseCalls(tree, source, instances);
     const entryPoints: EntryPoint[] = [];
     walkTree(tree, (node) => {
       if (node.type !== 'call_expression') return;
@@ -83,20 +92,36 @@ export const gorillaMuxDetector: FrameworkDetector = {
         }
       }
 
+      // Evidence: this instance's prior Use middleware + a wrapped handler.
+      const routeTokens: MiddlewareToken[] = [];
+      if (handlerArg?.type === 'call_expression') {
+        const wrapper = goMiddlewareToken(handlerArg, source);
+        if (wrapper) routeTokens.push(wrapper);
+      }
+      const routeLine = lineOf(node);
+      const useTokens = uses
+        .filter((u) => u.instance === op && u.line < routeLine)
+        .flatMap((u) => u.tokens);
+      const { classification, authenticated } = classifyGoRoute({ routeTokens, useTokens, routePattern });
+      const { span, eligible } = goHandlerSpan(tree.rootNode, source, handlerArg);
+      const allTokens = [...routeTokens, ...useTokens];
+
       if (methods.length === 0) methods = [null as unknown as HttpMethod];
       for (const m of methods) {
         entryPoints.push({
           filePath: file.filePath,
-          lineNumber: lineOf(node),
+          lineNumber: routeLine,
           framework: 'gorilla-mux',
           handlerName: handlerTextOf(handlerArg, source),
           httpMethod: m || null,
           routePattern,
           entryPointType: 'http_route',
           classification,
-          authenticated: !!authMechanism,
-          authMechanism,
-          middlewareChain: null,
+          authenticated,
+          authMechanism: authMechanismHint,
+          middlewareChain: allTokens.length ? allTokens.map((t) => t.display) : null,
+          handlerSpan: span,
+          demotionEligible: eligible,
           metadata: { method },
         });
       }
