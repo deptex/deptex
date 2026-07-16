@@ -1,6 +1,7 @@
 import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
-import { HTTP_METHOD_NAMES, classifyFromAuth, detectAuthMechanism, lineOf, stringLiteralValue, textOf, walkTree } from '../util/javascript';
+import { HTTP_METHOD_NAMES, detectAuthMechanism, lineOf, stringLiteralValue, textOf, walkTree } from '../util/javascript';
+import { classifyRoute, matchesPublicOverride, spanOfNode } from '../util/auth-evidence';
 
 // NestJS is decorator-driven:
 //   @Controller('/users')
@@ -53,6 +54,49 @@ function joinRoute(prefix: string | null, sub: string | null): string | null {
   return joined.replace(/\/+/g, '/');
 }
 
+/**
+ * All string-shaped argument tokens of a decorator invocation:
+ * `@UseGuards(JwtAuthGuard, RolesGuard)` → ['JwtAuthGuard', 'RolesGuard'];
+ * `@UseGuards(AuthGuard('jwt'))` → ["AuthGuard('jwt')"] (arg text kept so the
+ * optional/anonymous vetoes see strategy names).
+ */
+function decoratorArgTokens(dec: Node, source: string): string[] {
+  const inner = decoratorInvocation(dec);
+  if (inner?.type !== 'call_expression') return [];
+  const args = inner.childForFieldName('arguments');
+  if (!args) return [];
+  const out: string[] = [];
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const t = textOf(args.namedChild(i)!, source).trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Split a decorator list into route-auth evidence: `@UseGuards(...)` argument
+ * tokens (auth iff they match the shared auth-name patterns — `*AuthGuard`
+ * matches, ThrottlerGuard stays neutral) and explicit-public override
+ * decorators (`@Public()`, `@SkipAuth()`, `@AllowAnonymous()`).
+ */
+function gatherDecoratorEvidence(
+  decorators: readonly Node[],
+  source: string,
+): { guardTokens: string[]; publicOverrides: string[] } {
+  const guardTokens: string[] = [];
+  const publicOverrides: string[] = [];
+  for (const dec of decorators) {
+    const name = decoratorName(dec, source);
+    if (!name) continue;
+    if (name === 'UseGuards') {
+      guardTokens.push(...decoratorArgTokens(dec, source));
+    } else if (matchesPublicOverride(name)) {
+      publicOverrides.push(name);
+    }
+  }
+  return { guardTokens, publicOverrides };
+}
+
 export const nestjsDetector: FrameworkDetector = {
   name: 'nestjs',
   displayName: 'NestJS',
@@ -61,8 +105,8 @@ export const nestjsDetector: FrameworkDetector = {
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
 
-    const authMechanism = detectAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from guard/override decorators.
+    const authMechanismHint = detectAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -84,34 +128,39 @@ export const nestjsDetector: FrameworkDetector = {
       // so decorators may also sit as preceding siblings under the parent.
       // Check both locations. Node-wrapper identity is unreliable in
       // web-tree-sitter, so compare startIndex positions.
-      let controllerPrefix: string | null = null;
-      let isController = false;
+      // Collect the class's decorators from BOTH grammar locations (inline
+      // children before the body, and preceding siblings under an
+      // export_statement wrapper), then read Controller + auth evidence off the
+      // combined list.
+      const classDecorators: Node[] = [];
       for (let i = 0; i < node.namedChildCount; i++) {
         const child = node.namedChild(i)!;
         if (child.type !== 'decorator') break;
-        const name = decoratorName(child, source);
-        if (name === 'Controller') {
-          isController = true;
-          controllerPrefix = decoratorFirstStringArg(child, source);
-        }
+        classDecorators.push(child);
       }
-      if (!isController) {
+      if (classDecorators.length === 0) {
         const classParent = node.parent;
         if (classParent) {
           for (let i = 0; i < classParent.namedChildCount; i++) {
             const sib = classParent.namedChild(i)!;
             if (sib.startIndex >= node.startIndex) break;
-            if (sib.type === 'decorator') {
-              const name = decoratorName(sib, source);
-              if (name === 'Controller') {
-                isController = true;
-                controllerPrefix = decoratorFirstStringArg(sib, source);
-              }
-            }
+            if (sib.type === 'decorator') classDecorators.push(sib);
           }
         }
       }
+      let controllerPrefix: string | null = null;
+      let isController = false;
+      for (const dec of classDecorators) {
+        if (decoratorName(dec, source) === 'Controller') {
+          isController = true;
+          controllerPrefix = decoratorFirstStringArg(dec, source);
+        }
+      }
       if (!isController) return;
+
+      // Class-level guards cover every method; a method-level @Public()
+      // override still wins (Sem 2: method-level public beats class auth).
+      const classEvidence = gatherDecoratorEvidence(classDecorators, source);
 
       // Find class body and walk methods.
       const body = node.childForFieldName('body');
@@ -128,6 +177,9 @@ export const nestjsDetector: FrameworkDetector = {
           else if (prev.type === 'method_definition') decorators.length = 0;
         }
 
+        // Method-level guard/override evidence, merged with the class's.
+        const methodEvidence = gatherDecoratorEvidence(decorators, source);
+
         for (const dec of decorators) {
           const name = decoratorName(dec, source);
           if (!name) continue;
@@ -136,6 +188,20 @@ export const nestjsDetector: FrameworkDetector = {
           const subRoute = decoratorFirstStringArg(dec, source);
           const route = joinRoute(controllerPrefix, subRoute ?? '');
           const methodName = member.childForFieldName('name');
+
+          const guardTokens = [...classEvidence.guardTokens, ...methodEvidence.guardTokens];
+          const result = classifyRoute({
+            // classifyRoute's auth-name matching decides which guard tokens are
+            // real auth evidence (`*AuthGuard` matches; ThrottlerGuard neutral;
+            // Optional*/anonymous-strategy guards vetoed).
+            authTokens: guardTokens,
+            publicOverrides: [...classEvidence.publicOverrides, ...methodEvidence.publicOverrides],
+            routePattern: route,
+            // Decorator evidence is declaration-local, never a centralized
+            // idiom — the belt does not apply (Sem 10).
+            centralizedOnly: false,
+          });
+
           entryPoints.push({
             filePath: file.filePath,
             lineNumber: lineOf(member),
@@ -144,10 +210,15 @@ export const nestjsDetector: FrameworkDetector = {
             httpMethod,
             routePattern: route,
             entryPointType: 'http_route',
-            classification,
-            authenticated: !!authMechanism,
-            authMechanism,
-            middlewareChain: null,
+            classification: result.classification,
+            authenticated: result.authenticated,
+            authMechanism: authMechanismHint,
+            middlewareChain: guardTokens.length ? guardTokens : null,
+            // Declaration-bound family (Sem 6 guard table): the auth evidence
+            // travels with the method wherever it's referenced, so the span is
+            // always demotion-eligible.
+            handlerSpan: spanOfNode(member),
+            demotionEligible: true,
             metadata: { decorator: name },
           });
         }

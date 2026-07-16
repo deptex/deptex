@@ -84,6 +84,11 @@ export const AUTH_NAME_PATTERNS: readonly RegExp[] = [
   /\bexpress_?jwt\b/i,
   /\brequire_?user\b/i,
   /\bauthorize\b/i,
+  // Guard-class convention (NestJS `@UseGuards(JwtAuthGuard)`, custom Express
+  // classes). Substring, camelCase-tolerant: JwtAuthGuard / LocalAuthGuard.
+  // ThrottlerGuard / RolesGuard deliberately do NOT match (rate-limit /
+  // authorization-only names are not authentication evidence on their own).
+  /auth.?guard/i,
 ];
 
 /**

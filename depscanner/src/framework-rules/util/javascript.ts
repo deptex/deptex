@@ -1,7 +1,13 @@
 import type { Node, Tree } from 'web-tree-sitter';
 import type { ImportBinding } from '../../tree-sitter-extractor/languages/types';
 import type { EntryPointClassification, HttpMethod } from '../types';
-import { spanOfNode, type HandlerSpan } from './auth-evidence';
+import {
+  classifyRoute,
+  matchesInternalName,
+  matchesPublicOverride,
+  spanOfNode,
+  type HandlerSpan,
+} from './auth-evidence';
 
 export function textOf(node: Node | null, source: string): string {
   if (!node) return '';
@@ -247,4 +253,120 @@ function rootsAtExports(node: Node, source: string): boolean {
   if (!cur) return false;
   const root = textOf(cur, source);
   return root === 'exports' || root === 'module';
+}
+
+// ---------------------------------------------------------------------------
+// Shared JS middleware-evidence helpers (entry-point auth classification).
+// Used by the express / fastify / koa detectors so the token → evidence-bucket
+// logic can never diverge between them.
+// ---------------------------------------------------------------------------
+
+/**
+ * A middleware argument reduced to two token views: `display` (a clean symbol
+ * name for the chain field + the fp-filter prompt) and `classify` (a richer
+ * string that also captures string-literal args, so name-pattern vetoes see
+ * `passport.authenticate('anonymous')`'s `'anonymous'`).
+ */
+export interface MiddlewareToken {
+  display: string;
+  classify: string;
+}
+
+export function middlewareToken(node: Node, source: string): MiddlewareToken | null {
+  if (node.type === 'identifier') {
+    const t = textOf(node, source);
+    return { display: t, classify: t };
+  }
+  if (node.type === 'member_expression') {
+    const t = textOf(node, source);
+    return { display: t, classify: t };
+  }
+  if (node.type === 'call_expression') {
+    const fn = node.childForFieldName('function');
+    const fnText = fn ? textOf(fn, source) : '';
+    // Fold string-literal args into the classify token so `passport.authenticate('anonymous')`
+    // and `guard('optional')` are veto-visible without a full arg inspector.
+    const argStrings: string[] = [];
+    const argsNode = node.childForFieldName('arguments');
+    if (argsNode) {
+      for (let i = 0; i < argsNode.namedChildCount; i++) {
+        const s = stringLiteralValue(argsNode.namedChild(i)!, source);
+        if (s) argStrings.push(s);
+      }
+    }
+    if (!fnText) return null;
+    return { display: fnText, classify: `${fnText} ${argStrings.join(' ')}`.trim() };
+  }
+  return null;
+}
+
+/** Partition middleware tokens into the three evidence buckets classifyRoute reads. */
+export function categorizeMiddlewareTokens(tokens: MiddlewareToken[]): {
+  authTokens: string[];
+  internalTokens: string[];
+  publicOverrides: string[];
+} {
+  const authTokens: string[] = [];
+  const internalTokens: string[] = [];
+  const publicOverrides: string[] = [];
+  for (const t of tokens) {
+    if (matchesPublicOverride(t.classify)) publicOverrides.push(t.classify);
+    else if (matchesInternalName(t.classify)) internalTokens.push(t.classify);
+    else authTokens.push(t.classify);
+  }
+  return { authTokens, internalTokens, publicOverrides };
+}
+
+/** Does any token constitute valid (non-veto) route-local auth? Drives centralizedOnly. */
+export function hasRouteLocalAuth(tokens: MiddlewareToken[]): boolean {
+  const { authTokens } = categorizeMiddlewareTokens(tokens);
+  // classifyRoute applies the same auth-name + optional-veto logic; probing it
+  // keeps the definition of "valid auth" in one place.
+  return classifyRoute({ authTokens }).classification === 'AUTH_INTERNAL';
+}
+
+/** True when `node` is a program-level statement (no enclosing function/method/arrow). */
+export function isTopLevelStatement(node: Node): boolean {
+  for (let cur: Node | null = node.parent; cur; cur = cur.parent) {
+    const t = cur.type;
+    if (
+      t === 'function_declaration' || t === 'function_expression' || t === 'arrow_function' ||
+      t === 'generator_function' || t === 'generator_function_declaration' || t === 'method_definition'
+    ) {
+      return false;
+    }
+    if (t === 'program') return true;
+  }
+  return true;
+}
+
+/**
+ * A same-file inline verifier call is machine evidence (Sem 5): a webhook
+ * handler that verifies a signature in its own body (`x.verify(...)`,
+ * `stripe.webhooks.constructEvent(...)`). Scanned only inside an inline handler
+ * span — cross-file verifier bodies are NOT detectable (documented v1 residual).
+ */
+export function inlineHandlerHasVerifier(handler: Node | null, source: string): string | null {
+  if (!handler) return null;
+  if (handler.type !== 'arrow_function' && handler.type !== 'function_expression' && handler.type !== 'function_declaration') {
+    return null;
+  }
+  let hit: string | null = null;
+  const walk = (n: Node): void => {
+    if (hit) return;
+    if (n.type === 'call_expression') {
+      const fn = n.childForFieldName('function');
+      if (fn?.type === 'member_expression') {
+        const prop = fn.childForFieldName('property');
+        const propName = prop ? textOf(prop, source) : '';
+        if (/^verify$/i.test(propName) || /construct_?event/i.test(propName)) {
+          hit = textOf(fn, source);
+          return;
+        }
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
+  };
+  walk(handler);
+  return hit;
 }
