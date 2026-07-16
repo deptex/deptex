@@ -87,6 +87,8 @@ function goldenActual(): ActualFindings {
       },
     ],
     dast: [],
+    entryPoints: [],
+    flowTags: [],
   };
 }
 
@@ -243,6 +245,74 @@ console.log('\nbonus: invariants');
     matchesReachabilityBucket('unreachable', null),
     'unreachable bucket accepts null reachability',
   );
+}
+
+// --- Case (i): entry_points classification (T6a) ---
+
+console.log('\n(i) entry_points classification match/mismatch');
+{
+  const actual = goldenActual();
+  actual.entryPoints = [
+    { file_path: 'routes/admin.js', route_pattern: '/api/admin/render', classification: 'AUTH_INTERNAL' },
+    { file_path: 'routes/api.js', route_pattern: '/api/render', classification: 'PUBLIC_UNAUTH' },
+  ];
+  const passExpected: ExpectedYaml = {
+    entry_points: [
+      { route: '/admin/render', file: 'routes/admin.js', classification: 'AUTH_INTERNAL' },
+      { route: '/render', file: 'routes/api.js', classification: 'PUBLIC_UNAUTH' },
+    ],
+  };
+  assert(diffExpectedVsActual(passExpected, actual).ok, 'matching classifications → PASS');
+
+  const wrongClass: ExpectedYaml = {
+    entry_points: [{ route: '/admin/render', file: 'routes/admin.js', classification: 'PUBLIC_UNAUTH' }],
+  };
+  const d1 = diffExpectedVsActual(wrongClass, actual);
+  assert(!d1.ok, 'wrong expected classification → FAIL');
+  assert(d1.missing.some((m) => m.category === 'entry_points' && m.detail.includes('mismatch')), 'cites classification mismatch');
+
+  const noRoute: ExpectedYaml = {
+    entry_points: [{ route: '/nonexistent', classification: 'AUTH_INTERNAL' }],
+  };
+  const d2 = diffExpectedVsActual(noRoute, actual);
+  assert(!d2.ok, 'no matching route → FAIL');
+  assert(d2.missing.some((m) => m.category === 'entry_points'), 'cites the unmatched entry point');
+}
+
+// --- Case (j): flow_tags stamping (T6a) ---
+
+console.log('\n(j) flow_tags stamping match/mismatch');
+{
+  const actual = goldenActual();
+  actual.flowTags = [
+    { entry_point_file: 'routes/admin.js', entry_point_line: 23, entry_point_tag: 'framework-route:auth_internal' },
+    { entry_point_file: 'routes/api.js', entry_point_line: 9, entry_point_tag: 'framework-route:public_unauth' },
+  ];
+  const passExpected: ExpectedYaml = {
+    flow_tags: [
+      { file: 'routes/admin.js', tag: 'framework-route:auth_internal' },
+      { file: 'routes/api.js', tag: 'framework-route:public_unauth' },
+    ],
+  };
+  assert(diffExpectedVsActual(passExpected, actual).ok, 'matching tags (line-tolerant) → PASS');
+
+  const wrongTag: ExpectedYaml = {
+    flow_tags: [{ file: 'routes/admin.js', tag: 'framework-route:public_unauth' }],
+  };
+  const d1 = diffExpectedVsActual(wrongTag, actual);
+  assert(!d1.ok, 'wrong expected tag → FAIL (the demotion regressed)');
+  assert(d1.missing.some((m) => m.category === 'flow_tags' && m.detail.includes('mismatch')), 'cites tag mismatch');
+
+  const noFlow: ExpectedYaml = {
+    flow_tags: [{ file: 'routes/missing.js', tag: 'framework-route:auth_internal' }],
+  };
+  assert(!diffExpectedVsActual(noFlow, actual).ok, 'no flow in file → FAIL');
+
+  // Line-specific match: a wrong line finds no candidate → FAIL.
+  const wrongLine: ExpectedYaml = {
+    flow_tags: [{ file: 'routes/admin.js', line: 999, tag: 'framework-route:auth_internal' }],
+  };
+  assert(!diffExpectedVsActual(wrongLine, actual).ok, 'wrong explicit line → FAIL');
 }
 
 console.log(`\n${failures === 0 ? 'PASS' : 'FAIL'} — ${failures} failure(s)`);

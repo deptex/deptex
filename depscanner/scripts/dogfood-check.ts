@@ -84,6 +84,28 @@ export interface ExpectedDastFinding {
   url_pattern?: string;
 }
 
+/**
+ * Entry-point auth classification (T6a). Assert a detected route's
+ * `project_entry_points.classification`. Match by `route` (route_pattern
+ * substring) and/or `file` (file_path). At least one must be given.
+ */
+export interface ExpectedEntryPoint {
+  classification: 'PUBLIC_UNAUTH' | 'AUTH_INTERNAL' | 'OFFLINE_WORKER' | 'UNKNOWN';
+  route?: string;
+  file?: string;
+}
+
+/**
+ * Entry-point auth classification (T6a). Assert that at least one taint-engine
+ * flow whose source is in `file` carries `entry_point_tag = tag`. `line` is
+ * optional (line-tolerant so byte drift in the fixture doesn't break the check).
+ */
+export interface ExpectedFlowTag {
+  file: string;
+  tag: string;
+  line?: number;
+}
+
 export interface ExpectedYaml {
   reachable_vulns?: ExpectedVuln[];
   unreachable_vulns?: ExpectedVuln[];
@@ -93,6 +115,8 @@ export interface ExpectedYaml {
   malicious_pkg?: ExpectedMaliciousPkg[];
   semgrep_findings?: ExpectedSemgrepFinding[];
   dast_findings?: ExpectedDastFinding[];
+  entry_points?: ExpectedEntryPoint[];
+  flow_tags?: ExpectedFlowTag[];
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +160,18 @@ export interface ActualDastFinding {
   endpoint_url: string;
 }
 
+export interface ActualEntryPoint {
+  file_path: string;
+  route_pattern: string | null;
+  classification: string | null;
+}
+
+export interface ActualFlowTag {
+  entry_point_file: string;
+  entry_point_line: number | null;
+  entry_point_tag: string | null;
+}
+
 export interface ActualFindings {
   vulns: ActualVuln[];
   iac: ActualIacFinding[];
@@ -144,6 +180,8 @@ export interface ActualFindings {
   malicious: ActualMaliciousPkg[];
   semgrep: ActualSemgrepFinding[];
   dast: ActualDastFinding[];
+  entryPoints: ActualEntryPoint[];
+  flowTags: ActualFlowTag[];
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +372,52 @@ export function diffExpectedVsActual(
     }
   }
 
+  // --- entry_points (entry-point auth classification, T6a) ---
+  for (const e of expected.entry_points ?? []) {
+    const candidates = actual.entryPoints.filter((a) => {
+      if (e.route && !(a.route_pattern ?? '').includes(e.route)) return false;
+      if (e.file && !a.file_path.includes(e.file)) return false;
+      return e.route != null || e.file != null;
+    });
+    if (candidates.length === 0) {
+      missing.push({
+        category: 'entry_points',
+        detail: `no entry point matched route=${e.route ?? '-'} file=${e.file ?? '-'}`,
+      });
+      continue;
+    }
+    if (!candidates.some((a) => a.classification === e.classification)) {
+      const got = Array.from(new Set(candidates.map((a) => a.classification ?? 'null'))).join(',');
+      missing.push({
+        category: 'entry_points',
+        detail: `route=${e.route ?? '-'} file=${e.file ?? '-'} classification mismatch: expected ${e.classification}, got ${got}`,
+      });
+    }
+  }
+
+  // --- flow_tags (entry-point auth classification, T6a) ---
+  for (const e of expected.flow_tags ?? []) {
+    const candidates = actual.flowTags.filter((a) => {
+      if (!a.entry_point_file.includes(e.file)) return false;
+      if (e.line != null && a.entry_point_line !== e.line) return false;
+      return true;
+    });
+    if (candidates.length === 0) {
+      missing.push({
+        category: 'flow_tags',
+        detail: `no taint-engine flow at file=${e.file}${e.line != null ? `:${e.line}` : ''}`,
+      });
+      continue;
+    }
+    if (!candidates.some((a) => a.entry_point_tag === e.tag)) {
+      const got = Array.from(new Set(candidates.map((a) => a.entry_point_tag ?? 'null'))).join(',');
+      missing.push({
+        category: 'flow_tags',
+        detail: `file=${e.file}${e.line != null ? `:${e.line}` : ''} tag mismatch: expected ${e.tag}, got ${got}`,
+      });
+    }
+  }
+
   // --- collect informational extras (not failure-driving) ---
   // (Only categories where the expected set is non-empty get extras logged,
   // to avoid noise on fixtures that intentionally don't cover a category.)
@@ -383,6 +467,8 @@ async function loadActual(
     malicious: [],
     semgrep: [],
     dast: [],
+    entryPoints: [],
+    flowTags: [],
   };
 
   const vulnsRes = await supabase
@@ -463,6 +549,42 @@ async function loadActual(
   out.dast = (dastRes.data ?? []).map((r: any) => ({
     vulnerability_type: r.vulnerability_type,
     endpoint_url: r.endpoint_url,
+  }));
+
+  // Entry-point auth classification (T6a). Scope to the active run so a
+  // re-scanned fixture doesn't diff against stale rows.
+  const activeRunRes = await supabase
+    .from('projects')
+    .select('active_extraction_run_id')
+    .eq('id', projectId)
+    .maybeSingle();
+  const activeRunId = (activeRunRes.data as any)?.active_extraction_run_id ?? null;
+
+  let epQuery = supabase
+    .from('project_entry_points')
+    .select('file_path, route_pattern, classification')
+    .eq('project_id', projectId);
+  if (activeRunId) epQuery = epQuery.eq('extraction_run_id', activeRunId);
+  const epRes = await epQuery;
+  if (epRes.error) throw new Error(`entry_points query: ${epRes.error.message}`);
+  out.entryPoints = (epRes.data ?? []).map((r: any) => ({
+    file_path: r.file_path,
+    route_pattern: r.route_pattern ?? null,
+    classification: r.classification ?? null,
+  }));
+
+  let ftQuery = supabase
+    .from('project_reachable_flows')
+    .select('entry_point_file, entry_point_line, entry_point_tag')
+    .eq('project_id', projectId)
+    .eq('reachability_source', 'taint_engine');
+  if (activeRunId) ftQuery = ftQuery.eq('extraction_run_id', activeRunId);
+  const ftRes = await ftQuery;
+  if (ftRes.error) throw new Error(`flow_tags query: ${ftRes.error.message}`);
+  out.flowTags = (ftRes.data ?? []).map((r: any) => ({
+    entry_point_file: r.entry_point_file,
+    entry_point_line: r.entry_point_line ?? null,
+    entry_point_tag: r.entry_point_tag ?? null,
   }));
 
   return out;
