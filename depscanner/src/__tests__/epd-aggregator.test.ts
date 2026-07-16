@@ -72,22 +72,135 @@ describe('aggregateEpdFromFlows — empty + suppression states', () => {
   });
 });
 
-describe('aggregateEpdFromFlows — confidence threshold parity', () => {
-  it(`drops flows whose sanitization confidence < ${MAX_VOTE_THRESHOLD}`, () => {
+describe('aggregateEpdFromFlows — two-vote-set split (Core Semantics 7)', () => {
+  // The endpoint verdict has no confidence field, so it is NOT gated by the
+  // sanitization confidence threshold: a sub-threshold flow's SANITIZATION
+  // verdict is dropped (can't neutralize the score) but its ENDPOINT class
+  // still votes. This is the deliberate decoupling the split introduced.
+  it(`sub-threshold flow's sanitization is dropped but its endpoint still votes`, () => {
     const lowConf = makeVerdict({
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
       sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
     });
     const r = aggregateEpdFromFlows([lowConf], 5.0, 'confirmed', true);
+    // Endpoint votes → flow_aggregated (not no_flows_evaluated as under the old
+    // coupled filter).
+    expect(r.epd_status).toBe('flow_aggregated');
+    expect(r.entry_point_classification).toBe('PUBLIC_UNAUTH');
+    // But the sub-threshold sanitizer is NOT trusted — no sanitization voter, so
+    // is_sanitized stays false (the score is not neutralized on weak evidence).
+    expect(r.is_sanitized).toBe(false);
+  });
+
+  it(`sub-threshold flow with NO endpoint + NO evidence contributes nothing`, () => {
+    const lowConfNoEndpoint = makeVerdict({
+      endpoint: null,
+      sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH', // legacy constant, no vote
+    });
+    const r = aggregateEpdFromFlows([lowConfNoEndpoint], 5.0, 'confirmed', true);
     expect(r.epd_status).toBe('no_flows_evaluated');
   });
 
-  it(`keeps flows whose sanitization confidence === ${MAX_VOTE_THRESHOLD}`, () => {
+  it(`keeps flows whose sanitization confidence === ${MAX_VOTE_THRESHOLD} (sanitization voter)`, () => {
     const exact = makeVerdict({
       sanitization: { is_sanitized: false, confidence: MAX_VOTE_THRESHOLD },
     });
     const r = aggregateEpdFromFlows([exact], 5.0, 'confirmed', true);
     expect(r.epd_status).toBe('flow_aggregated');
     expect(r.flowsAggregated).toBe(1);
+  });
+});
+
+describe('aggregateEpdFromFlows — evidence merge (Core Semantics 7 matrix)', () => {
+  // matched route evidence rides on entryPointTag as framework-route:<class>.
+  const ev = (cls: 'auth_internal' | 'offline_worker' | 'public_unauth') => `framework-route:${cls}`;
+
+  it('verdict-less + evidence-authed + sanitization-filtered → demotes (intended expansion)', () => {
+    // No AI verdict at all (endpoint null, sanitization null → not a sanitization
+    // voter), but the flow's source fell inside an authed handler span.
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('flow_aggregated');
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(r.entry_point_weight).toBe(0.5); // demoted from the UNKNOWN 1.0 it'd get today
+    expect(r.is_sanitized).toBe(false);
+  });
+
+  it('AI-public verdict is never overridden by evidence-authed (Locked-6)', () => {
+    const f = makeVerdict({
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('PUBLIC_UNAUTH');
+  });
+
+  it('evidence-offline_worker demotes a verdict-less flow to weight 0.2', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('offline_worker'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('OFFLINE_WORKER');
+    expect(r.entry_point_weight).toBe(0.2);
+  });
+
+  it('unmatched tag never votes (verdict-less unmatched flow contributes nothing)', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: 'framework-input:unmatched',
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it('legacy constant tag never votes (detector-coerced flow contributes nothing)', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH',
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it('suppressed-public + surviving evidence-authed → AUTH_INTERNAL (suppressed excluded)', () => {
+    const suppressedPublic = makeVerdict({
+      isSuppressed: true,
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+    });
+    const authed = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([suppressedPublic, authed], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+  });
+
+  it('evidence-authed + AI-authed agree → AUTH_INTERNAL (worst-case of equals)', () => {
+    const f = makeVerdict({
+      endpoint: { classification: 'AUTH_INTERNAL' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(r.entry_point_weight).toBe(0.5);
   });
 });
 
