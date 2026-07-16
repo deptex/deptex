@@ -57,6 +57,15 @@ export interface ExtractedFile {
    * undefined by language modules that don't yet run any detectors.
    */
   entryPoints?: import('../../framework-rules/types').EntryPoint[];
+  /**
+   * Cross-file auth facts banked during `detect` for the `postProcess` pass
+   * (entry-point auth classification, T9). Rails/Django hold the auth evidence
+   * (before_action / decorators / mixins) in the CONTROLLER/VIEW file, not in
+   * the routes file, so those detectors bank per-action classifications here
+   * (they have the tree during detect; postProcess does not). In-memory only —
+   * never persisted. Left undefined by detectors that don't do cross-file work.
+   */
+  authFacts?: import('../../framework-rules/types').FileAuthFacts;
 }
 
 export interface KnownDep {

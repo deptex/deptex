@@ -1,9 +1,12 @@
 import type { Node } from 'web-tree-sitter';
-import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
+import type { CtxOnlyRouteRecord, DetectorContext, EntryPoint, FrameworkDetector } from '../types';
+import type { ExtractedFile } from '../../tree-sitter-extractor/languages/types';
 import {
   RUBY_HTTP_METHODS,
+  analyzeRailsController,
   classifyFromAuth,
   detectRubyAuthMechanism,
+  isRailsController,
   lineOf,
   rubyStringLiteral,
   textOf,
@@ -32,6 +35,12 @@ export const railsDetector: FrameworkDetector = {
     const authMechanism = detectRubyAuthMechanism(file.imports);
     const classification = classifyFromAuth(authMechanism);
     const entryPoints: EntryPoint[] = [];
+
+    // Bank per-action auth facts from any controller class in this file (the
+    // cross-file leg, T9). The taint sources fire inside controller actions, so
+    // classifying them here + re-homing via postProcess demotes those flows —
+    // no routes.rb resolution needed (covers resources-routed controllers too).
+    bankControllerAuthFacts(tree.rootNode, source, file);
 
     const drawBlocks = findRoutesDrawBlocks(tree.rootNode, source);
     if (drawBlocks.length === 0) return [];
@@ -70,7 +79,60 @@ export const railsDetector: FrameworkDetector = {
     }
     return entryPoints;
   },
+  /**
+   * Cross-file pass (T9): flatten every file's banked Rails controller
+   * auth facts into ctx-only route records keyed on the controller file. The
+   * records are added to `ctx.entryPointAuth` only — never persisted — so a
+   * flow whose source falls inside an authed action span demotes.
+   */
+  postProcess(files: readonly ExtractedFile[]): CtxOnlyRouteRecord[] {
+    const out: CtxOnlyRouteRecord[] = [];
+    for (const file of files) {
+      const facts = file.authFacts;
+      if (!facts || facts.framework !== 'rails') continue;
+      for (const action of facts.actions) {
+        // Only re-home the actions that carry a demotion (AUTH_INTERNAL/OFFLINE);
+        // public actions add no signal and public is the default fallback.
+        if (action.classification === 'PUBLIC_UNAUTH' || action.classification === 'UNKNOWN') continue;
+        out.push({
+          filePath: facts.filePath,
+          classification: action.classification,
+          handlerSpan: action.handlerSpan,
+          demotionEligible: action.demotionEligible,
+          routePattern: action.routePattern,
+          middlewareChain: action.middlewareChain,
+          authMechanism: action.authMechanism,
+        });
+      }
+    }
+    return out;
+  },
 };
+
+/** Bank per-action auth facts from every controller class in the file. */
+function bankControllerAuthFacts(root: Node, source: string, file: ExtractedFile): void {
+  const actions: import('../types').FileAuthFacts['actions'] = [];
+  const walk = (node: Node): void => {
+    if (node.type === 'class' && isRailsController(node, source)) {
+      for (const a of analyzeRailsController(node, source)) {
+        actions.push({
+          name: a.name,
+          handlerSpan: a.handlerSpan,
+          classification: a.classification,
+          demotionEligible: a.demotionEligible,
+          routePattern: null,
+          middlewareChain: a.middlewareChain,
+          authMechanism: a.middlewareChain?.[0] ?? null,
+        });
+      }
+    }
+    for (let i = 0; i < node.namedChildCount; i++) walk(node.namedChild(i)!);
+  };
+  walk(root);
+  if (actions.length > 0) {
+    file.authFacts = { framework: 'rails', filePath: file.filePath, actions };
+  }
+}
 
 function findRoutesDrawBlocks(root: Node, source: string): Node[] {
   const out: Node[] = [];

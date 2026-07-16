@@ -105,6 +105,29 @@ export interface CtxOnlyRouteRecord {
   authMechanism: string | null;
 }
 
+/**
+ * Per-action auth facts a cross-file detector banks onto a controller/view
+ * `ExtractedFile` during `detect` (entry-point auth classification, T9). The
+ * detector's `postProcess` re-homes these into ctx-only route records keyed on
+ * the same file. `filePath` is the file's original (possibly absolute) path —
+ * `buildEntryPointAuthMap` normalizes it to the project-relative join key.
+ */
+export interface FileAuthFacts {
+  framework: string;
+  filePath: string;
+  actions: Array<{
+    /** Action / view name (for adjudication + logs). */
+    name: string;
+    /** The action method / view body span (Sem 6). */
+    handlerSpan: HandlerSpan;
+    classification: EntryPointClassification;
+    demotionEligible: boolean;
+    routePattern: string | null;
+    middlewareChain: string[] | null;
+    authMechanism: string | null;
+  }>;
+}
+
 export interface FrameworkDetector {
   /** Stable identifier stored in `project_entry_points.framework`. */
   name: string;
