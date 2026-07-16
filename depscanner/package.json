@@ -90,6 +90,7 @@
     "dogfood:check": "tsx scripts/dogfood-check.ts",
     "test:dogfood-check": "tsx test/dogfood-check.test.ts",
     "test:framework-detector-spring": "tsx test/framework-detector-spring.test.ts",
+    "test:framework-detector-express": "tsx test/framework-detector-express.test.ts",
     "test:entry-point-auth": "tsx test/entry-point-auth.test.ts",
     "test:param-harvest": "tsx test/param-harvest.test.ts",
     "test:dast-param-enrich": "tsx test/dast-param-enrich.test.ts"
