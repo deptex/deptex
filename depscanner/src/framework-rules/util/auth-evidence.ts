@@ -51,6 +51,14 @@ export interface RouteAuthRecord {
 export interface RouteAuthEvidence {
   /** Identifiers of auth middleware / guards / decorators applied to this route. */
   authTokens?: readonly string[];
+  /**
+   * Tokens the detector has ALREADY determined are auth evidence by exact
+   * framework semantics (annotation families: `@Secured`, `@RolesAllowed`,
+   * `@Authenticated`, non-public `@PreAuthorize` SpEL). Bypass the auth-NAME
+   * pattern matching + optional-veto (the detector owns those semantics), but
+   * still subject to `optional`, `conditional`, the belt, and public overrides.
+   */
+  vettedAuthTokens?: readonly string[];
   /** Verifier / internal-key evidence (Sem 5): `Receiver.verify`, `constructEvent`, internal-key middleware. */
   internalTokens?: readonly string[];
   /** Explicit-public markers (Sem 2): `@PermitAll`, `AllowAny`, `skip_before_action`, `withoutMiddleware('auth')`, … */
@@ -236,12 +244,14 @@ export function classifyRoute(evidence: RouteAuthEvidence): {
   }
 
   // Sem 4 + 8 — a valid auth token is one that matches an auth-name pattern and
-  // is NOT optional-vetoed. The caller's `optional` flag (arg inspection) also
-  // disqualifies.
+  // is NOT optional-vetoed. Vetted tokens (exact annotation semantics) skip the
+  // name matching. The caller's `optional` flag (arg inspection) disqualifies
+  // both kinds.
   const validAuthTokens = (evidence.authTokens ?? []).filter(
     (t) => matchesAuthName(t) && !isOptionalVetoed(t),
   );
-  const hasAuth = validAuthTokens.length > 0 && !evidence.optional;
+  const hasAuth = (validAuthTokens.length > 0 || (evidence.vettedAuthTokens ?? []).length > 0)
+    && !evidence.optional;
 
   if (!hasAuth) return publicResult;
 

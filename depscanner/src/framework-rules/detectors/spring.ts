@@ -11,13 +11,16 @@ import type {
 import {
   SPRING_VERB_ANNOTATIONS,
   annotationsOn,
-  classifyFromAuth,
   detectJavaAuthMechanism,
+  javaAuthEvidenceFromAnnotations,
   joinRoute,
   lineOf,
+  mergeJavaAuthEvidence,
   textOf,
   walkTree,
+  workspaceHasFullSecurityChain,
 } from '../util/java';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // Spring MVC / WebFlux routes:
 //   @RestController @RequestMapping("/api/users")
@@ -296,8 +299,12 @@ export const springDetector: FrameworkDetector = {
   ],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectJavaAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from annotation evidence.
+    const authMechanismHint = detectJavaAuthMechanism(file.imports);
+    // Centralized Spring Security (Sem 3 zero-carve-out rule): a filter chain
+    // that positively covers every request with no permitAll/anonymous/ignoring
+    // carve-outs authenticates ALL MVC routes (belt still guards belt routes).
+    const chainCovers = workspaceHasFullSecurityChain(ctx.workspaceRoot);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -307,6 +314,7 @@ export const springDetector: FrameworkDetector = {
       const prefix = classPrefix(node, source);
       const nameNode = node.childForFieldName('name');
       const className = nameNode ? textOf(nameNode, source) : null;
+      const classEvidence = javaAuthEvidenceFromAnnotations(annotationsOn(node, source), source);
 
       const body = node.childForFieldName('body');
       if (!body) return;
@@ -316,41 +324,55 @@ export const springDetector: FrameworkDetector = {
         const methodName = member.childForFieldName('name');
         const handlerName = methodName ? textOf(methodName, source) : null;
 
+        const methodEvidence = javaAuthEvidenceFromAnnotations(annotationsOn(member, source), source);
+        const merged = mergeJavaAuthEvidence(classEvidence, methodEvidence);
+
+        const classifyFor = (routePattern: string | null) => {
+          const routeLocal = merged.vettedAuthTokens.length > 0;
+          const vetted = routeLocal
+            ? merged.vettedAuthTokens
+            : chainCovers ? ['SecurityFilterChain'] : [];
+          return classifyRoute({
+            vettedAuthTokens: vetted,
+            publicOverrides: merged.publicOverrides,
+            routePattern,
+            centralizedOnly: !routeLocal,
+          });
+        };
+
+        const pushRoute = (
+          httpMethod: EntryPoint['httpMethod'],
+          subRoute: string,
+          annotationName: string,
+        ): void => {
+          const routePattern = joinRoute(prefix, subRoute);
+          const result = classifyFor(routePattern);
+          entryPoints.push({
+            filePath: file.filePath,
+            lineNumber: lineOf(member),
+            framework: 'spring',
+            handlerName,
+            httpMethod,
+            routePattern,
+            entryPointType: 'http_route',
+            classification: result.classification,
+            authenticated: result.authenticated,
+            authMechanism: authMechanismHint,
+            middlewareChain: merged.vettedAuthTokens.length ? merged.vettedAuthTokens : null,
+            // Declaration-bound family (Sem 6): evidence travels with the
+            // method declaration → span always demotion-eligible.
+            handlerSpan: spanOfNode(member),
+            demotionEligible: true,
+            metadata: { controller: className, annotation: annotationName },
+          });
+        };
+
         for (const ann of annotationsOn(member, source)) {
           const httpMethod = SPRING_VERB_ANNOTATIONS[ann.name];
           if (httpMethod) {
-            const subRoute = ann.firstStringArg ?? '';
-            entryPoints.push({
-              filePath: file.filePath,
-              lineNumber: lineOf(member),
-              framework: 'spring',
-              handlerName,
-              httpMethod,
-              routePattern: joinRoute(prefix, subRoute),
-              entryPointType: 'http_route',
-              classification,
-              authenticated: !!authMechanism,
-              authMechanism,
-              middlewareChain: null,
-              metadata: { controller: className, annotation: ann.name },
-            });
+            pushRoute(httpMethod, ann.firstStringArg ?? '', ann.name);
           } else if (ann.name === 'RequestMapping') {
-            const rmMethod = methodFromRequestMapping(ann.namedValues, source);
-            const subRoute = ann.firstStringArg ?? '';
-            entryPoints.push({
-              filePath: file.filePath,
-              lineNumber: lineOf(member),
-              framework: 'spring',
-              handlerName,
-              httpMethod: rmMethod,
-              routePattern: joinRoute(prefix, subRoute),
-              entryPointType: 'http_route',
-              classification,
-              authenticated: !!authMechanism,
-              authMechanism,
-              middlewareChain: null,
-              metadata: { controller: className, annotation: 'RequestMapping' },
-            });
+            pushRoute(methodFromRequestMapping(ann.namedValues, source), ann.firstStringArg ?? '', 'RequestMapping');
           }
         }
       }
