@@ -372,6 +372,11 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         // Phase 33: thread scan_jobs id so per-call cost rolls up
         // into the scan row + the per-scan cap is honoured.
         jobId: job.jobId,
+        // Entry-point auth classification (T5): the per-route auth map built at
+        // usage extraction. The fp-filter injects the span-matched route's raw
+        // middleware chain into the prompt so the model classifies the endpoint
+        // from real auth evidence.
+        entryPointAuth: ctx.entryPointAuth,
       },
     });
 
