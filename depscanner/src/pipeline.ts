@@ -84,6 +84,7 @@ export async function runPipeline(
     newDepsToPopulate: [],
     astParsedSuccessfully: false,
     httpEntryPointCount: 0,
+    entryPointAuth: new Map(),
   };
 
   try {

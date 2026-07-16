@@ -18,6 +18,7 @@ import { extractUsage, type SupportedEcosystem } from '../tree-sitter-extractor'
 import { storeUsageExtractionResults } from '../tree-sitter-extractor/storage';
 import { getDetectorErrorSummary, resetDetectorErrors } from '../tree-sitter-extractor/detector-errors';
 import { storeEntryPoints } from '../framework-rules/storage';
+import { buildEntryPointAuthMap, runPostProcess, summarizeAttackSurface } from '../framework-rules/build-auth-map';
 import { resolveMountPrefixes } from '../param-harvest/mount-prefix';
 import { updateStep } from '../pipeline-helpers';
 import type { PipelineContext } from '../pipeline-types';
@@ -156,6 +157,26 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
         }
       }
       ctx.httpEntryPointCount = httpEntryPointCount;
+
+      // Build the per-route auth map the taint engine joins each flow against
+      // (entry-point auth classification, T2). Order is load-bearing:
+      // detect (done during extraction) → resolveMountPrefixes (above) →
+      // postProcess (cross-file re-homing) → build map → storeEntryPoints. The
+      // map is built BEFORE the DB write so it exists even if the write fails
+      // (retry-safe; no step-resume). postProcess RETURNS ctx-only records —
+      // never appends to file.entryPoints — so httpEntryPointCount + the
+      // persisted rows are untouched by it. A throwing postProcess is contained
+      // per-detector and never blocks persistence.
+      const postProcessRecords = await runPostProcess(result.files, workspaceRoot);
+      ctx.entryPointAuth = buildEntryPointAuthMap(result.files, postProcessRecords, workspaceRoot);
+      const surface = summarizeAttackSurface(result.files);
+      if (surface.public + surface.authenticated + surface.background > 0) {
+        await log.info(
+          'framework_detection',
+          `Attack surface: ${surface.public} public · ${surface.authenticated} authenticated · ${surface.background} background routes`,
+        );
+      }
+
       const entryResult = await storeEntryPoints(supabase, projectId, runId, result.files, workspaceRoot);
       if (!entryResult.success && entryResult.error) {
         await log.warn('framework_detection', `Entry-point write failed: ${entryResult.error}`);

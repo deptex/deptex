@@ -448,9 +448,20 @@ export async function doTaintEngine(ctx: PipelineContext): Promise<TaintEngineOu
         filterVerdicts: aiFilter?.verdicts,
         workspaceRoot,
         resolveDep: createOsvIdResolver(depsByOsvId),
+        entryPointAuth: ctx.entryPointAuth,
       });
       for (const e of writeResult.errors) {
         await log.warn('taint_engine', `flow write: ${e}`);
+      }
+      // Join-coverage KPI (T2/T3): what fraction of taint-regime flows fell
+      // inside a detected handler span. Low coverage flags routes we can't span
+      // (wrapped / cross-file / resources-routed) and prioritizes detector work.
+      if (writeResult.joinable > 0) {
+        const pct = ((writeResult.matched / writeResult.joinable) * 100).toFixed(1);
+        await log.info(
+          'taint_engine',
+          `Entry-point match rate: ${pct}% of taint flows (${writeResult.matched}/${writeResult.joinable} matched a detected handler span)`,
+        );
       }
       fpFilterCostUsd = aiFilter?.costUsd ?? 0;
       if (propagation.stats.stoppedEarly) {

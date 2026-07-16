@@ -7,6 +7,7 @@
  *
  * Run: npx tsx test/entry-point-auth.test.ts
  */
+import * as path from 'path';
 import type { Node } from 'web-tree-sitter';
 import { parseSource } from '../src/tree-sitter-extractor/parser';
 import {
@@ -30,6 +31,16 @@ import {
   handlerSpanForArg,
   isNamedHandlerDemotionEligible,
 } from '../src/framework-rules/util/javascript';
+import {
+  buildEntryPointAuthMap,
+  runPostProcess,
+  summarizeAttackSurface,
+} from '../src/framework-rules/build-auth-map';
+import { computeEntryPointTag } from '../src/taint-engine/storage';
+import { resetDetectorErrors, getDetectorErrorSummary } from '../src/tree-sitter-extractor/detector-errors';
+import type { EntryPoint, CtxOnlyRouteRecord, FrameworkDetector } from '../src/framework-rules/types';
+import type { ExtractedFile } from '../src/tree-sitter-extractor/languages/types';
+import type { Flow, FlowNode } from '../src/taint-engine/flow';
 
 let failures = 0;
 let passes = 0;
@@ -202,6 +213,157 @@ async function run(): Promise<void> {
   };
   findMember(memberRoot);
   eq(handlerSpanForArg(memberNode, memberRoot, memberSrc), null, 'handlerSpanForArg: member_expression handler → null span');
+
+  // ========================================================================
+  console.log('\nbuildEntryPointAuthMap + attack surface (T2)');
+  // ========================================================================
+  const mkEP = (p: Partial<EntryPoint>): EntryPoint => ({
+    filePath: 'routes/api.ts',
+    lineNumber: 10,
+    framework: 'express',
+    handlerName: null,
+    httpMethod: 'GET',
+    routePattern: '/x',
+    entryPointType: 'http_route',
+    classification: 'PUBLIC_UNAUTH',
+    authenticated: null,
+    authMechanism: null,
+    middlewareChain: null,
+    metadata: null,
+    ...p,
+  });
+  const mkFile = (p: Partial<ExtractedFile>): ExtractedFile => ({
+    filePath: 'routes/api.ts',
+    language: 'javascript',
+    imports: [],
+    usages: [],
+    ...p,
+  });
+
+  {
+    const files = [mkFile({
+      entryPoints: [
+        mkEP({ classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 10, endLine: 20 }, demotionEligible: true, routePattern: '/admin' }),
+        mkEP({ classification: 'PUBLIC_UNAUTH', lineNumber: 30, handlerSpan: { startLine: 30, endLine: 40 } }),
+        mkEP({ classification: 'AUTH_INTERNAL', lineNumber: 50, handlerSpan: null }), // no span → default-ineligible
+      ],
+    })];
+    const m = buildEntryPointAuthMap(files, [], undefined);
+    const recs = m.get('routes/api.ts') ?? [];
+    eq(recs.length, 3, 'map keeps every route (pre-dedupe)');
+    eq(recs[0].classification, 'AUTH_INTERNAL', 'record carries classification');
+    eq(recs[0].demotionEligible, true, 'explicit demotionEligible preserved');
+    eq(recs[2].demotionEligible, false, 'no span + no flag → demotionEligible defaults false (fail-safe)');
+    // span-present + absent flag → eligible-by-default
+    const m2 = buildEntryPointAuthMap([mkFile({ entryPoints: [mkEP({ classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 1, endLine: 2 } })] })], [], undefined);
+    eq((m2.get('routes/api.ts') ?? [])[0].demotionEligible, true, 'span present + absent flag → eligible by default');
+  }
+
+  {
+    // Absolute ep path under workspaceRoot → project-relative POSIX key (matches flows).
+    const ws = path.resolve('deptex-extract-xyz');
+    const abs = path.join(ws, 'routes', 'admin.ts');
+    const files = [mkFile({ filePath: abs, entryPoints: [mkEP({ filePath: abs, classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 1, endLine: 5 } })] })];
+    const m = buildEntryPointAuthMap(files, [], ws);
+    assert(m.has('routes/admin.ts'), 'absolute ep path normalized to project-relative POSIX key');
+    assert(!m.has(abs), 'absolute path is NOT a key');
+  }
+
+  {
+    // postProcess ctx-only records merge under their filePath.
+    const extra: CtxOnlyRouteRecord[] = [{
+      filePath: 'app/controllers/admin_controller.rb',
+      classification: 'AUTH_INTERNAL',
+      handlerSpan: { startLine: 3, endLine: 8 },
+      demotionEligible: true,
+      routePattern: '/admin/dashboard',
+      middlewareChain: ['authenticate_user!'],
+      authMechanism: 'before_action',
+    }];
+    const m = buildEntryPointAuthMap([mkFile({ entryPoints: [] })], extra, undefined);
+    eq((m.get('app/controllers/admin_controller.rb') ?? []).length, 1, 'postProcess record homed onto controller file');
+  }
+
+  {
+    const surface = summarizeAttackSurface([mkFile({
+      entryPoints: [
+        mkEP({ classification: 'PUBLIC_UNAUTH' }),
+        mkEP({ classification: 'UNKNOWN' }),
+        mkEP({ classification: 'AUTH_INTERNAL' }),
+        mkEP({ classification: 'OFFLINE_WORKER' }),
+      ],
+    })]);
+    eq(surface, { public: 2, authenticated: 1, background: 1 }, 'attack surface buckets (UNKNOWN counts as public)');
+  }
+
+  // ========================================================================
+  console.log('\nrunPostProcess — per-detector containment (T2)');
+  // ========================================================================
+  {
+    resetDetectorErrors();
+    const okDetector = {
+      name: 'ok-fw',
+      displayName: 'OK',
+      language: 'javascript',
+      triggerImports: [],
+      detect: () => [],
+      postProcess: () => [{
+        filePath: 'a.rb', classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 1, endLine: 2 },
+        demotionEligible: true, routePattern: '/a', middlewareChain: null, authMechanism: null,
+      } as CtxOnlyRouteRecord],
+    } as unknown as FrameworkDetector;
+    const throwDetector = {
+      name: 'boom-fw',
+      displayName: 'Boom',
+      language: 'javascript',
+      triggerImports: [],
+      detect: () => [],
+      postProcess: () => { throw new Error('postProcess boom'); },
+    } as unknown as FrameworkDetector;
+    const recs = await runPostProcess([mkFile({ entryPoints: [] })], '/ws', [throwDetector, okDetector]);
+    eq(recs.length, 1, 'throwing postProcess is contained; the other detector still contributes');
+    eq(recs[0].filePath, 'a.rb', 'surviving detector record returned');
+    assert(getDetectorErrorSummary().total >= 1, 'the throw was recorded as a detector error (not swallowed silently)');
+    resetDetectorErrors();
+  }
+
+  // ========================================================================
+  console.log('\ncomputeEntryPointTag — stamping decision (T3)');
+  // ========================================================================
+  const node = (kind: FlowNode['kind'], line: number): FlowNode => ({ filePath: 'routes/api.ts', line, column: 0, label: 'x', kind });
+  const mkTaintFlow = (p: Partial<Flow>): Flow => ({
+    id: 'f', vuln_class: 'xss', taint_kind: 'http_input',
+    entry_point_file: 'routes/api.ts', entry_point_line: 15, entry_point_method: 'handler', entry_point_pattern: 'req.body',
+    sink_file: 'routes/api.ts', sink_line: 18, sink_method: 'res.send', sink_pattern: 'res.send(*)', sink_is_external: false,
+    flow_nodes: [node('source', 15), node('sink', 18)], flow_length: 2,
+    source_description: 'src', sink_description: 'snk', engine_confidence: 0.5, ...p,
+  });
+  const stampMap: EntryPointAuthMap = new Map([['routes/api.ts', [
+    route({ classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 10, endLine: 20 } }),
+    route({ classification: 'PUBLIC_UNAUTH', handlerSpan: { startLine: 30, endLine: 40 } }),
+  ]]]);
+
+  // no map → legacy constant, never joinable
+  eq(computeEntryPointTag(mkTaintFlow({}), undefined), { tag: TAG_LEGACY_PUBLIC, joinable: false, matched: false }, 'no auth map → legacy constant, not joinable');
+  // detector-coerced flow (single sink node) → legacy constant even WITH a map
+  const coerced = mkTaintFlow({ flow_nodes: [node('sink', 15)], flow_length: 1 });
+  eq(computeEntryPointTag(coerced, stampMap), { tag: TAG_LEGACY_PUBLIC, joinable: false, matched: false }, 'detector-coerced flow keeps legacy constant (not joinable)');
+  // real flow inside authed span → framework-route:auth_internal, joined + matched
+  eq(computeEntryPointTag(mkTaintFlow({ entry_point_line: 15 }), stampMap), { tag: tagForClass('AUTH_INTERNAL'), joinable: true, matched: true }, 'flow in authed span → framework-route:auth_internal (matched)');
+  // real flow inside public span → evidence public, matched (counts toward coverage)
+  eq(computeEntryPointTag(mkTaintFlow({ entry_point_line: 35 }), stampMap), { tag: tagForClass('PUBLIC_UNAUTH'), joinable: true, matched: true }, 'flow in public span → framework-route:public_unauth (matched)');
+  // real flow with no span match → unmatched, joinable but not matched
+  eq(computeEntryPointTag(mkTaintFlow({ entry_point_line: 25 }), stampMap), { tag: TAG_UNMATCHED, joinable: true, matched: false }, 'flow with no span match → unmatched (joinable, not matched)');
+  // path normalization: map built from absolute ep path, flow uses relative path → still joins
+  {
+    const ws = path.resolve('deptex-extract-join');
+    const abs = path.join(ws, 'routes', 'api.ts');
+    const m = buildEntryPointAuthMap(
+      [mkFile({ filePath: abs, entryPoints: [mkEP({ filePath: abs, classification: 'AUTH_INTERNAL', handlerSpan: { startLine: 10, endLine: 20 } })] })],
+      [], ws,
+    );
+    eq(computeEntryPointTag(mkTaintFlow({ entry_point_file: 'routes/api.ts', entry_point_line: 15 }), m).tag, tagForClass('AUTH_INTERNAL'), 'path normalization: absolute-keyed map joins a relative-path flow');
+  }
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
