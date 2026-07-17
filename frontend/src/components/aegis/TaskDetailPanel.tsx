@@ -427,7 +427,7 @@ export function TaskDetailPanel({
 
   return (
     <div
-      className="flex flex-shrink-0 relative transition-[width] duration-[220ms] ease-out"
+      className="flex-shrink-0 relative transition-[width] duration-[220ms] ease-out"
       style={{ width: open ? width : 0 }}
     >
       {/* Persistent toggle: the TaskHeader row (the only other way in) scrolls
@@ -448,7 +448,16 @@ export function TaskDetailPanel({
           <PanelRight className="h-4 w-4" />
         </button>
       )}
-      <aside className="flex-1 border-l border-border overflow-hidden" aria-hidden={!open}>
+      {/* Clip layer fills the (width-animated) wrapper; the panel inside is a
+          FIXED-width slide-over so its content never squishes as it opens or
+          closes — the wrapper reserves space (chat re-centers smoothly) while
+          the panel just slides in/out over that space and gets clipped. */}
+      <div className="relative h-full overflow-hidden">
+        <aside
+          className="absolute inset-y-0 right-0 border-l border-border overflow-hidden bg-background transition-transform duration-[220ms] ease-out"
+          style={{ width, transform: open ? 'translateX(0)' : 'translateX(100%)' }}
+          aria-hidden={!open}
+        >
         {task && (
           <div className="flex h-full flex-col overflow-hidden bg-background">
             <div className="border-b border-border px-6 pt-4">
@@ -492,7 +501,8 @@ export function TaskDetailPanel({
             </div>
           </div>
         )}
-      </aside>
+        </aside>
+      </div>
     </div>
   );
 }
