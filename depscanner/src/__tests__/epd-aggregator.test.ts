@@ -104,6 +104,21 @@ describe('aggregateEpdFromFlows — two-vote-set split (Core Semantics 7)', () =
     expect(r.is_sanitized).toBe(false);
   });
 
+  it('an auth demotion re-weights the entry point but never mutates reachability_status', () => {
+    const shared = { sanitization: { is_sanitized: false, confidence: 0.9 }, endpoint: { classification: 'UNKNOWN' as const } };
+    const asPublic = aggregateEpdFromFlows(
+      [makeVerdict({ ...shared, entryPointTag: 'framework-input:PUBLIC_UNAUTH' })], 5.0, 'confirmed', true);
+    const asAuthed = aggregateEpdFromFlows(
+      [makeVerdict({ ...shared, entryPointTag: 'framework-route:auth_internal' })], 5.0, 'confirmed', true);
+    // The evidence demotes the entry-point class...
+    expect(asAuthed.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(asPublic.entry_point_classification).not.toBe('AUTH_INTERNAL');
+    // ...but reachability_status is derived from (reachabilityLevel, isReachable)
+    // only, so it is identical — EPD auth scoring never touches the reachability
+    // tier (a demotion can never hide a finding from the visible set).
+    expect(asAuthed.reachability_status).toBe(asPublic.reachability_status);
+  });
+
   it(`sub-threshold flow with NO endpoint + NO evidence contributes nothing`, () => {
     const lowConfNoEndpoint = makeVerdict({
       endpoint: null,

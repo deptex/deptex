@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Node } from 'web-tree-sitter';
+import { recordDetectorError } from '../../tree-sitter-extractor/detector-errors';
 import type {
   DetectorContext,
   EntryPoint,
@@ -390,8 +391,11 @@ export const springDetector: FrameworkDetector = {
         );
         entryPoints.push(...enumerateActuatorEntryPoints({ exposure, springSecurityPresent }));
       }
-    } catch {
-      /* actuator enumeration is best-effort */
+    } catch (err) {
+      // Best-effort: never let an actuator read fail controller detection, but
+      // surface the error to the detector-error summary (unlike a silent swallow,
+      // an enumeration bug is then visible to ops).
+      recordDetectorError('spring-actuator', err);
     }
 
     return entryPoints;
