@@ -47,6 +47,9 @@ semgrep_findings:
   - rule_id: java.spring.security.injection.tainted-sql-from-http-request.tainted-sql-from-http-request
     file: src/main/java/com/deptex/fixtures/OwnerController.java
     line: 25
+  - rule_id: java.spring.security.injection.tainted-url-host.tainted-url-host
+    file: src/main/java/com/deptex/fixtures/FetchController.java
+    line: 21
 
 dast_findings:
   - alert: SQL Injection
