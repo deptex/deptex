@@ -18,9 +18,10 @@ router.use(requireAuth);
 // Authenticated taint flow: lodash _.template with an attacker-controlled
 // source (CVE-2021-23337) — the SAME modeled sink as the public /api/render
 // route, but reachable ONLY behind requireAuth. The engine must therefore stamp
-// this flow `framework-route:auth_internal` while /api/render stays
-// `framework-route:public_unauth`. This is the executable proof of the
-// entry-point auth demotion end-to-end.
+// this flow as authenticated entry-point surface while /api/render stays public.
+// This is the executable proof of the entry-point auth demotion end-to-end.
+// (Intentionally NO literal tag string here — a scanner's AI must classify this
+// from the requireAuth guard, not by reading a comment.)
 router.get('/admin/render', (req, res) => {
   const tpl = req.query.tpl;
   const compiled = _.template(tpl);
