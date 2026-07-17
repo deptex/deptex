@@ -288,7 +288,10 @@ export interface FixPlan {
   description: string;
   issue?: string;
   todos?: { title: string; detail?: string }[];
-  fileChanges: PlanFileChange[];
+  // Optional: agent-strategy fixes (the autonomous task agent) don't pre-plan
+  // file changes the way the old plan-then-execute pipeline did, so this is
+  // absent on their plans. Always guard before mapping.
+  fileChanges?: PlanFileChange[];
   testCommand: string;
   verification?: string;
   verificationSteps?: { command: string; description: string }[];

@@ -25,6 +25,25 @@ interface StalenessState {
 
 const TERMINAL_STATUSES: readonly FixStatus[] = ['completed', 'failed', 'rejected'];
 
+export interface PlanTodoRow {
+  primary: string;
+  secondary?: string;
+  mono: boolean;
+}
+
+// The "To-dos" rows shown in a fix's detail: the AI todos if present, else the
+// planned file changes. BOTH fields are optional at runtime — `todos` always
+// was, and `fileChanges` is absent on agent-strategy plans — so a plan with
+// neither yields an empty list (the section is then hidden), never a crash.
+// (Regression: `plan.fileChanges.map` on an agent plan black-screened the page.)
+export function derivePlanTodoRows(plan: Pick<FixPlan, 'todos' | 'fileChanges'>): PlanTodoRow[] {
+  const aiTodos = plan.todos ?? [];
+  if (aiTodos.length > 0) {
+    return aiTodos.map((t) => ({ primary: t.title, secondary: t.detail, mono: false }));
+  }
+  return (plan.fileChanges ?? []).map((c) => ({ primary: c.path, secondary: c.description, mono: true }));
+}
+
 interface FixPanelProps {
   // Null when the panel is showing the list view (no fix focused).
   fixId: string | null;
@@ -482,10 +501,7 @@ function FixDetailBody({ fixId }: FixDetailBodyProps) {
                 </div>
               )}
               {(() => {
-                const aiTodos = plan.todos ?? [];
-                const todos = aiTodos.length > 0
-                  ? aiTodos.map((t) => ({ primary: t.title, secondary: t.detail, mono: false }))
-                  : plan.fileChanges.map((c) => ({ primary: c.path, secondary: c.description, mono: true }));
+                const todos = derivePlanTodoRows(plan);
                 if (todos.length === 0) return null;
                 return (
                   <div className="rounded-md border border-border bg-background-subtle/30 px-4 py-3">
