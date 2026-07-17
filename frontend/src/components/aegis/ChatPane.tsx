@@ -187,33 +187,49 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
   });
 }
 
-// Shown while an existing thread's history is being fetched. A faded stand-in
-// for the conversation — a couple of assistant text blocks and a user bubble,
-// laid out on the same centered max-w-3xl column and alignment (assistant left,
-// user right) as real MessageBubbles — so the load resolves into place instead
-// of the pane sitting empty with the task header already popped in.
+// Shown while an existing thread's history is being fetched. A stand-in for the
+// conversation — alternating assistant text blocks (left) and user bubbles
+// (right) on the same centered max-w-3xl column and alignment as real
+// MessageBubbles — so the load resolves into place instead of the pane sitting
+// empty with the task header already popped in. Runs long and fades downward
+// (the app-wide `mask-image` treatment used by the tables/settings skeletons)
+// so it reads as "conversation loading", not a fixed block.
+const CHAT_SKELETON_TURNS: { assistant: string[]; user: string }[] = [
+  { assistant: ['w-1/2', 'w-4/5', 'w-2/3'], user: 'w-2/5' },
+  { assistant: ['w-3/4', 'w-5/6', 'w-1/2', 'w-2/5'], user: 'w-1/3' },
+  { assistant: ['w-2/3', 'w-4/5'], user: 'w-1/2' },
+  { assistant: ['w-5/6', 'w-1/2', 'w-3/4'], user: 'w-2/5' },
+  { assistant: ['w-1/3', 'w-3/5', 'w-4/5', 'w-1/2'], user: 'w-1/4' },
+  { assistant: ['w-3/4', 'w-2/3', 'w-1/2'], user: 'w-1/3' },
+];
+
 function ChatSkeleton() {
   return (
-    <div aria-label="Loading conversation" className="py-4 opacity-60">
-      <div className="px-4 py-1">
-        <div className="mx-auto max-w-3xl space-y-2.5">
-          <Skeleton className="h-3.5 w-1/2" />
-          <Skeleton className="h-3.5 w-4/5" />
-          <Skeleton className="h-3.5 w-2/3" />
+    <div
+      aria-busy="true"
+      aria-label="Loading conversation"
+      className="py-4 opacity-70 pointer-events-none select-none"
+      style={{
+        maskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%)',
+      }}
+    >
+      {CHAT_SKELETON_TURNS.map((turn, i) => (
+        <div key={i}>
+          <div className="px-4 py-2">
+            <div className="mx-auto max-w-3xl space-y-2.5">
+              {turn.assistant.map((w, j) => (
+                <Skeleton key={j} className={`h-3.5 ${w}`} />
+              ))}
+            </div>
+          </div>
+          <div className="px-4 py-2">
+            <div className="mx-auto max-w-3xl flex justify-end">
+              <Skeleton className={`h-9 rounded-2xl ${turn.user}`} />
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="px-4 py-1">
-        <div className="mx-auto max-w-3xl flex justify-end">
-          <Skeleton className="h-9 w-2/5 rounded-2xl" />
-        </div>
-      </div>
-      <div className="px-4 py-1">
-        <div className="mx-auto max-w-3xl space-y-2.5">
-          <Skeleton className="h-3.5 w-3/4" />
-          <Skeleton className="h-3.5 w-5/6" />
-          <Skeleton className="h-3.5 w-1/3" />
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
