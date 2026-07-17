@@ -159,6 +159,26 @@ class ReadOnlyApi(ListAPIView):
 
     def get(self, request):
         return request.GET.get('q')
+
+
+from django.test import override_settings
+from rest_framework.viewsets import ViewSet
+from rest_framework.decorators import action
+
+
+@override_settings(REST_FRAMEWORK={"DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.BasicAuthentication"]})
+def test_auth_disabled(request):
+    return request.GET.get('q')
+
+
+class TasksViewSet(ViewSet):
+    @action(detail=False, permission_classes=[IsAuthenticated])
+    def acknowledge(self, request):
+        return request.GET.get('q')
+
+    @action(detail=False, permission_classes=[AllowAny])
+    def ping(self, request):
+        return request.GET.get('q')
 `;
     const { postProcessRecords: recs } = await extractWorkspace(pythonModule, [
       { path: 'app/views.py', source: views },
@@ -170,6 +190,12 @@ class ReadOnlyApi(ListAPIView):
     eq(classAt(recs, 'views.py', 26), 'AUTH_INTERNAL', 'permission_classes=[IsAuthenticated] → AUTH_INTERNAL');
     eq(classAt(recs, 'views.py', 33), null, 'permission_classes=[AllowAny] → explicit PUBLIC → no record');
     eq(classAt(recs, 'views.py', 40), null, 'permission_classes=[IsAuthenticatedOrReadOnly] → conditional → PUBLIC (Sem 3)');
+    // A test-only `@override_settings(... DEFAULT_AUTHENTICATION_CLASSES ...)` must
+    // NOT read as auth just because its kwargs mention authentication (corpus FP).
+    eq(classAt(recs, 'views.py', 50), null, '@override_settings mentioning authentication → NOT auth → no record');
+    // DRF `@action(permission_classes=[...])` carries real enforcement in its args.
+    eq(classAt(recs, 'views.py', 56), 'AUTH_INTERNAL', '@action permission_classes=[IsAuthenticated] → AUTH_INTERNAL');
+    eq(classAt(recs, 'views.py', 60), null, '@action permission_classes=[AllowAny] → explicit PUBLIC → no record');
   }
 
   console.log(`\n${passes} passed, ${failures} failed`);

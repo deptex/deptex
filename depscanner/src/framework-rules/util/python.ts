@@ -218,15 +218,37 @@ function classifyDjangoDecorators(decorators: readonly Node[], source: string): 
   authed: boolean; publicOverride: boolean; mechanism: string | null;
 } {
   let authed = false;
+  let publicOverride = false;
   let mechanism: string | null = null;
   for (const dec of decorators) {
     const text = decoratorTokenText(dec, source);
-    if (DJANGO_AUTH_DECORATORS.test(text) || (matchesAuthName(text) && !/optional/i.test(text))) {
+    const callee = text.replace(/^@/, '').split('(')[0].trim();
+    // A DRF `permission_classes=[...]` kwarg carried on the decorator itself
+    // (e.g. `@action(detail=False, permission_classes=[IsAuthenticated, ...])`)
+    // is real enforcement — honor its AllowAny / conditional carve-outs exactly
+    // like a class-body `permission_classes`.
+    const permKwarg = /permission_classes\s*=\s*(\[[^\]]*\]|\([^)]*\))/.exec(text);
+    if (permKwarg) {
+      const permText = permKwarg[1];
+      if (DRF_PUBLIC_PERMISSION.test(permText)) publicOverride = true;
+      else if (DRF_AUTH_PERMISSION.test(permText) && !DRF_CONDITIONAL_PERMISSION.test(permText)) {
+        authed = true;
+        mechanism = callee;
+      }
+      continue;
+    }
+    // Otherwise match the loose auth-name pattern against the decorator's CALLEE
+    // NAME only — never arbitrary argument text. A test-only decorator like
+    // `@override_settings(REST_FRAMEWORK={"DEFAULT_AUTHENTICATION_CLASSES": [...]})`
+    // must not read as auth just because its kwargs mention authentication. The
+    // specific DJANGO_AUTH_DECORATORS names still match on the full text so
+    // `@method_decorator(login_required)` keeps classifying.
+    if (DJANGO_AUTH_DECORATORS.test(text) || (matchesAuthName(callee) && !/optional/i.test(text))) {
       authed = true;
-      mechanism = text.split('(')[0];
+      mechanism = callee;
     }
   }
-  return { authed, publicOverride: false, mechanism };
+  return { authed: authed && !publicOverride, publicOverride, mechanism };
 }
 
 /** DRF `permission_classes = [...]` (or `.permission_classes`) on a class body. */
