@@ -67,7 +67,7 @@ export const nethttpDetector: FrameworkDetector = {
       const { classification, authenticated } = classifyGoRoute({
         routeTokens, useTokens: [], routePattern,
       });
-      const { span, eligible } = goHandlerSpan(tree.rootNode, source, handlerArg);
+      const { span, eligible } = goHandlerSpan(tree, source, handlerArg);
 
       entryPoints.push({
         filePath: file.filePath,

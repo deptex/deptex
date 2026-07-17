@@ -324,36 +324,51 @@ export function findUseCalls(tree: Tree, source: string, instances: Set<string>)
  * set so its Use/route calls are visible.
  */
 export function addSubrouterInstances(tree: Tree, source: string, instances: Set<string>): void {
-  let grew = true;
-  while (grew) {
-    grew = false;
-    walkTree(tree, (node) => {
-      if (node.type !== 'short_var_declaration' && node.type !== 'assignment_statement') return;
-      const left = node.childForFieldName('left');
-      const right = node.childForFieldName('right');
-      if (left?.type !== 'expression_list' || right?.type !== 'expression_list') return;
-      if (left.namedChildCount !== 1 || right.namedChildCount !== 1) return;
-      const l = left.namedChild(0)!;
-      const r = right.namedChild(0)!;
-      if (l.type !== 'identifier' || r.type !== 'call_expression') return;
-      const fn = r.childForFieldName('function');
-      if (fn?.type !== 'selector_expression') return;
-      const field = fn.childForFieldName('field');
-      if (!field || textOf(field, source) !== 'Subrouter') return;
-      // Chain must root at a tracked instance identifier.
-      let cur: Node | null = fn.childForFieldName('operand');
-      while (cur && cur.type === 'call_expression') {
-        const innerFn: Node | null = cur.childForFieldName('function');
-        cur = innerFn?.type === 'selector_expression' ? innerFn.childForFieldName('operand') : null;
+  // Collect every `x := <chain>.Subrouter()` declaration in ONE tree walk as a
+  // child→root edge, then propagate reachability from the seed instances with a
+  // worklist. The old `while (grew) { walkTree(entire tree) }` re-walked the whole
+  // tree once per newly-discovered subrouter — O(passes × tree) = O(file²) on a
+  // reverse-ordered chain, a DoS vector on an untrusted repo. This is O(tree) for
+  // the single walk + O(edges) for the propagation.
+  const childrenByRoot = new Map<string, string[]>();
+  walkTree(tree, (node) => {
+    if (node.type !== 'short_var_declaration' && node.type !== 'assignment_statement') return;
+    const left = node.childForFieldName('left');
+    const right = node.childForFieldName('right');
+    if (left?.type !== 'expression_list' || right?.type !== 'expression_list') return;
+    if (left.namedChildCount !== 1 || right.namedChildCount !== 1) return;
+    const l = left.namedChild(0)!;
+    const r = right.namedChild(0)!;
+    if (l.type !== 'identifier' || r.type !== 'call_expression') return;
+    const fn = r.childForFieldName('function');
+    if (fn?.type !== 'selector_expression') return;
+    const field = fn.childForFieldName('field');
+    if (!field || textOf(field, source) !== 'Subrouter') return;
+    // Root the chain at its base identifier.
+    let cur: Node | null = fn.childForFieldName('operand');
+    while (cur && cur.type === 'call_expression') {
+      const innerFn: Node | null = cur.childForFieldName('function');
+      cur = innerFn?.type === 'selector_expression' ? innerFn.childForFieldName('operand') : null;
+    }
+    if (cur?.type !== 'identifier') return;
+    const rootName = textOf(cur, source);
+    const childName = textOf(l, source);
+    const arr = childrenByRoot.get(rootName);
+    if (arr) arr.push(childName);
+    else childrenByRoot.set(rootName, [childName]);
+  });
+  // Any subrouter rooted at a tracked instance is itself tracked (transitively).
+  const worklist: string[] = [...instances];
+  while (worklist.length > 0) {
+    const name = worklist.pop()!;
+    const children = childrenByRoot.get(name);
+    if (!children) continue;
+    for (const child of children) {
+      if (!instances.has(child)) {
+        instances.add(child);
+        worklist.push(child);
       }
-      if (cur?.type === 'identifier' && instances.has(textOf(cur, source))) {
-        const name = textOf(l, source);
-        if (!instances.has(name)) {
-          instances.add(name);
-          grew = true;
-        }
-      }
-    });
+    }
   }
 }
 
@@ -370,7 +385,7 @@ export function addSubrouterInstances(tree: Tree, source: string, instances: Set
  * named func.
  */
 export function goHandlerSpan(
-  root: Node,
+  tree: Tree,
   source: string,
   handlerArg: Node | null,
 ): { span: HandlerSpan | null; eligible: boolean } {
@@ -380,9 +395,9 @@ export function goHandlerSpan(
   }
   if (handlerArg.type === 'identifier') {
     const name = textOf(handlerArg, source);
-    const span = resolveGoFuncSpan(root, source, name);
+    const span = resolveGoFuncSpan(tree, source, name);
     if (!span) return { span: null, eligible: false };
-    return { span, eligible: isGoNamedHandlerEligible(root, source, name) };
+    return { span, eligible: isGoNamedHandlerEligible(tree, source, name) };
   }
   if (handlerArg.type === 'call_expression') {
     // Wrapped: authMw(h) — span from the single inner identifier arg if it
@@ -391,26 +406,56 @@ export function goHandlerSpan(
     if (args?.namedChildCount === 1 && args.namedChild(0)?.type === 'identifier') {
       const inner = args.namedChild(0)!;
       const name = textOf(inner, source);
-      const span = resolveGoFuncSpan(root, source, name);
-      if (span) return { span, eligible: isGoNamedHandlerEligible(root, source, name) };
+      const span = resolveGoFuncSpan(tree, source, name);
+      if (span) return { span, eligible: isGoNamedHandlerEligible(tree, source, name) };
     }
     return { span: null, eligible: false };
   }
   return { span: null, eligible: false };
 }
 
-/** Span of exactly ONE same-file `func <name>(...)` declaration, else null. */
-export function resolveGoFuncSpan(root: Node, source: string, name: string): HandlerSpan | null {
-  const matches: Node[] = [];
-  const walk = (n: Node): void => {
+/**
+ * Per-file Go index — function-declaration spans (null when a name is declared
+ * more than once → ambiguous) and identifier reference counts — built in ONE
+ * tree walk and memoized on the Tree object. `goHandlerSpan` runs per route, so
+ * resolving the span + eligibility by re-walking the whole tree each call was
+ * O(routes × nodes) = O(file²), a DoS vector on an untrusted repo with many
+ * routes; the index makes each per-route lookup O(1).
+ */
+interface GoFileIndex {
+  funcSpans: Map<string, HandlerSpan | null>;
+  refCounts: Map<string, number>;
+}
+const goFileIndexCache = new WeakMap<Tree, GoFileIndex>();
+function goFileIndex(tree: Tree, source: string): GoFileIndex {
+  const cached = goFileIndexCache.get(tree);
+  if (cached) return cached;
+  const decls = new Map<string, { node: Node; count: number }>();
+  const refCounts = new Map<string, number>();
+  walkTree(tree, (n) => {
     if (n.type === 'function_declaration') {
       const nm = n.childForFieldName('name');
-      if (nm && textOf(nm, source) === name) matches.push(n);
+      if (nm) {
+        const name = textOf(nm, source);
+        const e = decls.get(name);
+        if (e) e.count++;
+        else decls.set(name, { node: n, count: 1 });
+      }
+    } else if (n.type === 'identifier') {
+      const t = textOf(n, source);
+      refCounts.set(t, (refCounts.get(t) ?? 0) + 1);
     }
-    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
-  };
-  walk(root);
-  return matches.length === 1 ? spanOfNode(matches[0]) : null;
+  });
+  const funcSpans = new Map<string, HandlerSpan | null>();
+  for (const [name, e] of decls) funcSpans.set(name, e.count === 1 ? spanOfNode(e.node) : null);
+  const index: GoFileIndex = { funcSpans, refCounts };
+  goFileIndexCache.set(tree, index);
+  return index;
+}
+
+/** Span of exactly ONE same-file `func <name>(...)` declaration, else null. */
+export function resolveGoFuncSpan(tree: Tree, source: string, name: string): HandlerSpan | null {
+  return goFileIndex(tree, source).funcSpans.get(name) ?? null;
 }
 
 /**
@@ -418,15 +463,9 @@ export function resolveGoFuncSpan(root: Node, source: string, name: string): Han
  * callable from other packages → ineligible; unexported handlers are ineligible
  * when referenced in this file beyond declaration + one registration.
  */
-export function isGoNamedHandlerEligible(root: Node, source: string, name: string): boolean {
+export function isGoNamedHandlerEligible(tree: Tree, source: string, name: string): boolean {
   if (/^[A-Z]/.test(name)) return false;
-  let refs = 0;
-  const walk = (n: Node): void => {
-    if (n.type === 'identifier' && textOf(n, source) === name) refs++;
-    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
-  };
-  walk(root);
-  return refs <= 2;
+  return (goFileIndex(tree, source).refCounts.get(name) ?? 0) <= 2;
 }
 
 /**
@@ -460,7 +499,7 @@ export function classifyGoRoute(opts: {
  */
 export function buildGoRouteEntryPoint(opts: {
   call: RouteCall & { httpMethod: HttpMethod | null };
-  root: Node;
+  tree: Tree;
   source: string;
   filePath: string;
   framework: string;
@@ -468,7 +507,7 @@ export function buildGoRouteEntryPoint(opts: {
   uses: GoUse[];
   metadata: Record<string, unknown> | null;
 }): EntryPoint {
-  const { call, root, source } = opts;
+  const { call, tree, source } = opts;
   const useTokens = opts.uses
     .filter((u) => call.instance !== null && u.instance === call.instance && u.line < lineOf(call.node))
     .flatMap((u) => u.tokens);
@@ -477,7 +516,7 @@ export function buildGoRouteEntryPoint(opts: {
     useTokens,
     routePattern: call.routePattern,
   });
-  const { span, eligible } = goHandlerSpan(root, source, call.handlerArg);
+  const { span, eligible } = goHandlerSpan(tree, source, call.handlerArg);
   const allTokens = [...call.middlewareTokens, ...useTokens];
   return {
     filePath: opts.filePath,

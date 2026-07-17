@@ -103,7 +103,7 @@ export const gorillaMuxDetector: FrameworkDetector = {
         .filter((u) => u.instance === op && u.line < routeLine)
         .flatMap((u) => u.tokens);
       const { classification, authenticated } = classifyGoRoute({ routeTokens, useTokens, routePattern });
-      const { span, eligible } = goHandlerSpan(tree.rootNode, source, handlerArg);
+      const { span, eligible } = goHandlerSpan(tree, source, handlerArg);
       const allTokens = [...routeTokens, ...useTokens];
 
       if (methods.length === 0) methods = [null as unknown as HttpMethod];

@@ -34,7 +34,7 @@ export const echoDetector: FrameworkDetector = {
     for (const call of findRouteCalls(tree, source, instances, GO_HTTP_METHODS_UPPER)) {
       if (!call.httpMethod) continue;
       entryPoints.push(buildGoRouteEntryPoint({
-        call, root: tree.rootNode, source, filePath: file.filePath,
+        call, tree, source, filePath: file.filePath,
         framework: 'echo', authMechanismHint, uses,
         metadata: { method: call.methodName },
       }));

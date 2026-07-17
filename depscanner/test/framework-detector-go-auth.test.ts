@@ -232,6 +232,43 @@ func main() {
     eq(byRoute(eps, '/me')?.classification, 'PUBLIC_UNAUTH', 'echo trailing-middleware form: token not auth-named → stays PUBLIC (honest fail-safe)');
   }
 
+  // ==========================================================================
+  console.log('\nFIBER — PascalCase methods, middle-arg middleware, belt');
+  // ==========================================================================
+  {
+    const eps = await detect(`
+package main
+
+import "github.com/gofiber/fiber/v2"
+
+func main() {
+	app := fiber.New()
+	app.Use(logger.New())
+	app.Get("/public", func(c *fiber.Ctx) error { return c.SendString(c.Query("q")) })
+	app.Get("/logged", cors.New(), func(c *fiber.Ctx) error { return c.SendString(c.Query("q")) })
+	app.Get("/admin", requireAuth, func(c *fiber.Ctx) error { return c.SendString(c.Query("q")) })
+	app.Get("/named", namedHandler)
+}
+
+func namedHandler(c *fiber.Ctx) error { return c.SendString(c.Query("q")) }
+`, 'fiber', ['github.com/gofiber/fiber']);
+    // Cardinal sin: a centralized non-auth middleware (logger) must NOT demote a
+    // public route, and a route-local non-auth middleware (cors) must not either.
+    eq(byRoute(eps, '/public')?.classification, 'PUBLIC_UNAUTH', 'centralized logger.New() (non-auth) → stays PUBLIC');
+    eq(byRoute(eps, '/logged')?.classification, 'PUBLIC_UNAUTH', 'route-local cors.New() (non-auth) → stays PUBLIC');
+    // Genuine demotion: an auth-named route-local middleware IS evidence.
+    eq(byRoute(eps, '/admin')?.classification, 'AUTH_INTERNAL', 'route-local requireAuth → AUTH_INTERNAL');
+    const admin = byRoute(eps, '/admin')!;
+    assert(admin.handlerSpan != null, 'inline func literal span captured');
+    eq(admin.demotionEligible, true, 'inline literal eligible');
+    // Named handler: span resolves to the same-file unexported func (exercises the
+    // memoized per-file func-span index) and is eligible; no middleware → PUBLIC.
+    const named = byRoute(eps, '/named')!;
+    eq(named.classification, 'PUBLIC_UNAUTH', 'named handler, no middleware → PUBLIC');
+    assert(named.handlerSpan != null, 'named same-file func span resolved via index');
+    eq(named.demotionEligible, true, 'unexported single-ref named handler eligible');
+  }
+
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

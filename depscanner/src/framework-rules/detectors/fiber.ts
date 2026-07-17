@@ -34,7 +34,7 @@ export const fiberDetector: FrameworkDetector = {
     for (const call of findRouteCalls(tree, source, instances, GO_HTTP_METHODS_PASCAL, ['All', 'Use'])) {
       if (!call.httpMethod) continue;
       entryPoints.push(buildGoRouteEntryPoint({
-        call, root: tree.rootNode, source, filePath: file.filePath,
+        call, tree, source, filePath: file.filePath,
         framework: 'fiber', authMechanismHint, uses,
         metadata: { method: call.methodName },
       }));
