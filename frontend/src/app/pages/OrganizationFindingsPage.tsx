@@ -88,7 +88,7 @@ export default function OrganizationFindingsPage() {
 
   if (!organizationId) {
     return (
-      <main className="flex flex-col flex-1 min-h-0 w-full bg-background">
+      <main className="custom-scrollbar flex flex-col h-svh w-full bg-background overflow-y-scroll">
         <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-8">
           <p className="text-sm text-foreground-secondary">Loading organization…</p>
         </div>
@@ -97,7 +97,7 @@ export default function OrganizationFindingsPage() {
   }
 
   return (
-    <main className="flex flex-col flex-1 min-h-0 w-full bg-background">
+    <main className="custom-scrollbar flex flex-col h-svh w-full bg-background overflow-y-scroll">
       <div className="mx-auto max-w-7xl w-full px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         {/* Title */}
         <div>
