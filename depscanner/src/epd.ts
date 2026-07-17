@@ -572,20 +572,24 @@ export function aggregateEpdFromFlows(
     && f.sanitization.confidence >= MAX_VOTE_THRESHOLD,
   );
 
-  // endpointVoters — every non-suppressed, non-error flow that carries an
-  // endpoint signal: its AI endpoint verdict (independent of the sanitization
-  // confidence gate) merged worst-case with any matched `framework-route:`
-  // evidence. maxRisk makes an AI-public verdict unbeatable (Locked-6), and lets
-  // a verdict-less evidence-authed flow demote where today it wouldn't vote at
-  // all — the intended, demotion-direction expansion. unmatched/legacy tags
-  // never vote; a flow with neither an AI verdict nor a voting tag contributes
-  // nothing. sanitizationVoters ⊆ endpointVoters (its members all have an AI
-  // endpoint verdict), so this set is empty only when that set is too.
+  // endpointVoters — the AI endpoint verdict of each flow that clears the SAME
+  // sanitization-confidence gate as sanitizationVoters, merged worst-case with any
+  // matched `framework-route:` evidence. Gating the AI leg keeps a no-auth-map scan
+  // byte-identical to pre-arc (evidenceCls is null there, so endpointVoters ==
+  // the legacy `filtered` set); framework-route EVIDENCE, being independent of
+  // sanitization confidence, votes UNCONDITIONALLY, so the arc still demotes a
+  // verdict-less evidence-authed flow. maxRisk makes an AI-public verdict
+  // unbeatable (Locked-6); unmatched/legacy tags never vote. endpointVoters can be
+  // non-empty when sanitizationVoters is empty (an evidence-only demotion), but
+  // sanitizationVoters ⊆ endpointVoters still holds.
   const endpointVoters: EntryPointClassification[] = [];
   for (const f of flows) {
     if (f.isSuppressed) continue;
     if (f.filterVerdict === 'ai_truncated' || f.filterVerdict === 'kept_on_error') continue;
-    const aiCls = f.endpoint ? f.endpoint.classification : null;
+    const aiCls = (f.endpoint !== null && f.sanitization !== null
+      && f.sanitization.confidence >= MAX_VOTE_THRESHOLD)
+      ? f.endpoint.classification
+      : null;
     const parsed = parseEntryPointTag(f.entryPointTag);
     const evidenceCls = parsed.votes ? parsed.cls : null;
     const eff = mergeEffectiveClass(aiCls, evidenceCls);

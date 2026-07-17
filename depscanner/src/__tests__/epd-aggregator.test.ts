@@ -73,22 +73,34 @@ describe('aggregateEpdFromFlows — empty + suppression states', () => {
 });
 
 describe('aggregateEpdFromFlows — two-vote-set split (Core Semantics 7)', () => {
-  // The endpoint verdict has no confidence field, so it is NOT gated by the
-  // sanitization confidence threshold: a sub-threshold flow's SANITIZATION
-  // verdict is dropped (can't neutralize the score) but its ENDPOINT class
-  // still votes. This is the deliberate decoupling the split introduced.
-  it(`sub-threshold flow's sanitization is dropped but its endpoint still votes`, () => {
+  // The AI endpoint verdict is gated by the SAME sanitization-confidence bar as
+  // the sanitization vote, so a no-auth-map scan scores identically to pre-arc: a
+  // sub-threshold flow with no route evidence casts no endpoint vote. But
+  // framework-route EVIDENCE is independent of sanitization confidence, so a
+  // sub-threshold flow carrying a voting `framework-route:` tag STILL demotes.
+  it(`sub-threshold flow's AI endpoint verdict is gated → no vote without evidence`, () => {
     const lowConf = makeVerdict({
       endpoint: { classification: 'PUBLIC_UNAUTH' },
       sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH', // legacy constant, no vote
     });
     const r = aggregateEpdFromFlows([lowConf], 5.0, 'confirmed', true);
-    // Endpoint votes → flow_aggregated (not no_flows_evaluated as under the old
-    // coupled filter).
+    // No auth evidence + sub-threshold AI verdict → no endpoint vote → identical to
+    // the legacy coupled filter (the no-auth-map path is unchanged).
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it(`sub-threshold flow with framework-route EVIDENCE still votes (evidence is unconditional)`, () => {
+    const lowConfAuthed = makeVerdict({
+      endpoint: { classification: 'UNKNOWN' },
+      sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-route:auth_internal', // real route evidence, votes
+    });
+    const r = aggregateEpdFromFlows([lowConfAuthed], 5.0, 'confirmed', true);
+    // Evidence demotes even below the AI confidence bar.
     expect(r.epd_status).toBe('flow_aggregated');
-    expect(r.entry_point_classification).toBe('PUBLIC_UNAUTH');
-    // But the sub-threshold sanitizer is NOT trusted — no sanitization voter, so
-    // is_sanitized stays false (the score is not neutralized on weak evidence).
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    // Sanitization still gated — a sub-threshold sanitizer is not trusted.
     expect(r.is_sanitized).toBe(false);
   });
 
