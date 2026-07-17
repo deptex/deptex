@@ -125,6 +125,10 @@ interface ChatPaneProps {
   // the add-card form. Sourced from OrganizationLayout's userPermissions.
   canManageBilling?: boolean;
   userEmail?: string | null;
+  // Fired once, when the thread's history finishes loading (or fails). Lets the
+  // parent hold the task side-panel closed until the conversation is on screen,
+  // so it doesn't sit open over the loading skeleton.
+  onFirstLoad?: () => void;
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -249,6 +253,7 @@ export function ChatPane({
   onOpenTaskDetails,
   canManageBilling,
   userEmail,
+  onFirstLoad,
 }: ChatPaneProps) {
   // We track the thread ID that THIS mount is working with. The prop may arrive
   // later (after a silent URL update). We never reset state just because the
@@ -388,8 +393,10 @@ export function ChatPane({
 
   const onThreadCreatedRef = useRef(onThreadCreated);
   const onThreadUpdatedRef = useRef(onThreadUpdated);
+  const onFirstLoadRef = useRef(onFirstLoad);
   useEffect(() => { onThreadCreatedRef.current = onThreadCreated; });
   useEffect(() => { onThreadUpdatedRef.current = onThreadUpdated; });
+  useEffect(() => { onFirstLoadRef.current = onFirstLoad; });
 
   // The transport owns the actual fetch. We wrap it so we can:
   //   1. attach the auth bearer dynamically (token may rotate during a session)
@@ -542,7 +549,12 @@ export function ChatPane({
   // started but before it returned (the assistant row might be missing
   // from the DB read but already done in Redis).
   useEffect(() => {
-    if (!propThreadId) return;
+    // Brand-new chat: nothing to fetch, so it's "loaded" immediately — signal
+    // ready so the parent doesn't wait on a load that never happens.
+    if (!propThreadId) {
+      onFirstLoadRef.current?.();
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -554,8 +566,12 @@ export function ChatPane({
       } finally {
         // Reveal the conversation (and the task header) as one, whether the
         // fetch succeeded or failed — a failed load falls through to the normal
-        // empty/error rendering, never a stuck skeleton.
-        if (!cancelled) setMessagesLoading(false);
+        // empty/error rendering, never a stuck skeleton. Signal the parent so
+        // the task side-panel can slide in now (not over the skeleton).
+        if (!cancelled) {
+          setMessagesLoading(false);
+          onFirstLoadRef.current?.();
+        }
       }
       if (cancelled) return;
       try {

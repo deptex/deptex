@@ -61,6 +61,16 @@ export default function AegisPage() {
     setTaskPanelOpen(isTaskThread);
   }, [activeThreadId, isTaskThread]);
 
+  // Hold the task panel closed until ChatPane reports its history loaded, so it
+  // doesn't sit open over the chat's loading skeleton. Reset on every thread
+  // switch; ChatPane's onFirstLoad flips it true once the conversation is on
+  // screen, and the panel slides in then.
+  const [chatReady, setChatReady] = useState(false);
+  useEffect(() => {
+    setChatReady(false);
+  }, [activeThreadId]);
+  const handleChatLoaded = useCallback(() => setChatReady(true), []);
+
   // The key passed to ChatPane. It stays stable across "silent" URL updates
   // (e.g. when ChatPane creates a thread from the landing state and we just
   // want to reflect the new threadId in the URL). It only changes when the
@@ -248,6 +258,7 @@ export default function AegisPage() {
                 onOpenTaskDetails={() => setTaskPanelOpen(true)}
                 canManageBilling={userPermissions?.manage_billing === true}
                 userEmail={user?.email ?? null}
+                onFirstLoad={handleChatLoaded}
               />
             </>
           )}
@@ -256,7 +267,7 @@ export default function AegisPage() {
         {isTaskThread && (
           <TaskDetailPanel
             task={activeTask}
-            open={taskPanelOpen}
+            open={taskPanelOpen && chatReady}
             onClose={() => setTaskPanelOpen(false)}
             onOpen={() => setTaskPanelOpen(true)}
           />

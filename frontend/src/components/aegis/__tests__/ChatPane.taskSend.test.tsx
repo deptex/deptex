@@ -288,6 +288,35 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     expect(screen.getByText('Started task')).toBeInTheDocument();
   });
 
+  it('fires onFirstLoad after the thread history loads (so the parent can slide the panel in)', async () => {
+    // The panel is held closed over the skeleton until this fires. Hold
+    // getMessages pending: onFirstLoad must NOT fire yet; then resolve → fires.
+    let resolveMsgs: (v: any[]) => void = () => {};
+    mocks.getMessages.mockImplementation(
+      (() => new Promise((res) => { resolveMsgs = res as (v: any[]) => void; })) as any,
+    );
+    const onFirstLoad = vi.fn();
+
+    render(
+      <ChatPane
+        organizationId="org-1"
+        threadId="thread-1"
+        currentUserId="user-1"
+        displayName="Henry"
+        onThreadCreated={vi.fn()}
+        liveReload
+        task={task}
+        onFirstLoad={onFirstLoad}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled());
+    expect(onFirstLoad).not.toHaveBeenCalled();
+
+    resolveMsgs([]);
+    await waitFor(() => expect(onFirstLoad).toHaveBeenCalledTimes(1));
+  });
+
   it('shows the in-input Stop the instant a task follow-up is sent (before any fix row goes running)', async () => {
     // The lag bug: the thinking dot + Stop are driven by taskWorking, which used
     // to flip only once a poll/realtime read saw the fix row running — so for a
