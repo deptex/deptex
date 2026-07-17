@@ -144,6 +144,14 @@ jobs:
         working-directory: depscanner
         run: npm run test:framework-detectors
 
+      # Entry-point auth end-to-end: real extractUsage → buildEntryPointAuthMap →
+      # runEngineCore → computeEntryPointTag span-join → aggregateEpdFromFlows over
+      # the express fixture. The only test that gates the full wiring (a real flow's
+      # source line actually landing inside a captured handler span). No VDB/Docker.
+      - name: Run entry-point auth e2e
+        working-directory: depscanner
+        run: npm run e2e:entry-point-auth
+
       # Snapshot-runner meta-test: exercises the bootstrap path, diff
       # detection, ignore-list, and arg parser against synthetic dirs.
       # No Docker required — runs in <1s.
