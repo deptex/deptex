@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils';
 import { MessageBubble } from './MessageBubble';
 import { TaskHeader } from './TaskHeader';
 import { ChatInput } from './ChatInput';
+import { Skeleton } from '../ui/skeleton';
 import { ChatTodos } from './ChatTodos';
 import { ThreadIcon } from './ThreadIcon';
 import type { TopUpReason } from '../billing/TopUpModal';
@@ -184,6 +185,37 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
       error: msg.metadata?.error,
     } as unknown as UIMessage;
   });
+}
+
+// Shown while an existing thread's history is being fetched. A faded stand-in
+// for the conversation — a couple of assistant text blocks and a user bubble,
+// laid out on the same centered max-w-3xl column and alignment (assistant left,
+// user right) as real MessageBubbles — so the load resolves into place instead
+// of the pane sitting empty with the task header already popped in.
+function ChatSkeleton() {
+  return (
+    <div aria-label="Loading conversation" className="py-4 opacity-60">
+      <div className="px-4 py-1">
+        <div className="mx-auto max-w-3xl space-y-2.5">
+          <Skeleton className="h-3.5 w-1/2" />
+          <Skeleton className="h-3.5 w-4/5" />
+          <Skeleton className="h-3.5 w-2/3" />
+        </div>
+      </div>
+      <div className="px-4 py-1">
+        <div className="mx-auto max-w-3xl flex justify-end">
+          <Skeleton className="h-9 w-2/5 rounded-2xl" />
+        </div>
+      </div>
+      <div className="px-4 py-1">
+        <div className="mx-auto max-w-3xl space-y-2.5">
+          <Skeleton className="h-3.5 w-3/4" />
+          <Skeleton className="h-3.5 w-5/6" />
+          <Skeleton className="h-3.5 w-1/3" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function ChatPane({
@@ -455,6 +487,13 @@ export function ChatPane({
   const isStreaming = status === 'streaming' || status === 'submitted';
   useEffect(() => { sendMessageRef.current = sendMessage; });
 
+  // The seed-load gate. An existing thread must fetch its history before it can
+  // render — until then show a chat skeleton rather than an empty pane with the
+  // task header already popped in (the "started task shows before the chat
+  // loads" jump). A brand-new chat (no propThreadId) has nothing to fetch, so
+  // it starts un-gated and goes straight to the landing.
+  const [messagesLoading, setMessagesLoading] = useState<boolean>(!!propThreadId);
+
   // On unmount (thread switch), abort the local SSE fetch. The server-side
   // resumable-stream tee keeps writing to Redis regardless of socket state, so
   // when the user navigates back, the seed-load + resumeStream() useEffect
@@ -496,6 +535,11 @@ export function ChatPane({
         setMessages(buildInitialMessages(msgs));
       } catch {
         /* leave whatever is on screen on load failure */
+      } finally {
+        // Reveal the conversation (and the task header) as one, whether the
+        // fetch succeeded or failed — a failed load falls through to the normal
+        // empty/error rendering, never a stuck skeleton.
+        if (!cancelled) setMessagesLoading(false);
       }
       if (cancelled) return;
       try {
@@ -928,6 +972,9 @@ export function ChatPane({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {messagesLoading ? (
+          <ChatSkeleton />
+        ) : (
         <div className="py-4">
           {task && <TaskHeader task={task} onOpenDetails={onOpenTaskDetails} />}
           {messages.map((m, i) => (
@@ -959,6 +1006,7 @@ export function ChatPane({
           )}
           <div ref={bottomRef} />
         </div>
+        )}
       </div>
       <div className="px-4 pb-4">
         <div className="mx-auto max-w-3xl">

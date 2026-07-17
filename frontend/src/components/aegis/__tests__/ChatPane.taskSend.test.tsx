@@ -255,6 +255,39 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     expect(mocks.stop).not.toHaveBeenCalled();
   });
 
+  it('shows a chat skeleton while the thread loads, revealing the "Started task" header only once loaded', async () => {
+    // Hold getMessages pending so we can observe the loading window: the
+    // skeleton is up and the task header ("Started task") must NOT have popped
+    // in yet (the reported jump). Then it resolves and both flip.
+    let resolveMsgs: (v: any[]) => void = () => {};
+    mocks.getMessages.mockImplementation(
+      () => new Promise<any[]>((res) => { resolveMsgs = res; }),
+    );
+
+    render(
+      <ChatPane
+        organizationId="org-1"
+        threadId="thread-1"
+        currentUserId="user-1"
+        displayName="Henry"
+        onThreadCreated={vi.fn()}
+        liveReload
+        task={task}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.getMessages).toHaveBeenCalled());
+    expect(document.querySelector('[aria-label="Loading conversation"]')).not.toBeNull();
+    expect(screen.queryByText('Started task')).toBeNull();
+
+    // History arrives → skeleton gone, task header revealed as one.
+    resolveMsgs([]);
+    await waitFor(() =>
+      expect(document.querySelector('[aria-label="Loading conversation"]')).toBeNull(),
+    );
+    expect(screen.getByText('Started task')).toBeInTheDocument();
+  });
+
   it('shows the in-input Stop the instant a task follow-up is sent (before any fix row goes running)', async () => {
     // The lag bug: the thinking dot + Stop are driven by taskWorking, which used
     // to flip only once a poll/realtime read saw the fix row running — so for a
