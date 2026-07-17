@@ -116,6 +116,38 @@ end
   }
 
   // ==========================================================================
+  console.log('\nRAILS — require_logged_in_[role] app-idiom halting gate + only: scoping');
+  // ==========================================================================
+  {
+    // Mirrors lobsters' SignupController: `require_logged_in_user` is not caught
+    // by the shared auth-name patterns, and `only: :invite` must scope the
+    // demotion so the PUBLIC signup actions stay public.
+    const controller = `class SignupController < ApplicationController
+  before_action :require_logged_in_user, only: :invite
+  before_action :require_logged_in_admin, only: [:ban]
+
+  def index
+    @q = params[:q]
+  end
+
+  def invite
+    @q = params[:q]
+  end
+
+  def ban
+    @q = params[:q]
+  end
+end
+`;
+    const { postProcessRecords: recs } = await extractWorkspace(rubyModule, [
+      { path: 'app/controllers/signup_controller.rb', source: controller },
+    ]);
+    eq(classAt(recs, 'signup_controller.rb', 6), null, 'index (public signup action, not in only:) → PUBLIC → no record');
+    eq(classAt(recs, 'signup_controller.rb', 10), 'AUTH_INTERNAL', 'invite (require_logged_in_user, only:) → AUTH_INTERNAL');
+    eq(classAt(recs, 'signup_controller.rb', 14), 'AUTH_INTERNAL', 'ban (require_logged_in_admin, only:) → AUTH_INTERNAL');
+  }
+
+  // ==========================================================================
   console.log('\nDJANGO — decorators / mixins / DRF permission_classes');
   // ==========================================================================
   {

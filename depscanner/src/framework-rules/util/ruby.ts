@@ -80,8 +80,19 @@ const RUBY_HALTING_ALLOWLIST = new Set([
   'authenticate_request', 'login_required', 'ensure_logged_in',
 ]);
 
+/**
+ * App-idiom halting auth gates the shared auth-name patterns miss: the
+ * `require_logged_in[_role]` family (lobsters + many real Rails apps) and
+ * `require_authentication` / `ensure_authenticated`. These redirect
+ * unauthenticated requests, so they halt. Ruby-local by design — kept out of the
+ * shared `matchesAuthName` so it can't demote a same-named token in another
+ * language (`login`-substring false matches are a cardinal-sin risk elsewhere).
+ */
+const RUBY_HALTING_AUTH_NAME = /^(require_logged_in(_[a-z]+)?|require_authentication|ensure_authenticated)$/;
+
 function isHaltingAuthCallback(sym: string): boolean {
   const bare = sym.replace(/^:/, '');
+  if (RUBY_HALTING_AUTH_NAME.test(bare)) return true;
   if (!matchesAuthName(bare)) return false;
   return bare.endsWith('!') || RUBY_HALTING_ALLOWLIST.has(bare);
 }
