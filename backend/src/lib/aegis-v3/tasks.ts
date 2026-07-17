@@ -148,10 +148,15 @@ export async function resolveTargetFindingId(target: AegisTaskTarget): Promise<s
         .eq('status', 'open');
       if (target.findingType === 'secret') q = q.eq('is_current', true);
       const { data } = await q.limit(1).maybeSingle();
-      return (data as any)?.id ?? null;
+      if ((data as any)?.id) return (data as any).id;
+      // Location miss — DON'T bail to "nothing to fix". Whole-file findings
+      // (start_line NULL: Dockerfile-level iac rules) never match a numeric
+      // line, and a rescan can drift a line by a few rows. The finding_key
+      // fallback below may collapse N occurrences to one, but resolving SOME
+      // open occurrence beats falsely completing the task.
     }
   }
-  // Fallback (no location handle): resolve by finding_key (picks one occurrence).
+  // Fallback (no or unresolvable location handle): resolve by finding_key.
   const { data } = await supabase
     .from(table)
     .select('id')

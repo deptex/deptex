@@ -452,6 +452,33 @@ describe('agent tools — resume mode', () => {
     expect(deps.logger.info).toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
   }, NPM_LIVE_TIMEOUT);
 
+  test('a NON-vulnerability fix that edits package.json still runs the regen (PR #20 container catch)', async () => {
+    // A container fix added an npm "overrides" entry; the old fixType gate
+    // skipped the regen and shipped an out-of-sync lockfile (npm ci EUSAGE).
+    // The regen must key on GIT (npm files dirty), not the finding type.
+    const deps = makeGitDeps({ fixType: 'container', finding: { type: 'container', id: 'CVE-X' } });
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    commitAll(deps.repoRoot);
+    fs.writeFileSync(
+      path.join(deps.projectDir, 'package.json'),
+      '{"name":"x","version":"1.0.0","overrides":{"minimist":">=1.2.6"}}\n',
+    );
+    const tools = buildAgentTools(deps);
+    await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
+    expect(deps.logger.info).toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
+  }, NPM_LIVE_TIMEOUT);
+
+  test('a code-only fix (no npm file touched) skips the regen entirely', async () => {
+    const deps = makeGitDeps({ fixType: 'semgrep', finding: { type: 'semgrep', id: 's1' } });
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    fs.writeFileSync(path.join(deps.projectDir, 'app.js'), 'const a = 1;\n');
+    commitAll(deps.repoRoot);
+    fs.writeFileSync(path.join(deps.projectDir, 'app.js'), 'const a = 2;\n'); // source dirty, npm files clean
+    const tools = buildAgentTools(deps);
+    await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
+    expect(deps.logger.info).not.toHaveBeenCalledWith('setup', expect.stringContaining('Regenerated lockfile'));
+  }, GIT_SPAWN_TIMEOUT);
+
   test('create path with runSeq>0 uses a run-unique branch suffix', async () => {
     const deps = makeGitDeps({ runSeq: 1 });
     const tools = buildAgentTools(deps);
@@ -583,6 +610,9 @@ describe('revertImplausibleLockfileRegen — lockfile stub guard', () => {
     const big = `{"name":"x","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"x","version":"1.0.0","padding":"${'p'.repeat(30000)}"}}}\n`;
     fs.writeFileSync(path.join(deps.projectDir, LOCK), big);
     commitAll(deps.repoRoot);
+    // Dirty the manifest (the agent's edit) — the regen keys on git now, so a
+    // fully-clean tree wouldn't trigger it.
+    fs.writeFileSync(path.join(deps.projectDir, 'package.json'), '{"name":"x","version":"1.0.1"}\n');
     const tools = buildAgentTools(deps);
     await (tools.open_pull_request.execute as any)({ title: 't', body: 'b' });
     // The regen ran…

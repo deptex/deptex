@@ -483,29 +483,32 @@ export function buildAgentTools(deps: AgentToolDeps) {
       }
       const plan = prPlan(deps, title, body);
       try {
-        // Deterministic lockfile guarantee for dep bumps: regenerate so CI's
-        // `npm ci` resolves even if the model skipped the install itself.
-        // SKIPPED only on a TRUE edit-free amend (an answer-only turn that
-        // wrongly calls open_pull_request must stay a true noChanges) — and
-        // "did this amend change anything?" is answered by GIT, not the
-        // editor-tool ledger: the heal-2 incident restored package-lock.json
-        // via run_command (`git checkout origin/<base> -- <file>`), which left
-        // state.editedFiles empty, skipped the regen, and shipped a lockfile
-        // out of sync with the manifest's overrides (npm ci EUSAGE). Any dirty
-        // tree — whichever tool dirtied it — runs the regen: it's idempotent,
-        // and the plausibility guard below protects its output.
+        // Deterministic lockfile guarantee: whenever the project's npm manifest
+        // or lockfile changed — WHATEVER the finding type; a container fix can
+        // add an "overrides" entry too (the PR #20 dogfood catch: fixType-gated
+        // regen shipped a manifest override with an untouched lockfile → npm ci
+        // EUSAGE) — regenerate so CI resolves even if the model skipped the
+        // install itself. "Did the npm files change?" is answered by GIT, not
+        // fixType or the editor-tool ledger: the heal-2 incident restored
+        // package-lock.json via run_command (`git checkout origin/<base> --
+        // <file>`), which left state.editedFiles empty, skipped the regen, and
+        // shipped a lockfile out of sync with the manifest's overrides. An
+        // edit-free run (answer-only amend) leaves both clean → no regen, so a
+        // true noChanges amend is preserved. The regen is idempotent and the
+        // plausibility guard below protects its output.
         // (`git status --porcelain` is staging-agnostic, and this runs BEFORE
         // the change-set narration's `git add -A` anyway.)
-        let skipRegenForCleanAmend = false;
-        if (deps.resumeMode && deps.fixType === 'vulnerability') {
+        let npmFilesDirty = false;
+        if (fs.existsSync(path.join(projectDir, 'package.json'))) {
           const { output: porcelain } = await runShell('git status --porcelain', repoRoot);
-          skipRegenForCleanAmend = porcelain.trim() === '';
+          const manifestRel = toGitPath(repoRoot, path.join(projectDir, 'package.json'));
+          const lockRel = toGitPath(repoRoot, path.join(projectDir, 'package-lock.json'));
+          npmFilesDirty = porcelain.split('\n').some((line) => {
+            const p = line.slice(3).trim().replace(/^"|"$/g, '');
+            return p === manifestRel || p === lockRel;
+          });
         }
-        if (
-          deps.fixType === 'vulnerability' &&
-          fs.existsSync(path.join(projectDir, 'package.json')) &&
-          !skipRegenForCleanAmend
-        ) {
+        if (npmFilesDirty) {
           // Pre-regen size — the plausibility baseline for the guard below.
           let lockBytesBefore = 0;
           try {
