@@ -83,13 +83,38 @@ function RootErrorBoundary() {
   const error = useRouteError();
   useEffect(() => {
     if (!isRouteErrorResponse(error)) {
+      // Always log the real error to the console — Sentry no-ops in dev without
+      // a DSN, so without this a render crash is a black screen with no clue.
+      console.error("[route error boundary]", error);
       Sentry.captureException(error);
     }
   }, [error]);
+  const err = error as any;
+  const detail =
+    err instanceof Error ? `${err.name}: ${err.message}` : typeof err === "string" ? err : "";
+  const stack = err instanceof Error ? err.stack : undefined;
   return (
     <div style={{ padding: 24, textAlign: "center" }}>
       <p>Something went wrong loading this page.</p>
       <button onClick={() => window.location.reload()}>Reload</button>
+      {import.meta.env.DEV && detail && (
+        <pre
+          style={{
+            marginTop: 16,
+            textAlign: "left",
+            whiteSpace: "pre-wrap",
+            fontSize: 12,
+            color: "#f87171",
+            maxWidth: 900,
+            marginLeft: "auto",
+            marginRight: "auto",
+            overflowX: "auto",
+          }}
+        >
+          {detail}
+          {stack ? `\n\n${stack}` : ""}
+        </pre>
+      )}
     </div>
   );
 }

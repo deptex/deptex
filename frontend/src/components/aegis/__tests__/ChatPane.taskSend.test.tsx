@@ -261,7 +261,7 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     // in yet (the reported jump). Then it resolves and both flip.
     let resolveMsgs: (v: any[]) => void = () => {};
     mocks.getMessages.mockImplementation(
-      () => new Promise<any[]>((res) => { resolveMsgs = res; }),
+      (() => new Promise((res) => { resolveMsgs = res as (v: any[]) => void; })) as any,
     );
 
     render(
