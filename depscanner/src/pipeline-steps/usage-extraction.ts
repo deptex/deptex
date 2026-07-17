@@ -166,14 +166,26 @@ export async function doUsageExtraction(ctx: PipelineContext): Promise<void> {
       // (retry-safe; no step-resume). postProcess RETURNS ctx-only records —
       // never appends to file.entryPoints — so httpEntryPointCount + the
       // persisted rows are untouched by it. A throwing postProcess is contained
-      // per-detector and never blocks persistence.
-      const postProcessRecords = await runPostProcess(result.files, workspaceRoot);
-      ctx.entryPointAuth = buildEntryPointAuthMap(result.files, postProcessRecords, workspaceRoot);
-      const surface = summarizeAttackSurface(result.files);
-      if (surface.public + surface.authenticated + surface.background > 0) {
-        await log.info(
+      // per-detector; the whole assembly is ALSO guarded so a bug in map-building
+      // or the attack-surface tally can never skip storeEntryPoints below — the
+      // map is best-effort scoring context, but project_entry_points is durable.
+      try {
+        const postProcessRecords = await runPostProcess(result.files, workspaceRoot);
+        ctx.entryPointAuth = buildEntryPointAuthMap(result.files, postProcessRecords, workspaceRoot);
+        const surface = summarizeAttackSurface(result.files);
+        if (surface.public + surface.authenticated + surface.background > 0) {
+          await log.info(
+            'framework_detection',
+            `Attack surface: ${surface.public} public · ${surface.authenticated} authenticated · ${surface.background} background routes`,
+          );
+        }
+      } catch (err) {
+        // Degrade to the legacy no-map path (every flow stamps the PUBLIC
+        // constant) rather than blocking entry-point persistence.
+        ctx.entryPointAuth = new Map();
+        await log.warn(
           'framework_detection',
-          `Attack surface: ${surface.public} public · ${surface.authenticated} authenticated · ${surface.background} background routes`,
+          `Entry-point auth map build failed; scoring context degrades to public: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
 
