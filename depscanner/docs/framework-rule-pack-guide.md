@@ -136,17 +136,64 @@ If you find yourself writing the same AST walk twice, promote it to the util mod
 
 ---
 
-## Authentication classification
+## Authentication classification (route-level, evidence-based)
 
 Classification flows into EPD scoring:
-- `PUBLIC_UNAUTH` (epd_factor 1.0) — default for an unauthenticated HTTP route
-- `AUTH_INTERNAL` (epd_factor 0.5) — flipped when an auth middleware is imported in the same file
-- `OFFLINE_WORKER` (epd_factor 0.2) — background jobs, message consumers, cron
-- `UNKNOWN` (epd_factor 1.0) — no signal; safe default is worst-case
+- `PUBLIC_UNAUTH` (entry-weight 1.0) — an HTTP route with no auth evidence (the default)
+- `AUTH_INTERNAL` (entry-weight 0.5) — a route with positive route-level auth evidence
+- `OFFLINE_WORKER` (entry-weight 0.2) — a signed/verified machine endpoint or a background job / cron
+- `UNKNOWN` (entry-weight 1.0) — no signal; the safe worst-case default
 
-File-level auth detection (import-based) is deliberately coarse. It's a starting point; route-level classification via AST middleware chain inspection is possible but not wired for every framework yet. Rust/C# detectors currently default to `PUBLIC_UNAUTH` unconditionally — pattern matching their middleware chains is TODO.
+Classification is **route-level and evidence-based** — the old file-level import
+sniff (`classifyFromAuth(detectAuthMechanism(file.imports))`, which flipped every
+route in a file to AUTH_INTERNAL on a single auth import) is **retired**. Each
+route is classified from its own evidence via `classifyRoute(evidence)` in
+`util/auth-evidence.ts`. The `authMechanism` field is kept only as a DAST/UI
+hint; it no longer decides the class.
 
-Do NOT heuristically classify as `AUTH_INTERNAL` just because a route has `/admin/` in the path. Trust the middleware chain, not the path string.
+**Gathering evidence.** Reduce a route's middleware / guards / decorators to
+tokens and hand them to `classifyRoute`:
+- `authTokens` — identifiers matched against the shared auth-name patterns
+  (`authenticate`, `requireAuth`, `*AuthGuard`, `login_required`, …); subject to
+  the optional-veto tokens (`optional`, `anonymous`, `guest`) so
+  `passport.authenticate('anonymous')` / `jwt_required(optional=True)` are NOT
+  evidence.
+- `vettedAuthTokens` — for exact-semantics families (Java/PHP/C# annotations:
+  `@Secured`, `[Authorize]`, `#[IsGranted]`, non-public `@PreAuthorize` SpEL);
+  bypass name matching, still subject to overrides/belt/conditional.
+- `publicOverrides` — explicit-public markers (`@PermitAll`, `[AllowAnonymous]`,
+  `permitAll()`, `AllowAny`, `skip_before_action`, `->withoutMiddleware('auth')`).
+  These always win.
+- `internalTokens` — machine/verifier evidence (`*.verify`, `constructEvent`,
+  `internal|signature|hmac|webhook.?verif|qstash|svix` middleware) → OFFLINE_WORKER.
+- `centralizedOnly` — set true when the ONLY auth evidence is a centralized idiom
+  (app-level `app.use(auth)`, a Spring `SecurityFilterChain`, a Laravel/Slim
+  group). The **public-route-name belt** then blocks the demotion on
+  `login|logout|signup|password|health|webhook|…`-segment routes (a route-local
+  guard still demotes them).
+- `conditional` — set true for carve-out coverage (Rails `before_action` with any
+  non-`only:` kwarg, DRF `IsAuthenticatedOrReadOnly`, `.unless(`) → does NOT cover.
+
+**Handler spans (`handlerSpan` + `demotionEligible`, Sem 6).** Capture the span
+of the terminal handler so a taint flow demotes only when its source line falls
+inside an authed handler. Inline handlers span themselves and are always
+eligible. A named handler resolves to its single same-file declaration; it is
+**ineligible** (classifies but never demotes) when it is exported or referenced
+elsewhere in the file (JS/TS), is a capitalized/exported symbol (Go/Rust), or is
+wrapped / a member expression / cross-file (→ null span). Declaration-bound
+families (annotations, decorators, Rails/Django actions) are always eligible —
+the evidence travels with the declaration.
+
+**Cross-file (Rails/Django).** The auth evidence lives in the controller/view
+file, next to the taint sources, so those detectors bank per-action facts on
+`ExtractedFile.authFacts` during `detect` and re-home them via `postProcess`
+into ctx-only records keyed on that file (never persisted). See
+`analyzeRailsController` / `analyzeDjangoViews`.
+
+Do NOT heuristically classify as `AUTH_INTERNAL` because a path contains
+`/admin/`. Trust the evidence, not the path string. When in doubt, leave it
+PUBLIC — a wrongful demote under-scores real public attack surface, the one
+thing this system must never do.
 
 ---
 

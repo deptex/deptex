@@ -135,6 +135,15 @@ jobs:
         working-directory: depscanner
         run: npm run test:taint-engine-all
 
+      # Entry-point auth classification (the CI classification lock, SC-4):
+      # the per-framework route-auth + handler-span suites across all 8
+      # languages plus the shared evidence/join core. Tsx-driven (tree-sitter
+      # WASM) — chained so a regression in any detector's classification fails
+      # the depscanner job.
+      - name: Run framework-detector auth suites
+        working-directory: depscanner
+        run: npm run test:framework-detectors
+
       # Snapshot-runner meta-test: exercises the bootstrap path, diff
       # detection, ignore-list, and arg parser against synthetic dirs.
       # No Docker required — runs in <1s.

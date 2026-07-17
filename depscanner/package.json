@@ -90,6 +90,7 @@
     "dogfood:check": "tsx scripts/dogfood-check.ts",
     "test:dogfood-check": "tsx test/dogfood-check.test.ts",
     "test:framework-detector-spring": "tsx test/framework-detector-spring.test.ts",
+    "test:framework-detector-symfony": "tsx test/framework-detector-symfony.test.ts",
     "test:framework-detector-express": "tsx test/framework-detector-express.test.ts",
     "test:framework-detector-js-auth": "tsx test/framework-detector-js-auth.test.ts",
     "test:framework-detector-java-auth": "tsx test/framework-detector-java-auth.test.ts",
@@ -98,6 +99,7 @@
     "test:framework-detector-go-auth": "tsx test/framework-detector-go-auth.test.ts",
     "test:framework-detector-rust-auth": "tsx test/framework-detector-rust-auth.test.ts",
     "test:framework-detector-crossfile-auth": "tsx test/framework-detector-crossfile-auth.test.ts",
+    "test:framework-detectors": "npm run test:entry-point-auth && npm run test:framework-detector-express && npm run test:framework-detector-js-auth && npm run test:framework-detector-java-auth && npm run test:framework-detector-csharp-php-auth && npm run test:framework-detector-python-auth && npm run test:framework-detector-go-auth && npm run test:framework-detector-rust-auth && npm run test:framework-detector-crossfile-auth && npm run test:framework-detector-spring && npm run test:framework-detector-symfony",
     "test:entry-point-auth": "tsx test/entry-point-auth.test.ts",
     "test:param-harvest": "tsx test/param-harvest.test.ts",
     "test:dast-param-enrich": "tsx test/dast-param-enrich.test.ts"
