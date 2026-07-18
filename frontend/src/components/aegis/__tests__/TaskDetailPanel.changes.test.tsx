@@ -33,6 +33,9 @@ vi.mock('../../../lib/aegis-api', () => ({
   aegisApi: {
     getMessages: mocks.getMessages,
     cancelTask: vi.fn(),
+    // run-status feeds the context meter; run: null keeps the meter hidden in
+    // these change-set tests.
+    getTaskRunStatus: vi.fn(async () => ({ taskStatus: 'working', run: null })),
   },
 }));
 

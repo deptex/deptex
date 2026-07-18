@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   sendTaskMessage: vi.fn(),
   cancelTask: vi.fn(async () => ({ success: true, cancelled: 1 })),
   getMessages: vi.fn(async () => []),
+  getTaskRunStatus: vi.fn(async () => ({ taskStatus: 'completed', run: null })),
   // What useChat reports (set per-test to simulate a chat SSE stream).
   chatStatus: 'ready' as string,
   // Rows the project_security_fixes query resolves with — a queued/executing
@@ -72,6 +73,7 @@ vi.mock('../../../lib/aegis-api', () => ({
     sendTaskMessage: mocks.sendTaskMessage,
     cancelTask: mocks.cancelTask,
     getMessages: mocks.getMessages,
+    getTaskRunStatus: mocks.getTaskRunStatus,
     regenerate: vi.fn(),
   },
 }));
@@ -185,6 +187,37 @@ describe('ChatPane — task-thread sends wake the task agent (never the chat age
     );
     expect(mocks.sendTaskMessage).toHaveBeenCalledTimes(1);
     // The split-brain assertion: the chat agent's SSE path must never run.
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('/status runs client-side — reads run telemetry, sends NOTHING to either agent', async () => {
+    mocks.getTaskRunStatus.mockResolvedValue({
+      taskStatus: 'working',
+      run: { fixStatus: 'executing', step: 12, contextTokens: 90000, contextWindow: 200000, contextPct: 0.45, startedAt: null, prNumber: 7 },
+    } as any);
+    await renderChatPane({ liveReload: true, task: { ...task, status: 'working' } });
+
+    submitText('/status');
+
+    await waitFor(() => expect(mocks.getTaskRunStatus).toHaveBeenCalledWith('task-1', 'org-1'));
+    // The formatted status line renders in the ephemeral output banner.
+    await waitFor(() => expect(screen.getByText(/context 45%/)).toBeInTheDocument());
+    // A command is NEVER a message to the agent (or the chat agent).
+    expect(mocks.sendTaskMessage).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('/retry wakes the agent with a retry message — never sends the raw "/retry"', async () => {
+    // task.status is 'completed' (terminal), so a retry is allowed.
+    await renderChatPane({ liveReload: true, task });
+
+    submitText('/retry');
+
+    await waitFor(() =>
+      expect(mocks.sendTaskMessage).toHaveBeenCalledWith('task-1', 'org-1', 'Please try this again.'),
+    );
+    // The literal command string must not be sent as a message.
+    expect(mocks.sendTaskMessage).not.toHaveBeenCalledWith('task-1', 'org-1', '/retry');
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 

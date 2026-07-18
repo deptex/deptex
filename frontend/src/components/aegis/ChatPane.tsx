@@ -2,7 +2,8 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
-import { aegisApi, type AegisMessage, type AegisTask, type AegisThread, type MessagePart } from '../../lib/aegis-api';
+import { aegisApi, type AegisMessage, type AegisTask, type AegisThread, type MessagePart, type TaskRunStatus } from '../../lib/aegis-api';
+import type { SlashCommand } from './ChatInput';
 import { api, getAuthToken, type AIModelMetadata } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
@@ -129,6 +130,29 @@ interface ChatPaneProps {
   // parent hold the task side-panel closed until the conversation is on screen,
   // so it doesn't sit open over the loading skeleton.
   onFirstLoad?: () => void;
+}
+
+// The task chat's slash palette (rendered by ChatInput; executed in ChatPane).
+const TASK_SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'status', description: 'Show run status — step, context %, elapsed' },
+  { name: 'retry', description: 'Re-run this task from where it stopped' },
+];
+const RETRY_TEXT = 'Please try this again.';
+
+function formatRunStatus(s: TaskRunStatus): string {
+  if (!s.run) {
+    return s.taskStatus === 'working' ? 'Starting up — no telemetry yet.' : `Task ${s.taskStatus}. No active run.`;
+  }
+  const r = s.run;
+  const parts: string[] = [`Run: ${r.fixStatus}`];
+  if (r.step != null) parts.push(`step ${r.step}`);
+  if (r.contextPct != null) parts.push(`context ${Math.round(r.contextPct * 100)}%`);
+  if (r.startedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - new Date(r.startedAt).getTime()) / 1000));
+    parts.push(`${secs < 60 ? `${secs}s` : `${Math.round(secs / 60)}m`} elapsed`);
+  }
+  if (r.prNumber) parts.push(`PR #${r.prNumber}`);
+  return parts.join(' · ');
 }
 
 function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
@@ -593,6 +617,10 @@ export function ChatPane({
   // A follow-up sent while the agent is mid-run is persisted + queued (the worker
   // drains it when the current run ends). Surfaced so the bubble doesn't read as ignored.
   const [taskQueuedHint, setTaskQueuedHint] = useState(false);
+  // Client-side output of a slash command (/status, /retry) — an ephemeral,
+  // non-persisted line above the composer (the thread reloads from the DB, so a
+  // fake chat message wouldn't survive).
+  const [commandOutput, setCommandOutput] = useState<string | null>(null);
   // Bumped each time a task follow-up is sent — arms the realtime-independent
   // poll fallback below so the reply always lands even if the realtime socket
   // has silently stalled (the "nothing came until I refreshed" bug).
@@ -724,6 +752,48 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [followupPollNonce, liveReload, propThreadId]);
 
+  // Slash-command execution for task threads. /status reads live run telemetry;
+  // /retry wakes the agent to re-attempt (reusing the follow-up wake path).
+  const runTaskCommand = useCallback(
+    async (raw: string) => {
+      if (!task) return;
+      const cmd = raw.trim().slice(1).split(/\s+/)[0].toLowerCase();
+      if (cmd === 'status') {
+        setCommandOutput('Checking status…');
+        try {
+          const s = await aegisApi.getTaskRunStatus(task.id, organizationId);
+          setCommandOutput(formatRunStatus(s));
+        } catch {
+          setCommandOutput('Could not fetch status right now.');
+        }
+        return;
+      }
+      if (cmd === 'retry') {
+        if (task.status === 'working') {
+          setCommandOutput('This task is already running — no need to retry.');
+          return;
+        }
+        setCommandOutput(null);
+        setSendError(null);
+        setTaskWorking(true);
+        setFollowupPollNonce((n) => n + 1);
+        setMessages((prev) => [
+          ...prev,
+          { id: `local-${Date.now()}`, role: 'user', parts: [{ type: 'text', text: RETRY_TEXT }] } as unknown as UIMessage,
+        ]);
+        try {
+          const res = await aegisApi.sendTaskMessage(task.id, organizationId, RETRY_TEXT);
+          if (res.queued) setTaskQueuedHint(true);
+        } catch {
+          setSendError('Something went wrong. Please try again.');
+        }
+        return;
+      }
+      setCommandOutput('Unknown command. Try /status or /retry.');
+    },
+    [task, organizationId, setMessages, setTaskWorking, setFollowupPollNonce],
+  );
+
   const handleSubmit = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -743,6 +813,13 @@ export function ChatPane({
       // realtime reload reconciles it against the persisted row.
       if (liveReload && task) {
         setSendError(null);
+        // Slash commands (/status, /retry) are handled client-side, never sent
+        // to the agent as a message.
+        if (trimmed.startsWith('/')) {
+          void runTaskCommand(trimmed);
+          return;
+        }
+        setCommandOutput(null);
         setMessages((prev) => [
           ...prev,
           {
@@ -799,6 +876,7 @@ export function ChatPane({
       setMessages,
       setTaskWorking,
       setFollowupPollNonce,
+      runTaskCommand,
     ],
   );
 
@@ -1046,6 +1124,19 @@ export function ChatPane({
               Queued — I'll pick this up when the current run finishes.
             </div>
           )}
+          {commandOutput && (
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-border bg-background-subtle/50 px-3 py-2 text-xs text-foreground-secondary">
+              <span className="font-mono">{commandOutput}</span>
+              <button
+                type="button"
+                onClick={() => setCommandOutput(null)}
+                className="shrink-0 text-foreground-secondary hover:text-foreground"
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <div className="rounded-2xl bg-background-card border border-border">
             <ChatInput
               onSubmit={handleSubmit}
@@ -1057,6 +1148,7 @@ export function ChatPane({
               modelsLoading={modelsLoading}
               isStreaming={isStreaming || taskRunActive}
               onStop={taskRunActive ? handleTaskStop : handleStop}
+              slashCommands={liveReload && task ? TASK_SLASH_COMMANDS : undefined}
             />
           </div>
         </div>

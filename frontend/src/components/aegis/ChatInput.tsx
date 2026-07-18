@@ -24,6 +24,15 @@ interface ChatInputProps {
   // typing a follow-up, the send arrow returns and queues the message.
   isStreaming?: boolean;
   onStop?: () => void;
+  // Optional slash-command palette (task threads pass /status, /retry). When the
+  // input is a bare `/token`, a menu of matching commands appears; picking one
+  // submits `/name`, which the parent's onSubmit interprets as a command.
+  slashCommands?: SlashCommand[];
+}
+
+export interface SlashCommand {
+  name: string; // without the leading slash
+  description: string;
 }
 
 function ArrowUpIcon({ className }: { className?: string }) {
@@ -46,10 +55,24 @@ export function ChatInput({
   modelsLoading,
   isStreaming,
   onStop,
+  slashCommands,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
+  const [slashIdx, setSlashIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
+
+  // Slash palette is active only for a bare `/token` (no space yet), so a normal
+  // message that merely mentions a slash later isn't hijacked.
+  const trimmedStart = value.trimStart();
+  const slashActive =
+    !!slashCommands && slashCommands.length > 0 && /^\/[a-z]*$/i.test(trimmedStart);
+  const slashQuery = slashActive ? trimmedStart.slice(1).toLowerCase() : '';
+  const slashMatches = slashActive
+    ? slashCommands!.filter((c) => c.name.toLowerCase().startsWith(slashQuery))
+    : [];
+  const slashOpen = slashMatches.length > 0;
+  const activeSlash = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
   const resize = () => {
     const el = textareaRef.current;
@@ -87,7 +110,39 @@ export function ChatInput({
     requestAnimationFrame(resize);
   };
 
+  const pickSlash = (name: string) => {
+    if (disabled) return;
+    if (listening) stopSpeech();
+    onSubmit(`/${name}`);
+    setValue('');
+    setSlashIdx(0);
+    requestAnimationFrame(resize);
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // When the slash palette is open, the arrow keys + Enter drive it.
+    if (slashOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIdx((i) => (Math.min(i, slashMatches.length - 1) + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIdx((i) => (Math.min(i, slashMatches.length - 1) + slashMatches.length - 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setValue('');
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) {
+        e.preventDefault();
+        pickSlash(slashMatches[activeSlash].name);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       submit();
@@ -103,7 +158,30 @@ export function ChatInput({
   const showModelPicker = !!(models && models.length > 0 && onSelectModel);
 
   return (
-    <form onSubmit={onFormSubmit} className="outline-none">
+    <form onSubmit={onFormSubmit} className="relative outline-none">
+      {slashOpen && (
+        <div className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-xl border border-border bg-background-card shadow-lg">
+          {slashMatches.map((c, i) => (
+            <button
+              key={c.name}
+              type="button"
+              // onMouseDown (not onClick) so the textarea doesn't blur first.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pickSlash(c.name);
+              }}
+              onMouseEnter={() => setSlashIdx(i)}
+              className={cn(
+                'flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors',
+                i === activeSlash ? 'bg-background-subtle' : 'hover:bg-background-subtle/60',
+              )}
+            >
+              <span className="font-mono text-sm text-foreground">/{c.name}</span>
+              <span className="truncate text-xs text-foreground-secondary">{c.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={value}
