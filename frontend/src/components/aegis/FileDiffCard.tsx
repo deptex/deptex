@@ -191,26 +191,20 @@ export function FileDiffCard({ diff, collapsible = false }: { diff: string; coll
         {collapsed && (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background-card-header to-transparent" />
         )}
+        {/* A floating chevron over the content — down to expand, up to collapse.
+            No footer bar. */}
+        {long && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse diff' : `Expand ${hiddenCount} more lines`}
+            className="absolute bottom-1.5 left-1/2 z-10 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background-card text-foreground-secondary shadow-sm transition-colors hover:bg-background-subtle hover:text-foreground"
+          >
+            {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+        )}
       </div>
-
-      {long && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          className="flex w-full items-center justify-center gap-1 border-t border-border py-1.5 text-[11px] font-medium text-foreground-secondary hover:bg-background-subtle/40 hover:text-foreground transition-colors"
-        >
-          {expanded ? (
-            <>
-              <ChevronUp className="h-3 w-3" /> Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown className="h-3 w-3" /> Expand {hiddenCount} more {hiddenCount === 1 ? 'line' : 'lines'}
-            </>
-          )}
-        </button>
-      )}
     </div>
   );
 }
