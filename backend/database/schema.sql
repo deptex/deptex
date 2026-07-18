@@ -336,59 +336,6 @@ CREATE TABLE IF NOT EXISTS public.finding_tracker_links (
   external_state text,
   external_state_synced_at timestamp with time zone
 );
-CREATE TABLE IF NOT EXISTS public.flow_node_executions (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  flow_run_id uuid NOT NULL,
-  node_id text NOT NULL,
-  node_type text NOT NULL,
-  status text NOT NULL,
-  input jsonb,
-  output jsonb,
-  error text,
-  duration_ms integer,
-  executed_at timestamp with time zone NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.flow_runs (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  flow_id uuid NOT NULL,
-  flow_version integer NOT NULL,
-  organization_id uuid NOT NULL,
-  trigger_event_id uuid,
-  trigger_payload jsonb NOT NULL,
-  status text NOT NULL,
-  outcome jsonb,
-  error text,
-  duration_ms integer,
-  started_at timestamp with time zone NOT NULL DEFAULT now(),
-  completed_at timestamp with time zone
-);
-CREATE TABLE IF NOT EXISTS public.flow_versions (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  flow_id uuid NOT NULL,
-  version integer NOT NULL,
-  graph jsonb NOT NULL,
-  name text NOT NULL,
-  changed_by_user_id uuid,
-  change_summary text,
-  created_at timestamp with time zone NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS public.flows (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  flow_type text NOT NULL,
-  scope text NOT NULL,
-  scope_id uuid NOT NULL,
-  organization_id uuid NOT NULL,
-  name text NOT NULL,
-  description text,
-  graph jsonb NOT NULL DEFAULT '{"edges": [], "nodes": [], "version": 1}'::jsonb,
-  version integer NOT NULL DEFAULT 1,
-  active boolean NOT NULL DEFAULT true,
-  dry_run boolean NOT NULL DEFAULT false,
-  snoozed_until timestamp with time zone,
-  created_by_user_id uuid,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now()
-);
 CREATE TABLE IF NOT EXISTS public.invitation_teams (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   invitation_id uuid,
@@ -454,8 +401,7 @@ CREATE TABLE IF NOT EXISTS public.notification_deliveries (
   attempts integer DEFAULT 0,
   last_attempt_at timestamp with time zone,
   delivered_at timestamp with time zone,
-  created_at timestamp with time zone DEFAULT now(),
-  flow_run_id uuid
+  created_at timestamp with time zone DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS public.notification_events (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -7193,10 +7139,6 @@ ALTER TABLE public.extraction_logs ADD CONSTRAINT extraction_logs_pkey PRIMARY K
 ALTER TABLE public.extraction_step_errors ADD CONSTRAINT extraction_step_errors_pkey PRIMARY KEY (id);
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_pkey PRIMARY KEY (id);
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_pkey PRIMARY KEY (id);
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_pkey PRIMARY KEY (id);
-ALTER TABLE public.flows ADD CONSTRAINT flows_pkey PRIMARY KEY (id);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_pkey PRIMARY KEY (id);
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_pkey PRIMARY KEY (id);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_pkey PRIMARY KEY (id);
@@ -7314,7 +7256,6 @@ ALTER TABLE public.dependency_version_edges ADD CONSTRAINT dependency_version_ed
 ALTER TABLE public.dependency_versions ADD CONSTRAINT dependency_versions_dependency_version_key UNIQUE (dependency_id, version);
 ALTER TABLE public.dependency_vulnerabilities ADD CONSTRAINT dependency_vulnerabilities_dependency_id_osv_id_key UNIQUE (dependency_id, osv_id);
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_unique UNIQUE (project_id, finding_type, finding_key, provider, external_id);
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_version_key UNIQUE (flow_id, version);
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_team_id_key UNIQUE (invitation_id, team_id);
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_natural_key UNIQUE NULLS NOT DISTINCT (source, source_id, package_name, version, ecosystem);
 ALTER TABLE public.license_obligations ADD CONSTRAINT license_obligations_license_spdx_id_key UNIQUE (license_spdx_id);
@@ -7406,10 +7347,6 @@ ALTER TABLE public.extraction_step_errors ADD CONSTRAINT chk_extraction_step_err
 ALTER TABLE public.feedback ADD CONSTRAINT feedback_type_check CHECK ((type = ANY (ARRAY['issue'::text, 'idea'::text])));
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_provider_chk CHECK ((provider = ANY (ARRAY['jira'::text, 'linear'::text, 'github'::text])));
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_type_chk CHECK ((finding_type = ANY (ARRAY['vulnerability'::text, 'secret'::text, 'semgrep'::text, 'iac'::text, 'container'::text, 'dast'::text, 'malicious'::text, 'taint_flow'::text])));
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_status_check CHECK ((status = ANY (ARRAY['success'::text, 'failed'::text, 'skipped'::text])));
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'dry_run'::text])));
-ALTER TABLE public.flows ADD CONSTRAINT flows_flow_type_check CHECK ((flow_type = ANY (ARRAY['notification'::text, 'pr_check'::text, 'policy'::text, 'status'::text])));
-ALTER TABLE public.flows ADD CONSTRAINT flows_scope_check CHECK ((scope = ANY (ARRAY['organization'::text, 'team'::text, 'project'::text])));
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_ecosystem_chk CHECK ((ecosystem = ANY (ARRAY['npm'::text, 'pypi'::text, 'maven'::text, 'golang'::text, 'rubygems'::text, 'composer'::text, 'cargo'::text, 'nuget'::text, 'github-actions'::text, 'vscode'::text])));
 ALTER TABLE public.known_malicious_packages ADD CONSTRAINT known_malicious_packages_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
 ALTER TABLE public.malicious_feed_sync_runs ADD CONSTRAINT mfsr_source_chk CHECK ((source = ANY (ARRAY['osv'::text, 'ghsa'::text])));
@@ -7558,18 +7495,9 @@ ALTER TABLE public.feedback ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (us
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.finding_tracker_links ADD CONSTRAINT finding_tracker_links_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_node_executions ADD CONSTRAINT flow_node_executions_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
-ALTER TABLE public.flow_runs ADD CONSTRAINT flow_runs_trigger_event_id_fkey FOREIGN KEY (trigger_event_id) REFERENCES notification_events(id) ON DELETE SET NULL;
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_changed_by_user_id_fkey FOREIGN KEY (changed_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.flow_versions ADD CONSTRAINT flow_versions_flow_id_fkey FOREIGN KEY (flow_id) REFERENCES flows(id) ON DELETE CASCADE;
-ALTER TABLE public.flows ADD CONSTRAINT flows_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.flows ADD CONSTRAINT flows_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_invitation_id_fkey FOREIGN KEY (invitation_id) REFERENCES organization_invitations(id) ON DELETE CASCADE;
 ALTER TABLE public.invitation_teams ADD CONSTRAINT invitation_teams_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
 ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_event_id_fkey FOREIGN KEY (event_id) REFERENCES notification_events(id) ON DELETE CASCADE;
-ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_flow_run_id_fkey FOREIGN KEY (flow_run_id) REFERENCES flow_runs(id) ON DELETE SET NULL;
 ALTER TABLE public.notification_deliveries ADD CONSTRAINT notification_deliveries_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE;
 ALTER TABLE public.notification_events ADD CONSTRAINT notification_events_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
@@ -7859,13 +7787,6 @@ CREATE INDEX idx_finding_group_suppressions_project ON public.project_finding_gr
 CREATE INDEX idx_finding_status_events_project ON public.project_finding_status_events USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_finding ON public.finding_tracker_links USING btree (project_id, finding_type, finding_key);
 CREATE INDEX idx_finding_tracker_links_org ON public.finding_tracker_links USING btree (organization_id);
-CREATE INDEX idx_flow_node_executions_run ON public.flow_node_executions USING btree (flow_run_id, executed_at);
-CREATE INDEX idx_flow_runs_flow_started ON public.flow_runs USING btree (flow_id, started_at DESC);
-CREATE INDEX idx_flow_runs_org_started ON public.flow_runs USING btree (organization_id, started_at DESC);
-CREATE INDEX idx_flow_runs_trigger_event ON public.flow_runs USING btree (trigger_event_id) WHERE (trigger_event_id IS NOT NULL);
-CREATE INDEX idx_flow_versions_flow ON public.flow_versions USING btree (flow_id, version DESC);
-CREATE INDEX idx_flows_org_type_active ON public.flows USING btree (organization_id, flow_type, active) WHERE (active = true);
-CREATE INDEX idx_flows_scope ON public.flows USING btree (scope, scope_id);
 CREATE INDEX idx_iac_project_finding_key ON public.project_iac_findings USING btree (project_id, finding_key);
 CREATE INDEX idx_iac_project_status ON public.project_iac_findings USING btree (project_id, status);
 CREATE INDEX idx_invitation_teams_invitation_id ON public.invitation_teams USING btree (invitation_id);
@@ -7877,7 +7798,6 @@ CREATE INDEX idx_malicious_project_finding_key ON public.project_malicious_findi
 CREATE INDEX idx_malicious_project_status ON public.project_malicious_findings USING btree (project_id, status);
 CREATE INDEX idx_mfsr_source_state ON public.malicious_feed_sync_runs USING btree (source, state, completed_at DESC);
 CREATE INDEX idx_notif_deliveries_event ON public.notification_deliveries USING btree (event_id);
-CREATE INDEX idx_notif_deliveries_flow_run ON public.notification_deliveries USING btree (flow_run_id) WHERE (flow_run_id IS NOT NULL);
 CREATE INDEX idx_notif_deliveries_org_time ON public.notification_deliveries USING btree (organization_id, created_at DESC);
 CREATE INDEX idx_notif_deliveries_status ON public.notification_deliveries USING btree (status) WHERE (status = ANY (ARRAY['pending'::text, 'failed'::text]));
 CREATE INDEX idx_notif_events_batch ON public.notification_events USING btree (batch_id) WHERE (batch_id IS NOT NULL);

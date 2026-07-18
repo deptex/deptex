@@ -3,7 +3,7 @@
 **Status:** Plan-only. No code changes proposed in this document — every PR-class change below is a separate ship that follows Section 9's roadmap.
 **Audience:** Henry. Decisions queued in Section 10.
 **Worktree:** `C:\Coding\Deptex\.claude\worktrees\depscanner-hardening\`
-**Owning thesis:** Per `docs/depscanner-hardening-report.md:394-424` and the Day 1 Wave 1 #7 finding (`.cursor/plans/depscanner-hardening-DAILY-LOG.md:59`), **we are an SCA tool that runs GuardDog post-clone, not a real-time malware detector.** Socket flags Axios in 6 minutes; Aikido medians 5min; we wait for SBOM ingestion. Two halves of the gap matter: (a) **time-to-detection** vs Socket / Aikido / Phylum (P0 — table stakes once a customer compares dashboards); (b) **reachability-aware verdicts** (P1 — the wedge nobody else ships — Socket's reachability is shallow, Endor doesn't pivot reachability onto malicious-pkg verdicts). The plan below pursues both, leaning on the Phase 6 cross-file taint engine + the existing `project_malicious_findings` schema for the wedge while building a real-time publish-feed listener for the floor.
+**Owning thesis:** Per `docs/depscanner-hardening-report.md:394-424` and the Day 1 Wave 1 #7 finding, **we are an SCA tool that runs GuardDog post-clone, not a real-time malware detector.** Socket flags Axios in 6 minutes; Aikido medians 5min; we wait for SBOM ingestion. Two halves of the gap matter: (a) **time-to-detection** vs Socket / Aikido / Phylum (P0 — table stakes once a customer compares dashboards); (b) **reachability-aware verdicts** (P1 — the wedge nobody else ships — Socket's reachability is shallow, Endor doesn't pivot reachability onto malicious-pkg verdicts). The plan below pursues both, leaning on the Phase 6 cross-file taint engine + the existing `project_malicious_findings` schema for the wedge while building a real-time publish-feed listener for the floor.
 
 ---
 
@@ -12,7 +12,7 @@
 | Claim | File:line |
 |---|---|
 | Hardening report identifies real-time publish-feed ingestion as #1 gap and reachability-aware verdicts as Wedge 1 | `docs/depscanner-hardening-report.md:399,412` |
-| Day 1 Wave 1 #7 finding: "we are an SCA tool that runs GuardDog post-clone, not a real-time malware detector" | `.cursor/plans/depscanner-hardening-DAILY-LOG.md:59` |
+| Day 1 Wave 1 #7 finding: "we are an SCA tool that runs GuardDog post-clone, not a real-time malware detector" | internal hardening daily-log (git history) |
 | Malicious v2 IMPLEMENTED — 5 milestones + 2 e2e bug fixes; tip `1861b2c` on `worktree-malicious-packages-v2`, not yet merged into main | `docs/depscanner-hardening-report.md:396`; memory `malicious_packages_state.md` |
 | `project_malicious_findings` schema (project_id, organization_id, extraction_run_id, project_dependency_id, dependency_id, rule_id, scanner, severity, message, depscore, suppressed, risk_accepted, reachability_level, reachability_details jsonb) | `backend/database/schema.sql:1216-1240` |
 | `project_malicious_findings` reachability CHECK: `unimported / imported_unused / module / function` | `backend/database/schema.sql:6130` |
@@ -26,9 +26,9 @@
 | Maintainer-signal sync — npm + PyPI + RubyGems clients live; 7 stubbed ecosystems return null | `backend/src/lib/malicious/maintainer-signals.ts:1-30` |
 | Feed-sync — OSV.dev + GHSA `MALWARE`-class advisories, daily QStash cron, `apply_malicious_allowlist` org-scoped suppression | `backend/src/lib/malicious/feed-sync.ts:1-37`; `backend/database/schema.sql:1977-2024` |
 | Wave 1 (Day 3 evening) commit `42084c1` — heartbeat in-flight feed-sync runs + re-enabled strict types in routes | hardening daily log entry, marathon commit log |
-| GuardDog version 2.9.0 wrapped with `--no-exec`, 60s timeout, 16MB buffer, venv binary validation, tarball name validation | `.cursor/plans/depscanner-hardening-DAILY-LOG.md:249` |
+| GuardDog version 2.9.0 wrapped with `--no-exec`, 60s timeout, 16MB buffer, venv binary validation, tarball name validation | internal hardening daily-log (git history) |
 | Phase 6 cross-file taint engine (8-language) shipped + Phase 5 Autogrep generates per-org rules | `docs/depscanner-hardening-report.md:412,416`; memory `reachability_phase6_state.md` |
-| GHSA GraphQL `ecosystem` arg lives on `securityVulnerabilities`, NOT `securityAdvisories` | memory `reference_ghsa_graphql_schema.md`; `.cursor/plans/depscanner-hardening-DAILY-LOG.md:249` |
+| GHSA GraphQL `ecosystem` arg lives on `securityVulnerabilities`, NOT `securityAdvisories` | memory `reference_ghsa_graphql_schema.md` |
 | `package_security_cache` (scanner CHECK = `guarddog / ai_review`) — keyed (package, version, ecosystem, scanner) | `backend/database/schema.sql:6110` |
 | Container OS-pkg layer (project_container_findings) is a SEPARATE surface from project_malicious_findings — no overlap | `backend/database/schema.sql:1216` (this table) vs IaC v2 plan |
 
@@ -512,6 +512,5 @@ Recommend **defer the materialized view**. The per-finding row already carries t
 - `backend/database/schema.sql:358-394` (known_malicious_packages + feed_sync_runs shapes)
 - `backend/database/schema.sql:6130-6131` (existing CHECK constraints to relax)
 - `docs/depscanner-hardening-report.md:394-424` (competitive context)
-- `.cursor/plans/depscanner-hardening-DAILY-LOG.md:59` (Wave 1 #7 finding)
 
 **Total expected diff:** ~1100 LOC of new TypeScript across worker + backend + frontend, ~80 LOC of new SQL (1 migration), ~250 LOC of edits to existing files. The data-model changes are surgical (2 new tables + 2 CHECK relaxations + 1 settings table); the bulk of the work is the listener infrastructure (P0) and the join-and-decorate pass (P1).

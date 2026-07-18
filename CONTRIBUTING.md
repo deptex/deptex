@@ -43,7 +43,7 @@ See [DEVELOPERS.md](./DEVELOPERS.md) for setup and where to add new routes or li
 - **Workers / extraction:** `depscanner/` and related packages
 - **CVE reachability rule packs:** `depscanner/reachability-rules/` — see that directory's README for authoring conventions (one Semgrep `mode: taint` rule per CVE folder, plus vulnerable/safe fixtures). CI validates the full catalog on every PR.
 
-See `.cursor/skills/add-new-features/SKILL.md` for placement and patterns.
+See `.claude/skills/add-new-features/SKILL.md` for placement and patterns.
 
 ---
 

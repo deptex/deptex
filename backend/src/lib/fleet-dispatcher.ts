@@ -15,7 +15,7 @@ import {
 
 /**
  * Fleet dispatcher — the horizontally-scalable autoscaler for the depscanner
- * worker fleet. See `.cursor/plans/scalable-extraction-infra.plan.md`.
+ * worker fleet.
  *
  * One tick reconciles `desired = min(MAX_FLEET, claimable backlog)` against the
  * current `inflight` machine count and creates the difference (batched). It is

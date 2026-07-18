@@ -8,8 +8,7 @@ Standalone copy of upstream taint-engine fixture:
   `app/actions/echo.ts`, `app/actions/safe.ts`, `README.md` (then
   the README was rewritten for the dogfood framing).
 
-The upstream fixture stays byte-stable per Patch B of the dogfood plan
-(`.cursor/plans/depscanner-dogfood.plan.md`). This copy adds:
+The upstream fixture stays byte-stable per Patch B of the dogfood plan. This copy adds:
 
 - `Dockerfile` + `k8s.yaml` for IaC + container scanner coverage
 - `.env.example` for TruffleHog secrets coverage

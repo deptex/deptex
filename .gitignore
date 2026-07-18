@@ -60,9 +60,13 @@ temp-open-saas
 
 documents
 
-# Per-run review artefacts from /criticalreview and /ultrareview — ephemeral,
-# not shipped code.
-.cursor/reviews/.e2e-scratch/
+# Claude workflow scratch — ephemeral, never shipped. /plan-feature writes a plan
+# here (used through /implement, then discardable); /criticalreview, /criticalaudit,
+# and /evaluate-findings write per-run reports here. The regenerated design/feature
+# skills under .claude/skills/ ARE tracked — only these working dirs are ignored.
+.claude/plans/
+.claude/reviews/
+.claude/audits/
 
 # OSS corpus harness output (depscanner/scripts/oss-corpus.ts). Per-run
 # artefacts are large (cloned workspaces + raw scan JSON) and re-derivable.

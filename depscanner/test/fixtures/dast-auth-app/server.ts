@@ -1,8 +1,8 @@
 // DAST auth-strategy fixture app — three route groups exercise the auth
 // shapes the replay strategy (`auth_strategy='replay'`) must handle.
 //
-// Per `.cursor/plans/dast-har-import.plan.md` M0 step 2 (HARD GATE) and
-// OS-NEW-1: this is a PERMANENT test harness — referenced from M0
+// This is a PERMANENT test harness (DAST HAR-import M0 hard gate),
+// referenced from M0
 // validation, M5 e2e (`depscanner/test/e2e/dast-har.ts`), and the dogfood
 // runbook (`docs/runbooks/dast-har-import-dogfood.md`).
 //

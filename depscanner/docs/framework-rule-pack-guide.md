@@ -298,5 +298,3 @@ npm run test:fixtures -- --include-slow             # verify idempotent
 2. EPD scoring reads `classification` + per-vuln reachability to compute `epd_factor`.
 3. Final `contextual_depscore = base_depscore * reachability_weight * epd_factor * tier_multiplier`.
 4. Frontend surfaces them on the project overview + vuln detail sidebar.
-
-See `.cursor/plans/reachability_phase2_tree_sitter.plan.md` and the overall strategy in `.cursor/plans/reachability-analysis.plan.md` for the full pipeline context.

@@ -108,7 +108,7 @@ Generic verdicts with no `file:line` evidence are rejected — be specific or st
 
 ## Phase 5 — Report back + STOP
 
-Print a tight chat summary: the tally, the top action items (verdict + one-line + recommended fix + `file:line`), and the de-dup clusters. Then **stop and ask Henry how he wants to proceed** — do not apply any fix. Optionally write the full per-finding table to `.cursor/audits/evaluate-findings-<project>-<run>.md` for the record.
+Print a tight chat summary: the tally, the top action items (verdict + one-line + recommended fix + `file:line`), and the de-dup clusters. Then **stop and ask Henry how he wants to proceed** — do not apply any fix. Optionally write the full per-finding table to `.claude/audits/evaluate-findings-<project>-<run>.md` for the record.
 
 Report shape:
 

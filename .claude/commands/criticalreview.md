@@ -175,7 +175,7 @@ Grouped by concern axis. Each persona has an ID (used in planner JSON) and a len
 ### Frontend-Specific
 
 - **react-stale-state-auditor** — For any new frontend state that persists across navigation (sidebar selection, detail-panel ID, filter state): check for the `panelOverviewDepId`-style bug where effect fires after selection change with stale data. Verify state is reset on the triggering dependency change, not just inside the effect.
-- **pixel-alignment-auditor** — For CSS/Tailwind diffs: flag class combinations that look like they came from a restructure when a 1-2px tweak would have worked. Reference `.cursor/skills/frontend-design/SKILL.md` design tokens.
+- **pixel-alignment-auditor** — For CSS/Tailwind diffs: flag class combinations that look like they came from a restructure when a 1-2px tweak would have worked. Reference `.claude/skills/frontend-design/SKILL.md` design tokens.
 - **empty-loading-error-state-auditor** — For every new page/list/detail component: verify all three states are handled (skeleton on load, empty-state with CTA, error-state with retry).
 - **ecosystem-ui-consistency** — For any dependency-display UI: verify icon + registry-link + badge maps are extended to all supported ecosystems, not just the one being worked on (see `ProjectDependenciesContent` + `PackageOverview` icon maps).
 - **a11y-auditor** — For new interactive UI: keyboard navigation (Tab order, Esc to close, Enter to submit), aria labels on icon-only buttons, focus management on modals, color contrast for text on `bg-background-card`.
@@ -236,7 +236,7 @@ Separate the output:
 
 ## Phase 5 — Report
 
-Write the report to `.cursor/reviews/critical-review-{branch-slug}-{YYYY-MM-DD-HHMM}.md`. Create the directory if it doesn't exist.
+Write the report to `.claude/reviews/critical-review-{branch-slug}-{YYYY-MM-DD-HHMM}.md`. Create the directory if it doesn't exist.
 
 Also print a **verdict line** to the user:
 
@@ -305,4 +305,4 @@ Also print a **short summary to the user in chat** (not the full report) — ver
 - **No retries on malformed JSON from review agents.** One shot per persona. Log failures in the coverage map as "response malformed".
 - **Worktree-safe.** If run in a worktree, diff is still vs `origin/main` — don't try to compare against the worktree's parent branch.
 - **Small-diff escape:** if the diff is under 50 lines and touches zero backend routes/middleware/migrations/workers, let the planner pick just 3–5 personas. Don't spawn 15 agents to review a CSS tweak.
-- **Do not commit the review file.** It goes in `.cursor/reviews/` which should be gitignored. If it isn't, note that in the final output but don't modify `.gitignore` unprompted.
+- **Do not commit the review file.** It goes in `.claude/reviews/` which should be gitignored. If it isn't, note that in the final output but don't modify `.gitignore` unprompted.

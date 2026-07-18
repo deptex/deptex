@@ -17,7 +17,7 @@ Parse arguments from the user's message:
 - `/criticalaudit <scope> <N>` — force N persona agents (clamped [5, 50])
 - `/criticalaudit <scope> --focus=<id1,id2>` — force these persona IDs; planner fills the rest
 - `/criticalaudit <scope> --skip=<id1,id2>` — exclude these persona IDs
-- `/criticalaudit <scope> --delta` — delta mode: find the most recent prior report for this scope in `.cursor/audits/` and compare. Don't re-flag findings that are still open with the same severity — focus on what's new, what's resolved, and what changed severity. Useful for re-auditing after acting on P0s.
+- `/criticalaudit <scope> --delta` — delta mode: find the most recent prior report for this scope in `.claude/audits/` and compare. Don't re-flag findings that are still open with the same severity — focus on what's new, what's resolved, and what changed severity. Useful for re-auditing after acting on P0s.
 - `/criticalaudit` with no args — ask the user what to audit, don't guess
 
 Flags can combine: `/criticalaudit aegis 20 --focus=audit-log-completeness-auditor --delta`. `--focus` IDs are mandatory for the planner; `--skip` IDs are forbidden.
@@ -37,7 +37,7 @@ Spawn a single **Explore** subagent with thoroughness "very thorough":
 > 5. **Workers** — any worker (`depscanner/`, `parser-worker/`, `watchtower-worker/`, `watchtower-poller/`, `aider-worker/`) that reads/writes the same tables
 > 6. **Cron / QStash** — any cron or QStash dispatch that triggers code paths in scope
 > 7. **Tests** — every test file that covers any of the above (`__tests__/`, `.test.ts`, `.spec.ts`)
-> 8. **Docs** — sections of `CLAUDE.md`, `DEVELOPERS.md`, `.cursor/plans/`, or inline comments that describe this feature
+> 8. **Docs** — sections of `CLAUDE.md`, `DEVELOPERS.md`, `.claude/plans/`, or inline comments that describe this feature
 > 9. **Config / env** — environment variables and settings gates relevant to this feature
 >
 > Return a **feature dossier** as JSON:
@@ -81,7 +81,7 @@ If the user gave an explicit file path or narrow directory, skip the confirmatio
 
 If `--delta` was passed:
 
-1. `ls .cursor/audits/audit-<scope-slug>-*.md` and pick the most recent. If none, print "No prior audit found for this scope — running fresh" and skip this phase.
+1. `ls .claude/audits/audit-<scope-slug>-*.md` and pick the most recent. If none, print "No prior audit found for this scope — running fresh" and skip this phase.
 2. Read the prior report. Extract:
    - Every finding with its `{file, line, axis, severity, persona_id}`
    - The verdict and axis-health table
@@ -267,7 +267,7 @@ Audit-mode addition: group findings **by layer** (frontend / backend-routes / li
 
 ## Phase 5 — Report
 
-Write to `.cursor/audits/audit-<scope-slug>-<YYYY-MM-DD-HHMM>.md`. Create the directory if missing.
+Write to `.claude/audits/audit-<scope-slug>-<YYYY-MM-DD-HHMM>.md`. Create the directory if missing.
 
 **Verdict framing** (different from `/criticalreview` — this isn't a merge gate):
 - **Strong** — 0 P0, ≤2 P1 (all UNVERIFIED or in test-thoroughness only)
@@ -368,5 +368,5 @@ Print a **short chat summary**: verdict, axis-health table one-liner, top 3 P0/P
 - **Don't let the planner skip test-thoroughness, doc-truth, observability, or pattern-drift.** These are the four most commonly-missed retrospective angles — they MUST be in every audit unless the scope is literally one function.
 - **If the feature is itself a test directory or a docs file,** the relevant personas are different — ask the user what they mean rather than running a full security swarm on `backend/src/__tests__/`.
 - **Don't open an interview loop.** This is a one-shot audit, not a discovery session. Ask at most one clarifying question (scope ambiguity); otherwise proceed.
-- **Audit file output is not committed.** Goes in `.cursor/audits/` — note if that path isn't gitignored, but don't modify `.gitignore` unprompted.
+- **Audit file output is not committed.** Goes in `.claude/audits/` — note if that path isn't gitignored, but don't modify `.gitignore` unprompted.
 - **Respect project memories.** If a memory says "Henry uses integration tests for X, mocks are OK for Y" or similar, cite it in relevant findings rather than contradicting it.

@@ -14,7 +14,7 @@
 | Custom IaC rules called out as #1 IaC gap (table-stakes vs Snyk/Wiz/KICS/Tenable/Bridgecrew) | `docs/depscanner-hardening-report.md:323` |
 | Quick-win recommendation literally names `iac_policy_code` parallel to `package_policy_code` | `docs/depscanner-hardening-report.md:333` |
 | Hardening report's PR backlog ranks "IaC custom rules (S, table stakes)" | `docs/depscanner-hardening-report.md:426` |
-| IaC v2 Phase 2 plan scope: OS-package reachability + base-image upgrade advisor (Items F + J) — does NOT touch policy surface | `.cursor/plans/iac-container-v2-phase2.plan.md:7-10,46-71` |
+| IaC v2 Phase 2 plan scope: OS-package reachability + base-image upgrade advisor (Items F + J) — does NOT touch policy surface | internal IaC v2 Phase 2 plan (git history) |
 | `project_iac_findings` schema (one row per Trivy/Checkov misconfig with framework, file_path, severity, rule_id, compliance_refs, metadata) | `backend/database/schema.sql:1166-1198` |
 | IaC framework canonical 9-value union | `depscanner/src/scanners/types.ts:5-17` |
 | `IaCFinding` worker-side shape (scanner, rule_id, framework, file_path, start_line, end_line, severity, message, cwe_ids, code_snippet, rule_doc_url, iac_fingerprint, compliance_refs, metadata) | `depscanner/src/scanners/types.ts:21-42` |
