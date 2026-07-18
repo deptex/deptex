@@ -182,7 +182,7 @@ export function FileDiffCard({ diff, collapsible = false }: { diff: string; coll
       <div className="relative">
         <div
           className={`overflow-x-auto border-t border-border py-2 font-mono text-[12px] leading-relaxed ${
-            long && expanded ? 'max-h-80 overflow-y-scroll custom-scrollbar' : ''
+            long && expanded ? 'max-h-80 overflow-y-auto' : ''
           }`}
         >
           <DiffRows rows={collapsed ? rows.slice(0, PREVIEW_ROWS) : rows} language={language} />
