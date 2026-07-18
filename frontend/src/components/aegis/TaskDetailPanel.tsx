@@ -215,7 +215,7 @@ function ChangesTab({
       <div className="space-y-4 px-6 pb-6 pt-5">
         {sorted.map((f) =>
           f.patch !== null ? (
-            <FileDiffCard key={f.path} diff={toUnifiedDiff(f.path, f.patch)} />
+            <FileDiffCard key={f.path} diff={toUnifiedDiff(f.path, f.patch)} collapsible />
           ) : (
             <FileSummaryRow key={f.path} file={f} />
           ),

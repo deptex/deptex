@@ -263,8 +263,15 @@ export default function AegisPage() {
             </>
           )}
         </div>
-        {!isTaskThread && <FixPanelHost />}
-        {isTaskThread && (
+        {/* Hold BOTH right-panels until the task list resolves. Before then a
+            task thread reads as non-task (activeTask is null until listTasks
+            lands), so the fix panel would flash open and then get swapped for
+            the task panel — the "sidebar loads, closes, reloads" glitch. Gating
+            on tasksReady means nothing shows on the right until we know which
+            panel belongs there; the task panel then waits on chatReady too, so
+            the order is always chat first, then sidebar. */}
+        {tasksReady && !isTaskThread && <FixPanelHost />}
+        {tasksReady && isTaskThread && (
           <TaskDetailPanel
             task={activeTask}
             open={taskPanelOpen && chatReady}

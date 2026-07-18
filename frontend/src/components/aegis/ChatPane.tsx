@@ -200,11 +200,8 @@ function buildInitialMessages(stored: AegisMessage[]): UIMessage[] {
 // so it reads as "conversation loading", not a fixed block.
 const CHAT_SKELETON_TURNS: { assistant: string[]; user: string }[] = [
   { assistant: ['w-1/2', 'w-4/5', 'w-2/3'], user: 'w-2/5' },
-  { assistant: ['w-3/4', 'w-5/6', 'w-1/2', 'w-2/5'], user: 'w-1/3' },
+  { assistant: ['w-3/4', 'w-5/6', 'w-1/2'], user: 'w-1/3' },
   { assistant: ['w-2/3', 'w-4/5'], user: 'w-1/2' },
-  { assistant: ['w-5/6', 'w-1/2', 'w-3/4'], user: 'w-2/5' },
-  { assistant: ['w-1/3', 'w-3/5', 'w-4/5', 'w-1/2'], user: 'w-1/4' },
-  { assistant: ['w-3/4', 'w-2/3', 'w-1/2'], user: 'w-1/3' },
 ];
 
 function ChatSkeleton() {

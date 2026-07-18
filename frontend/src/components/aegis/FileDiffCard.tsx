@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { VscodeFileIcon } from './VscodeFileIcon';
 import { codeTheme } from './codeTheme';
@@ -134,31 +136,75 @@ function CodeLine({ code, language }: { code: string; language: string }) {
   );
 }
 
-export function FileDiffCard({ diff }: { diff: string }) {
+// Above this many rendered rows a `collapsible` card starts collapsed (header
+// only) and, when expanded, caps the body height so a big file scrolls in place
+// instead of pushing the whole panel down.
+const COLLAPSE_THRESHOLD = 8;
+
+// `collapsible` is set by the Changes tab (net PR view), where a long file — a
+// bumped Gemfile.lock, a regenerated config — shouldn't dominate the panel. The
+// chat's live edit steps stay always-expanded (each is one small edit).
+export function FileDiffCard({ diff, collapsible = false }: { diff: string; collapsible?: boolean }) {
   const { file, additions, deletions, rows: allRows } = parseUnifiedDiff(diff);
   const rows = capContext(allRows, MAX_CONTEXT);
   const language = languageForFile(file);
+  const long = collapsible && rows.length > COLLAPSE_THRESHOLD;
+  const [expanded, setExpanded] = useState(false);
+  const bodyOpen = !long || expanded;
+
+  const stats = (
+    <>
+      <span className="ml-1 shrink-0 font-mono text-[11px] text-success">+{additions}</span>
+      <span className="shrink-0 font-mono text-[11px] text-destructive">−{deletions}</span>
+    </>
+  );
 
   return (
     <div className="my-1 overflow-hidden rounded-lg border border-border bg-background-card-header">
-      <div className="flex items-center gap-2 bg-background-card-header px-3 py-2">
-        <VscodeFileIcon file={file} size={16} />
-        <span className="truncate font-mono text-xs text-foreground/90">{file || 'file'}</span>
-        <span className="ml-1 shrink-0 font-mono text-[11px] text-success">+{additions}</span>
-        <span className="shrink-0 font-mono text-[11px] text-destructive">−{deletions}</span>
-      </div>
+      {long ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="flex w-full items-center gap-2 bg-background-card-header px-3 py-2 text-left hover:bg-background-subtle/40 transition-colors"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-foreground-secondary" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-foreground-secondary" />
+          )}
+          <VscodeFileIcon file={file} size={16} />
+          <span className="truncate font-mono text-xs text-foreground/90">{file || 'file'}</span>
+          {stats}
+          <span className="ml-auto shrink-0 text-[11px] text-foreground-secondary">
+            {expanded ? 'Hide' : `${rows.length} lines`}
+          </span>
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 bg-background-card-header px-3 py-2">
+          <VscodeFileIcon file={file} size={16} />
+          <span className="truncate font-mono text-xs text-foreground/90">{file || 'file'}</span>
+          {stats}
+        </div>
+      )}
 
-      <div className="overflow-x-auto border-t border-border py-2 font-mono text-[12px] leading-relaxed">
-        {rows.map((r, i) => {
-          const rowBg =
-            r.type === 'add' ? 'bg-success/10' : r.type === 'del' ? 'bg-destructive/10' : '';
-          return (
-            <div key={i} className={`px-3 ${rowBg}`}>
-              <CodeLine code={r.text} language={language} />
-            </div>
-          );
-        })}
-      </div>
+      {bodyOpen && (
+        <div
+          className={`overflow-x-auto border-t border-border py-2 font-mono text-[12px] leading-relaxed ${
+            long ? 'max-h-80 overflow-y-auto' : ''
+          }`}
+        >
+          {rows.map((r, i) => {
+            const rowBg =
+              r.type === 'add' ? 'bg-success/10' : r.type === 'del' ? 'bg-destructive/10' : '';
+            return (
+              <div key={i} className={`px-3 ${rowBg}`}>
+                <CodeLine code={r.text} language={language} />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -61,16 +61,24 @@ function dedentProse(content: string): string {
   const lines = content.split('\n');
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
       continue;
     }
     if (inFence) continue;
+    // Weak models emit `\`x\`` — an intended inline-code span with backslash-
+    // escaped backticks inside it. CommonMark reads the stray backticks as new
+    // delimiters and ends up highlighting half the sentence (the "weird
+    // highlights" bug). Unescaping \` → ` turns it back into a valid
+    // (double-)backtick span, e.g. (`\`ping\``) → (``ping``).
+    line = line.replace(/\\`/g, '`');
     // Preserve list items and blockquotes — they need their leading marker
     // (and modest indent) to render correctly.
-    if (/^(\s{0,3}[-*+]\s|\s{0,3}\d+\.\s|\s{0,3}>)/.test(line)) continue;
-    lines[i] = line.replace(/^[ \t]+/, '');
+    if (!/^(\s{0,3}[-*+]\s|\s{0,3}\d+\.\s|\s{0,3}>)/.test(line)) {
+      line = line.replace(/^[ \t]+/, '');
+    }
+    lines[i] = line;
   }
   return lines.join('\n');
 }

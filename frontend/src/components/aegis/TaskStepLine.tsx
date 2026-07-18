@@ -51,6 +51,19 @@ export function TaskStepLine({
     return <FileDiffCard diff={diff} />;
   }
 
+  // A file edit with NO diff — only secret fixes do this (rendering the removed
+  // lines would re-leak the credential). Still show it as a compact file card,
+  // not a stray status line, so a redacted change reads as a real change.
+  if (icon === 'edit') {
+    return (
+      <div className="my-1 flex items-center gap-2 overflow-hidden rounded-lg border border-border bg-background-card-header px-3 py-2">
+        <FilePen className="h-4 w-4 shrink-0 text-foreground-secondary" />
+        <span className="truncate font-mono text-xs text-foreground/90">{label}</span>
+        <span className="ml-auto shrink-0 text-[11px] text-foreground-secondary">contents hidden (secret)</span>
+      </div>
+    );
+  }
+
   // A real terminal command → a lightweight tool-call row. Every command uses the
   // same CLI icon (from TerminalCard's default), and its label is the descriptive
   // name the agent gave it — clone / verify / PR all read uniformly.
