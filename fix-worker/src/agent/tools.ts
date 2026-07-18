@@ -19,6 +19,7 @@ import {
   type TaskStep,
 } from './../task-chat';
 import { FixLogger } from './../logger';
+import { scrubString } from './../observability/scrub';
 
 const MAX_FILE_PEEK_BYTES = 32 * 1024;
 const MAX_COMMAND_MS = 300_000;
@@ -103,8 +104,25 @@ function resolveWithin(
   relPath: string,
 ): { ok: true; full: string } | { ok: false; error: string } {
   const full = path.resolve(resolveRoot, relPath);
+  // Fast lexical reject (handles ../ and absolute paths).
   if (full !== confineRoot && !full.startsWith(confineRoot + path.sep)) {
     return { ok: false, error: 'path is outside the repository' };
+  }
+  // Authoritative check: resolve symlinks. A repo can commit a symlink
+  // (git mode 120000) pointing at /etc or /proc/self/environ; path.resolve does
+  // NOT follow it, but fs.readFile/writeFile would. Realpath the nearest
+  // existing ancestor (the target itself may not exist yet on a write) and
+  // re-check containment against the realpathed root.
+  try {
+    const realConfine = fs.realpathSync(confineRoot);
+    let probe = full;
+    while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+    const realProbe = fs.realpathSync(probe);
+    if (realProbe !== realConfine && !realProbe.startsWith(realConfine + path.sep)) {
+      return { ok: false, error: 'path is outside the repository' };
+    }
+  } catch {
+    return { ok: false, error: 'could not resolve path' };
   }
   return { ok: true, full };
 }
@@ -114,12 +132,49 @@ function toGitPath(repoRoot: string, full: string): string {
   return path.relative(repoRoot, full).split(path.sep).join('/');
 }
 
-/** Strip the installation token (and Bearer-shaped secrets) from any surfaced output. */
-function scrubSecrets(text: string, token: string): string {
-  let out = text;
-  if (token) out = out.split(token).join('***');
-  return out.replace(/(x-access-token:)[^@\s]+/gi, '$1***').replace(/(ghs_|gho_|ghp_)[A-Za-z0-9]+/g, '$1***');
+/**
+ * Strip secrets from any string surfaced to the chat OR fed back to the model.
+ * Two layers: mask the exact installation token (defeats format drift / partial
+ * matches), then the shared pattern scrubber (PEM / JWT / Stripe / GitHub /
+ * Google / Anthropic / OpenAI / Bearer) — the same redactor the Sentry pipeline
+ * uses. Encoding a secret (base64/hex) still defeats pattern-scrubbing, which is
+ * why the PRIMARY control is keeping secrets out of the run_command env
+ * (SAFE_ENV below); this is the backstop for anything that slips through.
+ */
+export function scrubOutput(text: string, token: string): string {
+  const masked = token ? text.split(token).join('***') : text;
+  return scrubString(masked);
 }
+
+// Env keys whose presence in the agent's shell would hand a prompt-injected
+// agent the platform's crown jewels (the GitHub App private key mints
+// installation tokens for EVERY org; the service-role key is god-mode on the
+// DB). Deny-list (not allow-list) so real toolchain vars — PATH, HOME, NODE_*,
+// language caches — survive while anything secret-shaped by name is dropped.
+const SECRET_ENV_KEY_RE =
+  /(secret|token|passwo?rd|api[_-]?key|private[_-]?key|encryption[_-]?key|service[_-]?role|credential|webhook|signing|_key$|^key$)/i;
+const SECRET_ENV_PREFIXES = [
+  'SUPABASE_', 'GITHUB_', 'FLY_', 'QSTASH_', 'UPSTASH_', 'STRIPE_', 'RESEND_',
+  'SENTRY_', 'OPENAI_', 'ANTHROPIC_', 'GOOGLE_', 'GEMINI_', 'DEEPINFRA_',
+  'INTERNAL_', 'AI_', 'EMAIL_', 'ADMIN_',
+];
+
+/**
+ * The environment the agent's shell (and our own local git/npm helpers) run
+ * with: process.env minus every secret-shaped var. A prompt-injected
+ * `printenv` / `node -e 'console.log(process.env)'` then finds no platform
+ * secret to exfiltrate. Computed once — the worker's env is stable.
+ */
+export function buildSafeEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (SECRET_ENV_KEY_RE.test(k)) continue;
+    if (SECRET_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
+    out[k] = v;
+  }
+  return out;
+}
+const SAFE_ENV = buildSafeEnv();
 
 function cap(text: string): string {
   return text.length > MAX_OUTPUT_CHARS ? text.slice(0, MAX_OUTPUT_CHARS) + '\n... [truncated]' : text;
@@ -158,7 +213,7 @@ async function computeContentDiff(
         return line;
       })
       .join('\n');
-    const trimmed = scrubSecrets(rewritten, token).trim();
+    const trimmed = scrubOutput(rewritten, token).trim();
     return trimmed ? trimmed.slice(0, 6000) : undefined;
   } finally {
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -187,16 +242,36 @@ function isNoisyFile(p: string): boolean {
 /** Run a command async (never blocks the event loop → the 60s heartbeat keeps firing). */
 function runShell(command: string, cwd: string): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, env: process.env });
+    // detached:true (POSIX only — the prod worker is Linux) puts the child in
+    // its OWN process group so a timeout can kill the whole tree; a backgrounded
+    // grandchild (`nohup curl … &`, a miner) would otherwise be reparented to
+    // init and outlive a plain SIGKILL of the shell. On Windows (dev/test)
+    // detached breaks stdio-pipe capture and negative-pid signalling is
+    // unsupported, so we leave it off there. SAFE_ENV strips every secret-shaped
+    // var so a prompt-injected `printenv` has nothing to exfiltrate.
+    const posix = process.platform !== 'win32';
+    const child = spawn(command, { cwd, shell: true, env: SAFE_ENV, detached: posix });
     let out = '';
     const onData = (b: Buffer) => {
       out += b.toString();
       if (out.length > MAX_OUTPUT_CHARS * 4) out = out.slice(-MAX_OUTPUT_CHARS * 4);
     };
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
+    child.stdout?.on('data', onData);
+    child.stderr?.on('data', onData);
+    const killTree = (signal: NodeJS.Signals) => {
+      try {
+        if (posix && child.pid) process.kill(-child.pid, signal); // negative pid = the whole group
+        else child.kill(signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          /* already gone */
+        }
+      }
+    };
     const timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      killTree('SIGKILL');
       out += `\n... [command exceeded ${Math.round(MAX_COMMAND_MS / 1000)}s and was killed]`;
     }, MAX_COMMAND_MS);
     child.on('close', (code) => {
@@ -463,7 +538,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
     execute: async ({ description, command }) => {
       state.progressCalls++;
       const { code, output } = await runShell(command, projectDir);
-      const scrubbed = cap(scrubSecrets(output, deps.installationToken));
+      const scrubbed = cap(scrubOutput(output, deps.installationToken));
       await step({ icon: 'verify', label: description?.trim() || command, command, output: scrubbed });
       return `exit ${code}\n${scrubbed}`;
     },
@@ -538,7 +613,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
             const shown =
               deps.fixType === 'secret'
                 ? undefined
-                : scrubSecrets(f.diff, deps.installationToken).slice(0, 6000);
+                : scrubOutput(f.diff, deps.installationToken).slice(0, 6000);
             // Accurate verb from the diff — a removed secret file must read
             // "Removed", not "Changed" (the redacted-diff card has no body to
             // make that obvious otherwise).
@@ -592,7 +667,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
             icon: 'pr',
             label: `Updated pull request #${deps.resumeMode.prNumber}`,
             command: `git push origin ${deps.resumeMode.branch}`,
-            output: scrubSecrets(pushOutput, deps.installationToken),
+            output: scrubOutput(pushOutput, deps.installationToken),
           });
           // Do NOT queue postPrReadyCard: the run-1 card already live-renders
           // from this fixId — a second card would duplicate. But that card was
@@ -651,7 +726,7 @@ export function buildAgentTools(deps: AgentToolDeps) {
           icon: 'pr',
           label: `Opened pull request #${pr.prNumber}`,
           command: `git push origin ${prBranch}`,
-          output: scrubSecrets(pushOutput, deps.installationToken),
+          output: scrubOutput(pushOutput, deps.installationToken),
         });
         // Defer the PR-ready card so it flushes after the step rows (text → steps → card).
         state.pendingAfter.push(() => postPrReadyCard(supabase, threadId, deps.fixId));

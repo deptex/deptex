@@ -35,6 +35,8 @@ jest.mock('../logger', () => ({ FixLogger: class {} }));
 
 import {
   buildAgentTools,
+  buildSafeEnv,
+  scrubOutput,
   finalizeFailure,
   maybeFinalizeAnsweredNaturalStop,
   revertImplausibleLockfileRegen,
@@ -621,4 +623,92 @@ describe('revertImplausibleLockfileRegen — lockfile stub guard', () => {
     expect(deps.logger.warn).toHaveBeenCalledWith('setup', expect.stringContaining('implausibly small'));
     expect(fs.readFileSync(path.join(deps.projectDir, LOCK), 'utf-8').length).toBeGreaterThan(20000);
   }, NPM_TIMEOUT);
+});
+
+// ---------------------------------------------------------------------------
+// Security boundary (Tranche 1): the run_command env deny-list, the shared
+// secret scrubber on every surfaced string, and symlink path confinement.
+// These guard the CRIT-1 (secret exfil) / HIGH-1 (symlink escape) fixes.
+// ---------------------------------------------------------------------------
+describe('security — run_command env deny-list (buildSafeEnv)', () => {
+  test('strips every secret-shaped var but keeps the toolchain vars', () => {
+    const safe = buildSafeEnv({
+      PATH: '/usr/bin',
+      HOME: '/root',
+      NODE_OPTIONS: '--max-old-space-size=512',
+      LANG: 'C.UTF-8',
+      // secrets that MUST NOT survive into the agent's shell:
+      GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----x',
+      SUPABASE_SERVICE_ROLE_KEY: 'eyJ.a.b',
+      SUPABASE_ANON_KEY: 'eyJ.c.d',
+      OPENAI_API_KEY: 'sk-abc',
+      ANTHROPIC_API_KEY: 'sk-ant-abc',
+      INTERNAL_API_KEY: 'internal',
+      STRIPE_SECRET_KEY: 'sk_live_x',
+      FLY_API_TOKEN: 'fly',
+      QSTASH_TOKEN: 'q',
+      AI_ENCRYPTION_KEY: 'aes',
+      GITHUB_WEBHOOK_SECRET: 'wh',
+    });
+    // Toolchain kept.
+    expect(safe.PATH).toBe('/usr/bin');
+    expect(safe.HOME).toBe('/root');
+    expect(safe.NODE_OPTIONS).toBe('--max-old-space-size=512');
+    expect(safe.LANG).toBe('C.UTF-8');
+    // Every secret dropped.
+    for (const k of [
+      'GITHUB_APP_PRIVATE_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_ANON_KEY',
+      'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'INTERNAL_API_KEY', 'STRIPE_SECRET_KEY',
+      'FLY_API_TOKEN', 'QSTASH_TOKEN', 'AI_ENCRYPTION_KEY', 'GITHUB_WEBHOOK_SECRET',
+    ]) {
+      expect(safe[k]).toBeUndefined();
+    }
+  });
+});
+
+describe('security — scrubOutput redacts secrets on surfaced strings', () => {
+  test('masks the install token and pattern-scrubs AI / PEM / JWT keys', () => {
+    const token = 'ghs_installtoken1234567890abcdef';
+    const raw =
+      `cloned with ${token}\n` +
+      `OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwx\n` +
+      `ANTHROPIC=sk-ant-abcdefghijklmnopqrstuv\n` +
+      `-----BEGIN RSA PRIVATE KEY-----\nMIIBparts\n-----END RSA PRIVATE KEY-----`;
+    const out = scrubOutput(raw, token);
+    expect(out).not.toContain(token);
+    expect(out).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    expect(out).not.toContain('sk-ant-abcdefghijklmnopqrstuv');
+    expect(out).not.toContain('MIIBparts');
+    expect(out).toContain('[REDACTED_PRIVATE_KEY]');
+  });
+});
+
+describe('security — symlink path confinement (resolveWithin via read_file)', () => {
+  test('a symlink escaping the repo is rejected, not followed', async () => {
+    const deps = makeDeps();
+    // A secret file OUTSIDE the repo clone.
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
+    const secretPath = path.join(outsideDir, 'secret.txt');
+    fs.writeFileSync(secretPath, 'TOP SECRET');
+    const linkPath = path.join(deps.repoRoot, 'escape');
+    try {
+      fs.symlinkSync(secretPath, linkPath);
+    } catch {
+      // Windows dev without symlink privilege — the confinement runs on the
+      // Linux worker + CI (ubuntu), which is where this must hold.
+      return;
+    }
+    const tools = buildAgentTools(deps);
+    const result = await (tools.read_file.execute as any)({ path: 'escape' });
+    expect(result).toBe('path is outside the repository');
+    expect(result).not.toContain('TOP SECRET');
+  });
+
+  test('a normal in-repo file still reads fine (realpath check is not over-eager)', async () => {
+    const deps = makeDeps();
+    fs.writeFileSync(path.join(deps.repoRoot, 'ok.txt'), 'hello');
+    const tools = buildAgentTools(deps);
+    const result = await (tools.read_file.execute as any)({ path: 'ok.txt' });
+    expect(result).toBe('hello');
+  });
 });

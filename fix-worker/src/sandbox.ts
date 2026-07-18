@@ -42,6 +42,24 @@ function stripTokens(s: string): string {
   return s.replace(/x-access-token:[^@\s]*@/g, '');
 }
 
+/**
+ * Rewrite `origin` to a TOKENLESS url after the (token-authenticated) clone.
+ * A `git clone https://x-access-token:TOKEN@github.com/...` bakes the
+ * installation token into `.git/config`, where it sits for the entire agent
+ * loop — a prompt-injected `run_command('git push origin HEAD:main')` would use
+ * it to bypass the draft-PR-only guarantee (or push cross-repo). The controlled
+ * push (`pr.ts` pushBranch) re-adds the token for exactly one push and clears it
+ * again, so nothing legitimate needs the token to live in origin between clone
+ * and push. Best-effort — a failure to strip must not fail the clone.
+ */
+function stripOriginToken(workDir: string, repoFullName: string): void {
+  try {
+    execSync(`git -C "${workDir}" remote set-url origin "https://github.com/${repoFullName}.git"`, EXEC_OPTS);
+  } catch {
+    /* best-effort — pushBranch still re-scopes + clears the token itself */
+  }
+}
+
 export async function cloneAtSha(opts: {
   workDir: string;
   installationToken: string;
@@ -76,6 +94,8 @@ export async function cloneAtSha(opts: {
     execSync(`git -C "${workDir}" fetch --depth 1 origin ${baseSha}`, { ...EXEC_OPTS, timeout: 180_000 });
   }
   execSync(`git -C "${workDir}" reset --hard ${baseSha}`, EXEC_OPTS);
+  // Token is no longer needed in origin — strip it before the agent loop starts.
+  stripOriginToken(workDir, repoFullName);
 
   await logger.success('clone', `Cloned ${repoFullName} at ${baseSha.slice(0, 7)}`, Date.now() - startedAt);
   // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.
@@ -135,6 +155,10 @@ export async function cloneBranchHead(opts: {
       );
     }
   }
+
+  // Token is no longer needed in origin (the base fetch above is the last
+  // token op) — strip it before the agent loop can touch git.
+  stripOriginToken(workDir, repoFullName);
 
   await logger.success('clone', `Cloned ${repoFullName}@${branch}`, Date.now() - startedAt);
   // Trim to the last ~1500 chars — enough to show the "Receiving objects…" tail.

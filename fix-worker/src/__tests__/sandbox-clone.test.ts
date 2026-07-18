@@ -44,7 +44,9 @@ describe('cloneBranchHead — base-ref fetch', () => {
     (spawnSync as jest.Mock).mockReturnValue({ status: 0, stdout: '', stderr: 'cloned' });
     await cloneBranchHead({ ...OPTS });
     await cloneBranchHead({ ...OPTS, alsoFetchBranch: 'aegis/prior' });
-    expect(execSync).not.toHaveBeenCalled();
+    // No base-ref FETCH happens (the only execSync calls are the post-clone
+    // tokenless-origin rewrite — never a fetch).
+    expect(execCmds().some((c) => c.includes('fetch'))).toBe(false);
   });
 
   test('a failed base-ref fetch warns and degrades — the clone still succeeds', async () => {
