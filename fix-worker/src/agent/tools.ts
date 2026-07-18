@@ -176,9 +176,12 @@ function splitDiffByFile(unified: string): Array<{ path: string; diff: string }>
   return files;
 }
 
-/** Generated lockfiles — mechanical, huge, and not worth a diff card. */
+/** npm-family lockfiles we REGENERATE ourselves (`npm install
+ *  --package-lock-only`) — mechanical, huge, not worth a diff card. Other
+ *  ecosystems' lockfiles (Gemfile.lock, go.sum, …) are only in the change set
+ *  because the agent edited them by hand, so they ARE shown. */
 function isNoisyFile(p: string): boolean {
-  return /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock)$/.test(p);
+  return /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(p);
 }
 
 /** Run a command async (never blocks the event loop → the 60s heartbeat keeps firing). */
@@ -536,7 +539,15 @@ export function buildAgentTools(deps: AgentToolDeps) {
               deps.fixType === 'secret'
                 ? undefined
                 : scrubSecrets(f.diff, deps.installationToken).slice(0, 6000);
-            await step({ icon: 'edit', label: `Changed ${f.path}`, diff: shown });
+            // Accurate verb from the diff — a removed secret file must read
+            // "Removed", not "Changed" (the redacted-diff card has no body to
+            // make that obvious otherwise).
+            const verb = /(^|\n)deleted file mode|\n\+\+\+ \/dev\/null/.test(f.diff)
+              ? 'Removed'
+              : /(^|\n)new file mode|\n--- \/dev\/null/.test(f.diff)
+                ? 'Added'
+                : 'Changed';
+            await step({ icon: 'edit', label: `${verb} ${f.path}`, diff: shown });
           }
         } catch {
           /* change-set narration is best-effort */
