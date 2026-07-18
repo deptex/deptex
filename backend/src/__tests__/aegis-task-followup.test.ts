@@ -472,4 +472,23 @@ describe('acceptTask brief enrichment', () => {
     expect(threadId).toBe(THREAD_ID); // idempotent — returns the existing thread
     expect(insertAgentFixRow).not.toHaveBeenCalled(); // no second fan-out
   });
+
+  it('when EVERY fix-row insert fails, the task fails honestly instead of wedging at working', async () => {
+    setTask(taskRow);
+    setTableResponse('aegis_agent_tasks', 'then', { data: [{ id: TASK_ID }], error: null });
+    setActiveRun('run-1');
+    setVulnRow({ osv_id: 'GHSA-4jqc-8m5r-9rpr', project_dependency_id: 'pd-1', fixed_versions: ['3.36.0'] });
+    setDepRow({ name: 'set-value', version: '2.0.0', is_direct: false });
+    // The resolve finds a target, but the fix-row insert fails (e.g. the GitHub
+    // App was uninstalled between propose and accept).
+    (insertAgentFixRow as jest.Mock).mockResolvedValue({ error: 'not_connected' });
+
+    await acceptTask(args);
+
+    // No machine is booted for a task with zero pending fixes...
+    expect(startFixMachine).not.toHaveBeenCalled();
+    // ...and the chat gets an honest "couldn't set up" message, not "fixing 0".
+    const assistantMsgs = assistantMessageInsertCalls();
+    expect(assistantMsgs.some((m) => /couldn't set up the fix/i.test(String(m.content)))).toBe(true);
+  });
 });
