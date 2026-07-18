@@ -3,11 +3,12 @@ import * as fsp from 'fs/promises';
 import * as path from 'path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FindingType } from './../plan-types';
-import { getOrgInstallationId, isJobCancelled } from './../job-db';
+import { getOrgInstallationId, isJobCancelled, updateAgentRunStats } from './../job-db';
 import { createInstallationToken } from './../github';
 import { cloneAtSha, cloneBranchHead } from './../sandbox';
 import { getPullRequestState } from './../pr';
-import { getLanguageModelForOrg } from './../llm';
+import { resolveOrgModel } from './../llm';
+import { captureInfraError } from './../observability/capture';
 import { makeTaskNarrator, narrateStep } from './../task-chat';
 import { FixLogger } from './../logger';
 import { AGENT_SYSTEM, buildBrief, buildResumeSystem } from './brief';
@@ -63,9 +64,22 @@ export interface AgentRunDeps {
   workDir: string;
 }
 
+/** Fraction of the model's context window at which we stop gracefully (reply to
+ *  resume) rather than let the provider hard-400 on an over-long prompt. */
+const CONTEXT_SOFT_LIMIT = 0.9;
+
 /** Strip any leaked chain-of-thought before narrating a model beat. */
 function stripReasoning(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '').trim();
+}
+
+/** A provider "prompt too long / context length exceeded" error — a DETERMINISTIC
+ *  overflow (retrying reproduces it), distinct from a transient infra hiccup. */
+function isContextLengthError(e: any): boolean {
+  const msg = String(e?.message ?? e ?? '').toLowerCase();
+  return /context length|context_length_exceeded|prompt is too long|maximum context|too many tokens|reduce the length|input is too long/.test(
+    msg,
+  );
 }
 
 async function safeList(dir: string): Promise<string> {
@@ -98,7 +112,9 @@ export async function runTaskAgent(
   const repoInfo = await getOrgInstallationId(supabase, input.organizationId, input.projectId);
   if (!repoInfo) throw new Error('Project no longer has a GitHub App installation');
   const installationToken = await createInstallationToken(repoInfo.installationId);
-  const model = await getLanguageModelForOrg(supabase, input.organizationId, process.env.AEGIS_TASK_MODEL || undefined);
+  const resolved = await resolveOrgModel(supabase, input.organizationId, process.env.AEGIS_TASK_MODEL || undefined);
+  const model = resolved.model;
+  const contextWindow = resolved.contextWindow;
 
   // Clone the repo up front — this is infrastructure setup, not a step the user
   // needs to watch, so it isn't narrated. The agent's first visible beat is its
@@ -215,7 +231,7 @@ export async function runTaskAgent(
   const tools = buildAgentTools(toolDeps);
 
   const controller = new AbortController();
-  let abortReason: 'cancelled' | 'wall_clock' | 'stall' | null = null;
+  let abortReason: 'cancelled' | 'wall_clock' | 'stall' | 'context' | null = null;
   const wallTimer = setTimeout(() => {
     abortReason = abortReason ?? 'wall_clock';
     controller.abort();
@@ -224,6 +240,12 @@ export async function runTaskAgent(
   let lastNovel = 0;
   let stall = 0;
   let loopError: any = null;
+  // Context-meter tracking. peakInputTokens = the largest prompt the model has
+  // been sent this run (each step re-sends the whole accumulated history, so
+  // this is "how full the window got"); persisted per step for the chat's
+  // context bar + /status, and the trigger for the graceful soft-limit stop.
+  let peakInputTokens = 0;
+  let stepCount = 0;
   // Did the model produce ANY chat text this run? A resume that answers in
   // prose and stops without calling finish_task is an answer-only turn, not a
   // failure — see maybeFinalizeAnsweredNaturalStop.
@@ -256,6 +278,30 @@ export async function runTaskAgent(
     if (state.pendingAfter.length) {
       for (const fn of state.pendingAfter.splice(0)) await fn();
     }
+
+    // Context meter: the step's usage carries the prompt (input) tokens for
+    // THIS step = the full accumulated history at this point. Track the peak +
+    // persist it (best-effort) so the task chat can render a live context bar.
+    stepCount++;
+    const stepUsage: any = s?.usage ?? {};
+    const inTok: number = stepUsage.inputTokens ?? stepUsage.promptTokens ?? 0;
+    if (inTok > peakInputTokens) peakInputTokens = inTok;
+    await updateAgentRunStats(
+      supabase,
+      input.fixId,
+      { inputTokens: peakInputTokens, window: contextWindow, step: stepCount },
+      machineId,
+    );
+    // Soft context-window stop: bail BEFORE the provider hard-400s on an
+    // over-long prompt. Unlike a raw overflow crash this is recoverable — the
+    // wake/replay path rebuilds a BOUNDED history, so "reply to continue"
+    // genuinely resolves it. Only trips once we actually have a usage reading.
+    if (!state.terminal && contextWindow > 0 && peakInputTokens > contextWindow * CONTEXT_SOFT_LIMIT) {
+      abortReason = abortReason ?? 'context';
+      controller.abort();
+      return;
+    }
+
     // Novelty-aware stall detection. Reading six NEW files (package.json →
     // grep → lockfile chunks for a transitive dep) is legitimate investigation,
     // not spinning — the detector exists for the old spin bug (repeating the
@@ -341,35 +387,51 @@ export async function runTaskAgent(
     await maybeFinalizeAnsweredNaturalStop(toolDeps, narrated);
   }
 
+  // A deterministic context overflow (soft-limit abort OR a provider "prompt too
+  // long" 400) is NOT a transient infra hiccup — retrying reproduces it. Classify
+  // it as its own category so the card invites reply-to-resume (which genuinely
+  // fixes it: replay rebuilds a bounded history) instead of "try again later".
+  const contextOverflow = abortReason === 'context' || (!abortReason && isContextLengthError(loopError));
+
+  // A real (non-abort, non-context) loop error is invisible outside the DB
+  // error_message column otherwise — surface it to Sentry for triage.
+  if (loopError && !contextOverflow) {
+    captureInfraError(loopError, 'aegis-task-loop', { fixId: input.fixId, taskId: input.taskId });
+  }
+
   // Always-terminal guarantee: if a PR wasn't opened and finish_task wasn't
   // called, the row must not be left 'executing' (recovery would re-run the
   // whole agent). Resolve it honestly here.
   if (!state.terminal) {
     // An unexpected exception (model/provider/infra error) → system_error, so the
     // user sees a generic "something went wrong", not the raw provider message.
-    // 'stall' and 'budget_exhausted' (= wall-clock only) each carry their own
-    // safe copy in finalizeFailure — kept distinct because "budget" wording
-    // reads as prepaid BILLING to a paying user.
-    const category: 'cancelled' | 'stall' | 'budget_exhausted' | 'system_error' | 'not_fixable' =
+    // 'stall' / 'budget_exhausted' (= wall-clock) / 'context_exhausted' each
+    // carry their own safe copy in finalizeFailure — kept distinct because
+    // "budget" wording reads as prepaid BILLING to a paying user.
+    const category: 'cancelled' | 'stall' | 'budget_exhausted' | 'context_exhausted' | 'system_error' | 'not_fixable' =
       abortReason === 'cancelled'
         ? 'cancelled'
         : abortReason === 'stall'
           ? 'stall'
-          : abortReason
-            ? 'budget_exhausted'
-            : loopError
-              ? 'system_error'
-              : 'not_fixable';
+          : contextOverflow
+            ? 'context_exhausted'
+            : abortReason
+              ? 'budget_exhausted'
+              : loopError
+                ? 'system_error'
+                : 'not_fixable';
     const message =
       abortReason === 'cancelled'
         ? 'Task stopped by user.'
-        : abortReason === 'wall_clock'
-          ? `Reached the ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
-          : abortReason === 'stall'
-            ? 'Stopped making progress and was halted.'
-            : loopError
-              ? loopError?.message ?? 'Unexpected error in the agent loop.'
-              : "Couldn't complete a fix for this finding.";
+        : contextOverflow
+          ? 'Reached the context-window limit before finishing.'
+          : abortReason === 'wall_clock'
+            ? `Reached the ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
+            : abortReason === 'stall'
+              ? 'Stopped making progress and was halted.'
+              : loopError
+                ? loopError?.message ?? 'Unexpected error in the agent loop.'
+                : "Couldn't complete a fix for this finding.";
     await finalizeFailure(toolDeps, category, message);
   }
 

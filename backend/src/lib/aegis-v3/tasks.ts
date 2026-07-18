@@ -502,8 +502,11 @@ export async function acceptTask(args: {
     // Dependency context (direct vs transitive + fixed version) saves the agent
     // a lockfile-spelunking run; best-effort, null on any miss.
     const depNote = await vulnDependencyNote(target);
+    // Cap the brief: task.description is user/AI-authored and otherwise
+    // unbounded, and it becomes the agent's first (always-kept) prompt turn —
+    // an oversized one would eat the context window before the run starts.
     const findingBrief =
-      [target.label, task.description, depNote].filter(Boolean).join('\n\n') || undefined;
+      ([target.label, task.description, depNote].filter(Boolean).join('\n\n') || undefined)?.slice(0, 8000);
     const ins = await insertAgentFixRow({
       organizationId,
       projectId: target.projectId,
@@ -826,6 +829,61 @@ export async function getTask(taskId: string, orgId: string): Promise<AegisTask 
     .eq('organization_id', orgId)
     .maybeSingle();
   return data ? shapeTask(data) : null;
+}
+
+export interface TaskRunStatus {
+  taskStatus: string;
+  run: {
+    fixStatus: string;
+    step: number | null;
+    contextTokens: number | null;
+    contextWindow: number | null;
+    contextPct: number | null;
+    startedAt: string | null;
+    prNumber: number | null;
+  } | null;
+}
+
+/**
+ * The task's live run telemetry for the chat's context meter + /status. Reads
+ * the CURRENT agent run (prefer an 'executing' fix row, else the newest) and its
+ * agent_run_stats. Returns null only when the task doesn't exist in the org.
+ */
+export async function getTaskRunStatus(taskId: string, orgId: string): Promise<TaskRunStatus | null> {
+  const { data: task } = await supabase
+    .from('aegis_agent_tasks')
+    .select('id, status')
+    .eq('id', taskId)
+    .eq('organization_id', orgId)
+    .maybeSingle();
+  if (!task) return null;
+
+  const { data: rows } = await supabase
+    .from('project_security_fixes')
+    .select('status, agent_run_stats, started_at, pr_number, created_at')
+    .eq('task_id', taskId)
+    .eq('strategy', 'agent')
+    .order('created_at', { ascending: false })
+    .limit(5);
+  const list = (rows ?? []) as any[];
+  const row = list.find((r) => r.status === 'executing') ?? list[0] ?? null;
+  if (!row) return { taskStatus: task.status as string, run: null };
+
+  const stats = (row.agent_run_stats ?? {}) as Record<string, unknown>;
+  const tokens = typeof stats.inputTokens === 'number' ? stats.inputTokens : null;
+  const window = typeof stats.window === 'number' ? stats.window : null;
+  return {
+    taskStatus: task.status as string,
+    run: {
+      fixStatus: row.status as string,
+      step: typeof stats.step === 'number' ? stats.step : null,
+      contextTokens: tokens,
+      contextWindow: window,
+      contextPct: tokens != null && window ? Math.min(1, tokens / window) : null,
+      startedAt: (row.started_at as string) ?? null,
+      prNumber: (row.pr_number as number) ?? null,
+    },
+  };
 }
 
 /**

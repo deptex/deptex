@@ -15,6 +15,7 @@ jest.mock('ai', () => ({
 jest.mock('../job-db', () => ({
   getOrgInstallationId: jest.fn(async () => ({ installationId: 'i', repoFullName: 'o/r', packageJsonPath: '' })),
   isJobCancelled: jest.fn(async () => false),
+  updateAgentRunStats: jest.fn(async () => {}),
 }));
 jest.mock('../github', () => ({ createInstallationToken: jest.fn(async () => 'tok') }));
 jest.mock('../sandbox', () => ({
@@ -28,7 +29,15 @@ jest.mock('../agent/replay', () => ({
     replayedThrough: '2026-07-03T00:00:00Z',
   })),
 }));
-jest.mock('../llm', () => ({ getLanguageModelForOrg: jest.fn(async () => ({})) }));
+jest.mock('../llm', () => ({
+  resolveOrgModel: jest.fn(async () => ({
+    model: {},
+    provider: 'anthropic',
+    modelName: 'claude-sonnet-4-5-20250929',
+    contextWindow: 200_000,
+  })),
+}));
+jest.mock('../observability/capture', () => ({ captureInfraError: jest.fn() }));
 jest.mock('../task-chat', () => ({ makeTaskNarrator: () => async () => {}, narrateStep: jest.fn(async () => {}) }));
 jest.mock('../logger', () => ({ FixLogger: class {} }));
 jest.mock('../agent/tools', () => ({

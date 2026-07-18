@@ -1713,7 +1713,8 @@ CREATE TABLE IF NOT EXISTS public.project_security_fixes (
   dast_finding_id uuid,
   reachable_flow_id uuid,
   failure_details jsonb,
-  run_seq integer NOT NULL DEFAULT 0
+  run_seq integer NOT NULL DEFAULT 0,
+  agent_run_stats jsonb
 );
 CREATE TABLE IF NOT EXISTS public.project_security_summaries (
   project_id uuid NOT NULL,
@@ -8207,6 +8208,7 @@ CREATE INDEX idx_psf_run ON public.project_semgrep_findings USING btree (extract
 CREATE INDEX idx_psf_status_approved ON public.project_security_fixes USING btree (status, approved_at) WHERE (status = 'approved'::text);
 CREATE INDEX idx_psf_status_executing ON public.project_security_fixes USING btree (status, heartbeat_at) WHERE (status = 'executing'::text);
 CREATE INDEX idx_psf_task_id ON public.project_security_fixes USING btree (task_id) WHERE (task_id IS NOT NULL);
+CREATE UNIQUE INDEX uq_agent_fix_per_task_finding ON public.project_security_fixes USING btree (task_id, fix_type, COALESCE(osv_id, (semgrep_finding_id)::text, (secret_finding_id)::text, (iac_finding_id)::text, (container_finding_id)::text, (base_image_rec_id)::text, (dast_finding_id)::text, (reachable_flow_id)::text, (malicious_finding_id)::text, ''::text)) WHERE ((strategy = 'agent'::text) AND (task_id IS NOT NULL));
 CREATE INDEX idx_pus_project_extraction_run ON public.project_usage_slices USING btree (project_id, extraction_run_id);
 CREATE INDEX idx_pus_project_file ON public.project_usage_slices USING btree (project_id, file_path);
 CREATE INDEX idx_pus_project_type ON public.project_usage_slices USING btree (project_id, target_type);

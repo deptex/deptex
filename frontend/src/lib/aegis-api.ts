@@ -116,6 +116,19 @@ export interface AegisTask {
   completedAt: string | null;
 }
 
+export interface TaskRunStatus {
+  taskStatus: string;
+  run: {
+    fixStatus: string;
+    step: number | null;
+    contextTokens: number | null;
+    contextWindow: number | null;
+    contextPct: number | null;
+    startedAt: string | null;
+    prNumber: number | null;
+  } | null;
+}
+
 export const aegisApi = {
   async listThreads(organizationId: string): Promise<AegisThread[]> {
     const { threads } = await fetchWithAuth(
@@ -247,6 +260,13 @@ export const aegisApi = {
       `/api/aegis/tasks/${taskId}?organizationId=${encodeURIComponent(organizationId)}`,
     );
     return task;
+  },
+
+  /** Live run telemetry for the task chat's context meter + /status. */
+  async getTaskRunStatus(taskId: string, organizationId: string): Promise<TaskRunStatus> {
+    return fetchWithAuth(
+      `/api/aegis/tasks/${taskId}/run-status?organizationId=${encodeURIComponent(organizationId)}`,
+    );
   },
 
   async acceptTask(taskId: string, organizationId: string): Promise<{ threadId: string }> {

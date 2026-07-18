@@ -166,3 +166,18 @@ describe('reconstructAgentMessages', () => {
     ]);
   });
 });
+
+describe('reconstructAgentMessages — single-message cap', () => {
+  test('a huge pasted follow-up is head+tail truncated so it cannot overflow step 1', async () => {
+    const huge = 'A'.repeat(50_000);
+    const rows = [
+      { role: 'user', content: huge, metadata: { parts: [{ type: 'text', text: huge }] }, created_at: at(1) },
+    ];
+    const { messages } = await reconstructAgentMessages(stubThread(rows), 'thread-1', { brief: 'B' });
+    const userTurn = messages.find((m) => m.role === 'user' && m.content !== 'B');
+    expect(userTurn).toBeTruthy();
+    // Capped well under the raw 50k, and the truncation is marked.
+    expect(userTurn!.content.length).toBeLessThan(20_000);
+    expect(userTurn!.content).toContain('truncated');
+  });
+});

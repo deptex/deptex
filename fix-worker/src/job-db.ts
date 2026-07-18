@@ -87,6 +87,38 @@ export async function sendHeartbeat(supabase: SupabaseClient, fixId: string) {
     .eq('id', fixId);
 }
 
+export interface AgentRunStats {
+  /** Peak input tokens seen this run (= how full the context got). */
+  inputTokens: number;
+  /** The model's context window, for the meter denominator. */
+  window: number;
+  /** Steps taken so far. */
+  step: number;
+}
+
+/**
+ * Best-effort per-step telemetry for the task chat's context meter + /status.
+ * Machine-fenced so a zombie run can't scribble stats over the live run's row.
+ * Never throws — this is a UI nicety, not a correctness path.
+ */
+export async function updateAgentRunStats(
+  supabase: SupabaseClient,
+  fixId: string,
+  stats: AgentRunStats,
+  machineId?: string,
+): Promise<void> {
+  try {
+    let q = supabase
+      .from('project_security_fixes')
+      .update({ agent_run_stats: { ...stats, updatedAt: new Date().toISOString() } })
+      .eq('id', fixId);
+    if (machineId) q = q.eq('machine_id', machineId);
+    await q;
+  } catch {
+    /* best-effort */
+  }
+}
+
 /**
  * Machine-id fence for terminal writes. A Stopped-then-woken row can be
  * reclaimed by a NEW machine while the OLD agent is still running; the old

@@ -8,10 +8,15 @@ import {
   ensureTaskThread,
   findOpenTaskForFinding,
   getTask,
+  getTaskRunStatus,
   listTasks,
   proposeTaskFromFinding,
   sendTaskFollowup,
 } from '../lib/aegis-v3/tasks';
+
+/** Hard cap on a follow-up message: long enough for a pasted stack trace, short
+ *  enough that one message can't blow the agent's context on the first step. */
+const MAX_FOLLOWUP_CHARS = 24_000;
 import { AEGIS_TASK_FINDING_TYPES, type AegisTaskFindingType } from '../lib/aegis-v3/task-types';
 
 const router = express.Router();
@@ -118,6 +123,22 @@ router.get('/:taskId', async (req: AuthRequest, res) => {
   return res.json({ task });
 });
 
+/**
+ * Live run status for the task chat's context meter + /status: the current (or
+ * most recent) agent run's fix status, step count, and context-window fill.
+ */
+router.get('/:taskId/run-status', async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const organizationId = (req.query.organizationId as string | undefined) ?? '';
+  if (!organizationId) return res.status(400).json({ error: 'organizationId is required' });
+  if (!(await userHasOrgPermission(userId, organizationId, 'interact_with_aegis'))) {
+    return res.status(403).json({ error: 'You do not have permission to view Aegis' });
+  }
+  const status = await getTaskRunStatus(req.params.taskId, organizationId);
+  if (!status) return res.status(404).json({ error: 'Task not found' });
+  return res.json(status);
+});
+
 /** Accept a proposed task — authorizes the whole fix job. */
 router.patch('/:taskId/accept', async (req: AuthRequest, res) => {
   const userId = req.user!.id;
@@ -161,6 +182,11 @@ router.post('/:taskId/message', async (req: AuthRequest, res) => {
   const { organizationId, message } = req.body ?? {};
   if (!organizationId || typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'organizationId and message are required' });
+  }
+  if (message.length > MAX_FOLLOWUP_CHARS) {
+    return res
+      .status(400)
+      .json({ error: `Message is too long (max ${MAX_FOLLOWUP_CHARS.toLocaleString()} characters) — please summarize.` });
   }
   if (!(await userHasOrgPermission(userId, organizationId, 'trigger_fix'))) {
     return res.status(403).json({ error: 'You do not have permission to trigger fixes' });

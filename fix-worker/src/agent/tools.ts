@@ -25,6 +25,7 @@ const MAX_FILE_PEEK_BYTES = 32 * 1024;
 const MAX_COMMAND_MS = 300_000;
 const MAX_OUTPUT_CHARS = 8_000;
 const MAX_GREP_LINES = 60;
+const MAX_LIST_ENTRIES = 500;
 
 /**
  * Terminal categories the agent can resolve to. Mirrors the vocabulary
@@ -32,7 +33,13 @@ const MAX_GREP_LINES = 60;
  * 'stall' is loop-detected only — it is deliberately NOT in finish_task's
  * schema (the model shouldn't self-report it).
  */
-export type FinishCategory = 'not_fixable' | 'budget_exhausted' | 'cancelled' | 'system_error' | 'stall';
+export type FinishCategory =
+  | 'not_fixable'
+  | 'budget_exhausted'
+  | 'context_exhausted'
+  | 'cancelled'
+  | 'system_error'
+  | 'stall';
 
 /** Mutable run state shared between the tools and the loop's terminal fallback. */
 export interface AgentRunState {
@@ -413,7 +420,12 @@ export function buildAgentTools(deps: AgentToolDeps) {
           .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
           .sort();
         await step({ icon: 'read', label: `Listed ${rel === '.' ? 'the project directory' : rel}` });
-        return lines.length ? lines.join('\n') : '(empty directory)';
+        if (!lines.length) return '(empty directory)';
+        // Cap a pathologically large directory so one list_dir can't dominate
+        // the context window (mirrors grep's cap).
+        return lines.length > MAX_LIST_ENTRIES
+          ? `${lines.slice(0, MAX_LIST_ENTRIES).join('\n')}\n... [${lines.length - MAX_LIST_ENTRIES} more entries]`
+          : lines.join('\n');
       } catch (e: any) {
         return e?.code === 'ENOENT' ? 'directory not found' : (e?.message ?? 'list failed');
       }
@@ -889,6 +901,16 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     leadIn = "I hit my time limit on this one — here's where I got to.";
     stepLabel = 'Hit the time limit';
     nextStep = "Reply and I'll pick it up again from where I left off.";
+  } else if (category === 'context_exhausted') {
+    // The run read enough that the model's context window filled. Recoverable:
+    // a reply wakes a resume that rebuilds a COMPACTED history (replay's tail
+    // budget), so the follow-up genuinely continues rather than re-overflowing.
+    headline = 'This got too big to finish in one pass';
+    explanation =
+      "I read enough of the code that I ran out of room to keep going in a single run — I stopped rather than lose track.";
+    leadIn = "I've taken in about as much as I can hold in one pass — stopping here so I don't lose the thread.";
+    stepLabel = 'Reached the context limit';
+    nextStep = "Reply and I'll continue with a fresh, compacted view of what I've done so far.";
   } else {
     // not_fixable (the agent's own stated reason) — safe, first-person copy
     // from describeFailure (shared with the old pipeline; not touched here).

@@ -13,6 +13,16 @@ export interface ReplayMessage {
 
 const OMISSION_MARKER = '(earlier: … work omitted …)';
 
+// A single message (e.g. a user pasting a multi-MB log as their follow-up) must
+// not blow the first step's prompt on its own. Head+tail truncate any message
+// longer than this, keeping both ends (the ask usually top, the detail bottom).
+const MAX_MESSAGE_CHARS = 16_000;
+function capMessage(content: string): string {
+  if (content.length <= MAX_MESSAGE_CHARS) return content;
+  const half = Math.floor(MAX_MESSAGE_CHARS / 2);
+  return `${content.slice(0, half)}\n… [${content.length - MAX_MESSAGE_CHARS} chars truncated] …\n${content.slice(-half)}`;
+}
+
 /**
  * Fetch + fold the thread into model messages.
  *
@@ -57,7 +67,7 @@ export async function reconstructAgentMessages(
   for (const row of rows) {
     const content = (row.content ?? '').trim();
     if (row.role === 'user') {
-      if (content) mapped.push({ role: 'user', content });
+      if (content) mapped.push({ role: 'user', content: capMessage(content) });
       continue;
     }
     if (row.role !== 'assistant') continue;
@@ -65,7 +75,7 @@ export async function reconstructAgentMessages(
     if (Array.isArray(parts) && parts.length) {
       for (const part of parts) {
         if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-          mapped.push({ role: 'assistant', content: part.text.trim() });
+          mapped.push({ role: 'assistant', content: capMessage(part.text.trim()) });
         } else if (part?.type === 'step') {
           // Compact single line, deliberately DESCRIPTIVE/PAST-TENSE — never
           // command-shaped. A weak model shown `[verify] X — $ cmd` lines will
@@ -95,7 +105,7 @@ export async function reconstructAgentMessages(
         }
       }
     } else if (content) {
-      mapped.push({ role: 'assistant', content });
+      mapped.push({ role: 'assistant', content: capMessage(content) });
     }
   }
 
