@@ -1,8 +1,33 @@
 import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 function textOf(n: Node | null, src: string): string {
   return n ? src.slice(n.startIndex, n.endIndex) : '';
+}
+
+/**
+ * Fluent-chain method names applied ON a Map call:
+ * `app.MapGet("/x", h).RequireAuthorization()` parses as
+ * invocation(member_access(invocation(MapGet…), RequireAuthorization)) — walk UP
+ * from the Map invocation collecting chained call names (span-compared, not
+ * object identity).
+ */
+function chainedInvocationNames(node: Node, source: string): string[] {
+  const out: string[] = [];
+  let cur: Node = node;
+  for (;;) {
+    const member = cur.parent;
+    if (!member || member.type !== 'member_access_expression') break;
+    const obj = member.childForFieldName('expression') ?? member.namedChild(0);
+    if (!obj || obj.startIndex !== cur.startIndex || obj.endIndex !== cur.endIndex) break;
+    const invocation = member.parent;
+    if (!invocation || invocation.type !== 'invocation_expression') break;
+    const nameNode = member.childForFieldName('name') ?? member.namedChild(1);
+    if (nameNode) out.push(textOf(nameNode, source));
+    cur = invocation;
+  }
+  return out;
 }
 
 function csStringLiteral(node: Node | null, source: string): string | null {
@@ -60,6 +85,22 @@ export const minimalApisDetector: FrameworkDetector = {
                   else if (lastInner.type === 'lambda_expression') handlerName = '(lambda)';
                   else handlerName = textOf(lastInner, source).slice(0, 40);
                 }
+
+                // Fluent auth chain: .RequireAuthorization() → auth evidence;
+                // .AllowAnonymous() → explicit public (Sem 2).
+                const chain = chainedInvocationNames(node, source);
+                const requiresAuth = chain.filter((c) => /^RequireAuthorization$/.test(c));
+                const allowAnon = chain.some((c) => /^AllowAnonymous$/.test(c));
+                const result = classifyRoute({
+                  vettedAuthTokens: requiresAuth.length ? ['RequireAuthorization'] : [],
+                  publicOverrides: allowAnon ? ['AllowAnonymous'] : [],
+                  routePattern,
+                  centralizedOnly: false,
+                });
+
+                // Span capture (Sem 6): inline lambda handlers only — method
+                // group references are cross-file/unresolvable → null span.
+                const isLambda = lastInner?.type === 'lambda_expression';
                 entryPoints.push({
                   filePath: file.filePath,
                   lineNumber: node.startPosition.row + 1,
@@ -68,10 +109,12 @@ export const minimalApisDetector: FrameworkDetector = {
                   httpMethod: verb,
                   routePattern,
                   entryPointType: 'http_route',
-                  classification: 'PUBLIC_UNAUTH',
-                  authenticated: null,
-                  authMechanism: null,
-                  middlewareChain: null,
+                  classification: result.classification,
+                  authenticated: result.authenticated,
+                  authMechanism: requiresAuth.length ? 'aspnet_authorize' : null,
+                  middlewareChain: chain.length ? chain : null,
+                  handlerSpan: isLambda && lastInner ? spanOfNode(lastInner) : null,
+                  demotionEligible: isLambda,
                   metadata: { method: methodName },
                 });
               }

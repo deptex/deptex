@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Storage } from './storage';
 import { MAX_VOTE_THRESHOLD, UNCERTAIN_UPPER } from './taint-engine/confidence-thresholds';
+import { parseEntryPointTag } from './taint-engine/match-flow-to-routes';
 import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from './ai-telemetry';
 import { REACHABILITY_LEVEL_WEIGHTS } from './depscore';
 
@@ -476,6 +477,22 @@ const ENDPOINT_RANK: Record<EntryPointClassification, number> = {
   UNKNOWN: 0,
 };
 
+/**
+ * Merge an AI endpoint verdict with matched route evidence into one effective
+ * class (entry-point auth classification, Core Semantics 7). Worst-case (most
+ * exposed) wins, so an AI-public verdict is unbeatable — deterministic evidence
+ * can never override AI-public (Locked-6). Returns null when neither signal is
+ * present (the flow contributes no endpoint vote).
+ */
+function mergeEffectiveClass(
+  aiCls: EntryPointClassification | null,
+  evidenceCls: EntryPointClassification | null,
+): EntryPointClassification | null {
+  if (aiCls === null) return evidenceCls;
+  if (evidenceCls === null) return aiCls;
+  return ENDPOINT_RANK[aiCls] >= ENDPOINT_RANK[evidenceCls] ? aiCls : evidenceCls;
+}
+
 export interface AggregatedEpd {
   reachability_status: ReachabilityStatus;
   epd_depth: number | null;
@@ -541,7 +558,12 @@ export function aggregateEpdFromFlows(
     );
   }
 
-  const filtered = flows.filter((f) =>
+  // Two vote sets (entry-point auth classification, Core Semantics 7).
+  //
+  // sanitizationVoters — the EXISTING predicate, byte-for-byte. `allSanitized`
+  // and the is_sanitized output are computed over THIS set only, so sanitization
+  // behavior is unchanged.
+  const sanitizationVoters = flows.filter((f) =>
     !f.isSuppressed
     && f.filterVerdict !== 'ai_truncated'
     && f.filterVerdict !== 'kept_on_error'
@@ -550,7 +572,32 @@ export function aggregateEpdFromFlows(
     && f.sanitization.confidence >= MAX_VOTE_THRESHOLD,
   );
 
-  if (filtered.length === 0) {
+  // endpointVoters — the AI endpoint verdict of each flow that clears the SAME
+  // sanitization-confidence gate as sanitizationVoters, merged worst-case with any
+  // matched `framework-route:` evidence. Gating the AI leg keeps a no-auth-map scan
+  // byte-identical to pre-arc (evidenceCls is null there, so endpointVoters ==
+  // the legacy `filtered` set); framework-route EVIDENCE, being independent of
+  // sanitization confidence, votes UNCONDITIONALLY, so the arc still demotes a
+  // verdict-less evidence-authed flow. maxRisk makes an AI-public verdict
+  // unbeatable (Locked-6); unmatched/legacy tags never vote. endpointVoters can be
+  // non-empty when sanitizationVoters is empty (an evidence-only demotion), but
+  // sanitizationVoters ⊆ endpointVoters still holds.
+  const endpointVoters: EntryPointClassification[] = [];
+  for (const f of flows) {
+    if (f.isSuppressed) continue;
+    if (f.filterVerdict === 'ai_truncated' || f.filterVerdict === 'kept_on_error') continue;
+    const aiCls = (f.endpoint !== null && f.sanitization !== null
+      && f.sanitization.confidence >= MAX_VOTE_THRESHOLD)
+      ? f.endpoint.classification
+      : null;
+    const parsed = parseEntryPointTag(f.entryPointTag);
+    const evidenceCls = parsed.votes ? parsed.cls : null;
+    const eff = mergeEffectiveClass(aiCls, evidenceCls);
+    if (eff !== null) endpointVoters.push(eff);
+  }
+
+  if (endpointVoters.length === 0) {
+    // No endpoint signal survived — the existing empty-set semantics apply.
     // Distinguish "user reviewed everything" from "low confidence everywhere"
     // (FMH-R1-10): all_flows_suppressed RETAINS the last suppressed flow's
     // verdict so depscore reflects the user's reviewed judgement instead of
@@ -581,25 +628,25 @@ export function aggregateEpdFromFlows(
     );
   }
 
-  // Worst-case (most exposed) endpoint wins across all surviving flows.
+  // Worst-case (most exposed) endpoint wins across the endpoint voters.
   let worstEndpoint: EntryPointClassification = 'UNKNOWN';
   let worstRank = -1;
-  for (const f of filtered) {
-    const cls = f.endpoint!.classification;
+  for (const cls of endpointVoters) {
     const rank = ENDPOINT_RANK[cls];
     if (rank > worstRank) {
       worstRank = rank;
       worstEndpoint = cls;
     }
   }
-  // Sanitized at PDV level only if EVERY filtered flow is sanitized=true.
-  // null sanitization counts as "not sanitized" for safety: AI couldn't
-  // verify a sanitizer, so we don't treat this flow as neutralised.
-  const allSanitized = filtered.every((f) => f.sanitization!.is_sanitized === true);
+  // Sanitized at PDV level only if we HAVE sanitization voters AND EVERY one is
+  // sanitized=true. An empty sanitization set carries no sanitization claim, so
+  // is_sanitized=false — we never neutralize a score we couldn't verify (e.g. a
+  // verdict-less evidence-authed flow that demotes but has no sanitizer signal).
+  const allSanitized = sanitizationVoters.length > 0
+    && sanitizationVoters.every((f) => f.sanitization!.is_sanitized === true);
 
-  // If any surviving flow is `ai_truncated` AT THE STATUS PRECEDENCE LEVEL
-  // (which is filtered out above) this branch isn't reached, but if a
-  // future change widens the filter, the precedence stays explicit.
+  // flowsAggregated describes the endpointVoters set that actually decided the
+  // class (Core Semantics 7); allSanitized still comes from sanitizationVoters.
   return computeAggregate(
     reachability_status,
     depth,
@@ -608,7 +655,7 @@ export function aggregateEpdFromFlows(
     allSanitized,
     'flow_aggregated',
     flows.length,
-    filtered.length,
+    endpointVoters.length,
   );
 }
 

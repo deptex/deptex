@@ -1,0 +1,37 @@
+# Entry-point auth demotion allow-list (entry-point auth classification, T13a).
+#
+# The class-aware corpus tripwire compares each labelled app's per-flow
+# entry_point_tag + per-PDV entry_point_classification against a paired baseline
+# run (old code, same image + same VDB snapshot). Every flow that the auth arc
+# demotes below PUBLIC_UNAUTH (AUTH_INTERNAL / OFFLINE_WORKER) must have an entry
+# here, adjudicated as a TRUE demotion — otherwise the tripwire fails.
+#
+# The adjudication convention mirrors the corpus label files in this directory:
+# a human verifies, from the app source, that the demoting route genuinely
+# authenticates the flow's entry point, and records why. An unexplained
+# demotion (no entry) is treated as a potential wrongful demote — the cardinal
+# sin of this system (it under-scores real public attack surface) — and fails
+# the gate.
+#
+# Populated during the paired corpus run (Henry's environment: needs the
+# depscanner Docker image + the labelled corpus). Empty until the first run;
+# the tripwire treats an empty allow-list as "zero demotions expected", so the
+# initial run's demotions all surface for adjudication.
+#
+# Schema (per app):
+#   <app-key>:
+#     - flow_key: <purl>@<entry_point_file>:<entry_point_line>-><sink_method>
+#       demoting_route: <route pattern / handler the evidence came from>
+#       evidence: <the middleware / decorator / annotation that authed it>
+#       to_class: AUTH_INTERNAL | OFFLINE_WORKER
+#       note: <adjudicator note — why this is a true demotion>
+#
+# Example (illustrative — replace with real adjudicated rows):
+#   discourse-v2.5.0:
+#     - flow_key: "pkg:gem/loofah@2.3.1@app/controllers/admin/users_controller.rb:42->render"
+#       demoting_route: "Admin::UsersController#update"
+#       evidence: "before_action :ensure_admin (halting, unconditional)"
+#       to_class: AUTH_INTERNAL
+#       note: "AdminConstraint + ensure_admin gate every admin route; verified in source."
+
+apps: {}

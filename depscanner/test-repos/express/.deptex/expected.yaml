@@ -17,6 +17,30 @@ reachable_vulns:
     line: 9
     reachability_bucket: reachable
 
+# Entry-point auth classification (T6a). The engine classifies each detected
+# route from its middleware evidence; authed handlers must not be scored as
+# public attack surface.
+entry_points:
+  - route: /admin/render
+    file: routes/admin.js
+    classification: AUTH_INTERNAL
+  - route: /render
+    file: routes/api.js
+    classification: PUBLIC_UNAUTH
+  - route: /users
+    file: routes/api.js
+    classification: PUBLIC_UNAUTH
+
+# Per-flow entry-point tag stamped by the span-containment join. The authed
+# flow's source falls inside the requireAuth-guarded handler, so it stamps
+# framework-route:auth_internal; the public /render flow stamps
+# framework-route:public_unauth.
+flow_tags:
+  - file: routes/admin.js
+    tag: framework-route:auth_internal
+  - file: routes/api.js
+    tag: framework-route:public_unauth
+
 unreachable_vulns:
   # minimist@1.2.5 — present in package.json but never imported. Tree-sitter
   # extractor reports zero usages → reachability classifier marks unreachable.

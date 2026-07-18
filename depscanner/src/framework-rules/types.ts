@@ -23,6 +23,12 @@ export type EntryPointClassification =
 export type HttpMethod =
   | 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
+/** 1-based, inclusive-both-ends line span of a handler (entry-point auth join, Sem 6). */
+export interface HandlerSpan {
+  startLine: number;
+  endLine: number;
+}
+
 export interface EntryPoint {
   filePath: string;
   /** 1-based line number — matches how the DB stores it. */
@@ -36,6 +42,20 @@ export interface EntryPoint {
   authenticated: boolean | null;
   authMechanism: string | null;
   middlewareChain: string[] | null;
+  /**
+   * Span of this route's terminal handler (entry-point auth join, Sem 6). A
+   * taint flow demotes only when its source line falls inside an authed,
+   * demotion-eligible span. null for mount / wrapped / member / cross-file
+   * handlers (those never demote). Absent on rows that predate span capture.
+   */
+  handlerSpan?: HandlerSpan | null;
+  /**
+   * false when the handler could be re-mounted / called from code we can't see
+   * (exported or referenced elsewhere in the file) — its route still classifies
+   * but never demotes a flow. Absent = treated as eligible only when a span is
+   * present.
+   */
+  demotionEligible?: boolean;
   metadata: Record<string, unknown> | null;
   /**
    * Deterministically-harvested request parameters (query/header/cookie) the
@@ -67,6 +87,47 @@ export interface DetectorContext {
   depNames: readonly string[];
 }
 
+/**
+ * A route's auth facts carried in `ctx.entryPointAuth` and consumed by the
+ * flow→route join (`matchFlowToRoutes`). Built per-route pre-dedupe at usage
+ * extraction; NEVER persisted (the coarse `project_entry_points` row is).
+ * `postProcess` detectors (Rails/Django) return these to re-home per-action
+ * classifications onto controller/view files without touching `file.entryPoints`.
+ */
+export interface CtxOnlyRouteRecord {
+  /** Project-relative POSIX path the record is keyed under (the handler's file). */
+  filePath: string;
+  classification: EntryPointClassification;
+  handlerSpan: HandlerSpan | null;
+  demotionEligible: boolean;
+  routePattern: string | null;
+  middlewareChain: string[] | null;
+  authMechanism: string | null;
+}
+
+/**
+ * Per-action auth facts a cross-file detector banks onto a controller/view
+ * `ExtractedFile` during `detect` (entry-point auth classification, T9). The
+ * detector's `postProcess` re-homes these into ctx-only route records keyed on
+ * the same file. `filePath` is the file's original (possibly absolute) path —
+ * `buildEntryPointAuthMap` normalizes it to the project-relative join key.
+ */
+export interface FileAuthFacts {
+  framework: string;
+  filePath: string;
+  actions: Array<{
+    /** Action / view name (for adjudication + logs). */
+    name: string;
+    /** The action method / view body span (Sem 6). */
+    handlerSpan: HandlerSpan;
+    classification: EntryPointClassification;
+    demotionEligible: boolean;
+    routePattern: string | null;
+    middlewareChain: string[] | null;
+    authMechanism: string | null;
+  }>;
+}
+
 export interface FrameworkDetector {
   /** Stable identifier stored in `project_entry_points.framework`. */
   name: string;
@@ -84,4 +145,13 @@ export interface FrameworkDetector {
    * (e.g. the file imports express but doesn't actually register a route).
    */
   detect(ctx: DetectorContext): EntryPoint[];
+  /**
+   * Optional cross-file pass (Rails/Django), run once after all files are
+   * extracted (alongside `resolveMountPrefixes`). Consumes banked `authFacts`
+   * to resolve routes→controller/view files and RETURNS ctx-only route records
+   * (re-homed onto the handler file); it must NEVER append to `file.entryPoints`
+   * (that would leak into `storeEntryPoints` + `httpEntryPointCount`). Wrapped
+   * per-detector so a throw degrades that framework to route-local evidence.
+   */
+  postProcess?(files: readonly ExtractedFile[], opts: { workspaceRoot: string }): CtxOnlyRouteRecord[];
 }

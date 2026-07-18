@@ -148,11 +148,14 @@ function appendRequestParams(
  * Filter, translate, and emit an OpenAPI 3.1 doc + sidecar.
  *
  * Filtering pipeline:
- *   - entry_point_type !== 'http_route' → drop (defensive — current detectors
- *     all emit http_route, but the column allows other values).
- *   - classification === 'OFFLINE_WORKER' → drop (background queue handlers).
+ *   - entry_point_type !== 'http_route' → drop (non-HTTP handlers: queue
+ *     consumers, cron, websockets, GraphQL resolvers — not DAST-scannable).
  *   - route_pattern empty / http_method missing or non-canonical → drop.
  *   - Health-probe paths (/health, /_status, /livez, /readyz, /healthz) → drop.
+ *
+ * An http_route classified OFFLINE_WORKER (a signature-verified webhook or
+ * internal-named HTTP route) is STILL scanned — it is real external HTTP attack
+ * surface; only non-HTTP handlers are excluded, by the entry_point_type check.
  *
  * De-duplication: (method, path) collisions keep the first seen; rest are
  * dropped silently.
@@ -167,7 +170,9 @@ export function synthesizeOpenApi(
   const candidates: Array<{ ep: EntryPointRow; method: string }> = [];
   for (const ep of entryPoints) {
     if (ep.entry_point_type && ep.entry_point_type !== 'http_route') continue;
-    if (ep.classification === 'OFFLINE_WORKER') continue;
+    // An http_route OFFLINE_WORKER (signature-verified webhook / internal HTTP
+    // route) IS real external surface — keep scanning it; genuine background /
+    // queue / cron handlers are non-http_route and already dropped above.
     if (!ep.route_pattern) continue;
     const method = methodLower(ep.http_method);
     if (!method) continue;

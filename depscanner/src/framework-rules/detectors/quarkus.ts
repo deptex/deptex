@@ -2,13 +2,15 @@ import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
 import {
   JAXRS_VERB_ANNOTATIONS,
   annotationsOn,
-  classifyFromAuth,
   detectJavaAuthMechanism,
+  javaAuthEvidenceFromAnnotations,
   joinRoute,
   lineOf,
+  mergeJavaAuthEvidence,
   textOf,
   walkTree,
 } from '../util/java';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // Quarkus resource classes are JAX-RS based with a distinct framework
 // signature — `io.quarkus.*` imports tag them so the EntryPoint.framework
@@ -21,8 +23,9 @@ export const quarkusDetector: FrameworkDetector = {
   triggerImports: ['io.quarkus'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectJavaAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from annotation evidence
+    // (@Authenticated / @RolesAllowed / @PermitAll are the Quarkus idioms).
+    const authMechanismHint = detectJavaAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -32,6 +35,7 @@ export const quarkusDetector: FrameworkDetector = {
       if (!pathAnn) return;
       const classPrefix = pathAnn.firstStringArg ?? null;
       const className = node.childForFieldName('name');
+      const classEvidence = javaAuthEvidenceFromAnnotations(classAnns, source);
 
       const body = node.childForFieldName('body');
       if (!body) return;
@@ -43,7 +47,19 @@ export const quarkusDetector: FrameworkDetector = {
         if (!verbAnn) continue;
         const subPathAnn = methodAnns.find((a) => a.name === 'Path');
         const subRoute = subPathAnn?.firstStringArg ?? '';
+        const routePattern = joinRoute(classPrefix, subRoute);
         const methodName = member.childForFieldName('name');
+
+        const merged = mergeJavaAuthEvidence(
+          classEvidence,
+          javaAuthEvidenceFromAnnotations(methodAnns, source),
+        );
+        const result = classifyRoute({
+          vettedAuthTokens: merged.vettedAuthTokens,
+          publicOverrides: merged.publicOverrides,
+          routePattern,
+          centralizedOnly: false,
+        });
 
         entryPoints.push({
           filePath: file.filePath,
@@ -51,12 +67,15 @@ export const quarkusDetector: FrameworkDetector = {
           framework: 'quarkus',
           handlerName: methodName ? textOf(methodName, source) : null,
           httpMethod: JAXRS_VERB_ANNOTATIONS[verbAnn.name],
-          routePattern: joinRoute(classPrefix, subRoute),
+          routePattern,
           entryPointType: 'http_route',
-          classification,
-          authenticated: !!authMechanism,
-          authMechanism,
-          middlewareChain: null,
+          classification: result.classification,
+          authenticated: result.authenticated,
+          authMechanism: authMechanismHint,
+          middlewareChain: merged.vettedAuthTokens.length ? merged.vettedAuthTokens : null,
+          // Declaration-bound family — span always demotion-eligible (Sem 6).
+          handlerSpan: spanOfNode(member),
+          demotionEligible: true,
           metadata: { resource: className ? textOf(className, source) : null, annotation: verbAnn.name },
         });
       }

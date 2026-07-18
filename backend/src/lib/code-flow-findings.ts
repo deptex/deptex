@@ -16,6 +16,8 @@
  * `phase54_security_summary_code_flows.sql`.
  */
 
+import { entryPointClassForDto, type EntryPointClassification } from './entry-point-tag';
+
 export type FlowVulnClass =
   | 'sql_injection'
   | 'ssrf'
@@ -156,6 +158,12 @@ export interface DataFlowFinding {
   entry_point_line: number | null;
   entry_point_method: string | null;
   entry_point_tag: string | null;
+  /**
+   * The matched entry-point auth class parsed from `entry_point_tag`
+   * (`framework-route:<class>` → class; unmatched / legacy → null so the badge
+   * hides). Server-side parse via the duplicated `parseEntryPointTag` helper.
+   */
+  entry_point_class: EntryPointClassification | null;
   entry_point_code: string | null;
   sink_file: string | null;
   sink_line: number | null;
@@ -181,6 +189,7 @@ export function toDataFlowFinding(row: Record<string, any>): DataFlowFinding {
     entry_point_line: row.entry_point_line ?? null,
     entry_point_method: row.entry_point_method ?? null,
     entry_point_tag: row.entry_point_tag ?? null,
+    entry_point_class: entryPointClassForDto(row.entry_point_tag ?? null),
     entry_point_code: row.entry_point_code ?? null,
     sink_file: row.sink_file ?? null,
     sink_line: row.sink_line ?? null,

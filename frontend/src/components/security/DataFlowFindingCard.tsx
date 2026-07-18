@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { type DataFlowFinding, type ReachableFlow, type ReachableFlowNode } from '../../lib/api';
 import { PathCard } from './VulnerabilityOrgSidebarExpandedContent';
+import { EntryPointBadge } from './EntryPointBadge';
 import { cn, cleanFilePath } from '../../lib/utils';
 
 /** Expanded view for a first-party data-flow finding. The taint engine traced
@@ -15,23 +16,6 @@ const SEVERITY_BADGE: Record<DataFlowFinding['severity'], string> = {
   medium: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   low: 'bg-green-500/10 text-green-400 border-green-500/20',
 };
-
-/** `framework-input:PUBLIC_UNAUTH` → "Public · unauthenticated input". The tag
- *  is the entry-point class the engine attributed the source to. */
-function entryPointClassLabel(tag: string | null): string | null {
-  if (!tag) return null;
-  const cls = tag.includes(':') ? tag.split(':').pop()! : tag;
-  switch (cls.toUpperCase()) {
-    case 'PUBLIC_UNAUTH':
-      return 'Public · unauthenticated input';
-    case 'PUBLIC_AUTH':
-      return 'Authenticated request input';
-    case 'INTERNAL':
-      return 'Internal input';
-    default:
-      return cls.replace(/_/g, ' ').toLowerCase();
-  }
-}
 
 /** The taint source's short label (e.g. `searchParams.msg`) — the first
  *  real (non-synthetic) hop the engine marked as the source. */
@@ -70,7 +54,6 @@ export default function DataFlowFindingCard({ finding }: { finding: DataFlowFind
     [finding],
   );
 
-  const epClass = entryPointClassLabel(finding.entry_point_tag);
   const src = sourceLabel(finding);
   const sink = finding.sink_method ?? 'a dangerous sink';
   const sinkLoc =
@@ -91,11 +74,9 @@ export default function DataFlowFindingCard({ finding }: { finding: DataFlowFind
         >
           {finding.title}
         </span>
-        {epClass && (
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
-            {epClass}
-          </span>
-        )}
+        {/* Per-flow entry-point auth class from the span-containment join. Hidden
+            for unmatched / legacy flows (entry_point_class null). */}
+        <EntryPointBadge classification={finding.entry_point_class} status={null} />
       </div>
 
       {/* Why it matters — a reachable taint path is stronger than a pattern

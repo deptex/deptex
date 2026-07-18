@@ -116,8 +116,17 @@ class BlogController extends AbstractController
     // commentForm has a docblock but NO @Route → must NOT be emitted.
     assert(!eps.some((e) => e.handlerName === 'commentForm'), 'commentForm (no @Route in docblock) → not emitted');
 
-    // Classification defaults to PUBLIC_UNAUTH (no security package imported).
-    assert(eps.every((e) => e.classification === 'PUBLIC_UNAUTH'), 'all entry points classified PUBLIC_UNAUTH');
+    // Route-level evidence classification (entry-point auth arc): commentNew
+    // carries @IsGranted("IS_AUTHENTICATED_FULLY") in its docblock →
+    // AUTH_INTERNAL; every other route has no security annotation → PUBLIC.
+    assert(
+      eps.filter((e) => e.handlerName === 'commentNew').every((e) => e.classification === 'AUTH_INTERNAL'),
+      'commentNew (@IsGranted IS_AUTHENTICATED_FULLY docblock) → AUTH_INTERNAL',
+    );
+    assert(
+      eps.filter((e) => e.handlerName !== 'commentNew').every((e) => e.classification === 'PUBLIC_UNAUTH'),
+      'annotation-less routes stay PUBLIC_UNAUTH',
+    );
     // Every entry point is a well-formed http_route row.
     assert(eps.every((e) => e.entryPointType === 'http_route' && e.framework === 'symfony'), 'all rows are symfony http_route');
     assert(eps.length === 5, `exactly 5 entry points emitted (got ${eps.length})`);

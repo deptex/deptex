@@ -1,6 +1,7 @@
 import type { Node, Tree } from 'web-tree-sitter';
 import type { ImportBinding } from '../../tree-sitter-extractor/languages/types';
-import type { EntryPointClassification, HttpMethod } from '../types';
+import type { EntryPointClassification, HandlerSpan, HttpMethod } from '../types';
+import { matchesAuthName } from './auth-evidence';
 
 export function textOf(node: Node | null, source: string): string {
   if (!node) return '';
@@ -117,6 +118,237 @@ export function decoratorsOf(funcDef: Node): Node[] {
     const c = parent.namedChild(i)!;
     if (c.type === 'decorator') out.push(c);
   }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Python route-auth evidence helpers (entry-point auth classification, T7c).
+// ---------------------------------------------------------------------------
+
+/**
+ * Full text of a decorator's inner expression — `login_required`,
+ * `jwt_required(optional=True)`, `auth.login_required` — used as the evidence
+ * token so kwarg-shaped vetoes (`optional=True`) are veto-visible.
+ */
+export function decoratorTokenText(dec: Node, source: string): string {
+  const inner = dec.namedChild(0);
+  return inner ? textOf(inner, source) : '';
+}
+
+/**
+ * FastAPI auth-dependency targets beyond the shared auth-name patterns:
+ * `Depends(get_current_user)` / `Depends(oauth2_scheme)` — canonical
+ * tutorial/idiom names for enforced authentication.
+ */
+export const FASTAPI_AUTH_DEP_RE = /current_?user|oauth2|api_?key|http_?bearer|security_?scheme/i;
+
+/**
+ * Collect `Depends(x)` / `Security(x)` target tokens from a subtree — used on
+ * a FastAPI function's parameter list and on a decorator/constructor
+ * `dependencies=[...]` kwarg value. `Security(...)` targets are ALWAYS
+ * security requirements; `Depends(...)` targets are evidence only when their
+ * name is auth-shaped (caller filters).
+ */
+export function collectDependencyTargets(root: Node | null, source: string): Array<{ kind: 'depends' | 'security'; target: string }> {
+  if (!root) return [];
+  const out: Array<{ kind: 'depends' | 'security'; target: string }> = [];
+  const walk = (n: Node): void => {
+    if (n.type === 'call') {
+      const fn = n.childForFieldName('function');
+      const fnName = fn?.type === 'identifier' ? textOf(fn, source) : null;
+      if (fnName === 'Depends' || fnName === 'Security') {
+        const args = n.childForFieldName('arguments');
+        const first = args?.namedChild(0);
+        const target = first ? textOf(first, source) : '';
+        out.push({ kind: fnName === 'Security' ? 'security' : 'depends', target });
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i)!);
+  };
+  walk(root);
+  return out;
+}
+
+/** The `name=` keyword-argument value node of a call's argument list. */
+export function keywordArgValue(callNode: Node | null, name: string, source: string): Node | null {
+  const args = callNode?.childForFieldName('arguments');
+  if (!args) return null;
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const c = args.namedChild(i)!;
+    if (c.type !== 'keyword_argument') continue;
+    const key = c.childForFieldName('name');
+    if (key && textOf(key, source) === name) return c.childForFieldName('value');
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Django view auth analysis (entry-point auth classification, T9).
+//
+// The auth evidence (@login_required / LoginRequiredMixin / permission_classes)
+// lives in views.py, next to the taint sources (`request.GET[...]`). We classify
+// each view here and bank per-view facts; postProcess re-homes them (urls.py is
+// not needed).
+// ---------------------------------------------------------------------------
+
+/** Django decorator names that enforce auth (beyond the shared name patterns). */
+const DJANGO_AUTH_DECORATORS = /login_required|permission_required|staff_member_required|user_passes_test/i;
+/** DRF/mixin auth base classes. */
+const DJANGO_AUTH_MIXINS = /LoginRequiredMixin|PermissionRequiredMixin|UserPassesTestMixin/;
+/** DRF permission classes that ENFORCE auth. */
+const DRF_AUTH_PERMISSION = /IsAuthenticated\b|IsAdminUser|DjangoModelPermissions|IsAuthenticatedOrReadOnly/;
+/** DRF permission classes / markers that make a view explicitly public. */
+const DRF_PUBLIC_PERMISSION = /AllowAny/;
+/** DRF conditional coverage (Sem 3): read-open, write-authed — does NOT cover. */
+const DRF_CONDITIONAL_PERMISSION = /IsAuthenticatedOrReadOnly/;
+/** Django HTTP-verb method names on class-based views. */
+const DJANGO_CBV_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options',
+  'list', 'create', 'retrieve', 'update', 'partial_update', 'destroy']);
+
+export interface DjangoViewFact {
+  name: string;
+  handlerSpan: HandlerSpan;
+  classification: EntryPointClassification;
+  demotionEligible: boolean;
+  middlewareChain: string[] | null;
+}
+
+/** Classify a decorator list (function views) → auth / public-override / neither. */
+function classifyDjangoDecorators(decorators: readonly Node[], source: string): {
+  authed: boolean; publicOverride: boolean; mechanism: string | null;
+} {
+  let authed = false;
+  let publicOverride = false;
+  let mechanism: string | null = null;
+  for (const dec of decorators) {
+    const text = decoratorTokenText(dec, source);
+    const callee = text.replace(/^@/, '').split('(')[0].trim();
+    // A DRF `permission_classes=[...]` kwarg carried on the decorator itself
+    // (e.g. `@action(detail=False, permission_classes=[IsAuthenticated, ...])`)
+    // is real enforcement — honor its AllowAny / conditional carve-outs exactly
+    // like a class-body `permission_classes`.
+    const permKwarg = /permission_classes\s*=\s*(\[[^\]]*\]|\([^)]*\))/.exec(text);
+    if (permKwarg) {
+      const permText = permKwarg[1];
+      if (DRF_PUBLIC_PERMISSION.test(permText)) publicOverride = true;
+      else if (DRF_AUTH_PERMISSION.test(permText) && !DRF_CONDITIONAL_PERMISSION.test(permText)) {
+        authed = true;
+        mechanism = callee;
+      }
+      continue;
+    }
+    // Otherwise match the loose auth-name pattern against the decorator's CALLEE
+    // NAME only — never arbitrary argument text. A test-only decorator like
+    // `@override_settings(REST_FRAMEWORK={"DEFAULT_AUTHENTICATION_CLASSES": [...]})`
+    // must not read as auth just because its kwargs mention authentication. The
+    // specific DJANGO_AUTH_DECORATORS names still match on the full text so
+    // `@method_decorator(login_required)` keeps classifying.
+    if (DJANGO_AUTH_DECORATORS.test(text) || (matchesAuthName(callee) && !/optional/i.test(text))) {
+      authed = true;
+      mechanism = callee;
+    }
+  }
+  return { authed: authed && !publicOverride, publicOverride, mechanism };
+}
+
+/** DRF `permission_classes = [...]` (or `.permission_classes`) on a class body. */
+function classBodyPermissionEvidence(body: Node, source: string): {
+  authed: boolean; publicOverride: boolean; conditional: boolean; mechanism: string | null;
+} {
+  let authed = false;
+  let publicOverride = false;
+  let conditional = false;
+  let mechanism: string | null = null;
+  for (let i = 0; i < body.namedChildCount; i++) {
+    const stmt = body.namedChild(i)!;
+    if (stmt.type !== 'expression_statement') continue;
+    const assign = stmt.namedChild(0);
+    if (assign?.type !== 'assignment') continue;
+    const left = assign.childForFieldName('left');
+    if (!left || textOf(left, source) !== 'permission_classes') continue;
+    const right = assign.namedChild(1);
+    const text = right ? textOf(right, source) : '';
+    if (DRF_CONDITIONAL_PERMISSION.test(text)) { conditional = true; }
+    if (DRF_PUBLIC_PERMISSION.test(text) || /^\[\s*\]$/.test(text.trim())) { publicOverride = true; }
+    else if (DRF_AUTH_PERMISSION.test(text) && !DRF_CONDITIONAL_PERMISSION.test(text)) { authed = true; mechanism = 'permission_classes'; }
+  }
+  return { authed, publicOverride, conditional, mechanism };
+}
+
+/**
+ * Analyze a Python file's Django views → per-view auth classification.
+ * Function views: classified from their decorators, span = the def. Class-based
+ * views: classified from auth mixins + DRF permission_classes; each HTTP-verb
+ * method gets a record with the class classification + the method's span, plus a
+ * whole-class record for the class body span.
+ */
+export function analyzeDjangoViews(root: Node, source: string): DjangoViewFact[] {
+  const out: DjangoViewFact[] = [];
+
+  const walk = (node: Node): void => {
+    if (node.type === 'decorated_definition') {
+      const def = node.namedChild(node.namedChildCount - 1);
+      if (def?.type === 'function_definition') {
+        const decorators = decoratorsOf(def);
+        const { authed, mechanism } = classifyDjangoDecorators(decorators, source);
+        if (authed) {
+          const nameNode = def.childForFieldName('name');
+          out.push({
+            name: nameNode ? textOf(nameNode, source) : '(view)',
+            handlerSpan: { startLine: def.startPosition.row + 1, endLine: def.endPosition.row + 1 },
+            classification: 'AUTH_INTERNAL',
+            demotionEligible: true,
+            middlewareChain: mechanism ? [mechanism] : null,
+          });
+        }
+      }
+    }
+    if (node.type === 'class_definition') {
+      const superclasses = node.childForFieldName('superclasses');
+      const superText = superclasses ? textOf(superclasses, source) : '';
+      const body = node.childForFieldName('body');
+      const mixinAuthed = DJANGO_AUTH_MIXINS.test(superText);
+      const perm = body ? classBodyPermissionEvidence(body, source) : { authed: false, publicOverride: false, conditional: false, mechanism: null };
+      const authed = (mixinAuthed || perm.authed) && !perm.publicOverride && !perm.conditional;
+      if (authed && body) {
+        const mechanism = perm.mechanism ?? (mixinAuthed ? superText.match(DJANGO_AUTH_MIXINS)?.[0] ?? 'auth_mixin' : 'auth_mixin');
+        // Each HTTP-verb method → record with the method's span.
+        let sawMethod = false;
+        for (let i = 0; i < body.namedChildCount; i++) {
+          const m = body.namedChild(i)!;
+          const fnDef = m.type === 'function_definition' ? m
+            : (m.type === 'decorated_definition' && m.namedChild(m.namedChildCount - 1)?.type === 'function_definition'
+              ? m.namedChild(m.namedChildCount - 1)! : null);
+          if (!fnDef) continue;
+          const nm = fnDef.childForFieldName('name');
+          const methodName = nm ? textOf(nm, source) : '';
+          if (!DJANGO_CBV_METHODS.has(methodName)) continue;
+          sawMethod = true;
+          out.push({
+            name: methodName,
+            handlerSpan: { startLine: fnDef.startPosition.row + 1, endLine: fnDef.endPosition.row + 1 },
+            classification: 'AUTH_INTERNAL',
+            demotionEligible: true,
+            middlewareChain: [mechanism],
+          });
+        }
+        // Whole-class fallback span (covers CBVs whose source fires outside a
+        // verb method, e.g. get_queryset).
+        if (!sawMethod) {
+          const nameNode = node.childForFieldName('name');
+          out.push({
+            name: nameNode ? textOf(nameNode, source) : '(view)',
+            handlerSpan: { startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1 },
+            classification: 'AUTH_INTERNAL',
+            demotionEligible: true,
+            middlewareChain: [mechanism],
+          });
+        }
+      }
+    }
+    for (let i = 0; i < node.namedChildCount; i++) walk(node.namedChild(i)!);
+  };
+  walk(root);
   return out;
 }
 

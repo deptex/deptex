@@ -1,5 +1,8 @@
-import type { DetectorContext, EntryPoint, FrameworkDetector } from '../types';
+import type { Node } from 'web-tree-sitter';
+import type { CtxOnlyRouteRecord, DetectorContext, EntryPoint, FrameworkDetector } from '../types';
+import type { ExtractedFile } from '../../tree-sitter-extractor/languages/types';
 import {
+  analyzeDjangoViews,
   classifyFromAuth,
   detectPyAuthMechanism,
   lineOf,
@@ -30,6 +33,11 @@ export const djangoDetector: FrameworkDetector = {
     const authMechanism = detectPyAuthMechanism(file.imports);
     const classification = classifyFromAuth(authMechanism);
     const entryPoints: EntryPoint[] = [];
+
+    // Bank per-view auth facts from this file's Django views (the cross-file
+    // leg, T9). Taint sources fire inside the view, so classifying + re-homing
+    // here demotes those flows — no urls.py resolution needed.
+    bankDjangoViewFacts(tree.rootNode, source, file);
 
     walkTree(tree, (node) => {
       if (node.type !== 'assignment') return;
@@ -81,4 +89,48 @@ export const djangoDetector: FrameworkDetector = {
 
     return entryPoints;
   },
+  /**
+   * Cross-file pass (T9): re-home every file's banked Django view auth facts
+   * into ctx-only route records keyed on the view file. Added to
+   * `ctx.entryPointAuth` only — never persisted.
+   */
+  postProcess(files: readonly ExtractedFile[]): CtxOnlyRouteRecord[] {
+    const out: CtxOnlyRouteRecord[] = [];
+    for (const file of files) {
+      const facts = file.authFacts;
+      if (!facts || facts.framework !== 'django') continue;
+      for (const action of facts.actions) {
+        if (action.classification === 'PUBLIC_UNAUTH' || action.classification === 'UNKNOWN') continue;
+        out.push({
+          filePath: facts.filePath,
+          classification: action.classification,
+          handlerSpan: action.handlerSpan,
+          demotionEligible: action.demotionEligible,
+          routePattern: action.routePattern,
+          middlewareChain: action.middlewareChain,
+          authMechanism: action.authMechanism,
+        });
+      }
+    }
+    return out;
+  },
 };
+
+/** Bank per-view auth facts from every Django view in the file. */
+function bankDjangoViewFacts(root: Node, source: string, file: ExtractedFile): void {
+  const views = analyzeDjangoViews(root, source);
+  if (views.length === 0) return;
+  file.authFacts = {
+    framework: 'django',
+    filePath: file.filePath,
+    actions: views.map((v) => ({
+      name: v.name,
+      handlerSpan: v.handlerSpan,
+      classification: v.classification,
+      demotionEligible: v.demotionEligible,
+      routePattern: null,
+      middlewareChain: v.middlewareChain,
+      authMechanism: v.middlewareChain?.[0] ?? null,
+    })),
+  };
+}

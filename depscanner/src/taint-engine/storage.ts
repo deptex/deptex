@@ -47,9 +47,48 @@ import * as fs from 'fs';
 import type { Storage } from '../storage';
 import type { Flow } from './flow';
 import type { FilterTriple, TripleResult } from './fp-filter';
+import {
+  matchFlowToRoutes,
+  TAG_LEGACY_PUBLIC,
+  type EntryPointAuthMap,
+} from './match-flow-to-routes';
 
 function isFilterTriple(v: TripleResult): v is FilterTriple {
   return v.verdict === 'kept' || v.verdict === 'rejected';
+}
+
+/**
+ * Detector-coerced flows (sanitizer-absence / insecure-default / regex-literal)
+ * are single-hop synthetic flows whose entry point == sink (see detector-flows.ts).
+ * Real taint flows always begin at a `source` node (propagate-core `sinkHitToFlow`
+ * builds `flow_nodes` from `trace.path`, whose element 0 is the source). So a flow
+ * is detector-coerced iff its only node is a sink. These keep the legacy constant
+ * tag — their synthetic entry point isn't a real request-input surface, so the
+ * span join (which is about request auth) must not classify them.
+ */
+export function isDetectorCoercedFlow(flow: Flow): boolean {
+  return flow.flow_nodes.length === 1 && flow.flow_nodes[0]?.kind === 'sink';
+}
+
+/**
+ * Decide a flow's `entry_point_tag` (T3, Core Semantics 6). The single source of
+ * truth `writeFlows` calls per flow — extracted so the stamping matrix is
+ * unit-testable without a store.
+ *
+ *   - detector-coerced flow, or no auth map → legacy constant (not joinable).
+ *   - otherwise join to the route whose handler span contains the source line:
+ *     `framework-route:<class>` on a span hit (`matched`), else
+ *     `framework-input:unmatched`.
+ */
+export function computeEntryPointTag(
+  flow: Flow,
+  authMap: EntryPointAuthMap | undefined,
+): { tag: string; joinable: boolean; matched: boolean } {
+  if (!authMap || isDetectorCoercedFlow(flow)) {
+    return { tag: TAG_LEGACY_PUBLIC, joinable: false, matched: false };
+  }
+  const { stampTag } = matchFlowToRoutes(authMap, flow.entry_point_file, flow.entry_point_line);
+  return { tag: stampTag, joinable: true, matched: stampTag.startsWith('framework-route:') };
 }
 
 /**
@@ -109,6 +148,15 @@ export interface WriteFlowsResult {
   attempted: number;
   written: number;
   errors: string[];
+  /**
+   * Entry-point auth join coverage (T2/T3 KPI). `joinable` = taint-regime flows
+   * (detector-coerced flows excluded, they keep the legacy constant); `matched` =
+   * of those, how many fell inside a detected handler span (stamped a
+   * `framework-route:*` evidence tag). The step logs `matched/joinable` as the
+   * join-coverage rate. Both 0 when no auth map was supplied.
+   */
+  joinable: number;
+  matched: number;
 }
 
 export interface ResolvedDep {
@@ -161,6 +209,16 @@ export interface WriteFlowsOptions {
    * always pass it for production extractions.
    */
   workspaceRoot?: string;
+  /**
+   * Entry-point auth classification (T3). The per-file route-auth map built at
+   * usage_extraction (`ctx.entryPointAuth`). When supplied, each taint-regime
+   * flow is stamped from the route whose handler span contains its source line
+   * (`matchFlowToRoutes`); no span match → `framework-input:unmatched` (PUBLIC
+   * weight, no merge vote). Detector-coerced flows always keep the legacy
+   * constant. When omitted, every flow keeps the legacy constant (pre-feature
+   * behavior — used by tests + the inert path).
+   */
+  entryPointAuth?: EntryPointAuthMap;
 }
 
 /**
@@ -174,7 +232,10 @@ export async function writeFlows(
   const { projectId, extractionRunId, flows, workspaceRoot } = options;
   const resolveDep = options.resolveDep ?? fallbackUnresolvedResolveDep;
   const verdicts = options.filterVerdicts;
+  const authMap = options.entryPointAuth;
   const errors: string[] = [];
+  let joinable = 0;
+  let matched = 0;
 
   const rows: Record<string, unknown>[] = [];
   // Per-call cache of file line-arrays so a flow set sharing a source file
@@ -183,6 +244,13 @@ export async function writeFlows(
   for (const flow of flows) {
     const dep = resolveDep(flow);
     if (!dep) continue;
+    // Entry-point auth stamp (T3, Core Semantics 6). Detector-coerced flows +
+    // the no-map path keep the legacy constant; every other flow joins to the
+    // route whose handler span contains its source line.
+    const stamp = computeEntryPointTag(flow, authMap);
+    const entryPointTag = stamp.tag;
+    if (stamp.joinable) joinable++;
+    if (stamp.matched) matched++;
     // Capture the source line + the sink call line off the clone (best-effort)
     // so the detail view can show the code without a live repo fetch. The line
     // numbers match the scanned commit.
@@ -267,12 +335,14 @@ export async function writeFlows(
       entry_point_file: flow.entry_point_file,
       entry_point_method: flow.entry_point_method,
       entry_point_line: flow.entry_point_line,
-      // entry_point_tag feeds EPD's heuristic classifier the same way
-      // reachability_rules does: framework-input:<class>. The taint engine
-      // doesn't yet split by request-handler class (M5 may), so we tag all
-      // engine flows with PUBLIC_UNAUTH which matches the spec's source
-      // patterns (req.body etc).
-      entry_point_tag: 'framework-input:PUBLIC_UNAUTH',
+      // entry_point_tag feeds EPD's classifier + aggregator. Stamped per-flow
+      // from the entry-point auth join (T3): `framework-route:<class>` for a
+      // flow whose source line falls inside a detected handler span,
+      // `framework-input:unmatched` when it doesn't, and the legacy
+      // `framework-input:PUBLIC_UNAUTH` constant for detector-coerced flows or
+      // when no auth map was supplied. Only `framework-route:*` tags vote in the
+      // merge (parseEntryPointTag); unmatched/legacy carry PUBLIC weight only.
+      entry_point_tag: entryPointTag,
       entry_point_code: entryPointCode,
       sink_file: flow.sink_file,
       sink_method: flow.sink_method,
@@ -305,7 +375,7 @@ export async function writeFlows(
       written += chunk.length;
     }
   }
-  return { attempted: rows.length, written, errors };
+  return { attempted: rows.length, written, errors, joinable, matched };
 }
 
 /**

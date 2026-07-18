@@ -56,6 +56,7 @@ import {
 import type { Storage } from '../storage';
 import { checkScanJobCostCap, logScanJobCostCapExceeded, recordScanJobAiUsage } from '../ai-telemetry';
 import { runEngineCoreInWorker } from './engine-worker-host';
+import { matchFlowToRoutes, type EntryPointAuthMap } from './match-flow-to-routes';
 
 export interface RunEngineOptions {
   /** Absolute path to the cloned repo / workspace root. */
@@ -244,6 +245,13 @@ export interface FpFilterContext {
    * accounting in that case.
    */
   jobId?: string;
+  /**
+   * Entry-point auth map (T5). When present, each sub-threshold flow routed to
+   * the model gets its span-matched route's RAW middleware chain injected into
+   * the prompt so the model can classify the endpoint from real auth evidence.
+   * Absent → no route context (pre-feature behavior).
+   */
+  entryPointAuth?: EntryPointAuthMap;
 }
 
 export interface AiFilterStats {
@@ -266,6 +274,12 @@ export interface AiFilterStats {
   verdicts: Map<string, TripleResult>;
   /** Flows the model truncated (Patch 7 / max_tokens overflow). */
   flowsTruncated: number;
+  /**
+   * Flows for which a span-matched route context was injected into the prompt
+   * (T5). The T13(d) filter-engaged scan asserts this is > 0 to prove the
+   * ctx→fp-filter threading actually fired end-to-end.
+   */
+  routeContextInjected: number;
   durationMs: number;
 }
 
@@ -834,6 +848,7 @@ async function runFpFilterStage(
     costUsd: 0,
     verdicts: new Map(),
     flowsTruncated: 0,
+    routeContextInjected: 0,
     durationMs: 0,
   };
 
@@ -979,10 +994,19 @@ async function runFpFilterStage(
     // The reservation above is held against the per-org Redis bucket. If
     // filterFlow throws, the refund path below never runs and the full
     // perFlowEstimate leaks permanently — refund it on the throw path.
+    // Span-matched route context (T5): the narrowest handler span containing the
+    // flow's source line, injected as raw middleware evidence. Null for unmatched
+    // flows (no injection). Paths are already project-relative POSIX at this
+    // stage (the callgraph stores path.relative(rootDir, …)), matching the map.
+    const contextRoute = fp.entryPointAuth
+      ? matchFlowToRoutes(fp.entryPointAuth, f.entry_point_file, f.entry_point_line).contextRoute
+      : null;
+    if (contextRoute) baseStats.routeContextInjected++;
+
     let result;
     try {
       result = await filterFlow(
-        { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn },
+        { flow: f, workspaceRoot, apiKey, model: fp.model, specs, onWarn, routeContext: contextRoute },
         logger,
         {
           organizationId: fp.organizationId,

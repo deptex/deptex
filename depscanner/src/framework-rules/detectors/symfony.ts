@@ -2,13 +2,14 @@ import type { Node } from 'web-tree-sitter';
 import type { DetectorContext, EntryPoint, FrameworkDetector, HttpMethod } from '../types';
 import {
   PHP_HTTP_METHODS,
-  classifyFromAuth,
   detectPhpAuthMechanism,
   lineOf,
+  phpAttributesOn,
   phpStringLiteral,
   textOf,
   walkTree,
 } from '../util/php';
+import { classifyRoute, spanOfNode } from '../util/auth-evidence';
 
 // Symfony route declarations come in two flavours; we detect both:
 //
@@ -36,6 +37,54 @@ interface RouteSpec {
   methods: HttpMethod[];
 }
 
+/** Symfony security evidence gathered from a declaration (attributes + docblock). */
+interface SymfonySecurityEvidence {
+  vettedAuthTokens: string[];
+  publicOverrides: string[];
+}
+
+/** Grant subjects that make an IsGranted route explicitly public. */
+const PUBLIC_GRANT_RE = /PUBLIC_ACCESS|IS_AUTHENTICATED_ANONYMOUSLY/i;
+/** Expression markers that make a Security() expression public. */
+const PUBLIC_EXPR_RE = /PUBLIC_ACCESS|is_anonymous\s*\(|IS_AUTHENTICATED_ANONYMOUSLY/i;
+
+/**
+ * Security evidence from `#[IsGranted(...)]` / `#[Security("...")]` attributes
+ * and the legacy `@IsGranted(...)` / `@Security("...")` docblock annotations
+ * (Sem 1/2). `IsGranted('PUBLIC_ACCESS')` / anonymous grants are explicit-public
+ * overrides; any other grant/expression is a positive auth constraint.
+ */
+function symfonySecurityEvidence(decl: Node, source: string, docblock: string | null): SymfonySecurityEvidence {
+  const vettedAuthTokens: string[] = [];
+  const publicOverrides: string[] = [];
+
+  for (const attr of phpAttributesOn(decl, source)) {
+    if (attr.name === 'IsGranted') {
+      const subject = attr.firstStringArg ?? attr.argsText;
+      if (PUBLIC_GRANT_RE.test(subject)) publicOverrides.push(`IsGranted(${subject})`);
+      else if (subject) vettedAuthTokens.push(`IsGranted(${subject})`);
+    } else if (attr.name === 'Security') {
+      const expr = attr.firstStringArg ?? attr.argsText;
+      if (PUBLIC_EXPR_RE.test(expr)) publicOverrides.push(`Security(${expr})`);
+      else if (expr) vettedAuthTokens.push(`Security(${expr})`);
+    }
+  }
+
+  if (docblock) {
+    const re = /@(IsGranted|Security)\s*\(\s*(['"])((?:\\.|(?!\2)[^\\])*)\2/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(docblock)) !== null) {
+      const kind = m[1];
+      const subject = m[3];
+      const isPublic = kind === 'IsGranted' ? PUBLIC_GRANT_RE.test(subject) : PUBLIC_EXPR_RE.test(subject);
+      if (isPublic) publicOverrides.push(`${kind}(${subject})`);
+      else vettedAuthTokens.push(`${kind}(${subject})`);
+    }
+  }
+
+  return { vettedAuthTokens, publicOverrides };
+}
+
 export const symfonyDetector: FrameworkDetector = {
   name: 'symfony',
   displayName: 'Symfony',
@@ -43,8 +92,8 @@ export const symfonyDetector: FrameworkDetector = {
   triggerImports: ['Symfony\\Component\\Routing\\Annotation\\Route', 'Symfony'],
   detect(ctx: DetectorContext): EntryPoint[] {
     const { tree, file, source } = ctx;
-    const authMechanism = detectPhpAuthMechanism(file.imports);
-    const classification = classifyFromAuth(authMechanism);
+    // Import hint only — classification comes from IsGranted/Security evidence.
+    const authMechanismHint = detectPhpAuthMechanism(file.imports);
     const entryPoints: EntryPoint[] = [];
 
     walkTree(tree, (node) => {
@@ -52,32 +101,30 @@ export const symfonyDetector: FrameworkDetector = {
 
       // Class-level route prefix: attribute first, then docblock fallback.
       let classRoute: string | null = null;
+      let classEvidence: SymfonySecurityEvidence = { vettedAuthTokens: [], publicOverrides: [] };
       const klass = node.parent?.parent; // method → declaration_list → class_declaration
       if (klass?.type === 'class_declaration') {
+        const classDoc = precedingDocblock(klass, source);
         const classAttr = findRouteAttribute(klass, source);
         classRoute = classAttr?.path ?? null;
-        if (classRoute === null) {
-          const classDoc = precedingDocblock(klass, source);
-          if (classDoc) {
-            const prefixRoute = parseDocblockRoutes(classDoc).find((r) => r.path);
-            classRoute = prefixRoute?.path ?? null;
-          }
+        if (classRoute === null && classDoc) {
+          const prefixRoute = parseDocblockRoutes(classDoc).find((r) => r.path);
+          classRoute = prefixRoute?.path ?? null;
         }
+        classEvidence = symfonySecurityEvidence(klass, source, classDoc);
       }
 
       // Method-level routes. Prefer the native #[Route] attribute; only fall
       // back to the docblock when no attribute route is present, so a method
       // carrying BOTH forms is never double-counted.
       const routeSpecs: RouteSpec[] = [];
+      const methodDoc = precedingDocblock(node, source);
       const methodAttr = findRouteAttribute(node, source);
       if (methodAttr?.path) {
         routeSpecs.push({ path: methodAttr.path, methods: methodAttr.methods });
-      } else {
-        const methodDoc = precedingDocblock(node, source);
-        if (methodDoc) {
-          for (const spec of parseDocblockRoutes(methodDoc)) {
-            if (spec.path) routeSpecs.push(spec);
-          }
+      } else if (methodDoc) {
+        for (const spec of parseDocblockRoutes(methodDoc)) {
+          if (spec.path) routeSpecs.push(spec);
         }
       }
 
@@ -86,8 +133,20 @@ export const symfonyDetector: FrameworkDetector = {
       const nameNode = node.childForFieldName('name');
       const handlerName = nameNode ? textOf(nameNode, source) : null;
 
+      // Class + method security evidence. Method-level public override beats
+      // class-level auth (Sem 2, fail-safe direction).
+      const methodEvidence = symfonySecurityEvidence(node, source, methodDoc);
+      const vettedAuthTokens = [...classEvidence.vettedAuthTokens, ...methodEvidence.vettedAuthTokens];
+      const publicOverrides = [...classEvidence.publicOverrides, ...methodEvidence.publicOverrides];
+
       for (const { path, methods } of routeSpecs) {
         const fullPath = classRoute ? joinRoute(classRoute, path) : path;
+        const result = classifyRoute({
+          vettedAuthTokens,
+          publicOverrides,
+          routePattern: fullPath,
+          centralizedOnly: false,
+        });
         const emitted = methods.length > 0 ? methods : [null as HttpMethod | null];
         for (const m of emitted) {
           entryPoints.push({
@@ -98,10 +157,13 @@ export const symfonyDetector: FrameworkDetector = {
             httpMethod: m,
             routePattern: fullPath,
             entryPointType: 'http_route',
-            classification,
-            authenticated: !!authMechanism,
-            authMechanism,
-            middlewareChain: null,
+            classification: result.classification,
+            authenticated: result.authenticated,
+            authMechanism: authMechanismHint,
+            middlewareChain: vettedAuthTokens.length ? vettedAuthTokens : null,
+            // Declaration-bound family — span always demotion-eligible (Sem 6).
+            handlerSpan: spanOfNode(node),
+            demotionEligible: true,
             metadata: null,
           });
         }

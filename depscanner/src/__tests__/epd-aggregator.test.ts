@@ -72,22 +72,162 @@ describe('aggregateEpdFromFlows — empty + suppression states', () => {
   });
 });
 
-describe('aggregateEpdFromFlows — confidence threshold parity', () => {
-  it(`drops flows whose sanitization confidence < ${MAX_VOTE_THRESHOLD}`, () => {
+describe('aggregateEpdFromFlows — two-vote-set split (Core Semantics 7)', () => {
+  // The AI endpoint verdict is gated by the SAME sanitization-confidence bar as
+  // the sanitization vote, so a no-auth-map scan scores identically to pre-arc: a
+  // sub-threshold flow with no route evidence casts no endpoint vote. But
+  // framework-route EVIDENCE is independent of sanitization confidence, so a
+  // sub-threshold flow carrying a voting `framework-route:` tag STILL demotes.
+  it(`sub-threshold flow's AI endpoint verdict is gated → no vote without evidence`, () => {
     const lowConf = makeVerdict({
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
       sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH', // legacy constant, no vote
     });
     const r = aggregateEpdFromFlows([lowConf], 5.0, 'confirmed', true);
+    // No auth evidence + sub-threshold AI verdict → no endpoint vote → identical to
+    // the legacy coupled filter (the no-auth-map path is unchanged).
     expect(r.epd_status).toBe('no_flows_evaluated');
   });
 
-  it(`keeps flows whose sanitization confidence === ${MAX_VOTE_THRESHOLD}`, () => {
+  it(`sub-threshold flow with framework-route EVIDENCE still votes (evidence is unconditional)`, () => {
+    const lowConfAuthed = makeVerdict({
+      endpoint: { classification: 'UNKNOWN' },
+      sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-route:auth_internal', // real route evidence, votes
+    });
+    const r = aggregateEpdFromFlows([lowConfAuthed], 5.0, 'confirmed', true);
+    // Evidence demotes even below the AI confidence bar.
+    expect(r.epd_status).toBe('flow_aggregated');
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    // Sanitization still gated — a sub-threshold sanitizer is not trusted.
+    expect(r.is_sanitized).toBe(false);
+  });
+
+  it('an auth demotion re-weights the entry point but never mutates reachability_status', () => {
+    const shared = { sanitization: { is_sanitized: false, confidence: 0.9 }, endpoint: { classification: 'UNKNOWN' as const } };
+    const asPublic = aggregateEpdFromFlows(
+      [makeVerdict({ ...shared, entryPointTag: 'framework-input:PUBLIC_UNAUTH' })], 5.0, 'confirmed', true);
+    const asAuthed = aggregateEpdFromFlows(
+      [makeVerdict({ ...shared, entryPointTag: 'framework-route:auth_internal' })], 5.0, 'confirmed', true);
+    // The evidence demotes the entry-point class...
+    expect(asAuthed.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(asPublic.entry_point_classification).not.toBe('AUTH_INTERNAL');
+    // ...but reachability_status is derived from (reachabilityLevel, isReachable)
+    // only, so it is identical — EPD auth scoring never touches the reachability
+    // tier (a demotion can never hide a finding from the visible set).
+    expect(asAuthed.reachability_status).toBe(asPublic.reachability_status);
+  });
+
+  it(`sub-threshold flow with NO endpoint + NO evidence contributes nothing`, () => {
+    const lowConfNoEndpoint = makeVerdict({
+      endpoint: null,
+      sanitization: { is_sanitized: true, confidence: MAX_VOTE_THRESHOLD - 0.01 },
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH', // legacy constant, no vote
+    });
+    const r = aggregateEpdFromFlows([lowConfNoEndpoint], 5.0, 'confirmed', true);
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it(`keeps flows whose sanitization confidence === ${MAX_VOTE_THRESHOLD} (sanitization voter)`, () => {
     const exact = makeVerdict({
       sanitization: { is_sanitized: false, confidence: MAX_VOTE_THRESHOLD },
     });
     const r = aggregateEpdFromFlows([exact], 5.0, 'confirmed', true);
     expect(r.epd_status).toBe('flow_aggregated');
     expect(r.flowsAggregated).toBe(1);
+  });
+});
+
+describe('aggregateEpdFromFlows — evidence merge (Core Semantics 7 matrix)', () => {
+  // matched route evidence rides on entryPointTag as framework-route:<class>.
+  const ev = (cls: 'auth_internal' | 'offline_worker' | 'public_unauth') => `framework-route:${cls}`;
+
+  it('verdict-less + evidence-authed + sanitization-filtered → demotes (intended expansion)', () => {
+    // No AI verdict at all (endpoint null, sanitization null → not a sanitization
+    // voter), but the flow's source fell inside an authed handler span.
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('flow_aggregated');
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(r.entry_point_weight).toBe(0.5); // demoted from the UNKNOWN 1.0 it'd get today
+    expect(r.is_sanitized).toBe(false);
+  });
+
+  it('AI-public verdict is never overridden by evidence-authed (Locked-6)', () => {
+    const f = makeVerdict({
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('PUBLIC_UNAUTH');
+  });
+
+  it('evidence-offline_worker demotes a verdict-less flow to weight 0.2', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('offline_worker'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('OFFLINE_WORKER');
+    expect(r.entry_point_weight).toBe(0.2);
+  });
+
+  it('unmatched tag never votes (verdict-less unmatched flow contributes nothing)', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: 'framework-input:unmatched',
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it('legacy constant tag never votes (detector-coerced flow contributes nothing)', () => {
+    const f = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: 'framework-input:PUBLIC_UNAUTH',
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.epd_status).toBe('no_flows_evaluated');
+  });
+
+  it('suppressed-public + surviving evidence-authed → AUTH_INTERNAL (suppressed excluded)', () => {
+    const suppressedPublic = makeVerdict({
+      isSuppressed: true,
+      endpoint: { classification: 'PUBLIC_UNAUTH' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+    });
+    const authed = makeVerdict({
+      endpoint: null,
+      sanitization: null,
+      filterVerdict: null,
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([suppressedPublic, authed], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+  });
+
+  it('evidence-authed + AI-authed agree → AUTH_INTERNAL (worst-case of equals)', () => {
+    const f = makeVerdict({
+      endpoint: { classification: 'AUTH_INTERNAL' },
+      sanitization: { is_sanitized: false, confidence: 0.9 },
+      entryPointTag: ev('auth_internal'),
+    });
+    const r = aggregateEpdFromFlows([f], 10.0, 'confirmed', true);
+    expect(r.entry_point_classification).toBe('AUTH_INTERNAL');
+    expect(r.entry_point_weight).toBe(0.5);
   });
 });
 
