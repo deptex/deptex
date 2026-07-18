@@ -18,6 +18,53 @@ function requireInternalKey(req: express.Request, res: express.Response, next: e
   next();
 }
 
+/**
+ * Post an honest machine-crash failure to a task chat — a lead-in beat, a failed
+ * step line, and the FixFailureCard (shaped exactly like the worker's
+ * postFailureCard so the frontend rehydrates it), and stamp failure_details on
+ * the row so the card renders real copy. Ordered by insert time so the chat
+ * reads: lead-in → failed step → card, right after the crashed run's last beat.
+ */
+async function postCrashFailureToChat(
+  supabase: typeof getSupabaseClient,
+  job: { id: string; thread_id: string },
+): Promise<void> {
+  const threadId = job.thread_id;
+  const headline = 'The run stopped unexpectedly';
+  const explanation =
+    'The machine running this task stopped before it could finish — this is on my side, not a problem with your code.';
+  const nextStep = "Reply and I'll pick it up again from where I left off.";
+  const leadIn = 'Something interrupted my run on this one before I could wrap up.';
+
+  await supabase
+    .from('project_security_fixes')
+    .update({ failure_details: { category: 'machine_crash', headline, explanation, nextStep } })
+    .eq('id', job.id);
+
+  await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'assistant',
+    content: leadIn,
+    metadata: { parts: [{ type: 'text', text: leadIn }] },
+  });
+  await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'assistant',
+    content: 'Run interrupted',
+    metadata: { parts: [{ type: 'step', icon: 'failed', label: 'Run interrupted', status: 'done' }] },
+  });
+  await supabase.from('aegis_chat_messages').insert({
+    thread_id: threadId,
+    role: 'assistant',
+    content: nextStep,
+    metadata: {
+      parts: [
+        { type: 'tool-result', toolCallId: job.id, toolName: 'apply_fix', result: { fixId: job.id, failed: true }, isError: false },
+      ],
+    },
+  });
+}
+
 router.use(requireInternalKey);
 
 /**
@@ -73,6 +120,7 @@ router.post('/fix-jobs', async (_req, res) => {
     // via wake_agent_fix. Woken rows land 'approved', so the orphaned-approved
     // sweep below boots a machine for them in this same cron pass.
     let crashWakes = 0;
+    const wokenIds = new Set<string>();
     if (Array.isArray(failed)) {
       for (const job of failed) {
         try {
@@ -100,6 +148,7 @@ router.post('/fix-jobs', async (_req, res) => {
           const { data: wokeId } = await supabase.rpc('wake_agent_fix', { p_fix_id: job.id });
           if (!wokeId) continue;
           crashWakes++;
+          wokenIds.add(job.id);
           await supabase.from('extraction_logs').insert({
             project_id: job.project_id,
             run_id: job.run_id,
@@ -109,6 +158,23 @@ router.post('/fix-jobs', async (_req, res) => {
           }).then(() => {});
         } catch (e: any) {
           console.error('[FIX-RECOVERY] crash-wake check failed for fix', job?.id, e?.message ?? e);
+        }
+      }
+    }
+
+    // Failure-experience contract on the crash path: a machine crash otherwise
+    // ends the task chat mid-narration ("Reading src/…") while the sidebar
+    // silently flips to failed — no card, no honest "here's what happened". For
+    // each just-failed AGENT row with a task thread that we did NOT crash-wake
+    // above, post an honest failure card + set failure_details (the RPC leaves
+    // it null) so the chat + FixFailureCard read truthfully. Best-effort.
+    if (Array.isArray(failed)) {
+      for (const job of failed) {
+        if (job.strategy !== 'agent' || !job.thread_id || wokenIds.has(job.id)) continue;
+        try {
+          await postCrashFailureToChat(supabase, job);
+        } catch (e: any) {
+          console.error('[FIX-RECOVERY] crash failure-card post failed for fix', job?.id, e?.message ?? e);
         }
       }
     }

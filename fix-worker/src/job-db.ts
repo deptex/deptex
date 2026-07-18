@@ -224,15 +224,22 @@ export async function maybeRequeueFollowup(
   try {
     if (!threadId || !watermarkIso) return false;
     if (taskId) {
-      // v1: drain only single-target tasks — a multi-target task's wake fans
-      // out through the /message endpoint, not the per-row drain.
+      // Multi-target: only the LAST agent row to finish should drain a queued
+      // follow-up — otherwise every sibling would re-wake on the same message
+      // (N runs for one instruction). If any sibling is still non-terminal, let
+      // IT drain when it ends; when this row's run is the last to resolve, fall
+      // through and wake it so the message is delivered exactly once.
       const { data: agentRows } = await supabase
         .from('project_security_fixes')
-        .select('id')
+        .select('id, status')
         .eq('task_id', taskId)
         .eq('strategy', 'agent')
-        .limit(2);
-      if ((agentRows?.length ?? 0) > 1) return false;
+        .limit(50); // a task has <= AEGIS_TASK_MAX_TARGETS agent rows
+      const rows = (agentRows ?? []) as Array<{ id: string; status: string }>;
+      if (rows.length > 1) {
+        const anyActive = rows.some((r) => !['completed', 'failed', 'rejected'].includes(r.status));
+        if (anyActive) return false;
+      }
     }
     const { data: newer } = await supabase
       .from('aegis_chat_messages')

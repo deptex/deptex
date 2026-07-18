@@ -6,14 +6,24 @@
 
 import { maybeRequeueFollowup, isJobCancelled, markFailed, markAnswered, markCompleted } from '../job-db';
 
-function stubSupabase(opts: { agentRowCount?: number; hasNewerMessage?: boolean }) {
+function stubSupabase(opts: {
+  agentRowCount?: number;
+  agentRowStatuses?: string[];
+  hasNewerMessage?: boolean;
+}) {
   const rpc = jest.fn(async () => ({ data: 'fix-1', error: null }));
   const supabase: any = {
     rpc,
     from: (table: string) => {
       const rows =
         table === 'project_security_fixes'
-          ? Array.from({ length: opts.agentRowCount ?? 1 }, (_, i) => ({ id: `f${i}` }))
+          ? Array.from({ length: opts.agentRowCount ?? 1 }, (_, i) => ({
+              id: `f${i}`,
+              // Default to an ACTIVE run so a multi-row task skips (a sibling is
+              // still working); tests that want the all-terminal case pass
+              // explicit statuses.
+              status: opts.agentRowStatuses?.[i] ?? 'executing',
+            }))
           : opts.hasNewerMessage
             ? [{ id: 'm1' }]
             : [];
@@ -44,11 +54,26 @@ describe('maybeRequeueFollowup', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  test('returns false when the task has multiple agent rows (v1 drains single-target tasks only)', async () => {
-    const { supabase, rpc } = stubSupabase({ agentRowCount: 2, hasNewerMessage: true });
+  test('multi-target: skips while a sibling is still active (avoids N wakes for one message)', async () => {
+    const { supabase, rpc } = stubSupabase({
+      agentRowCount: 2,
+      agentRowStatuses: ['completed', 'executing'], // one sibling still running
+      hasNewerMessage: true,
+    });
     const woke = await maybeRequeueFollowup(supabase, 'fix-1', 'thread-1', 'task-1', '2026-07-03T00:00:00Z');
     expect(woke).toBe(false);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  test('multi-target: the LAST sibling to finish (all terminal) delivers the queued message', async () => {
+    const { supabase, rpc } = stubSupabase({
+      agentRowCount: 2,
+      agentRowStatuses: ['completed', 'failed'], // all terminal now
+      hasNewerMessage: true,
+    });
+    const woke = await maybeRequeueFollowup(supabase, 'fix-1', 'thread-1', 'task-1', '2026-07-03T00:00:00Z');
+    expect(woke).toBe(true);
+    expect(rpc).toHaveBeenCalledWith('wake_agent_fix', { p_fix_id: 'fix-1' });
   });
 
   test('a task-less fix with a newer message still wakes (no multi-row guard needed)', async () => {

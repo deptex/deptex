@@ -293,9 +293,27 @@ export async function markTaskFromFix(
   patch: { status: 'completed' | 'failed'; summary?: string },
 ): Promise<void> {
   if (!taskId) return;
-  const update: Record<string, unknown> = { status: patch.status };
-  if (patch.status === 'completed') update.completed_at = new Date().toISOString();
+  // For a MULTI-target task the DB rollup trigger (recompute_aegis_task_status)
+  // is the SINGLE source of truth for status/completed_at — it counts every
+  // sibling fix. Writing status from one fix's single-fix view races it: it can
+  // stamp the task 'completed' while a sibling still runs, or stomp a
+  // 'completed_with_failures' back to 'failed' when the last fix happens to fail
+  // after earlier ones succeeded. So on a multi-fix task we write ONLY the
+  // summary and let the trigger own status. A single-fix task (the common case)
+  // keeps the explicit write — it agrees with the trigger and gives immediacy.
+  const { count } = await supabase
+    .from('project_security_fixes')
+    .select('id', { count: 'exact', head: true })
+    .eq('task_id', taskId)
+    .eq('strategy', 'agent');
+  const multi = (count ?? 0) > 1;
+  const update: Record<string, unknown> = {};
+  if (!multi) {
+    update.status = patch.status;
+    if (patch.status === 'completed') update.completed_at = new Date().toISOString();
+  }
   if (patch.summary) update.summary = patch.summary;
+  if (Object.keys(update).length === 0) return;
   const { error } = await supabase.from('aegis_agent_tasks').update(update).eq('id', taskId);
   if (error) console.warn('[FIX] task status update failed:', error.message);
 }

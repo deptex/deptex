@@ -420,6 +420,8 @@ describe('acceptTask brief enrichment', () => {
 
   it('appends the dependency note to the findingBrief handed to insertAgentFixRow', async () => {
     setTask(taskRow);
+    // The proposed→working CAS reads back the claimed row via .update().select('id').
+    setTableResponse('aegis_agent_tasks', 'then', { data: [{ id: TASK_ID }], error: null });
     setActiveRun('run-1');
     // One PDV maybeSingle response serves BOTH reads (resolveTargetFindingId
     // needs osv_id; the note needs project_dependency_id + fixed_versions).
@@ -438,6 +440,8 @@ describe('acceptTask brief enrichment', () => {
 
   it('leaves the brief untouched when the note is unavailable', async () => {
     setTask(taskRow);
+    // The proposed→working CAS reads back the claimed row via .update().select('id').
+    setTableResponse('aegis_agent_tasks', 'then', { data: [{ id: TASK_ID }], error: null });
     setActiveRun('run-1');
     // Queue mode (no maybeSingle registered): the resolve read finds the vuln,
     // the note read misses — the accept must proceed with the plain brief.
@@ -454,5 +458,18 @@ describe('acceptTask brief enrichment', () => {
     const arg = (insertAgentFixRow as jest.Mock).mock.calls[0][0];
     expect(arg.findingBrief).toBe('set-value CVE-2021-23440\n\nFix set-value CVE-2021-23440');
     expect(arg.findingBrief).not.toContain('NOTE:');
+  });
+
+  it('a concurrent double-accept (CAS loses the proposed→working flip) does NOT fan out a second set of fixes', async () => {
+    setTask(taskRow); // still 'proposed' per the loser's read
+    setActiveRun('run-1');
+    // The CAS flip matches 0 rows — the other concurrent Accept already claimed it.
+    setTableResponse('aegis_agent_tasks', 'then', { data: [], error: null });
+    setVulnRow({ osv_id: 'GHSA-4jqc-8m5r-9rpr', project_dependency_id: 'pd-1', fixed_versions: ['3.36.0'] });
+    (insertAgentFixRow as jest.Mock).mockResolvedValue({ fixId: FIX_ID });
+
+    const { threadId } = await acceptTask(args);
+    expect(threadId).toBe(THREAD_ID); // idempotent — returns the existing thread
+    expect(insertAgentFixRow).not.toHaveBeenCalled(); // no second fan-out
   });
 });

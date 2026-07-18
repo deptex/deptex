@@ -524,29 +524,39 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     expect(JSON.stringify(details)).not.toMatch(/budget|ran out of room/i);
   });
 
-  test("a wall-clock exhaustion says 'time limit' and invites a reply-to-resume", async () => {
+  test('a single-run budget exhaustion (wall-clock OR step-cap) invites a reply-to-resume', async () => {
     const deps = makeDeps();
-    await finalizeFailure(deps, 'budget_exhausted', 'Reached the 1800s time budget before finishing.');
+    await finalizeFailure(deps, 'budget_exhausted', 'Reached the 40-step limit before finishing.');
     expect(markFailed).toHaveBeenCalledWith(
       expect.anything(),
       'fix-1',
       expect.any(String),
       'budget_exhausted',
       expect.objectContaining({
-        headline: 'This ran past my time limit',
-        explanation: 'The task needed more time than a single run allows.',
+        headline: 'This needs another run to finish',
         nextStep: expect.stringContaining("Reply and I'll pick it up again"),
       }),
       'me',
     );
     expect(narrateStep).toHaveBeenCalledWith(expect.anything(), 'thread-1', {
       icon: 'failed',
-      label: 'Hit the time limit',
+      label: 'Paused — needs another run',
     });
-    // The USER-FACING copy must not sound like money ('budget'/'room'); the
-    // internal category key ('budget_exhausted') is DB-only and never rendered.
+    // The USER-FACING copy must not sound like money ('budget'); the internal
+    // category key ('budget_exhausted') is DB-only and never rendered.
     const details = (markFailed as jest.Mock).mock.calls[0][4];
-    expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget|ran out of room/i);
+    expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget/i);
+  });
+
+  test('a context exhaustion is honest + resumable (never a transient "try again later")', async () => {
+    const deps = makeDeps();
+    await finalizeFailure(deps, 'context_exhausted', 'Reached the context-window limit before finishing.');
+    const details = (markFailed as jest.Mock).mock.calls[0][4];
+    expect((markFailed as jest.Mock).mock.calls[0][3]).toBe('context_exhausted');
+    expect(details.nextStep).toMatch(/reply/i);
+    // Must NOT masquerade as a transient infra hiccup (whose advice — retry —
+    // would just re-overflow).
+    expect(`${details.headline} ${details.explanation}`).not.toMatch(/temporary problem|try (running )?again/i);
   });
 });
 

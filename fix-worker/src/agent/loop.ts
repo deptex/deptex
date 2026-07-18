@@ -378,12 +378,20 @@ export async function runTaskAgent(
     await fn().catch(() => {});
   }
 
-  // A clean natural stop (no abort, no error) on a resume whose fix already
-  // stands, where the model answered in prose, IS an answer-only turn — resolve
-  // it as answered BEFORE the failure fallback so a good answer isn't stamped
-  // "I couldn't complete that follow-up" (the PR #16 wake bug). A dirty tree or
-  // an abort/error falls through to the honest failure path below.
-  if (!state.terminal && !abortReason && !loopError) {
+  // Did the run END by hitting the step cap (stopWhen: stepCountIs(MAX_STEPS))?
+  // That's indistinguishable from a natural stop otherwise — no abort, no error
+  // — so without this it would be misread as not_fixable (first run) or, worse,
+  // as a successful answer-only turn (resume). It's really "ran out of room in
+  // one pass": a resumable budget exhaustion.
+  const hitStepCap = !state.terminal && !abortReason && !loopError && stepCount >= MAX_STEPS;
+
+  // A clean natural stop (no abort, no error, NOT a step-cap cutoff) on a resume
+  // whose fix already stands, where the model answered in prose, IS an
+  // answer-only turn — resolve it as answered BEFORE the failure fallback so a
+  // good answer isn't stamped "I couldn't complete that follow-up" (the PR #16
+  // wake bug). A dirty tree, an abort/error, or a step-cap cutoff falls through
+  // to the honest failure path below.
+  if (!state.terminal && !abortReason && !loopError && !hitStepCap) {
     await maybeFinalizeAnsweredNaturalStop(toolDeps, narrated);
   }
 
@@ -415,7 +423,7 @@ export async function runTaskAgent(
           ? 'stall'
           : contextOverflow
             ? 'context_exhausted'
-            : abortReason
+            : abortReason || hitStepCap
               ? 'budget_exhausted'
               : loopError
                 ? 'system_error'
@@ -425,13 +433,15 @@ export async function runTaskAgent(
         ? 'Task stopped by user.'
         : contextOverflow
           ? 'Reached the context-window limit before finishing.'
-          : abortReason === 'wall_clock'
-            ? `Reached the ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
-            : abortReason === 'stall'
-              ? 'Stopped making progress and was halted.'
-              : loopError
-                ? loopError?.message ?? 'Unexpected error in the agent loop.'
-                : "Couldn't complete a fix for this finding.";
+          : hitStepCap
+            ? `Reached the ${MAX_STEPS}-step limit before finishing.`
+            : abortReason === 'wall_clock'
+              ? `Reached the ${Math.round(WALL_CLOCK_MS / 1000)}s time budget before finishing.`
+              : abortReason === 'stall'
+                ? 'Stopped making progress and was halted.'
+                : loopError
+                  ? loopError?.message ?? 'Unexpected error in the agent loop.'
+                  : "Couldn't complete a fix for this finding.";
     await finalizeFailure(toolDeps, category, message);
   }
 

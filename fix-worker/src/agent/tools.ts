@@ -894,12 +894,13 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     stepLabel = 'Stopped — no clear fix found';
     nextStep = "Reply with a hint (a file, a version, an approach) and I'll pick this up again.";
   } else if (category === 'budget_exhausted') {
-    // Now strictly the wall-clock time limit. Same wording rule: "time limit",
-    // never "budget" (money collision); nextStep invites reply-to-resume.
-    headline = 'This ran past my time limit';
-    explanation = 'The task needed more time than a single run allows.';
-    leadIn = "I hit my time limit on this one — here's where I got to.";
-    stepLabel = 'Hit the time limit';
+    // A single run's budget ran out — either the wall-clock time limit OR the
+    // step cap (both are "more than one run allows"). Wording rule: never
+    // "budget" (money collision); nextStep invites reply-to-resume.
+    headline = 'This needs another run to finish';
+    explanation = 'The task ran longer than a single pass allows, so I stopped where I was.';
+    leadIn = "I've done as much as one run allows — here's where I got to.";
+    stepLabel = 'Paused — needs another run';
     nextStep = "Reply and I'll pick it up again from where I left off.";
   } else if (category === 'context_exhausted') {
     // The run read enough that the model's context window filled. Recoverable:

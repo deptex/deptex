@@ -433,6 +433,32 @@ export async function acceptTask(args: {
     throw new Error(`Task is in status '${task.status}' and cannot be accepted`);
   }
 
+  // 0. CONCURRENCY GATE — compare-and-swap the proposed→working flip. A
+  //    double-clicked Accept fires two concurrent requests that BOTH pass the
+  //    JS status check above; only one wins this atomic flip (0 rows for the
+  //    loser, because status is no longer 'proposed'). The loser returns the
+  //    existing thread idempotently instead of fanning out a SECOND set of fix
+  //    rows / machines / draft PRs. (The partial unique index on agent fix rows
+  //    is the last-line backstop if this somehow slips.)
+  const nowIso = new Date().toISOString();
+  const { data: claimed } = await supabase
+    .from('aegis_agent_tasks')
+    .update({ status: 'working', accepted_at: nowIso, started_at: nowIso })
+    .eq('id', taskId)
+    .eq('status', 'proposed')
+    .select('id');
+  if (!claimed || claimed.length === 0) {
+    if (task.threadId) return { threadId: task.threadId };
+    // The winner may not have stamped thread_id yet — reload once before giving up.
+    const { data: reloaded } = await supabase
+      .from('aegis_agent_tasks')
+      .select('thread_id')
+      .eq('id', taskId)
+      .maybeSingle();
+    if (reloaded?.thread_id) return { threadId: reloaded.thread_id as string };
+    throw new Error('Task is already being accepted');
+  }
+
   // 1. The task-chat thread (reuse the finding-door's pre-created one, else make it).
   const threadId =
     task.threadId ??
@@ -452,17 +478,12 @@ export async function acceptTask(args: {
     if (resolved.length >= AEGIS_TASK_MAX_TARGETS) break;
   }
 
-  // 3. Stamp total_fixes UP FRONT (before any fix exists) so the rollup trigger
-  //    never sees a momentarily-empty fix set as "completed".
+  // 3. Stamp total_fixes + thread_id UP FRONT (before any fix exists) so the
+  //    rollup trigger never sees a momentarily-empty fix set as "completed".
+  //    (status/accepted_at/started_at were already set by the CAS above.)
   await supabase
     .from('aegis_agent_tasks')
-    .update({
-      thread_id: threadId,
-      accepted_at: new Date().toISOString(),
-      started_at: new Date().toISOString(),
-      status: 'working',
-      total_fixes: resolved.length,
-    })
+    .update({ thread_id: threadId, total_fixes: resolved.length })
     .eq('id', taskId);
 
   // 4. Zero-fix terminal: nothing left to fix -> finish here, no chips to flip.
@@ -497,6 +518,7 @@ export async function acceptTask(args: {
   //    pool by the worker, which runs the autonomous agent loop; there is no
   //    plan-generation step to background anymore.
   const pending: Array<{ fixId: string; target: AegisTaskTarget; findingId: string }> = [];
+  let lastInsertError: string | null = null;
   for (const { target, findingId } of resolved) {
     const summary = task.title;
     // Dependency context (direct vs transitive + fixed version) saves the agent
@@ -519,7 +541,10 @@ export async function acceptTask(args: {
       findingBrief,
     });
     if ('fixId' in ins) pending.push({ fixId: ins.fixId, target, findingId });
-    else console.error('[aegis-task] agent fix row insert skipped:', target.findingKey, ins.error);
+    else {
+      lastInsertError = ins.error ?? lastInsertError;
+      console.error('[aegis-task] agent fix row insert skipped:', target.findingKey, ins.error);
+    }
 
     // File an 'aegis' tracker link so the finding shows the Aegis chip. The
     // rollup trigger flips it to ✓ when the task resolves cleanly.
@@ -548,6 +573,36 @@ export async function acceptTask(args: {
   // Correct total_fixes to the rows actually created (an insert failure would
   // otherwise wedge the task at 'working' forever — v_total < v_planned).
   await supabase.from('aegis_agent_tasks').update({ total_fixes: pending.length }).eq('id', taskId);
+
+  // Zero-PENDING terminal: we resolved targets to fix but EVERY fix-row insert
+  // failed (e.g. the GitHub App was uninstalled between propose and accept, or
+  // getBranchSha threw). With no fix row, the rollup trigger never fires, so the
+  // task would sit at 'working' forever showing "fixing 0 findings". Fail it
+  // honestly instead — the mirror of the zero-RESOLVED terminal above.
+  if (pending.length === 0) {
+    const detail = lastInsertError ? ` (${lastInsertError})` : '';
+    await supabase
+      .from('aegis_agent_tasks')
+      .update({
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        summary: 'Could not start the fix — the repository connection may have been removed.',
+      })
+      .eq('id', taskId);
+    await postTaskOpeningMessage(
+      threadId,
+      `I couldn't set up the fix for this task${detail}. This usually means the GitHub connection was removed. Nothing was changed — reconnect the repository and send it to me again.`,
+    );
+    await logSecurityEvent({
+      organizationId,
+      actorId: userId,
+      action: 'aegis_task_accepted',
+      targetType: 'aegis_task',
+      targetId: taskId,
+      metadata: { fixCount: 0, targets: task.targets.length, insertFailed: true },
+    });
+    return { threadId };
+  }
 
   // 6. Seed the task-chat NOW with Aegis's opening turn. The agent narrates its
   //    real work inline as it runs — no plan card.
