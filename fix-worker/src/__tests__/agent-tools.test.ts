@@ -45,7 +45,7 @@ import {
 } from '../agent/tools';
 import { commitAndPushFix, openPullRequest } from '../pr';
 import { markCompleted, markFailed, markAnswered } from '../job-db';
-import { markTaskFromFix, narrateStep, postPrReadyCard } from '../task-chat';
+import { markTaskFromFix, narrateStep, postPrReadyCard, postFailureCard } from '../task-chat';
 
 const taskChatNarrator = (jest.requireMock('../task-chat') as any).__narrator as jest.Mock;
 
@@ -548,18 +548,23 @@ describe('finalizeFailure — stall & time-limit copy', () => {
     expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/budget/i);
   });
 
-  test('a context exhaustion renders the minimal card — no failed step beat, no transient-retry copy', async () => {
+  test('a task failure is JUST the muted step line — no failure card, no lead-in prose', async () => {
     const deps = makeDeps();
-    await finalizeFailure(deps, 'context_exhausted', 'Reached the context-window limit before finishing.');
+    await finalizeFailure(deps, 'system_error', 'the raw provider blew up');
+    // The whole failure surface in a task chat is one "failed" step line…
+    expect(narrateStep).toHaveBeenCalledWith(
+      expect.anything(),
+      'thread-1',
+      expect.objectContaining({ icon: 'failed' }),
+    );
+    // …with NO FixFailureCard and NO lead-in prose beat after it.
+    expect(postFailureCard).not.toHaveBeenCalled();
+    expect(taskChatNarrator).not.toHaveBeenCalled();
+    // The row still records the honest copy for the task-detail view, and a
+    // system_error stays generic — never the raw provider message.
     const details = (markFailed as jest.Mock).mock.calls[0][4];
-    expect((markFailed as jest.Mock).mock.calls[0][3]).toBe('context_exhausted');
-    expect(details.headline).toMatch(/context window limit reached/i);
-    // The minimal card carries its own headline + the "Compact context" action,
-    // so this category SKIPS the gray "failed" step beat + the lead-in prose.
-    expect(narrateStep).not.toHaveBeenCalled();
-    // Must NOT masquerade as a transient infra hiccup (whose advice — retry —
-    // would just re-overflow).
-    expect(`${details.headline} ${details.explanation}`).not.toMatch(/temporary problem|try (running )?again/i);
+    expect(details.headline).toBeTruthy();
+    expect(`${details.headline} ${details.explanation} ${details.nextStep}`).not.toMatch(/the raw provider blew up/);
   });
 });
 

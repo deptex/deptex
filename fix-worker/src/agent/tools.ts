@@ -13,7 +13,6 @@ import { markCompleted, markFailed, markAnswered, isJobCancelled } from './../jo
 import {
   narrateStep,
   postPrReadyCard,
-  postFailureCard,
   describeFailure,
   markTaskFromFix,
   type TaskStep,
@@ -937,24 +936,11 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
     },
     deps.machineId,
   );
-  // context_exhausted renders as a minimal, self-contained card (headline +
-  // "Compact context" button — the frontend keys off failure_details.category),
-  // so it skips the gray "failed" step line and the lead-in prose beat that the
-  // other categories post. Every other category keeps the full narration.
-  const minimalCard = category === 'context_exhausted';
-  if (!minimalCard) {
-    await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
-  }
-  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, minimalCard ? '' : nextStep, category);
+  // The failure surface in a task chat is JUST a single muted "failed" step line
+  // (e.g. "Something went wrong" / "Paused — needs another run") — no card, no
+  // lead-in prose. markFailed still records the full failure_details on the row
+  // (headline/explanation/nextStep) for the task-detail view + our logs; the chat
+  // itself stays minimal.
+  await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });
-  // Post the lead-in as a prose beat (best-effort — no throw). Skipped for the
-  // minimal card, which carries all the copy it needs.
-  if (!minimalCard && leadIn) {
-    try {
-      const { makeTaskNarrator } = await import('./../task-chat');
-      await makeTaskNarrator(deps.supabase, deps.threadId)(leadIn);
-    } catch {
-      /* narration is best-effort */
-    }
-  }
 }
