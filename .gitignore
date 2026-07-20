@@ -46,8 +46,6 @@ lerna-debug.log*
 backend/src/**/*.js
 !backend/src/test/mocks/lib-supabase-mock.js
 backend/src/**/*.d.ts
-backend/watchtower-worker/src/**/*.js
-backend/watchtower-worker/src/**/*.d.ts
 
 # Windows crash dumps
 *.stackdump
@@ -72,3 +70,7 @@ documents
 # artefacts are large (cloned workspaces + raw scan JSON) and re-derivable.
 # Summary lives at docs/oss-corpus-<date>.md.
 oss-corpus-runs/
+
+# Local scanner run artifacts — regenerable output, never shipped.
+depscanner/arc4a-runs/
+**/zap-report.json

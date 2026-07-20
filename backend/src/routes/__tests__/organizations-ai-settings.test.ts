@@ -13,9 +13,6 @@ jest.mock('../../lib/email', () => ({ sendInvitationEmail: jest.fn() }));
 jest.mock('../../lib/openai', () => ({
   getOpenAIClient: jest.fn().mockReturnValue({ chat: { completions: { create: jest.fn() } } }),
 }));
-jest.mock('../../lib/policy-seed', () => ({
-  seedOrganizationPolicyDefaults: jest.fn().mockResolvedValue(undefined),
-}));
 
 const ORG_ID = 'org-1';
 const TOKEN = 'valid-token';

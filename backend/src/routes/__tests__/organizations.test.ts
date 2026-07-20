@@ -18,10 +18,6 @@ jest.mock('../../lib/openai', () => ({
   }),
 }));
 
-jest.mock('../../lib/policy-seed', () => ({
-  seedOrganizationPolicyDefaults: jest.fn().mockResolvedValue(undefined),
-}));
-
 describe('Organization Routes', () => {
   const mockUser = { id: 'user-123', email: 'test@example.com' };
   const mockToken = 'valid-token';
