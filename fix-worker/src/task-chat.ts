@@ -254,6 +254,7 @@ export async function postFailureCard(
   threadId: string | null | undefined,
   fixId: string,
   caption: string,
+  category?: string,
 ): Promise<void> {
   if (!threadId) return;
   const { error } = await supabase.from('aegis_chat_messages').insert({
@@ -266,7 +267,10 @@ export async function postFailureCard(
           type: 'tool-result',
           toolCallId: fixId,
           toolName: 'apply_fix',
-          result: { fixId, failed: true },
+          // `category` lets the frontend pick the right card (context-limit vs
+          // generic failure) on the first paint, before it fetches the fix row —
+          // so a context-limit card never flashes the red failure card first.
+          result: { fixId, failed: true, category },
           isError: false,
         },
       ],

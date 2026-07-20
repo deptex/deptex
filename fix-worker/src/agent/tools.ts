@@ -945,7 +945,7 @@ export async function finalizeFailure(deps: AgentToolDeps, category: FinishCateg
   if (!minimalCard) {
     await narrateStep(deps.supabase, deps.threadId, { icon: 'failed', label: stepLabel });
   }
-  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, minimalCard ? '' : nextStep);
+  await postFailureCard(deps.supabase, deps.threadId, deps.fixId, minimalCard ? '' : nextStep, category);
   await markTaskFromFix(deps.supabase, deps.taskId, { status: 'failed', summary: headline });
   // Post the lead-in as a prose beat (best-effort — no throw). Skipped for the
   // minimal card, which carries all the copy it needs.
