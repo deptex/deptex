@@ -73,11 +73,39 @@ function stripReasoning(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '').trim();
 }
 
+/** Collect every string an SDK error might hide the provider's reason in. The AI
+ *  SDK's APICallError puts the human message in `.message` for some providers but
+ *  leaves the real detail only in `.responseBody` (the raw provider JSON) for
+ *  others (DeepInfra/openai-compatible), and reasons can nest under `.cause` /
+ *  `.data`. Scanning just `.message` misses those, so we flatten them all. */
+function errorText(e: any, depth = 0): string {
+  if (e == null || depth > 3) return '';
+  if (typeof e === 'string') return e;
+  const parts: string[] = [];
+  if (e.message) parts.push(String(e.message));
+  if (e.responseBody) parts.push(String(e.responseBody));
+  if (e.data != null) {
+    try {
+      parts.push(typeof e.data === 'string' ? e.data : JSON.stringify(e.data));
+    } catch {
+      /* non-serialisable data — skip */
+    }
+  }
+  if (e.cause && e.cause !== e) parts.push(errorText(e.cause, depth + 1));
+  return parts.join(' ');
+}
+
 /** A provider "prompt too long / context length exceeded" error — a DETERMINISTIC
- *  overflow (retrying reproduces it), distinct from a transient infra hiccup. */
-function isContextLengthError(e: any): boolean {
-  const msg = String(e?.message ?? e ?? '').toLowerCase();
-  return /context length|context_length_exceeded|prompt is too long|maximum context|too many tokens|reduce the length|input is too long/.test(
+ *  overflow (retrying reproduces it), distinct from a transient infra hiccup.
+ *  Covers all four providers' phrasings: OpenAI/DeepInfra ("maximum context
+ *  length", code context_length_exceeded), Anthropic ("prompt is too long"),
+ *  and Gemini ("input token count (X) exceeds the maximum number of tokens") —
+ *  the last of which the old message-only regex missed, misfiling a Gemini
+ *  overflow as a generic system_error ("try again later" → user retries forever).
+ *  Exported for direct classifier tests. */
+export function isContextLengthError(e: any): boolean {
+  const msg = errorText(e).toLowerCase();
+  return /context length|context_length_exceeded|prompt is too long|maximum context|too many tokens|reduce the length|input is too long|input token count|token count[^.]*exceed|exceeds? the maximum number of tokens|exceeds? the maximum context|string too long/.test(
     msg,
   );
 }
@@ -256,7 +284,7 @@ export async function runTaskAgent(
   // failure — see maybeFinalizeAnsweredNaturalStop.
   let narrated = false;
 
-  const prompt = buildBrief({
+  let prompt = buildBrief({
     fixType: input.fixType,
     finding: input.finding,
     summary: input.summary,
@@ -265,6 +293,19 @@ export async function runTaskAgent(
     projectSubdir: repoInfo.packageJsonPath ?? '',
     repoRootListing,
   });
+
+  // TEST-ONLY overflow lever (never set in normal operation): pad the opening
+  // prompt with filler so a fresh run deterministically exceeds the model's REAL
+  // context window and the provider hard-400s. That branch — the belt to the 90%
+  // soft-stop's suspenders — can't be reproduced naturally, because output caps +
+  // the soft-stop keep any real run well under the window. AEGIS_TASK_TEST_PAD_TOKENS
+  // is the token count of filler to append (~4 chars/token). Only fresh runs pad;
+  // resumes replay a bounded history and must stay recoverable.
+  const padTokens = parseInt(process.env.AEGIS_TASK_TEST_PAD_TOKENS || '', 10);
+  if (!input.resume && Number.isFinite(padTokens) && padTokens > 0) {
+    console.log(`[test] padding opening prompt with ~${padTokens} filler tokens to force a context overflow`);
+    prompt = `${prompt}\n\n<!-- test-pad -->\n${'lorem ipsum dolor sit amet '.repeat(Math.ceil(padTokens / 5))}`;
+  }
 
   let replayedThrough: string | null = null;
 

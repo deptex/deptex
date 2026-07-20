@@ -53,8 +53,9 @@ import { generateText } from 'ai';
 import { isJobCancelled } from '../job-db';
 import { cloneAtSha, cloneBranchHead } from '../sandbox';
 import { getPullRequestState } from '../pr';
+import { captureInfraError } from '../observability/capture';
 import { buildAgentTools, finalizeFailure, maybeFinalizeAnsweredNaturalStop } from '../agent/tools';
-import { runTaskAgent, type AgentRunInput } from '../agent/loop';
+import { runTaskAgent, isContextLengthError, type AgentRunInput } from '../agent/loop';
 
 /** The live AgentRunState of the current run, captured off the buildAgentTools mock. */
 function capturedState(): any {
@@ -160,6 +161,89 @@ describe('runTaskAgent — always-terminal guarantee', () => {
     // … and because it resolved the run, the failure writer never fired.
     expect(finalizeFailure).not.toHaveBeenCalled();
     (maybeFinalizeAnsweredNaturalStop as jest.Mock).mockResolvedValue(false);
+  });
+});
+
+describe('isContextLengthError — provider overflow classification', () => {
+  // The SDK's APICallError hides the real reason in different fields per
+  // provider. Each of these MUST classify as an overflow so the loop maps it to
+  // context_exhausted (reply-to-resume), not system_error ("try again later").
+  test('OpenAI overflow in .message', () => {
+    expect(
+      isContextLengthError({
+        statusCode: 400,
+        message:
+          "This model's maximum context length is 16385 tokens. However, your messages resulted in 21000 tokens. Please reduce the length of the messages.",
+      }),
+    ).toBe(true);
+  });
+
+  test('OpenAI/DeepInfra overflow ONLY in .responseBody (generic .message)', () => {
+    // The message-only regex missed this: openai-compatible (DeepInfra) surfaces
+    // a terse .message and leaves the detail in the raw body.
+    expect(
+      isContextLengthError({
+        statusCode: 400,
+        message: 'Bad Request',
+        responseBody:
+          '{"error":{"message":"This model\'s maximum context length is 131072 tokens. However, you requested 140000 tokens.","type":"invalid_request_error","code":"context_length_exceeded"}}',
+      }),
+    ).toBe(true);
+  });
+
+  test('Anthropic overflow ("prompt is too long")', () => {
+    expect(isContextLengthError({ statusCode: 400, message: 'prompt is too long: 215000 tokens > 200000 maximum' })).toBe(
+      true,
+    );
+  });
+
+  test('Gemini overflow ("input token count … exceeds the maximum") — the case the old regex missed', () => {
+    expect(
+      isContextLengthError({
+        statusCode: 400,
+        message: 'The input token count (1500000) exceeds the maximum number of tokens allowed (1048575).',
+      }),
+    ).toBe(true);
+  });
+
+  test('reason nested under .cause', () => {
+    expect(
+      isContextLengthError({ message: 'AI_APICallError', cause: { message: 'prompt is too long: 300000 tokens' } }),
+    ).toBe(true);
+  });
+
+  test('a plain overflow string still classifies', () => {
+    expect(isContextLengthError('context length exceeded')).toBe(true);
+  });
+
+  test('NON-overflow errors do NOT misclassify (would loop the user forever on reply-to-resume)', () => {
+    expect(isContextLengthError({ statusCode: 500, message: 'Internal server error', responseBody: 'upstream timeout' })).toBe(
+      false,
+    );
+    expect(isContextLengthError({ statusCode: 429, message: 'Rate limit reached for gpt-4o' })).toBe(false);
+    expect(isContextLengthError(new Error('ECONNRESET'))).toBe(false);
+    expect(isContextLengthError(null)).toBe(false);
+  });
+});
+
+describe('runTaskAgent — a provider overflow 400 resolves as context_exhausted', () => {
+  test('a hard context-length 400 (not an abort) → context_exhausted, NOT system_error, and is not sent to Sentry', async () => {
+    (generateText as jest.Mock).mockImplementation(async () => {
+      // The provider rejected the over-long prompt before any step ran — the
+      // soft-stop never got a usage reading to trip on. This is the belt to the
+      // soft-stop's suspenders.
+      throw Object.assign(new Error('Bad Request'), {
+        statusCode: 400,
+        responseBody:
+          '{"error":{"message":"This model\'s maximum context length is 128000 tokens. However, your messages resulted in 150000 tokens.","code":"context_length_exceeded"}}',
+      });
+    });
+    await runTaskAgent({} as any, makeInput(), makeDeps());
+    expect(finalizeFailure).toHaveBeenCalledTimes(1);
+    expect((finalizeFailure as jest.Mock).mock.calls[0][1]).toBe('context_exhausted');
+    // A deterministic overflow is NOT a transient infra hiccup — it must not
+    // page Sentry (only genuine loop errors do).
+    expect(captureInfraError).not.toHaveBeenCalled();
   });
 });
 
